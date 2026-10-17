@@ -95,15 +95,20 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
      ```
 
    - **As a service** ([`deploy/factory.service`](deploy/factory.service)):
-     put the same lines, without `export`, in `/etc/factory/env`, which the
-     service loads at start. Keep it private, and make the key readable by
-     the `factory` user the service runs as:
+     put the same values in `/etc/factory/env`, which the service loads at
+     start. Write plain `NAME=value` lines, with no `export` and no comments
+     after a value (systemd would keep them as part of it):
 
      ```sh
-     sudoedit /etc/factory/env       # FACTORY_GITHUB_APP_ID=... one per line
-     sudo chmod 600 /etc/factory/env
-     sudo chown factory /etc/factory/app.pem
+     FACTORY_GITHUB_APP_ID=123456
+     FACTORY_GITHUB_INSTALLATION_ID=7890123
+     FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
+     ANTHROPIC_API_KEY=sk-ant-...
+     OPENAI_API_KEY=sk-...
      ```
+
+     Create it with `sudoedit /etc/factory/env`, then
+     `sudo chmod 600 /etc/factory/env`. Step 6 sets up the user that reads it.
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
 
@@ -128,24 +133,34 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    ./factory serve         # or run it as a service, below
    ```
 
+   Then label an issue `factory:ready`.
+
    To run it as a service instead, using the env file from step 3, install
    it from a checkout in `/opt/factory` and run it as a `factory` user that
-   can use Docker:
+   can use Docker. The service gets its own database in `/opt/factory/data`,
+   separate from any trial run:
 
    ```sh
    sudo useradd --system --create-home --groups docker factory
+   sudo chown factory /etc/factory/app.pem   # the trial user can no longer read it
    sudo git clone https://github.com/<you>/factory /opt/factory   # this repo
    sudo chown -R factory /opt/factory
-   cd /opt/factory && sudo -u factory env CGO_ENABLED=0 go build -o factory ./cmd/factory
+   cd /opt/factory
+   sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o factory ./cmd/factory
    sudo cp deploy/factory.service /etc/systemd/system/
    sudo systemctl enable --now factory
    journalctl -u factory -f     # follow its log
    ```
 
-   Later upgrades go through `sudo deploy/upgrade.sh NEW_BINARY` (see
-   [Quality (M6)](#quality-m6) below), which can roll back.
+   To upgrade later, build the new binary somewhere else and hand it to
+   `deploy/upgrade.sh`, which keeps the old one and rolls back on failure
+   (see [Quality (M6)](#quality-m6)):
 
-   Then label an issue `factory:ready`.
+   ```sh
+   cd /opt/factory && sudo -u factory git pull
+   sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o /tmp/factory.new ./cmd/factory
+   sudo deploy/upgrade.sh /tmp/factory.new
+   ```
 
 Set a spend alert on both API accounts. The daemon enforces its own caps
 (`budgets` in `factory.yaml`): a per-job cap, a daily total that stops new
