@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*os.File).Close
+        - (*text/tabwriter.Writer).Flush
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.RemoveAll
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck]
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

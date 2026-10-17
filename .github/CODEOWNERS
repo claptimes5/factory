@@ -1,0 +1,5 @@
+# The factory may not change its own controls; a human owns these paths.
+/.github/       @claptimes5
+/factory.yaml   @claptimes5
+/prompts/       @claptimes5
+/.golangci.yml  @claptimes5

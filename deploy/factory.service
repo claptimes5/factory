@@ -1,0 +1,16 @@
+[Unit]
+Description=Factory daemon
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=factory
+WorkingDirectory=/opt/factory
+EnvironmentFile=/etc/factory/env
+ExecStart=/opt/factory/factory serve
+Restart=on-failure
+KillSignal=SIGTERM
+TimeoutStopSec=15min
+
+[Install]
+WantedBy=multi-user.target
