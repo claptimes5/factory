@@ -104,15 +104,22 @@ export function useLiveUpdates() {
     const bc = shared ? new BroadcastChannel("factory-version") : null;
     if (bc) bc.onmessage = (e) => seen(e.data as string);
     let stop = () => {};
+    const abort = new AbortController();
     const stream = () =>
       new Promise<void>((resolve) => {
+        // A grant that lands after cleanup must not open a stream nothing will close.
+        if (abort.signal.aborted) return resolve();
         let es: EventSource | null = null;
         let retry: ReturnType<typeof setTimeout> | undefined;
         const open = () => {
           es = new EventSource(base + "/stream");
           es.addEventListener("version", (e) => {
             const v = (JSON.parse((e as MessageEvent).data) as { version: string }).version;
-            bc?.postMessage(v);
+            try {
+              bc?.postMessage(v);
+            } catch {
+              /* channel closed during cleanup */
+            }
             seen(v);
           });
           es.onerror = () => {
@@ -127,7 +134,6 @@ export function useLiveUpdates() {
           resolve();
         };
       });
-    const abort = new AbortController();
     if (shared) {
       navigator.locks.request("factory-version-stream", { signal: abort.signal }, stream).catch(() => {});
     } else {
