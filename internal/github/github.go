@@ -356,7 +356,8 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	body := map[string]any{"repositories": []string{name}, "permissions": map[string]string{
-		"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read"}}
+		"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read",
+		"checks": "read"}} // checks: the dashboard's CI panel
 	if err := doJSON(ctx, hc, "POST", base+"/app/installations/"+a.InstallationID+"/access_tokens", "Bearer "+jwt, body, &r); err != nil {
 		return "", err
 	}

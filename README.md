@@ -34,17 +34,54 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    docker build -t factory-job:latest deploy/job-image
    ```
 
-2. **Create a GitHub App** on your account with repository permissions
-   *Contents: read & write*, *Issues: read & write*, *Pull requests: read &
-   write*, *Metadata: read*. Do **not** grant *Workflows*, so the factory
-   cannot edit its own CI. Install it on this repo and download a private key.
+2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
+   access is limited to one repo and a few permissions you choose.
+   ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app))
+
+   1. Open [New GitHub App](https://github.com/settings/apps/new). For a repo
+      owned by an organization, use
+      `https://github.com/organizations/<org>/settings/apps/new` instead.
+   2. **GitHub App name:** anything unique, such as `factory-<your-login>`.
+      **Homepage URL:** this repo's URL.
+   3. **Webhook:** untick **Active**. The factory polls GitHub, so it needs no
+      public URL.
+   4. **Repository permissions:** set these four and leave everything else
+      at *No access*. Metadata switches to *Read-only* by itself.
+
+      | Permission | Access | Used for |
+      | --- | --- | --- |
+      | Contents | Read and write | pushing `factory/*` branches |
+      | Issues | Read and write | reading issues, labels and comments |
+      | Pull requests | Read and write | opening and updating draft PRs |
+      | Checks | Read-only | the CI panel in the dashboard |
+
+      Leave **Workflows** at *No access*, so the factory can never edit its
+      own CI.
+   5. **Where can this GitHub App be installed?** *Only on this account.*
+      Click **Create GitHub App**.
+   6. On the app's page, copy the **App ID** shown under *About*.
+   7. Scroll to **Private keys**, click **Generate a private key**, and keep
+      the downloaded `.pem` where only the daemon can read it
+      ([about keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)):
+
+      ```sh
+      sudo install -D -m 600 -o "$USER" ~/Downloads/*.private-key.pem /etc/factory/app.pem
+      ```
+   8. In the app's left sidebar, click **Install App**, then **Install** next
+      to your account. Choose **Only select repositories**, pick the repo the
+      factory works on, and click **Install**
+      ([about installing](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app)).
+   9. You land on `https://github.com/settings/installations/<number>`. That
+      number is the **installation ID**. You can find it again later under
+      [Settings → Applications](https://github.com/settings/installations) →
+      *Configure*.
 
 3. **Set the daemon's environment.** These are read by the daemon only and
    injected into each job container as env vars, never written to disk.
 
    ```sh
-   export FACTORY_GITHUB_APP_ID=...            # app id
-   export FACTORY_GITHUB_INSTALLATION_ID=...   # installation id
+   export FACTORY_GITHUB_APP_ID=...            # step 2.6
+   export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
    export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
    export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
    export OPENAI_API_KEY=...                   # for the Codex reviewer
@@ -52,12 +89,18 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
 
+   Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
+   billed per use; a ChatGPT subscription is not needed. Without one, review
+   jobs fail and their items park. Reviews must run on a different harness
+   from the builder (the daemon refuses a config where they match), so Codex
+   cannot simply be swapped for Claude in `factory.yaml`.
+
 4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,
    `factory:retry` and `factory:awaiting-you` (`scripts/setup-labels.sh` does
    it with `gh`).
 
 5. **Protect `main`:** require a pull request with your review, and require
-   the `ci` check. `.github/CODEOWNERS` makes you the owner of `.github/`,
+   the `test` and `web` checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
    `factory.yaml`, `prompts/` and the lint config.
 
 6. **Run it.**
