@@ -87,3 +87,31 @@ func TestAppTokenScopedAndCached(t *testing.T) {
 		t.Fatalf("jwt = %s", jwt)
 	}
 }
+
+func TestAppTokenWithoutChecksPermission(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	var asked []map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Permissions map[string]string `json:"permissions"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		asked = append(asked, body.Permissions)
+		if _, ok := body.Permissions["checks"]; ok {
+			// What GitHub does when the app was never granted a permission.
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"message":"The permissions requested are not granted to this installation."}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"token": "ghs_y", "expires_at": time.Now().Add(time.Hour)})
+	}))
+	defer srv.Close()
+	a := &AppTokens{AppID: "1", InstallationID: "9", Key: key, Repo: "o/r", BaseURL: srv.URL}
+	tok, err := a.Token(context.Background())
+	if err != nil || tok != "ghs_y" {
+		t.Fatalf("an app without Checks should still get a token: %q %v", tok, err)
+	}
+	if len(asked) != 2 || asked[1]["contents"] != "write" {
+		t.Fatalf("requests = %v", asked)
+	}
+}

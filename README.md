@@ -56,7 +56,9 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
       | Checks | Read-only | the CI panel in the dashboard |
 
       Leave **Workflows** at *No access*, so the factory can never edit its
-      own CI.
+      own CI. An app made without *Checks* still works, but the dashboard's
+      CI panel stays empty until you add it (then accept the new permission
+      on the installation page).
    5. **Where can this GitHub App be installed?** *Only on this account.*
       Click **Create GitHub App**.
    6. On the app's page, copy the **App ID** shown under *About*.
@@ -65,14 +67,15 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
       ([about keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)):
 
       ```sh
-      sudo install -D -m 600 -o "$USER" ~/Downloads/*.private-key.pem /etc/factory/app.pem
+      sudo install -D -m 600 -o "$USER" ~/Downloads/<the-downloaded-file>.pem /etc/factory/app.pem
       ```
    8. In the app's left sidebar, click **Install App**, then **Install** next
       to your account. Choose **Only select repositories**, pick the repo the
       factory works on, and click **Install**
       ([about installing](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app)).
-   9. You land on `https://github.com/settings/installations/<number>`. That
-      number is the **installation ID**. You can find it again later under
+   9. You land on `https://github.com/settings/installations/<number>` (for
+      an organization, `https://github.com/organizations/<org>/settings/installations/<number>`).
+      That number is the **installation ID**. You can find it again later under
       [Settings → Applications](https://github.com/settings/installations) →
       *Configure*.
 
@@ -84,16 +87,15 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
    export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
    export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
-   export OPENAI_API_KEY=...                   # for the Codex reviewer
+   export OPENAI_API_KEY=...                   # for the Codex reviewer (or CODEX_API_KEY)
    ```
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
 
    Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
    billed per use; a ChatGPT subscription is not needed. Without one, review
-   jobs fail and their items park. Reviews must run on a different harness
-   from the builder (the daemon refuses a config where they match), so Codex
-   cannot simply be swapped for Claude in `factory.yaml`.
+   jobs fail and their items park. To run on Claude alone, see
+   [Claude-only review](#claude-only-review).
 
 4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,
    `factory:retry` and `factory:awaiting-you` (`scripts/setup-labels.sh` does
@@ -286,8 +288,31 @@ today's budget, and their spend counts against it.
 
 Everything lives in [`factory.yaml`](factory.yaml): routing per stage,
 escalation tiers, timeouts, budgets, Codex token pricing, gate commands and
-the diff guard. The daemon refuses a config where the builder and the
-reviewer use the same harness. Stage prompts are in [`prompts/`](prompts).
+the diff guard. The daemon refuses a config where a reviewer could run the
+same harness and model as the builder it reviews. Stage prompts are in
+[`prompts/`](prompts).
+
+### Claude-only review
+
+By default Codex reviews what Claude builds, so neither grades its own work.
+If you only have Claude, a different Claude model can review instead. The
+reviewer's model must differ from every model the builder can reach,
+including the tiers a retry escalates to, so a reviewer on Opus means Opus
+cannot be a build tier:
+
+```yaml
+routing:
+  implement.S:       {harness: claude, model: sonnet}
+  implement.M:       {harness: claude, model: sonnet}
+  implement.L:       {harness: claude, model: sonnet}
+  review:            {harness: claude, model: opus}
+  # drop review.high_risk, or point it at opus too
+escalation:
+  implement: [sonnet]
+```
+
+This is weaker than cross-vendor review: two models from one family tend to
+share blind spots. No OpenAI key is needed once no route names `codex`.
 
 ## Isolation
 
