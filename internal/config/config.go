@@ -44,6 +44,9 @@ type Config struct {
 		// Listen is the control room address. Keep it on localhost or a
 		// Tailscale address: there is no login in v1.
 		Listen string `yaml:"listen"`
+		// Hosts are extra names the control room answers to (for example
+		// a Tailscale name); anything else is refused.
+		Hosts []string `yaml:"hosts"`
 	} `yaml:"web"`
 
 	Routing map[string]Route `yaml:"routing"`
@@ -64,6 +67,9 @@ type Config struct {
 		Interval      Duration `yaml:"interval"`        // scheduled run period
 		SummaryHour   int      `yaml:"summary_hour"`    // local hour of the daily summary
 		NotifyPerHour int      `yaml:"notify_per_hour"`
+		// Labels the orchestrator may put on issues it opens (besides the
+		// intake label). factory:* labels are never allowed.
+		Labels []string `yaml:"labels"`
 	} `yaml:"orchestrator"`
 
 	Budgets struct {

@@ -948,9 +948,18 @@ func (s *Store) SetParent(ctx context.Context, itemID, parentID int64) error {
 }
 
 // SetJobInput replaces a queued job's input (used to coalesce triggers).
-func (s *Store) SetJobInput(ctx context.Context, id int64, input string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE jobs SET input = ? WHERE id = ? AND state = 'queued'`, input, id)
+// SetJobInput replaces a queued job's input. It reports false when the job
+// was no longer queued.
+func (s *Store) SetJobInput(ctx context.Context, id int64, input string) (bool, error) {
+	var ok bool
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE jobs SET input = ? WHERE id = ? AND state = 'queued'`, input, id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		ok = n == 1
 		return err
 	})
+	return ok, err
 }

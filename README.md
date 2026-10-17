@@ -92,6 +92,10 @@ Notifications go to `FACTORY_NOTIFY_URL`: an ntfy topic URL for phone push,
 a Slack incoming webhook, or a Discord webhook. You get one when an item
 parks, a PR is ready, the daily budget is hit, or the job image is missing.
 
+The control room only answers to localhost names and the host in
+`web.listen`. To reach it under another name (a Tailscale name, say), list it
+in `web.hosts`.
+
 ## Commands
 
 | Command | What it does |
@@ -112,8 +116,8 @@ queue drains with work stuck (ready with no job, or blocked on dependencies
 that are not moving), every `interval`, and once a day after
 `summary_hour` for the summary it sends to your notifier.
 
-Its tools are `list_items`, `get_item`, `queue_status`, `get_job_log`,
-`create_issue`, `set_dependencies`, `set_priority`, `enqueue`, `retry`,
+Its tools are `list_items`, `get_item`, `get_issue`, `queue_status`,
+`get_job_log`, `create_issue`, `set_dependencies`, `set_priority`, `enqueue`, `retry`,
 `park` and `notify_human`. The daemon checks each against policy (daily
 issue cap, no dependency cycles, stage allowed for the item, review-queue
 cap, budget, notification rate) and writes every call, reads included, to
@@ -122,6 +126,13 @@ log shows them. There is no tool to merge, push, close a PR or edit config.
 One run at a time; extra triggers, and any that piled up while the daemon
 was down, coalesce into one run. Items whose dependencies are not done wait
 in `blocked` and start when the last one merges.
+
+An epic becomes an item in stage `epic` that is never built, even if it also
+carries `factory:ready`, and is done when all its children are. The
+orchestrator cannot restart parked items (that stays your `factory:retry`
+label), may retry each item at most twice, and may only add labels listed in
+`orchestrator.labels`. Its spend has its own daily cap and does not count
+against the build budget.
 
 ## Skill sets
 

@@ -15,6 +15,29 @@ import (
 // Retry queues a new run of a finished job. With tierUp, an implement job
 // moves to the first attempt of the next model tier.
 func (p *Pipeline) Retry(ctx context.Context, jobID int64, tierUp bool) error {
+	p.act.Lock()
+	defer p.act.Unlock()
+	return p.retry(ctx, "human", jobID, tierUp)
+}
+
+// Cancel stops a queued or running job. A cancelled job does not retry;
+// its item parks so a human decides what happens next.
+func (p *Pipeline) Cancel(ctx context.Context, jobID int64) error {
+	p.act.Lock()
+	defer p.act.Unlock()
+	return p.cancel(ctx, "human", jobID)
+}
+
+// Park moves an item to parked and cancels its active job.
+func (p *Pipeline) Park(ctx context.Context, itemID int64, reason string) error {
+	p.act.Lock()
+	defer p.act.Unlock()
+	return p.parkItem(ctx, "human", itemID, reason)
+}
+
+// The lower-case actions assume p.act is held.
+
+func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp bool) error {
 	j, err := p.Store.GetJob(ctx, jobID)
 	if err != nil {
 		return err
@@ -41,12 +64,12 @@ func (p *Pipeline) Retry(ctx context.Context, jobID int64, tierUp bool) error {
 	if tierUp && j.Kind != "implement" {
 		return errors.New("only implement jobs have model tiers")
 	}
-	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, JobID: &j.ID, Type: "retry",
+	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: actor, ItemID: &it.ID, JobID: &j.ID, Type: "retry",
 		Reason: map[bool]string{true: "retry one tier up", false: "retry"}[tierUp]}), "AddEvent")
 
 	switch j.Kind {
 	case "triage":
-		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "retry triage"); err != nil {
+		if err := p.Store.SetStage(ctx, it.ID, state.Triage, actor, "retry triage"); err != nil {
 			return err
 		}
 		return p.enqueueTriage(ctx, it, j.Attempt, "")
@@ -60,11 +83,11 @@ func (p *Pipeline) Retry(ctx context.Context, jobID int64, tierUp bool) error {
 			return errors.New("already on the top model tier")
 		}
 		if it.Stage == state.Parked || it.Stage == state.Blocked || it.Stage == state.Triage {
-			if err := p.Store.SetStage(ctx, it.ID, state.Ready, "human", "retry implement"); err != nil {
+			if err := p.Store.SetStage(ctx, it.ID, state.Ready, actor, "retry implement"); err != nil {
 				return err
 			}
 		}
-		if err := p.Store.SetStage(ctx, it.ID, state.Implementing, "human", "retry implement"); err != nil {
+		if err := p.Store.SetStage(ctx, it.ID, state.Implementing, actor, "retry implement"); err != nil {
 			return err
 		}
 		var in ImplementInput
@@ -86,33 +109,42 @@ func (p *Pipeline) Retry(ctx context.Context, jobID int64, tierUp bool) error {
 	return fmt.Errorf("cannot retry a %s job", j.Kind)
 }
 
-// Cancel stops a queued or running job. A cancelled job does not retry;
-// its item parks so a human decides what happens next.
-func (p *Pipeline) Cancel(ctx context.Context, jobID int64) error {
+func (p *Pipeline) cancel(ctx context.Context, actor string, jobID int64) error {
 	j, err := p.Store.GetJob(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	switch j.State {
-	case state.Queued:
-		if err := p.Store.CancelQueued(ctx, jobID, "human", "cancelled from the control room"); err != nil {
-			return err
-		}
-		if j.ItemID != nil {
-			if it, err := p.Store.GetItem(ctx, *j.ItemID); err == nil {
-				return p.park(ctx, it, fmt.Sprintf("A human cancelled job %d (%s).", j.ID, j.Kind))
-			}
-		}
-		return nil
-	case state.Running:
-		p.cancelled.Store(jobID, true)
-		return p.Runner.Kill(ctx, containerName(jobID))
+	if j.State.Terminal() {
+		return fmt.Errorf("job %d is already %s", jobID, j.State)
 	}
-	return fmt.Errorf("job %d is already %s", jobID, j.State)
+	if err := p.stopJob(ctx, actor, j, "cancelled from the control room"); err != nil {
+		return err
+	}
+	if j.ItemID != nil {
+		if it, err := p.Store.GetItem(ctx, *j.ItemID); err == nil && it.Stage != state.Parked {
+			return p.park(ctx, it, fmt.Sprintf("%s cancelled job %d (%s).", who(actor), j.ID, j.Kind))
+		}
+	}
+	return nil
 }
 
-// Park moves an item to parked and cancels its active job.
-func (p *Pipeline) Park(ctx context.Context, itemID int64, reason string) error {
+// stopJob cancels a queued job, or stops a running one: its context is
+// cancelled (ending whatever phase it is in) and its container killed. A job
+// claimed between the read and the cancel is treated as running.
+func (p *Pipeline) stopJob(ctx context.Context, actor string, j *store.Job, reason string) error {
+	if j.State == state.Queued {
+		if err := p.Store.CancelQueued(ctx, j.ID, actor, reason); err == nil {
+			return nil
+		}
+	}
+	p.cancelled.Store(j.ID, true)
+	if c, ok := p.jobCancel.Load(j.ID); ok {
+		c.(context.CancelFunc)()
+	}
+	return p.Runner.Kill(ctx, containerName(j.ID))
+}
+
+func (p *Pipeline) parkItem(ctx context.Context, actor string, itemID int64, reason string) error {
 	it, err := p.Store.GetItem(ctx, itemID)
 	if err != nil {
 		return err
@@ -121,15 +153,16 @@ func (p *Pipeline) Park(ctx context.Context, itemID int64, reason string) error 
 		return fmt.Errorf("item is %s", it.Stage)
 	}
 	if active, err := p.activeJob(ctx, itemID); err == nil && active != nil {
-		switch active.State {
-		case state.Queued:
-			p.warn(p.Store.CancelQueued(ctx, active.ID, "human", "item parked"), "CancelQueued")
-		case state.Running:
-			p.cancelled.Store(active.ID, true)
-			p.warn(p.Runner.Kill(ctx, containerName(active.ID)), "Kill")
-		}
+		p.warn(p.stopJob(ctx, actor, active, "item parked"), "stop job")
 	}
-	return p.park(ctx, it, "Parked by a human: "+reason)
+	return p.park(ctx, it, fmt.Sprintf("Parked by %s: %s", who(actor), reason))
+}
+
+func who(actor string) string {
+	if actor == "human" {
+		return "a human"
+	}
+	return "the " + actor
 }
 
 func (p *Pipeline) activeJob(ctx context.Context, itemID int64) (*store.Job, error) {
@@ -145,16 +178,20 @@ func (p *Pipeline) activeJob(ctx context.Context, itemID int64) (*store.Job, err
 	return nil, nil
 }
 
-// stopIfCancelled ends a job a human cancelled mid-run. It returns true
-// when the caller must not retry.
+// stopIfCancelled ends a job that was cancelled mid-run. It returns true
+// when the caller must not retry. The job's own context may already be
+// cancelled, so the bookkeeping runs without it.
 func (p *Pipeline) stopIfCancelled(ctx context.Context, j *store.Job, it *store.WorkItem, run agentRun) bool {
 	if _, ok := p.cancelled.LoadAndDelete(j.ID); !ok {
 		return false
 	}
-	p.finish(ctx, j, run, state.Cancelled, "", "cancelled by a human")
-	if it != nil && it.Stage != state.Parked {
-		if cur, err := p.Store.GetItem(ctx, it.ID); err == nil && cur.Stage != state.Parked {
-			p.warn(p.park(ctx, cur, fmt.Sprintf("A human cancelled job %d (%s).", j.ID, j.Kind)), "park")
+	ctx = context.WithoutCancel(ctx)
+	if cur, err := p.Store.GetJob(ctx, j.ID); err == nil && !cur.State.Terminal() {
+		p.finish(ctx, j, run, state.Cancelled, "", "cancelled")
+	}
+	if j.ItemID != nil {
+		if cur, err := p.Store.GetItem(ctx, *j.ItemID); err == nil && cur.Stage != state.Parked && cur.Stage != state.Done {
+			p.warn(p.park(ctx, cur, fmt.Sprintf("Job %d (%s) was cancelled.", j.ID, j.Kind)), "park")
 		}
 	}
 	return true

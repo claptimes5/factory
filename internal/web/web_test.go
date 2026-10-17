@@ -121,6 +121,12 @@ func TestActionsAndCrossSiteRefusal(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-origin POST got %d", resp.StatusCode)
 	}
+	// A DNS-rebinding page reaches the server under its own name.
+	req, _ = http.NewRequest("GET", srv.URL+"/board", nil)
+	req.Host = "evil.example"
+	if resp, _ = client.Do(req); resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("foreign Host got %d", resp.StatusCode)
+	}
 	if len(fa.calls) != 1 || fa.calls[0] != "park:later" {
 		t.Fatalf("calls = %v", fa.calls)
 	}

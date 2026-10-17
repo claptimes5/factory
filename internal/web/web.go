@@ -39,12 +39,15 @@ type Actions interface {
 
 // Server serves the control room.
 type Server struct {
-	Store      *store.Store
-	Actions    Actions
-	Repo       string
-	DailyCap   float64
-	AwaitCap   int
-	Attach     func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
+	Store    *store.Store
+	Actions  Actions
+	Repo     string
+	DailyCap float64
+	AwaitCap int
+	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
+	// Hosts are extra Host header values to accept (a Tailscale name or
+	// address); localhost addresses are always accepted.
+	Hosts      []string
 	tmpl       *template.Template
 	pollPeriod time.Duration
 }
@@ -98,19 +101,32 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /items/{id}/park", s.park)
 	mux.HandleFunc("GET /orchestrator", s.orchestrator)
 	mux.HandleFunc("GET /spend", s.spend)
-	return sameOrigin(mux), nil
+	return s.guard(mux), nil
 }
 
-// sameOrigin rejects cross-site POSTs, so a page in your browser cannot
-// press the control room's buttons.
-func sameOrigin(next http.Handler) http.Handler {
+// guard refuses requests whose Host is not one the control room serves,
+// so a DNS-rebinding page cannot reach it under its own name, and
+// cross-site POSTs, so a page in your browser cannot press its buttons.
+func (s *Server) guard(next http.Handler) http.Handler {
+	allowed := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range s.Hosts {
+		allowed[strings.ToLower(h)] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !allowed[strings.ToLower(strings.Trim(host, "[]"))] {
+			http.Error(w, "unknown host "+r.Host+"; add it to web.hosts", http.StatusMisdirectedRequest)
+			return
+		}
 		if r.Method == http.MethodPost {
-			if o := r.Header.Get("Origin"); o != "" && !strings.HasSuffix(o, "://"+r.Host) {
+			if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host && o != "https://"+r.Host {
 				http.Error(w, "cross-origin request refused", http.StatusForbidden)
 				return
 			}
-			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
 				http.Error(w, "cross-site request refused", http.StatusForbidden)
 				return
 			}
@@ -174,7 +190,7 @@ func (s *Server) needsYou(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-var boardStages = []state.Stage{state.Triage, state.Spec, state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Parked, state.Blocked, state.Done}
+var boardStages = []state.Stage{state.Epic, state.Triage, state.Spec, state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Parked, state.Blocked, state.Done}
 
 type boardCard struct {
 	Item  *store.WorkItem

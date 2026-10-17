@@ -78,6 +78,11 @@ type Pipeline struct {
 	gateSeq    atomic.Int64    // unique suffix for gate container names
 	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
 	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
+	jobCancel  sync.Map        // job id -> context.CancelFunc of a running job
+	// act serializes state-changing actions that check and then act:
+	// intake, human actions and the orchestrator's tools.
+	act    sync.Mutex
+	orchMu sync.Mutex // guards coalescing of orchestrator requests
 
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
@@ -213,7 +218,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if running >= p.Cfg.Budgets.ConcurrentJobs {
 		return nil, nil
 	}
-	spent, err := p.Store.SpendOn(ctx, store.Today())
+	spent, err := p.buildSpend(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +227,8 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.budgetHalt = store.Today()
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
-		return nil, nil
+		// The orchestrator has its own budget, checked when its run starts.
+		return p.Store.ClaimJobExcept(ctx, "triage", "implement", "review", "critic")
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -244,15 +250,31 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	return p.Store.ClaimJob(ctx)
 }
 
+// buildSpend is today's spend on building, without orchestration, which
+// has its own daily cap.
+func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
+	all, err := p.Store.SpendOn(ctx, store.Today())
+	if err != nil {
+		return 0, err
+	}
+	orch, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	return all - orch, err
+}
+
 // Intake turns labeled issues into work items, sends items a human marked
 // factory:retry back to triage, closes out items whose PR merged or closed,
 // and reconciles items left with no job.
 func (p *Pipeline) Intake(ctx context.Context) error {
+	p.act.Lock()
+	defer p.act.Unlock()
 	issues, err := p.GH.ListIssues(ctx, p.Cfg.Intake.Label)
 	if err != nil {
 		return err
 	}
 	for _, is := range issues {
+		if hasLabel(is.Labels, LabelEpic) {
+			continue // epics are split by the orchestrator, never built whole
+		}
 		it, created, err := p.Store.UpsertItem(ctx, p.Cfg.Repo, is.Number, is.Title)
 		if err != nil {
 			return err
@@ -594,6 +616,10 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	p.jobCancel.Store(j.ID, cancel)
+	defer p.jobCancel.Delete(j.ID)
 	var it *store.WorkItem
 	if j.ItemID != nil {
 		p.inflight.Store(*j.ItemID, true)
@@ -603,7 +629,15 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 			p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
 			return
 		}
+		// Parked (or finished) between being queued and being claimed.
+		if it.Stage == state.Parked || it.Stage == state.Done {
+			p.finish(ctx, j, agentRun{}, state.Cancelled, "", "item is "+string(it.Stage))
+			return
+		}
 	}
+	// A cancel that landed after the job's last cancellation check (for
+	// example while it opened the PR) still parks the item.
+	defer p.stopIfCancelled(ctx, j, it, agentRun{})
 	var err error
 	switch j.Kind {
 	case "triage":

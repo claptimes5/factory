@@ -103,7 +103,9 @@ func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
 	ctx := context.Background()
 	e := setup(t)
 	orchestratorOn(e)
-	e.gh.issues[50] = &github.Issue{Number: 50, Title: "Arithmetic", Body: "Add and Sub.", Labels: []string{LabelEpic}}
+	// Labeled ready too: an epic must still never be built whole.
+	e.gh.issues[50] = &github.Issue{Number: 50, Title: "Arithmetic", Body: "Add and Sub.", Labels: []string{LabelEpic, "factory:ready"}}
+	e.p.Cfg.Orchestrator.Labels = []string{"math"}
 	runs := 0
 	e.claude.orch = func(req harness.RunRequest) (string, error) {
 		runs++
@@ -128,21 +130,34 @@ func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
 				t.Errorf("tool list exposes %s: %v", banned, names)
 			}
 		}
-		var ids [2]int64
-		for i, title := range []string{"Add an Add function", "Add a Sub function"} {
-			out, isErr := m.call("create_issue", map[string]any{"title": title, "body": "Part of #50.", "labels": []string{"factory:running", "math"}, "reason": "split epic #50"})
+		out, _ := m.call("list_items", map[string]any{"stage": "epic"})
+		var epics []struct{ ID int64 }
+		json.Unmarshal([]byte(out), &epics)
+		if len(epics) != 1 {
+			t.Fatalf("epic items = %s", out)
+		}
+		epic := epics[0].ID
+		if out, _ := m.call("get_issue", map[string]any{"issue": 50}); !strings.Contains(out, "Add and Sub.") {
+			t.Fatalf("get_issue = %s", out)
+		}
+		create := func(args map[string]any) int64 {
+			out, isErr := m.call("create_issue", args)
 			if isErr {
 				t.Fatalf("create_issue: %s", out)
 			}
 			var r struct{ Item int64 }
-			json.Unmarshal([]byte(out), &r)
-			ids[i] = r.Item
+			json.Unmarshal([]byte(strings.SplitN(out, "\n", 2)[0]), &r)
+			return r.Item
 		}
-		if out, isErr := m.call("set_dependencies", map[string]any{"item": ids[1], "depends_on": []int64{ids[0]}, "reason": "Sub reuses Add's file"}); isErr {
-			t.Fatalf("set_dependencies: %s", out)
-		}
-		if out, isErr := m.call("set_dependencies", map[string]any{"item": ids[0], "depends_on": []int64{ids[1]}, "reason": "oops"}); !isErr {
+		first := create(map[string]any{"title": "Add an Add function", "body": "Part of #50.", "parent": epic,
+			"labels": []string{"Factory:Running", "math", "automerge"}, "reason": "split epic #50"})
+		second := create(map[string]any{"title": "Add a Sub function", "body": "Part of #50.", "parent": epic,
+			"depends_on": []int64{first}, "reason": "Sub reuses Add's file"})
+		if out, isErr := m.call("set_dependencies", map[string]any{"item": first, "depends_on": []int64{second}, "reason": "oops"}); !isErr {
 			t.Fatalf("a cycle must be refused, got %s", out)
+		}
+		if out, isErr := m.call("create_issue", map[string]any{"title": "x", "body": "y", "parent": 999, "reason": "r"}); !isErr {
+			t.Fatalf("a missing parent must be refused, got %s", out)
 		}
 		return `{"summary":"split #50 into two issues"}`, nil
 	}
@@ -167,7 +182,7 @@ func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
 	if first.Stage != state.AwaitingHuman || second.Stage != state.Blocked {
 		t.Fatalf("stages = %s, %s", first.Stage, second.Stage)
 	}
-	if ls := e.gh.issues[51].Labels; !hasLabel(ls, "factory:ready") || !hasLabel(ls, "math") || hasLabel(ls, "factory:running") {
+	if ls := e.gh.issues[51].Labels; !hasLabel(ls, "factory:ready") || !hasLabel(ls, "math") || hasLabel(ls, "Factory:Running") || hasLabel(ls, "automerge") {
 		t.Fatalf("labels = %v", ls)
 	}
 	evs, _ := e.p.Store.EventsByActor(ctx, "orchestrator", 50)
@@ -187,6 +202,16 @@ func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
 	}
 	if st := e.item(t, 52).Stage; st != state.AwaitingHuman {
 		t.Fatalf("second item = %s", st)
+	}
+	if e.claude.calls["triage"] != 2 {
+		t.Fatalf("triage runs = %d; the epic itself must not be triaged", e.claude.calls["triage"])
+	}
+	// Both children merged: the epic is done.
+	e.gh.prs["factory/issue-52"].Merged = true
+	e.p.lastPoll = time.Time{}
+	e.p.Drain(ctx)
+	if st := e.item(t, 50).Stage; st != state.Done {
+		t.Fatalf("epic = %s", st)
 	}
 	// The epic is seen once, however often intake runs.
 	e.p.lastPoll = time.Time{}
@@ -236,8 +261,13 @@ func TestOrchestratorToolPolicy(t *testing.T) {
 	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": r.Item, "stage": "implement", "complexity": "S", "reason": "r"}); err == nil {
 		t.Fatal("enqueue over an active job must be refused")
 	}
+	parked, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 98, "parked")
+	e.p.Store.SetStage(ctx, parked.ID, state.Parked, "test", "")
+	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": parked.ID, "stage": "triage", "reason": "r"}); err == nil || !strings.Contains(err.Error(), "parked") {
+		t.Fatalf("unparking is for humans: %v", err)
+	}
 	other, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 99, "other")
-	e.p.Store.SetStage(ctx, other.ID, state.Parked, "test", "")
+	e.p.Store.SetStage(ctx, other.ID, state.Ready, "test", "")
 	e.p.Store.SetDependencies(ctx, other.ID, []int64{r.Item}, "test", "")
 	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": other.ID, "stage": "implement", "complexity": "S", "reason": "r"}); err == nil || !strings.Contains(err.Error(), "dependencies") {
 		t.Fatalf("unmet dependencies: %v", err)
@@ -261,7 +291,7 @@ func TestOrchestratorToolPolicy(t *testing.T) {
 	if _, err := callTool(t, tools, "retry", map[string]any{"job": 1, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "budget") {
 		t.Fatalf("retry over budget: %v", err)
 	}
-	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": other.ID, "stage": "triage", "reason": "r"}); err == nil || !strings.Contains(err.Error(), "budget") {
+	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": r.Item, "stage": "triage", "reason": "r"}); err == nil {
 		t.Fatalf("enqueue over budget: %v", err)
 	}
 
@@ -359,5 +389,56 @@ func TestRestartCoalescesOrchestratorRuns(t *testing.T) {
 	json.Unmarshal([]byte(queued[0].Input), &in)
 	if strings.Join(in.Reasons, ",") != "interrupted,epic,summary" || !in.Summary {
 		t.Fatalf("input = %+v", in)
+	}
+}
+
+// Dependencies set after a child was triaged hold back its queued build.
+func TestLateDependencyHoldsQueuedBuild(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	a, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 1, "a")
+	b, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 2, "b")
+	e.p.Store.SetStage(ctx, b.ID, state.Ready, "test", "")
+	cx := "S"
+	e.p.Store.UpdateItem(ctx, b.ID, store.ItemUpdate{Complexity: &cx})
+	b, _ = e.p.Store.GetItem(ctx, b.ID)
+	e.p.enqueueImplement(ctx, b, 1, ImplementInput{})
+	e.p.Store.SetStage(ctx, b.ID, state.Implementing, "test", "")
+
+	tools := toolsByName(e.p, 0)
+	out, err := callTool(t, tools, "set_dependencies", map[string]any{"item": b.ID, "depends_on": []int64{a.ID}, "reason": "b needs a"})
+	if err != nil || !strings.Contains(out, "held") {
+		t.Fatalf("%s %v", out, err)
+	}
+	if st := e.item(t, 2).Stage; st != state.Blocked {
+		t.Fatalf("stage = %s", st)
+	}
+	if active, _ := e.p.activeJob(ctx, b.ID); active != nil {
+		t.Fatalf("queued build still active: %+v", active)
+	}
+}
+
+func TestOrchestratorRetryCap(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(80)
+	e.claude.builds = []func(string) error{badBuild, badBuild, badBuild, badBuild, badBuild, badBuild, badBuild}
+	e.p.Drain(ctx) // fails on every tier and parks
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 80).ID, Kind: "implement"})
+	tools := toolsByName(e.p, 0)
+	if _, err := callTool(t, tools, "retry", map[string]any{"job": jobs[0].ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "parked") {
+		t.Fatalf("retrying a parked item: %v", err)
+	}
+	// Unparked into triage by a human; the orchestrator may retry twice.
+	e.p.Store.SetStage(ctx, e.item(t, 80).ID, state.Triage, "human", "")
+	for i := 0; i < MaxOrchestratorRetries; i++ {
+		if _, err := callTool(t, tools, "retry", map[string]any{"job": jobs[len(jobs)-1].ID, "reason": "r"}); err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+		e.p.Drain(ctx)
+		e.p.Store.SetStage(ctx, e.item(t, 80).ID, state.Triage, "human", "")
+	}
+	if _, err := callTool(t, tools, "retry", map[string]any{"job": jobs[len(jobs)-1].ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "already retried") {
+		t.Fatalf("third retry: %v", err)
 	}
 }
