@@ -93,7 +93,7 @@ func TestReplaySetReportsCostPerPass(t *testing.T) {
 	git(t, src, "add", "-A")
 	git(t, src, "commit", "-qm", "base")
 	base := git(t, src, "rev-parse", "HEAD")
-	write(src, "later.go", "package fixture\n\n// added after the base\n")
+	write(src, "later.go", "package fixture\n\n// THE-KNOWN-GOOD-FIX\n")
 	git(t, src, "add", "-A")
 	git(t, src, "commit", "-qm", "later")
 
@@ -128,6 +128,20 @@ func TestReplaySetReportsCostPerPass(t *testing.T) {
 	}, cases)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The builder's copy must not hold anything after the base.
+	frozen := filepath.Join(root, "work", "00-add", "remote.git")
+	if out := git(t, root, "--git-dir="+frozen, "log", "--all", "--format=%s"); strings.Contains(out, "later") {
+		t.Fatalf("frozen remote still has later commits: %s", out)
+	}
+	if out, _ := exec.Command("git", "--git-dir="+frozen, "cat-file", "--batch-all-objects", "--batch-check").Output(); len(out) > 0 {
+		objs := strings.Fields(string(out))
+		for i := 0; i+2 < len(objs); i += 3 {
+			body, _ := exec.Command("git", "--git-dir="+frozen, "cat-file", "-p", objs[i]).Output()
+			if strings.Contains(string(body), "THE-KNOWN-GOOD-FIX") {
+				t.Fatal("the fix's content is still in the frozen remote")
+			}
+		}
 	}
 	if rep.Cases != 2 || rep.Passed != 1 || rep.PassRate != 0.5 {
 		t.Fatalf("report:\n%s", rep.Table())

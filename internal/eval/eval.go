@@ -128,7 +128,7 @@ func Run(ctx context.Context, o Options, cases []Case) (*Report, error) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			o.Log.Info("eval case", "case", c.Name)
-			r, err := runCase(ctx, o, c, filepath.Join(o.WorkDir, fmt.Sprintf("%02d-%s", i, c.Name)))
+			r, err := runCase(ctx, o, c, filepath.Join(o.WorkDir, fmt.Sprintf("%02d-%s", i, c.Name)), fmt.Sprintf("eval%d-", i))
 			if err != nil {
 				r = Result{Case: c.Name, Reason: "eval error: " + err.Error()}
 			}
@@ -153,7 +153,7 @@ func Run(ctx context.Context, o Options, cases []Case) (*Report, error) {
 	return rep, ctx.Err()
 }
 
-func runCase(ctx context.Context, o Options, c Case, dir string) (Result, error) {
+func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result, error) {
 	res := Result{Case: c.Name}
 	if err := os.RemoveAll(dir); err != nil {
 		return res, err
@@ -175,12 +175,12 @@ func runCase(ctx context.Context, o Options, c Case, dir string) (Result, error)
 		return res, err
 	}
 	defer func() { _ = st.Close() }()
-	gh := newMemGH()
-	gh.addIssue(1, c.Title, c.Body, cfg.Intake.Label)
+	gh := github.NewMemory()
+	gh.AddIssue(1, c.Title, c.Body, cfg.Intake.Label)
 	p := &pipeline.Pipeline{
 		Cfg: &cfg, Store: st, GH: gh, Runner: o.Runner, Harnesses: o.Harnesses, Secrets: o.Secrets, Log: o.Log.With("case", c.Name),
 		Git:      &pipeline.Git{RemoteURL: remote, Author: "factory-eval <eval@localhost>", AskPassDir: dir},
-		GateExec: o.GateExec,
+		GateExec: o.GateExec, JobPrefix: prefix,
 	}
 	start := time.Now()
 	if err := p.Drain(ctx); err != nil {
@@ -237,7 +237,26 @@ func freeze(ctx context.Context, o Options, c Case, remote, base string) error {
 	if err := g.CloneBare(ctx, remote); err != nil {
 		return err
 	}
-	return gitRun(ctx, "--git-dir="+remote, "update-ref", "refs/heads/"+base, c.BaseSHA+"^{commit}")
+	if err := gitRun(ctx, "--git-dir="+remote, "update-ref", "refs/heads/"+base, c.BaseSHA+"^{commit}"); err != nil {
+		return err
+	}
+	// Keep only what is reachable from the base, so the builder's clone
+	// cannot contain the known-good fix (or anything after it).
+	refs, err := exec.CommandContext(ctx, "git", "--git-dir="+remote, "for-each-ref", "--format=%(refname)").Output()
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(string(refs)) {
+		if ref != "refs/heads/"+base {
+			if err := gitRun(ctx, "--git-dir="+remote, "update-ref", "-d", ref); err != nil {
+				return err
+			}
+		}
+	}
+	if err := gitRun(ctx, "--git-dir="+remote, "reflog", "expire", "--expire=now", "--all"); err != nil {
+		return err
+	}
+	return gitRun(ctx, "--git-dir="+remote, "gc", "--quiet", "--prune=now")
 }
 
 func gitRun(ctx context.Context, args ...string) error {

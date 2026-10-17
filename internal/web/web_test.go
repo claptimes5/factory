@@ -51,7 +51,11 @@ func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	st.SetGateResults(ctx, id, []store.GateResult{{Gate: "test", Status: "fail", Detail: "boom"}})
 	st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 0.5, Error: "gates failed"})
 	fa := &fakeActions{}
-	s := &Server{Store: st, Actions: fa, Repo: "o/r", DailyCap: 60, AwaitCap: 5, pollPeriod: 10 * time.Millisecond}
+	cmpDir := t.TempDir()
+	os.MkdirAll(filepath.Join(cmpDir, "5-run"), 0o755)
+	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.json"), []byte(`{"issue":5,"title":"Add it","arms":[{"skillset":"tdd","stage":"awaiting_human","cost_usd":1.5},{"skillset":"none","stage":"parked"}]}`), 0o644)
+	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.md"), []byte("# Skill comparison: <b>#5</b>"), 0o644)
+	s := &Server{Store: st, Actions: fa, Repo: "o/r", DailyCap: 60, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, CompareDir: cmpDir}
 	h, err := s.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +90,8 @@ func TestPagesRender(t *testing.T) {
 		"/spend":            {"$0.50"},
 		"/metrics":          {"Cost per merged PR", "First-pass rate"},
 		"/metrics.json":     {"\"cost_per_merged_usd\""},
+		"/compare":          {"#5 Add it", "tdd:</span> passed $1.50", "none:</span> parked"},
+		"/compare/5-run":    {"Skill comparison: &lt;b&gt;#5"},
 	}
 	for path, wants := range pages {
 		body := get(t, srv.URL+path)

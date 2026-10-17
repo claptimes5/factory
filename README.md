@@ -106,8 +106,9 @@ in `web.hosts`.
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
 | `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |
+| `factory compare ISSUE -skills a,b [-complexity M] [-no-push]` | Build one issue once per skill set and report the arms side by side |
 | `factory pull ISSUE` | Fetch an item's branch into the current checkout and copy its job transcripts to `.factory/issue-N/` |
-| `factory last-job`, `factory wait-job AFTER TIMEOUT` | Used by `deploy/upgrade.sh` |
+| `factory last-job`, `factory wait-job AFTER TIMEOUT`, `factory db-path` | Used by `deploy/upgrade.sh` |
 | `factory mcp-bridge SOCKET` | Internal: the orchestrator's stdio MCP server, run inside its container |
 
 ## Orchestrator
@@ -158,10 +159,11 @@ against the build budget.
 - **Session resume.** With the Docker runner, an implement retry on the same
   model continues the previous attempt's Claude session (best effort; a
   missing session starts fresh).
-- **Safe upgrade.** `sudo deploy/upgrade.sh NEW_BINARY` backs up the
-  database, drains, swaps the binary (keeping `factory.old`), migrates,
-  watches the next job, and rolls back if that job fails before doing any
-  work or the daemon stops.
+- **Safe upgrade.** `sudo deploy/upgrade.sh NEW_BINARY` stops the daemon,
+  backs up the database, swaps the binary (keeping `factory.old`), migrates,
+  starts it and watches the next job. If the migration fails, the daemon
+  stops, or that job fails before doing any work, it restores the old binary
+  (and the database backup when the migration failed).
 
 ## Skill sets
 
@@ -176,6 +178,16 @@ routing:
 
 Every job records the skill set it ran with (`factory status` shows it, and
 so does the PR's job table).
+
+**Comparing skill sets.** `factory compare 42 -skills tdd-strict,none` builds
+issue #42 once per skill set (`none` means no skills), in parallel, from one
+frozen copy of the base, at the same complexity tier (the item's triage, or
+`-complexity`). Every arm goes through the same gates and review, but no PR
+is opened. You get a side-by-side report covering the outcome, review
+verdict and findings, failed gates, implement attempts, cost, time and diff.
+It's saved under `data/compare/` and shown in the control room under
+Compare. Each arm's branch is pushed as `factory/compare-42-<set>` (pass
+`-no-push` to keep them local).
 
 ## Configuration
 
@@ -236,4 +248,4 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
 M4 (control room and notifications), M5 (the orchestrator) and M6 (hidden
 scenarios, metrics, `factory eval`, session resume, safe upgrade) are in.
-Next: side-by-side skill comparison and Dashboard v2.
+Side-by-side skill comparison is in too. Next: Dashboard v2.

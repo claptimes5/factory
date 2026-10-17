@@ -26,6 +26,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/eval"
 	"github.com/claptimes5/factory/internal/github"
@@ -47,7 +48,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -103,6 +104,9 @@ func run(args []string) error {
 		}
 		fmt.Println(id)
 		return nil
+	case "db-path":
+		fmt.Println(filepath.Join(dataDir, "factory.db"))
+		return nil
 	case "wait-job":
 		if fs.NArg() != 3 {
 			return usage()
@@ -113,6 +117,8 @@ func run(args []string) error {
 			return usage()
 		}
 		return pull(ctx, cfg, st, fs.Arg(1))
+	case "compare":
+		return runCompare(ctx, cfg, st, fs.Args()[1:])
 	case "eval":
 		return runEval(ctx, cfg, fs.Args()[1:])
 	case "serve", "run-once":
@@ -253,7 +259,7 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 		return fmt.Errorf("web.listen: %w", err)
 	}
 	srv := &web.Server{Store: st, Actions: p, Repo: cfg.Repo, DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
-		Hosts: append([]string{host}, cfg.Web.Hosts...)}
+		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	if cfg.Runner.Kind == "docker" {
 		srv.Attach = web.TTYDAttach(st, host)
 	}
@@ -459,7 +465,7 @@ func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) 
 // waitJob waits for the first job after a given id to finish, for
 // deploy/upgrade.sh. It fails when that job failed before its agent did
 // any work (cost 0), which points at the daemon or the image rather than
-// at the task, or when nothing finishes in time.
+// at the task. Nothing finishing in time is not a failure.
 func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) error {
 	after, err := strconv.ParseInt(afterArg, 10, 64)
 	if err != nil {
@@ -492,5 +498,61 @@ func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) 
 		case <-time.After(10 * time.Second):
 		}
 	}
-	return fmt.Errorf("no job finished within %s", timeout)
+	// An idle factory runs no job; upgrade.sh then relies on the daemon
+	// still being up.
+	fmt.Printf("no job finished within %s\n", timeout)
+	return nil
+}
+
+// runCompare runs one issue once per skill set and writes a side-by-side
+// report under data/compare/.
+func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	skills := fs.String("skills", "", "comma-separated skill sets to compare (\"none\" for no skills)")
+	complexity := fs.String("complexity", "", "S, M or L (default: the item's triage, else M)")
+	noPush := fs.Bool("no-push", false, "keep the arms' branches local instead of pushing factory/compare-* branches")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: factory compare <issue> -skills a,b")
+	}
+	issue, err := strconv.Atoi(strings.TrimPrefix(args[0], "#"))
+	if err != nil {
+		return fmt.Errorf("compare: %q is not an issue number", args[0])
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	risk := "low"
+	if it, err := st.ItemByIssue(ctx, cfg.Repo, issue); err == nil {
+		if *complexity == "" {
+			*complexity = it.Complexity
+		}
+		if it.Risk != "" {
+			risk = it.Risk
+		}
+	}
+	if *complexity == "" {
+		*complexity = "M"
+	}
+	p, err := build(cfg, st)
+	if err != nil {
+		return err
+	}
+	id := fmt.Sprintf("%d-%s", issue, time.Now().UTC().Format("20060102T150405Z"))
+	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
+	rep, err := compare.Run(ctx, compare.Options{
+		Cfg: cfg, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GH, Git: p.Git,
+		Dir: dir, Push: !*noPush,
+	}, issue, strings.Split(*skills, ","), *complexity, risk)
+	if err != nil {
+		return err
+	}
+	if err := rep.Save(dir); err != nil {
+		return err
+	}
+	_ = st.AddEvent(ctx, store.Event{Actor: "human", Type: "compare_done", Reason: fmt.Sprintf("#%d: %s", issue, *skills), Data: dir})
+	for _, a := range rep.Arms {
+		fmt.Printf("%-16s %-16s review=%-9s cost=$%.2f time=%.0fs %s\n", a.Skillset, a.Stage, a.Review, a.CostUSD, a.Seconds, a.Error)
+	}
+	fmt.Printf("\nReport: %s (also in the control room under Compare)\n", filepath.Join(dir, "report.md"))
+	return nil
 }

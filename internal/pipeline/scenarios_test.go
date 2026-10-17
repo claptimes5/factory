@@ -36,20 +36,20 @@ func TestHiddenScenarioFailsWithoutLeaking(t *testing.T) {
 		t.Fatalf("stage = %s", it.Stage)
 	}
 	prompts := e.claude.prompts["implement"]
-	if len(prompts) != 2 || !strings.Contains(prompts[1], "scenario:subtracts") {
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "scenario:2") {
 		t.Fatalf("the retry should name the failed scenario:\n%s", strings.Join(prompts, "\n---\n"))
 	}
 	for _, pr := range append(prompts, e.codex.prompts["review"]...) {
-		if strings.Contains(pr, "SCENARIO-SECRET") || strings.Contains(pr, "test -f sub.go") {
+		if strings.Contains(pr, "SCENARIO-SECRET") || strings.Contains(pr, "test -f sub.go") || strings.Contains(pr, "subtracts") {
 			t.Fatalf("a prompt leaked the scenario:\n%s", pr)
 		}
 	}
 	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
-	log, err := os.ReadFile(filepath.Join(e.p.jobDir(jobs[len(jobs)-1].ID), "scenarios", "subtracts.log"))
+	log, err := os.ReadFile(filepath.Join(e.p.jobDir(jobs[len(jobs)-1].ID), "scenarios", "2-subtracts.log"))
 	if err != nil || !strings.Contains(string(log), "SCENARIO-SECRET") {
 		t.Fatalf("the human's copy of the output: %q %v", log, err)
 	}
-	if body := e.gh.comments[it.PRNumber][0]; !strings.Contains(body, "| scenario:adds | pass |") || !strings.Contains(body, "| scenario:subtracts | pass |") {
+	if body := e.gh.comments[it.PRNumber][0]; !strings.Contains(body, "| scenario:1 | pass |") || !strings.Contains(body, "| scenario:2 | pass |") {
 		t.Fatalf("PR body lacks scenario results:\n%s", body)
 	}
 }
@@ -88,10 +88,14 @@ test('home says hello', async ({ page }) => {
 `)
 	writeFile(work, "index.html", `<h1 id="t">Hello</h1>`)
 	if rs := e.p.runScenarios(context.Background(), 1, work); len(rs) != 1 || rs[0].Status != "pass" {
-		log, _ := os.ReadFile(filepath.Join(e.p.jobDir(1), "scenarios", "home.log"))
+		log, _ := os.ReadFile(filepath.Join(e.p.jobDir(1), "scenarios", "1-home.log"))
 		t.Fatalf("results = %+v\n%s", rs, log)
 	}
 	writeFile(work, "index.html", `<h1 id="t">Bye</h1>`)
+	// A fake Playwright committed by the builder must not be the one that runs.
+	writeFile(work, "node_modules/.bin/playwright", "#!/bin/sh\nexit 0\n")
+	os.Chmod(filepath.Join(work, "node_modules/.bin/playwright"), 0o755)
+	writeFile(work, "package.json", `{"name":"x"}`)
 	if rs := e.p.runScenarios(context.Background(), 2, work); rs[0].Status != "fail" {
 		t.Fatalf("a broken page must fail: %+v", rs)
 	}

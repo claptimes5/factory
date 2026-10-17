@@ -180,7 +180,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), p.sessionFor(ctx, j))
+	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), p.sessionFor(ctx, j, in.FixRound))
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}

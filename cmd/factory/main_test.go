@@ -31,8 +31,8 @@ func TestWaitJob(t *testing.T) {
 	if err := waitJob(ctx, st, itoa(first), "1s"); err == nil {
 		t.Fatal("a job that failed before doing any work must fail the upgrade")
 	}
-	if err := waitJob(ctx, st, "99", "1ms"); err == nil {
-		t.Fatal("nothing finishing in time must fail")
+	if err := waitJob(ctx, st, "99", "1ms"); err != nil {
+		t.Fatalf("an idle factory is not a failed upgrade: %v", err)
 	}
 }
 

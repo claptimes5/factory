@@ -17,11 +17,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -46,6 +48,8 @@ type Server struct {
 	DailyCap float64
 	AwaitCap int
 	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
+	// CompareDir holds `factory compare` reports, one directory per run.
+	CompareDir string
 	// Hosts are extra Host header values to accept (a Tailscale name or
 	// address); localhost addresses are always accepted.
 	Hosts      []string
@@ -110,6 +114,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /orchestrator", s.orchestrator)
 	mux.HandleFunc("GET /spend", s.spend)
 	mux.HandleFunc("GET /metrics", s.metrics)
+	mux.HandleFunc("GET /compare", s.compareList)
+	mux.HandleFunc("GET /compare/{id}", s.compareView)
 	mux.HandleFunc("GET /metrics.json", s.metricsJSON)
 	return s.guard(mux), nil
 }
@@ -484,6 +490,46 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "metrics", map[string]any{"R": rep})
+}
+
+type compareRun struct {
+	ID     string
+	Report compare.Report
+}
+
+func (s *Server) compareRuns() []compareRun {
+	var runs []compareRun
+	ents, _ := os.ReadDir(s.CompareDir)
+	for _, e := range ents {
+		b, err := os.ReadFile(filepath.Join(s.CompareDir, e.Name(), "report.json"))
+		if err != nil {
+			continue
+		}
+		var r compare.Report
+		if json.Unmarshal(b, &r) == nil {
+			runs = append(runs, compareRun{e.Name(), r})
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool { return runs[i].Report.Started.After(runs[j].Report.Started) })
+	return runs
+}
+
+func (s *Server) compareList(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "compare", map[string]any{"Runs": s.compareRuns()})
+}
+
+func (s *Server) compareView(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.CompareDir == "" || id != filepath.Base(id) || strings.HasPrefix(id, ".") {
+		http.NotFound(w, r)
+		return
+	}
+	md, err := os.ReadFile(filepath.Join(s.CompareDir, id, "report.md"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.render(w, "compare_view", map[string]any{"ID": id, "Report": string(md)})
 }
 
 func (s *Server) metricsJSON(w http.ResponseWriter, r *http.Request) {

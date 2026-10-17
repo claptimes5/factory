@@ -36,6 +36,9 @@ type Spec struct {
 	Cmd      []string
 	Stdin    io.Reader
 	Timeout  time.Duration
+	// NoNetwork runs without any network (hidden scenarios, so code under
+	// test cannot send them anywhere).
+	NoNetwork bool
 }
 
 // Paths are the locations a command should use for the checkout, the
@@ -48,7 +51,8 @@ type Runner interface {
 	Run(ctx context.Context, s Spec, stdout io.Writer) (exitCode int, err error)
 	Alive(ctx context.Context, name string) bool
 	Kill(ctx context.Context, name string) error
-	// KillAll removes every container this runner started.
+	// KillAll removes every container the daemon's own pipeline started
+	// (not those of a concurrent factory eval or compare).
 	KillAll(ctx context.Context) error
 }
 
@@ -91,7 +95,9 @@ func (d *Docker) Args(s Spec) []string {
 	if d.Memory != "" {
 		a = append(a, "--memory", d.Memory)
 	}
-	if d.Network != "" {
+	if s.NoNetwork {
+		a = append(a, "--network", "none")
+	} else if d.Network != "" {
 		a = append(a, "--network", d.Network)
 	}
 	ro := ""
@@ -150,7 +156,7 @@ func (d *Docker) Kill(ctx context.Context, name string) error {
 }
 
 func (d *Docker) KillAll(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-aq", "--filter", "label=factory.job").Output()
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-aq", "--filter", "label=factory.job", "--filter", "name=^factory-job-").Output()
 	if err != nil {
 		return err
 	}
