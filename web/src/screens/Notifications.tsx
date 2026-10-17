@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Bell, CircleDollarSign, GitPullRequest, Hand } from "lucide-react";
 import { useNotifications } from "@/api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";

@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: vet
@@ -22,7 +22,7 @@ jobs:
         run: go build ./...
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5.0
+          version: v2.14.0
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -31,12 +31,12 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci

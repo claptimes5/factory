@@ -25,7 +25,7 @@ it back through triage.
 
 ## Setup
 
-You need a Linux host with Docker and Go 1.23+.
+You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolchain itself).
 
 1. **Build the job image.** It has the Go toolchain, golangci-lint and the
    pinned `claude` and `codex` CLIs.

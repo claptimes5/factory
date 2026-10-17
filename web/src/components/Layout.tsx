@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet } from "react-router";
 import { Activity, Bell, Bot, LayoutGrid, Moon, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview } from "@/api/client";
 import { useBrowserNotifications } from "@/lib/notify";

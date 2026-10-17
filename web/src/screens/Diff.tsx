@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { APIError, useDiff, useItem } from "@/api/client";
 import { Empty, ErrorBox, Loading } from "@/components/common";
 import { DiffView } from "@/components/DiffView";

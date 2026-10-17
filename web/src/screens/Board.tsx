@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { AlertTriangle, GitPullRequest, Hand } from "lucide-react";
 import { useBoard, type Card as CardT } from "@/api/client";
 import { ErrorBox, Loading } from "@/components/common";

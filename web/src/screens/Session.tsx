@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { useItem, useJob } from "@/api/client";
 import { Actions, Empty, ErrorBox, GateList, JobStateBadge, Loading } from "@/components/common";
 import { Terminal } from "@/components/Terminal";
