@@ -280,7 +280,6 @@ export interface paths {
          * The job's transcript as server-sent events
          * @description One `line` event per transcript line, with data `{"text": string}`,
          *     then one `done` event with data `{"state": string}` once the job ends.
-         *
          */
         get: {
             parameters: {
@@ -324,7 +323,6 @@ export interface paths {
          * @description Output arrives as binary frames. Send text frames holding
          *     `{"type":"input","data":string}` for keystrokes and
          *     `{"type":"resize","cols":int,"rows":int}` when the window changes.
-         *
          */
         get: {
             parameters: {

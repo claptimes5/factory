@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { ExternalLink } from "lucide-react";
 import { useItem, type Event } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";

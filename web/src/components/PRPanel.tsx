@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { CheckCircle2, CircleDashed, ExternalLink, GitPullRequest, XCircle } from "lucide-react";
 import { usePRPanel, type Finding, type PRPanel as PRPanelT } from "@/api/client";
 import { Actions, Empty, ErrorBox, GateList, Loading } from "@/components/common";

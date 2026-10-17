@@ -1,4 +1,4 @@
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, Link } from "react-router";
 import { useFeed } from "@/api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/card";

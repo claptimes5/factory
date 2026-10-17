@@ -1,14 +1,14 @@
 # Job image: one per repo. Toolchain plus pinned agent CLIs.
 # Build: docker build -t factory-job:latest deploy/job-image
-FROM golang:1.24-bookworm
+FROM golang:1.27-bookworm
 
 ARG CLAUDE_CODE_VERSION=2.1.302
 ARG CODEX_VERSION=0.163.0
-ARG GOLANGCI_LINT_VERSION=v2.5.0
-ARG NODE_MAJOR=22
+ARG GOLANGCI_LINT_VERSION=v2.14.0
+ARG NODE_MAJOR=24
 # Set to 1 for repos with Playwright scenarios (adds Chromium, ~400 MB).
 ARG PLAYWRIGHT=0
-ARG PLAYWRIGHT_VERSION=1.56.1
+ARG PLAYWRIGHT_VERSION=1.63.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq ripgrep \

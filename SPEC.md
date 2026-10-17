@@ -472,7 +472,7 @@ The first useful milestone, an unattended issue-to-draft-PR loop, is M3, roughly
 
 ```text
 Read SPEC.md (this document). Implement milestone M1 only.
-Constraints: Go 1.23+, modernc.org/sqlite (no cgo), standard library
+Constraints: Go 1.26+, modernc.org/sqlite (no cgo), standard library
 where possible, no web framework. Write tests first for the job-claim
 statement and the work-item state machine. Stop when `go test ./...`
 passes and summarize what is left for M2.
