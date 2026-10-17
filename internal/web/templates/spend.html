@@ -1,0 +1,6 @@
+{{template "head" .}}
+<h1>Spend</h1>
+<p>Today: <b>{{money (index .Days 0).Cost}}</b> of {{money .Cap}} · last 7 days: <b>{{money .Week}}</b> · cost per merged PR: <b>{{money .PerPR}}</b> ({{.Merged}} merged)</p>
+<h2>By day</h2><table>{{range .Days}}<tr><td>{{.Day}}</td><td>{{money .Cost}}</td></tr>{{end}}</table>
+<h2>Merged work by model</h2><table>{{range .Models}}<tr><td>{{.Model}}</td><td>{{money .Cost}}</td></tr>{{else}}<tr><td class="mut">Nothing merged yet.</td></tr>{{end}}</table>
+{{template "foot" .}}

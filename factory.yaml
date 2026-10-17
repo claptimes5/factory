@@ -9,6 +9,9 @@ intake:
   label: "factory:ready"      # issues with this label become work items
   poll_interval: 60s
 
+web:
+  listen: 127.0.0.1:8080      # control room; use a Tailscale IP for phone access
+
 runner:
   kind: docker                # docker | local (local runs CLIs on the host; dev only)
   image: factory-job:latest   # built from deploy/job-image

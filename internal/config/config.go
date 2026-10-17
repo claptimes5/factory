@@ -40,6 +40,12 @@ type Config struct {
 		Memory  string `yaml:"memory"`
 	} `yaml:"runner"`
 
+	Web struct {
+		// Listen is the control room address. Keep it on localhost or a
+		// Tailscale address: there is no login in v1.
+		Listen string `yaml:"listen"`
+	} `yaml:"web"`
+
 	Routing map[string]Route `yaml:"routing"`
 
 	Escalation struct {
@@ -140,6 +146,9 @@ func (c *Config) defaults() {
 	}
 	if c.Intake.PollInterval.Duration == 0 {
 		c.Intake.PollInterval.Duration = time.Minute
+	}
+	if c.Web.Listen == "" {
+		c.Web.Listen = "127.0.0.1:8080"
 	}
 	if c.Runner.Kind == "" {
 		c.Runner.Kind = "docker"

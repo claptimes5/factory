@@ -75,6 +75,23 @@ Set a spend alert on both API accounts. The daemon enforces its own caps
 jobs until midnight UTC, three concurrent jobs, and no new implement jobs
 while five PRs wait for you.
 
+## Control room
+
+`factory serve` also serves the control room on `web.listen`
+(default `127.0.0.1:8080`). There is no login, so keep it on localhost or a
+Tailscale address.
+
+- **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
+- **Board:** items by stage, with model and cost.
+- **Job view:** live log over SSE, gate results, verdict, cost; buttons to
+  retry, retry one tier up, cancel, and attach a terminal (with `ttyd`
+  installed; otherwise it shows the `docker exec` command).
+- **Orchestrator log** and **Spend** (today, 7 days, cost per merged PR).
+
+Notifications go to `FACTORY_NOTIFY_URL`: an ntfy topic URL for phone push,
+a Slack incoming webhook, or a Discord webhook. You get one when an item
+parks, a PR is ready, the daily budget is hit, or the job image is missing.
+
 ## Commands
 
 | Command | What it does |
@@ -148,7 +165,7 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 
 ## Status
 
-M1 (store, claim, config), M2 (runner and adapters) and M3 (the pipeline)
-are in. Next: the control room and notifications (M4), the orchestrator
-(M5), hidden scenarios and `factory eval` (M6), side-by-side skill
-comparison, and Dashboard v2.
+M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline) and
+M4 (control room and notifications) are in. Next: the orchestrator (M5),
+hidden scenarios and `factory eval` (M6), side-by-side skill comparison, and
+Dashboard v2.

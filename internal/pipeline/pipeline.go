@@ -76,6 +76,7 @@ type Pipeline struct {
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
 	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
+	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -625,3 +626,5 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 }
 
 func specFor(work, out string) runner.Spec { return runner.Spec{Workdir: work, OutDir: out} }
+
+func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

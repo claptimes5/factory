@@ -55,6 +55,9 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 	dir := p.jobDir(j.ID)
 	out := filepath.Join(dir, "out")
 	fail := func(run agentRun, st state.JobState, msg string) error {
+		if p.stopIfCancelled(ctx, j, it, run) {
+			return nil
+		}
 		p.finish(ctx, j, run, st, "", msg)
 		if j.Attempt < maxTriageAttempts {
 			return p.enqueueTriage(ctx, it, j.Attempt+1, "")
@@ -77,6 +80,9 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	schema, _ := verdict.Schema("triage")
 	run := p.runAgent(ctx, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("triage"))
+	if p.stopIfCancelled(ctx, j, it, run) {
+		return nil
+	}
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
 	}
@@ -134,6 +140,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 
 	fail := func(run agentRun, st state.JobState, msg string) error {
+		if p.stopIfCancelled(ctx, j, it, run) {
+			return nil
+		}
 		p.finish(ctx, j, run, st, "", msg)
 		next := in
 		next.PreviousFailure = msg
@@ -166,6 +175,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	run := p.runAgent(ctx, j, ws.Work, out, prompt, "", false, p.Cfg.Timeout("implement"))
+	if p.stopIfCancelled(ctx, j, it, run) {
+		return nil
+	}
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
 	}
@@ -361,6 +373,9 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return err
 	}
 	fail := func(run agentRun, st state.JobState, msg string) error {
+		if p.stopIfCancelled(ctx, j, it, run) {
+			return nil
+		}
 		p.finish(ctx, j, run, st, "", msg)
 		if j.Attempt < maxReviewAttempts {
 			return p.enqueueReview(ctx, it, j.Kind, j.Attempt+1, in)
@@ -400,6 +415,9 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	schema, _ := verdict.Schema("review")
 	run := p.runAgent(ctx, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("review"))
+	if p.stopIfCancelled(ctx, j, it, run) {
+		return nil
+	}
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
 	}

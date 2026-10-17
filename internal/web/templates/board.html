@@ -1,0 +1,8 @@
+{{template "head" .}}
+<h1>Board</h1>
+<div class="cols">{{range .Cols}}<div class="col"><div class="mut">{{.Stage}} ({{len .Cards}})</div>
+{{range .Cards}}<div class="card"><a href="/items/{{.Item.ID}}">#{{.Item.IssueNumber}} {{short .Item.Title 60}}</a><br>
+<span class="mut">{{if .Item.Complexity}}{{.Item.Complexity}}/{{.Item.Risk}} · {{end}}{{if .Model}}{{.Model}} · {{end}}{{money .Cost}}</span>
+{{if .Live}}<span class="pill ok">running</span>{{end}}{{if eq (print .Item.Stage) "awaiting_human" "parked"}}<span class="pill warn">needs you</span>{{end}}</div>{{end}}
+</div>{{end}}</div>
+{{template "foot" .}}

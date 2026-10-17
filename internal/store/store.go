@@ -782,3 +782,69 @@ func (s *Store) Events(ctx context.Context, itemID int64) ([]Event, error) {
 	}
 	return out, rows.Err()
 }
+
+// CancelQueued cancels a job that has not started.
+func (s *Store) CancelQueued(ctx context.Context, id int64, actor, reason string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var item sql.NullInt64
+		res, err := tx.Exec(`UPDATE jobs SET state = 'cancelled', finished_at = ?, error = ? WHERE id = ? AND state = 'queued'`, Now(), reason, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("job %d is not queued", id)
+		}
+		if err := tx.QueryRow(`SELECT item_id FROM jobs WHERE id = ?`, id).Scan(&item); err != nil {
+			return err
+		}
+		var itemID *int64
+		if item.Valid {
+			itemID = &item.Int64
+		}
+		return insertEvent(tx, Event{Actor: actor, ItemID: itemID, JobID: &id, Type: "job_cancelled", Reason: reason})
+	})
+}
+
+// Dependencies returns the ids of items an item depends on.
+func (s *Store) Dependencies(ctx context.Context, itemID int64) ([]int64, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT depends_on_id FROM dependencies WHERE item_id = ? ORDER BY depends_on_id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// EventsByActor returns the newest events by one actor, newest first.
+func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]Event, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id, at, actor, item_id, job_id, type, COALESCE(reason,''), COALESCE(data,'')
+		FROM events WHERE actor = ? ORDER BY id DESC LIMIT ?`, actor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var item, job sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &item, &job, &e.Type, &e.Reason, &e.Data); err != nil {
+			return nil, err
+		}
+		if item.Valid {
+			e.ItemID = &item.Int64
+		}
+		if job.Valid {
+			e.JobID = &job.Int64
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
