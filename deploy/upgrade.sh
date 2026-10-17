@@ -25,6 +25,7 @@ as_factory() { (cd "$DIR" && sudo -u "$USER_" --preserve-env "$@"); }
 STARTED=0
 on_exit() { [ "$STARTED" = 1 ] || systemctl start "$UNIT" || echo "!! $UNIT did not start; check journalctl -u $UNIT" >&2; }
 trap on_exit EXIT
+trap 'exit 130' INT TERM
 
 echo "== draining (running jobs get the unit's stop timeout)"
 systemctl stop "$UNIT"
