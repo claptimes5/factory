@@ -1,0 +1,38 @@
+{
+  "name": "factory-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "gen": "openapi-typescript ../internal/web/openapi.yaml -o src/api/schema.d.ts",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run gen && tsc --noEmit && vite build",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.62.0",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "diff2html": "3.4.51",
+    "lucide-react": "0.468.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.28.0",
+    "tailwind-merge": "2.5.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@tailwindcss/vite": "4.1.18",
+    "@types/react": "18.3.18",
+    "@types/node": "22.10.2",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "openapi-typescript": "7.4.4",
+    "tailwindcss": "4.1.18",
+    "typescript": "5.7.2",
+    "vite": "6.4.3"
+  }
+}

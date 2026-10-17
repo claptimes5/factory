@@ -52,7 +52,15 @@ type Server struct {
 	CompareDir string
 	// Hosts are extra Host header values to accept (a Tailscale name or
 	// address); localhost addresses are always accepted.
-	Hosts      []string
+	Hosts []string
+	// JobsDir is data/jobs, where review jobs save the diff they saw.
+	JobsDir string
+	// Issue and Checks read GitHub for the dashboard (either may be nil).
+	Issue  IssueFunc
+	Checks CheckFunc
+	// Exec builds the command a live terminal runs for a running job
+	// (nil when the runner has no containers to attach to).
+	Exec       ExecFunc
 	tmpl       *template.Template
 	pollPeriod time.Duration
 }
@@ -117,6 +125,10 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /compare", s.compareList)
 	mux.HandleFunc("GET /compare/{id}", s.compareView)
 	mux.HandleFunc("GET /metrics.json", s.metricsJSON)
+	s.routesAPI(mux)
+	if err := s.routesApp(mux); err != nil {
+		return nil, err
+	}
 	return s.guard(mux), nil
 }
 
@@ -288,12 +300,22 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 
 // stream tails the job's log file over SSE until the job ends.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	id, err := idParam(r)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	s.tailLog(w, r, id, func(line string) string {
+		return fmt.Sprintf("event: line\ndata: <div class=\"l\">%s</div>\n\n", template.HTMLEscapeString(summarize(line)))
+	}, func(st state.JobState) string {
+		return fmt.Sprintf("event: done\ndata: <em>job %s</em>\n\n", st)
+	})
+}
+
+// tailLog follows a job's log file, writing line(l) for each complete line
+// and done(state) once the job has ended.
+func (s *Server) tailLog(w http.ResponseWriter, r *http.Request, id int64, line func(string) string, done func(state.JobState) string) {
+	ctx := r.Context()
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", 500)
@@ -318,11 +340,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		}
 		if rd != nil {
 			for {
-				line, err := rd.ReadString('\n')
+				ln, err := rd.ReadString('\n')
 				if err == io.EOF {
-					if line != "" {
+					if ln != "" {
 						// partial line: rewind so it is re-read when complete
-						_, _ = f.Seek(-int64(len(line)), io.SeekCurrent)
+						_, _ = f.Seek(-int64(len(ln)), io.SeekCurrent)
 						rd.Reset(f)
 					}
 					break
@@ -330,12 +352,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return
 				}
-				fmt.Fprintf(w, "event: line\ndata: <div class=\"l\">%s</div>\n\n", template.HTMLEscapeString(summarize(line)))
+				_, _ = io.WriteString(w, line(ln))
 			}
 			fl.Flush()
 		}
 		if j.State.Terminal() {
-			fmt.Fprintf(w, "event: done\ndata: <em>job %s</em>\n\n", j.State)
+			_, _ = io.WriteString(w, done(j.State))
 			fl.Flush()
 			return
 		}

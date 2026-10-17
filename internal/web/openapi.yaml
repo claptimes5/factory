@@ -1,0 +1,394 @@
+openapi: 3.1.0
+info:
+  title: Factory control room API
+  version: "1"
+  description: |
+    The JSON API behind the dashboard at /app/. It is served on the same
+    localhost or Tailscale address as the control room and has no login, so
+    never expose it publicly. POST requests must be application/json and
+    same-origin. Every property is always present; nullable ones are null
+    when unset.
+servers:
+  - url: /api/v1
+paths:
+  /overview:
+    get:
+      summary: Header strip shown on every screen
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Overview" } } } }
+  /board:
+    get:
+      summary: Work items in columns by stage
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+  /items/{id}:
+    get:
+      summary: One item with its jobs, events, dependencies, issue text and spec
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ItemDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/pr:
+    get:
+      summary: CI checks, gate results and the reviewer verdict for the item's PR
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PRPanel" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/diff:
+    get:
+      summary: The patch the latest reviewer saw, with its findings
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Diff" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/park:
+    post:
+      summary: Park an item with a question for the human
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { reason: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "409": { $ref: "#/components/responses/Action" }
+  /jobs/{id}:
+    get:
+      summary: One job with its gate results
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/JobDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{id}/log:
+    get:
+      summary: The job's transcript as server-sent events
+      description: |
+        One `line` event per transcript line, with data `{"text": string}`,
+        then one `done` event with data `{"state": string}` once the job ends.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Event stream, content: { text/event-stream: { schema: { type: string } } } }
+  /jobs/{id}/terminal:
+    get:
+      summary: A live shell in the running job's container, over WebSocket
+      description: |
+        Output arrives as binary frames. Send text frames holding
+        `{"type":"input","data":string}` for keystrokes and
+        `{"type":"resize","cols":int,"rows":int}` when the window changes.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "101": { description: Switching protocols }
+        "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /jobs/{id}/retry:
+    post:
+      summary: Queue the job again, optionally one model tier up
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { tier_up: { type: boolean } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "409": { $ref: "#/components/responses/Action" }
+  /jobs/{id}/cancel:
+    post:
+      summary: Cancel a queued or running job
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "409": { $ref: "#/components/responses/Action" }
+  /orchestrator:
+    get:
+      summary: The orchestrator's decisions, newest first
+      parameters:
+        - { name: item, in: query, required: false, schema: { type: integer }, description: Only this item's decisions }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Feed" } } } }
+  /metrics:
+    get:
+      summary: Cost per merged PR, first-pass and escalation rates, overall and per week
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Metrics" } } } }
+  /spend:
+    get:
+      summary: Spend by day (30 days, newest first) and by model
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Spend" } } } }
+  /notifications:
+    get:
+      summary: Things the human may need to act on
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+  /stream:
+    get:
+      summary: 'A `version` event (data `{"version": string}`) whenever anything shown changes'
+      responses:
+        "200": { description: Event stream, content: { text/event-stream: { schema: { type: string } } } }
+components:
+  parameters:
+    ID: { name: id, in: path, required: true, schema: { type: integer } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Action:
+      description: Whether the daemon accepted the action, and why not
+      content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+    ActionResult:
+      type: object
+      required: [ok, message]
+      properties:
+        ok: { type: boolean }
+        message: { type: string }
+    Overview:
+      type: object
+      required: [repo, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version]
+      properties:
+        repo: { type: string }
+        spent_today_usd: { type: number }
+        daily_cap_usd: { type: number }
+        awaiting: { type: integer }
+        awaiting_cap: { type: integer }
+        running: { type: integer }
+        queued: { type: integer }
+        version: { type: string }
+    Item:
+      type: object
+      required: [id, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note]
+      properties:
+        id: { type: integer }
+        issue: { type: integer }
+        title: { type: string }
+        stage: { $ref: "#/components/schemas/Stage" }
+        complexity: { type: string, description: "S, M, L, or empty before triage" }
+        risk: { type: string }
+        priority: { type: integer }
+        parent_id: { type: [integer, "null"] }
+        branch: { type: string }
+        pr_number: { type: integer, description: 0 when there is no PR }
+        created_at: { type: string }
+        updated_at: { type: string }
+        issue_url: { type: string }
+        pr_url: { type: string }
+        needs_you: { type: boolean, description: Awaiting review or parked }
+        blocked_note: { type: string, description: Why it is parked or blocked }
+    Stage:
+      type: string
+      enum: [epic, triage, spec, ready, implementing, reviewing, awaiting_human, parked, blocked, done]
+    Card:
+      allOf:
+        - $ref: "#/components/schemas/Item"
+        - type: object
+          required: [model, cost_usd, live, live_job]
+          properties:
+            model: { type: string }
+            cost_usd: { type: number }
+            live: { type: boolean }
+            live_job: { type: [integer, "null"] }
+    Column:
+      type: object
+      required: [stage, cards]
+      properties:
+        stage: { $ref: "#/components/schemas/Stage" }
+        cards: { type: array, items: { $ref: "#/components/schemas/Card" } }
+    Board:
+      type: object
+      required: [columns]
+      properties:
+        columns: { type: array, items: { $ref: "#/components/schemas/Column" } }
+    Job:
+      type: object
+      required: [id, item_id, kind, state, harness, model, effort, attempt, cost_usd, budget_usd, tokens_in, tokens_out, verdict, error, queued_at, started_at, finished_at, branch, skillset, head_sha]
+      properties:
+        id: { type: integer }
+        item_id: { type: [integer, "null"] }
+        kind: { type: string, description: "triage, implement, review, critic, orchestrate" }
+        state: { type: string, description: "queued, running, succeeded, failed, cancelled, interrupted, ..." }
+        harness: { type: string }
+        model: { type: string }
+        effort: { type: string }
+        attempt: { type: integer }
+        cost_usd: { type: number }
+        budget_usd: { type: number }
+        tokens_in: { type: integer }
+        tokens_out: { type: integer }
+        verdict: { type: string, description: The stage's raw JSON verdict }
+        error: { type: string }
+        queued_at: { type: string }
+        started_at: { type: string }
+        finished_at: { type: string }
+        branch: { type: string }
+        skillset: { type: string }
+        head_sha: { type: string }
+    Gate:
+      type: object
+      required: [gate, status, detail]
+      properties:
+        gate: { type: string }
+        status: { type: string, description: "pass, fail, misconfigured" }
+        detail: { type: string }
+    Event:
+      type: object
+      required: [id, at, actor, item_id, job_id, type, reason, data]
+      properties:
+        id: { type: integer }
+        at: { type: string }
+        actor: { type: string }
+        item_id: { type: [integer, "null"] }
+        job_id: { type: [integer, "null"] }
+        type: { type: string }
+        reason: { type: string }
+        data: { type: string, description: JSON }
+    ItemDetail:
+      type: object
+      required: [item, jobs, events, depends_on, issue_body, spec]
+      properties:
+        item: { $ref: "#/components/schemas/Item" }
+        jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
+        events: { type: array, items: { $ref: "#/components/schemas/Event" } }
+        depends_on: { type: array, items: { type: integer } }
+        issue_body: { type: string }
+        spec: { type: string }
+    JobDetail:
+      type: object
+      required: [job, gates, can_attach]
+      properties:
+        job: { $ref: "#/components/schemas/Job" }
+        gates: { type: array, items: { $ref: "#/components/schemas/Gate" } }
+        can_attach: { type: boolean }
+    Finding:
+      type: object
+      required: [severity, file, line, claim, evidence]
+      properties:
+        severity: { type: string, description: "critical, major, minor" }
+        file: { type: string }
+        line: { type: integer }
+        claim: { type: string }
+        evidence: { type: string }
+    Review:
+      type: object
+      required: [job_id, decision, findings, challenged_assumptions]
+      properties:
+        job_id: { type: integer }
+        decision: { type: string, description: "pass, block, questions" }
+        findings: { type: array, items: { $ref: "#/components/schemas/Finding" } }
+        challenged_assumptions: { type: array, items: { type: string } }
+    Check:
+      type: object
+      required: [name, status, conclusion, url]
+      properties:
+        name: { type: string }
+        status: { type: string }
+        conclusion: { type: string }
+        url: { type: string }
+    PRPanel:
+      type: object
+      required: [pr_number, pr_url, head_sha, checks, checks_error, gate_job_id, gates, review, last_job_id]
+      properties:
+        pr_number: { type: integer }
+        pr_url: { type: string }
+        head_sha: { type: string }
+        checks: { type: array, items: { $ref: "#/components/schemas/Check" } }
+        checks_error: { type: string }
+        gate_job_id: { type: [integer, "null"] }
+        gates: { type: array, items: { $ref: "#/components/schemas/Gate" } }
+        review:
+          oneOf:
+            - $ref: "#/components/schemas/Review"
+            - type: "null"
+        last_job_id: { type: [integer, "null"] }
+    Diff:
+      type: object
+      required: [job_id, patch, findings]
+      properties:
+        job_id: { type: integer }
+        patch: { type: string }
+        findings: { type: array, items: { $ref: "#/components/schemas/Finding" } }
+    Feed:
+      type: object
+      required: [events]
+      properties:
+        events: { type: array, items: { $ref: "#/components/schemas/Event" } }
+    DaySpend:
+      type: object
+      required: [day, cost_usd]
+      properties:
+        day: { type: string }
+        cost_usd: { type: number }
+    ModelSpend:
+      type: object
+      required: [model, cost_usd]
+      properties:
+        model: { type: string }
+        cost_usd: { type: number }
+    Spend:
+      type: object
+      required: [days, week_usd, daily_cap_usd, by_model]
+      properties:
+        days: { type: array, items: { $ref: "#/components/schemas/DaySpend" } }
+        week_usd: { type: number }
+        daily_cap_usd: { type: number }
+        by_model: { type: array, items: { $ref: "#/components/schemas/ModelSpend" } }
+    Notification:
+      type: object
+      required: [id, kind, title, detail, item_id, at]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [needs_input, ready_for_review, budget] }
+        title: { type: string }
+        detail: { type: string }
+        item_id: { type: [integer, "null"] }
+        at: { type: string }
+    Notifications:
+      type: object
+      required: [notifications]
+      properties:
+        notifications: { type: array, items: { $ref: "#/components/schemas/Notification" } }
+    Group:
+      type: object
+      required: [key, merged, cost_usd, cost_per_pr_usd]
+      properties:
+        key: { type: string }
+        merged: { type: integer }
+        cost_usd: { type: number }
+        cost_per_pr_usd: { type: number }
+    Week:
+      type: object
+      required: [start, merged, cost_usd, cost_per_merged_usd, implemented, first_pass_rate, escalation_rate]
+      properties:
+        start: { type: string, description: The Monday that starts the week }
+        merged: { type: integer }
+        cost_usd: { type: number }
+        cost_per_merged_usd: { type: number }
+        implemented: { type: integer }
+        first_pass_rate: { type: number, description: "0..1, or -1 with no data" }
+        escalation_rate: { type: number, description: "0..1, or -1 with no data" }
+    Metrics:
+      type: object
+      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, awaiting_human_hours, awaiting_human_mean_hours, weekly]
+      properties:
+        items: { type: integer }
+        merged: { type: integer }
+        closed: { type: integer }
+        parked: { type: integer }
+        cost_per_merged_usd: { type: number }
+        by_complexity: { type: array, items: { $ref: "#/components/schemas/Group" } }
+        by_model: { type: array, items: { $ref: "#/components/schemas/Group" } }
+        first_pass_rate: { type: number }
+        escalation_rate: { type: number }
+        review_blocks: { type: integer }
+        review_escape_rate: { type: number }
+        awaiting_human_hours: { type: number }
+        awaiting_human_mean_hours: { type: number }
+        weekly: { type: array, items: { $ref: "#/components/schemas/Week" } }

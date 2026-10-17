@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -418,6 +419,8 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	diff = truncate(diff, 200_000)
+	// The control room's diff viewer shows exactly what the reviewer saw.
+	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
 	prompt, err := p.render("review", PromptData{Repo: p.Cfg.Repo, Issue: is, Gates: in.Gates, Diff: diff, Fence: fence(diff)})

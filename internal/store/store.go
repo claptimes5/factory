@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"sort"
 	"strconv"
@@ -842,8 +843,13 @@ func (s *Store) Dependencies(ctx context.Context, itemID int64) ([]int64, error)
 
 // EventsByActor returns the newest events by one actor, newest first.
 func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]Event, error) {
+	return s.EventsByActorFor(ctx, actor, 0, limit)
+}
+
+// EventsByActorFor is EventsByActor limited to one item (all items if 0).
+func (s *Store) EventsByActorFor(ctx context.Context, actor string, itemID int64, limit int) ([]Event, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT id, at, actor, item_id, job_id, type, COALESCE(reason,''), COALESCE(data,'')
-		FROM events WHERE actor = ? ORDER BY id DESC LIMIT ?`, actor, limit)
+		FROM events WHERE actor = ? AND (? = 0 OR item_id = ?) ORDER BY id DESC LIMIT ?`, actor, itemID, itemID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -978,4 +984,27 @@ func (s *Store) SetJobInput(ctx context.Context, id int64, input string) (bool, 
 		return err
 	})
 	return ok, err
+}
+
+// Version is a cheap fingerprint of everything the dashboard shows: it
+// changes whenever an event is written or a job changes state, cost or
+// head. Clients poll it (over SSE) and refetch when it moves.
+func (s *Store) Version(ctx context.Context) (string, error) {
+	var ev, jobs, finished int64
+	var cost float64
+	var live, items string
+	err := s.read.QueryRowContext(ctx, `SELECT
+		(SELECT COALESCE(MAX(id),0) FROM events),
+		(SELECT COALESCE(MAX(id),0) FROM jobs),
+		(SELECT COUNT(*) FROM jobs WHERE finished_at IS NOT NULL),
+		(SELECT COALESCE(SUM(cost_usd),0) FROM jobs),
+		(SELECT COALESCE(GROUP_CONCAT(id || state || COALESCE(head_sha,''), ','),'') FROM jobs WHERE state IN ('queued','running')),
+		(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at),'') FROM work_items)`).
+		Scan(&ev, &jobs, &finished, &cost, &live, &items)
+	if err != nil {
+		return "", err
+	}
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%d|%d|%d|%.6f|%s|%s", ev, jobs, finished, cost, live, items)
+	return strconv.FormatUint(h.Sum64(), 36), nil
 }
