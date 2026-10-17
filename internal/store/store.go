@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -847,4 +848,109 @@ func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]E
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// SpendByKind sums the cost of jobs of one kind that finished on a day.
+func (s *Store) SpendByKind(ctx context.Context, day, kind string) (float64, error) {
+	var v sql.NullFloat64
+	err := s.read.QueryRowContext(ctx, `SELECT SUM(cost_usd) FROM jobs WHERE kind = ? AND substr(finished_at, 1, 10) = ?`, kind, day).Scan(&v)
+	return v.Float64, err
+}
+
+// CountEventsSince counts events of a type by an actor at or after a time.
+func (s *Store) CountEventsSince(ctx context.Context, actor, typ, since string) (int, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE actor = ? AND type = ? AND at >= ?`, actor, typ, since).Scan(&n)
+	return n, err
+}
+
+// HasEvent reports whether an event with this type and reason exists.
+func (s *Store) HasEvent(ctx context.Context, typ, reason string) (bool, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE type = ? AND reason = ?`, typ, reason).Scan(&n)
+	return n > 0, err
+}
+
+// ErrCycle is returned when a dependency would create a cycle.
+var ErrCycle = errors.New("dependency cycle")
+
+// SetDependencies replaces an item's dependencies, refusing cycles.
+func (s *Store) SetDependencies(ctx context.Context, itemID int64, dependsOn []int64, actor, reason string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT item_id, depends_on_id FROM dependencies WHERE item_id != ?`, itemID)
+		if err != nil {
+			return err
+		}
+		graph := map[int64][]int64{}
+		for rows.Next() {
+			var a, b int64
+			if err := rows.Scan(&a, &b); err != nil {
+				rows.Close()
+				return err
+			}
+			graph[a] = append(graph[a], b)
+		}
+		rows.Close()
+		graph[itemID] = dependsOn
+		// A cycle through itemID exists if itemID is reachable from its deps.
+		seen := map[int64]bool{}
+		var reach func(n int64) bool
+		reach = func(n int64) bool {
+			if n == itemID {
+				return true
+			}
+			if seen[n] {
+				return false
+			}
+			seen[n] = true
+			for _, m := range graph[n] {
+				if reach(m) {
+					return true
+				}
+			}
+			return false
+		}
+		for _, d := range dependsOn {
+			if reach(d) {
+				return fmt.Errorf("%w: %d -> %d leads back to %d", ErrCycle, itemID, d, itemID)
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM dependencies WHERE item_id = ?`, itemID); err != nil {
+			return err
+		}
+		for _, d := range dependsOn {
+			if _, err := tx.Exec(`INSERT INTO dependencies(item_id, depends_on_id) VALUES (?, ?)`, itemID, d); err != nil {
+				return err
+			}
+		}
+		b, _ := json.Marshal(dependsOn)
+		return insertEvent(tx, Event{Actor: actor, ItemID: &itemID, Type: "set_dependencies", Reason: reason, Data: string(b)})
+	})
+}
+
+// SetPriority changes an item's priority and that of its queued jobs.
+func (s *Store) SetPriority(ctx context.Context, itemID int64, prio int) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE work_items SET priority = ?, updated_at = ? WHERE id = ?`, prio, Now(), itemID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE jobs SET priority = ? WHERE item_id = ? AND state = 'queued'`, prio, itemID)
+		return err
+	})
+}
+
+// SetParent records an epic's child.
+func (s *Store) SetParent(ctx context.Context, itemID, parentID int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE work_items SET parent_id = ?, updated_at = ? WHERE id = ?`, parentID, Now(), itemID)
+		return err
+	})
+}
+
+// SetJobInput replaces a queued job's input (used to coalesce triggers).
+func (s *Store) SetJobInput(ctx context.Context, id int64, input string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE jobs SET input = ? WHERE id = ? AND state = 'queued'`, input, id)
+		return err
+	})
 }

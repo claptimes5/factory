@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strconv"
+	"strings"
 
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -31,8 +32,12 @@ func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.ReadOnly {
 		// Read-only stages review content the builder wrote, so ignore the
 		// checkout's own settings, hooks and MCP servers.
+		tools := append([]string{"Read", "Glob", "Grep"}, req.Tools...)
 		args = append(args, "--permission-mode", "dontAsk", "--setting-sources", "user", "--strict-mcp-config",
-			"--allowedTools", "Read,Glob,Grep")
+			"--allowedTools", strings.Join(tools, ","))
+		if req.MCPConfig != "" {
+			args = append(args, "--mcp-config", req.MCPConfig)
+		}
 	} else {
 		args = append(args, "--permission-mode", "bypassPermissions", "--disallowedTools", "WebSearch")
 	}

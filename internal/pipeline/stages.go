@@ -107,6 +107,12 @@ func (p *Pipeline) afterTriage(ctx context.Context, it *store.WorkItem, v *verdi
 		return err
 	}
 	it.Complexity, it.Risk = v.Complexity, v.Risk
+	if ok, err := p.depsDone(ctx, it.ID); err != nil {
+		return err
+	} else if !ok {
+		// unblock queues the implement once every dependency is done.
+		return p.Store.SetStage(ctx, it.ID, state.Blocked, "daemon", "waiting on dependencies")
+	}
 	if _, err := p.enqueueImplement(ctx, it, 1, ImplementInput{}); err != nil {
 		return err
 	}

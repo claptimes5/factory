@@ -140,7 +140,7 @@ func (s *Server) ListenUnix(ctx context.Context, path string) (net.Listener, err
 				return
 			}
 			go func() {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				_ = s.Serve(ctx, c)
 			}()
 		}
@@ -155,7 +155,7 @@ func Bridge(socket string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(out, c)

@@ -56,6 +56,16 @@ type Config struct {
 
 	Timeouts map[string]Duration `yaml:"timeouts"`
 
+	Orchestrator struct {
+		On            bool     `yaml:"enabled"`         // off unless set: it spends on its own schedule
+		RunBudget     float64  `yaml:"run_budget"`      // dollars per orchestrator run
+		DailyBudget   float64  `yaml:"daily_budget"`    // dollars per day, separate from build spend
+		DailyIssueCap int      `yaml:"daily_issue_cap"` // issues it may open per day
+		Interval      Duration `yaml:"interval"`        // scheduled run period
+		SummaryHour   int      `yaml:"summary_hour"`    // local hour of the daily summary
+		NotifyPerHour int      `yaml:"notify_per_hour"`
+	} `yaml:"orchestrator"`
+
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
 		Triage           float64            `yaml:"triage"`
@@ -162,10 +172,32 @@ func (c *Config) defaults() {
 	if c.Timeouts == nil {
 		c.Timeouts = map[string]Duration{}
 	}
-	for k, v := range map[string]time.Duration{"triage": 10 * time.Minute, "implement": 60 * time.Minute, "review": 20 * time.Minute, "gates": 20 * time.Minute} {
+	for k, v := range map[string]time.Duration{"triage": 10 * time.Minute, "implement": 60 * time.Minute, "review": 20 * time.Minute, "gates": 20 * time.Minute, "orchestrate": 20 * time.Minute} {
 		if c.Timeouts[k].Duration == 0 {
 			c.Timeouts[k] = Duration{v}
 		}
+	}
+	o := &c.Orchestrator
+	if o.RunBudget == 0 {
+		o.RunBudget = 3
+	}
+	if o.DailyBudget == 0 {
+		o.DailyBudget = 15
+	}
+	if o.DailyIssueCap == 0 {
+		o.DailyIssueCap = 10
+	}
+	if o.Interval.Duration == 0 {
+		o.Interval.Duration = time.Hour
+	}
+	if o.SummaryHour == 0 {
+		o.SummaryHour = 8
+	}
+	if o.NotifyPerHour == 0 {
+		o.NotifyPerHour = 6
+	}
+	if _, ok := c.Routing["orchestrate"]; !ok && c.Routing != nil {
+		c.Routing["orchestrate"] = Route{Harness: "claude", Model: "opus"}
 	}
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
@@ -222,6 +254,9 @@ func (c *Config) Validate() error {
 		if c.Budgets.PerJob[size] <= 0 {
 			bad("budgets.per_job.%s must be > 0", size)
 		}
+	}
+	if r, ok := c.Routing["orchestrate"]; ok && r.Harness != "claude" {
+		bad("routing.orchestrate must use the claude harness (it drives the daemon's MCP tools)")
 	}
 	if len(c.Escalation.Implement) == 0 {
 		bad("escalation.implement needs at least one model tier")

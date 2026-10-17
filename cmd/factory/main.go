@@ -25,6 +25,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
+	"github.com/claptimes5/factory/internal/mcp"
 	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
@@ -41,10 +42,15 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
+	// The orchestrator's MCP bridge runs inside the job container, where there
+	// is no config or database: it only joins stdio to the daemon's socket.
+	if len(args) == 2 && args[0] == "mcp-bridge" {
+		return mcp.Bridge(args[1], os.Stdin, os.Stdout)
+	}
 	fs := flag.NewFlagSet("factory", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FACTORY_CONFIG", "factory.yaml"), "path to factory.yaml")
 	if err := fs.Parse(args); err != nil {

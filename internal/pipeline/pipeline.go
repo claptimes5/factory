@@ -49,6 +49,7 @@ type GitHub interface {
 	GetPR(ctx context.Context, n int) (*github.PR, error)
 	CreatePR(ctx context.Context, title, body, head, base string, draft bool) (*github.PR, error)
 	UpdatePRBody(ctx context.Context, n int, body string) error
+	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
 }
 
 // Pipeline wires the store, GitHub, git, the runner and the harnesses.
@@ -77,6 +78,10 @@ type Pipeline struct {
 	gateSeq    atomic.Int64    // unique suffix for gate container names
 	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
 	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
+
+	lastOrch    time.Time // last scheduled orchestrator request
+	lastSummary string    // day the daily summary was requested
+	lastDrain   time.Time // last drained-queue orchestrator request
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -114,7 +119,10 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return p.coalesceOrchestrate(ctx)
 }
 
 // Serve runs the daemon loop until ctx is cancelled, then waits for
@@ -160,8 +168,15 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 			p.log().Error("intake", "err", err)
 		}
 	}
-	for {
+	if p.Cfg.Orchestrator.On {
+		p.orchestratorTriggers(ctx, time.Now())
+	}
+	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
+		if err == nil && j == nil && !claimed && p.Cfg.Orchestrator.On {
+			p.drainedTrigger(ctx)
+			j, err = p.claimNext(ctx) // it may have queued an orchestrator run
+		}
 		if err != nil || j == nil {
 			return err
 		}
@@ -213,8 +228,18 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	var except []string
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
-		return p.Store.ClaimJobExcept(ctx, "implement")
+		except = append(except, "implement")
+	}
+	// One orchestrator at a time: its tools act on the whole queue.
+	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
+		return nil, err
+	} else if n > 0 {
+		except = append(except, "orchestrate")
+	}
+	if len(except) > 0 {
+		return p.Store.ClaimJobExcept(ctx, except...)
 	}
 	return p.Store.ClaimJob(ctx)
 }
@@ -237,6 +262,9 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if p.Cfg.Orchestrator.On {
+		p.warn(p.intakeEpics(ctx), "epics")
 	}
 	retries, err := p.GH.ListIssues(ctx, LabelRetry)
 	if err != nil {
@@ -280,6 +308,9 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
+	}
+	if err := p.unblock(ctx); err != nil {
+		return err
 	}
 	return p.Reconcile(ctx, ReconcileAfter)
 }
@@ -463,6 +494,18 @@ type agentRun struct {
 // runAgent runs one harness invocation for a job, streams its events to the
 // job log (scrubbed of secrets) and returns the outcome.
 func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, readOnly bool, timeout time.Duration) agentRun {
+	return p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, agentExtras{writable: !readOnly})
+}
+
+// agentExtras are the less common knobs of an agent run.
+type agentExtras struct {
+	writable  bool
+	mounts    []runner.Mount
+	mcpConfig string
+	tools     []string
+}
+
+func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
 	h, ok := p.Harnesses[j.Harness]
 	if !ok {
 		return agentRun{err: fmt.Errorf("no harness %q", j.Harness)}
@@ -488,8 +531,9 @@ func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, 
 	}()
 	res, err := h.Run(ctx, harness.RunRequest{
 		Name: containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
-		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: readOnly, Schema: schema,
+		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: secrets, Timeout: timeout, Image: p.Cfg.Runner.Image,
+		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools,
 	}, events)
 	close(events)
 	<-done
@@ -530,6 +574,9 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
 		p.log().Error("finish job", "job", j.ID, "err", err)
 	}
+	if (st == state.Failed || st == state.TimedOut) && j.Kind != "orchestrate" && p.Cfg.Orchestrator.On {
+		p.failedTwice(ctx, j)
+	}
 }
 
 func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
@@ -565,6 +612,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runImplement(ctx, j, it)
 	case "review", "critic":
 		err = p.runReview(ctx, j, it)
+	case "orchestrate":
+		err = p.runOrchestrate(ctx, j)
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -586,7 +635,10 @@ type PromptData struct {
 	PreviousFailure string
 	Gates           string
 	Diff            string
-	Fence           string // a code fence the diff cannot close
+	Fence           string   // a code fence the diff cannot close
+	Reasons         []string // why the orchestrator runs
+	Summary         bool     // the orchestrator writes the daily summary
+	Status          string   // queue snapshot for the orchestrator
 }
 
 func (p *Pipeline) render(stage string, d PromptData) (string, error) {

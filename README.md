@@ -63,7 +63,7 @@ You need a Linux host with Docker and Go 1.23+.
 6. **Run it.**
 
    ```sh
-   go build -o factory ./cmd/factory
+   CGO_ENABLED=0 go build -o factory ./cmd/factory   # static: the orchestrator's container runs it too
    ./factory status        # creates data/factory.db
    ./factory serve         # or install deploy/factory.service
    ```
@@ -101,6 +101,27 @@ parks, a PR is ready, the daily budget is hit, or the job image is missing.
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
+| `factory mcp-bridge SOCKET` | Internal: the orchestrator's stdio MCP server, run inside its container |
+
+## Orchestrator
+
+With `orchestrator.enabled: true`, a short read-only Claude run plans and
+steers through the daemon's MCP tools (`prompts/orchestrate.md`). It runs on
+a new `factory:epic` issue, when an item's last two jobs failed, when the
+queue drains with work stuck (ready with no job, or blocked on dependencies
+that are not moving), every `interval`, and once a day after
+`summary_hour` for the summary it sends to your notifier.
+
+Its tools are `list_items`, `get_item`, `queue_status`, `get_job_log`,
+`create_issue`, `set_dependencies`, `set_priority`, `enqueue`, `retry`,
+`park` and `notify_human`. The daemon checks each against policy (daily
+issue cap, no dependency cycles, stage allowed for the item, review-queue
+cap, budget, notification rate) and writes every call, reads included, to
+the audit trail with the reason it gave; the control room's Orchestrator
+log shows them. There is no tool to merge, push, close a PR or edit config.
+One run at a time; extra triggers, and any that piled up while the daemon
+was down, coalesce into one run. Items whose dependencies are not done wait
+in `blocked` and start when the last one merges.
 
 ## Skill sets
 
@@ -162,10 +183,15 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **Stuck items are reconciled:** an item in an active stage with no job for
   two minutes resumes from its last job's outcome.
 - **No separate spec stage yet.** Triage parks unclear issues with a question.
+- **The orchestrator is off by default** in code (on in this repo's
+  `factory.yaml`), since it spends on its own schedule.
+- **A drained queue only triggers the orchestrator for stuck work**, once per
+  distinct set of stuck items, so items waiting on your PR review don't cost
+  a run every half hour.
 
 ## Status
 
-M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline) and
-M4 (control room and notifications) are in. Next: the orchestrator (M5),
+M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
+M4 (control room and notifications) and M5 (the orchestrator) are in. Next:
 hidden scenarios and `factory eval` (M6), side-by-side skill comparison, and
 Dashboard v2.
