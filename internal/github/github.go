@@ -42,6 +42,9 @@ type PR struct {
 	State  string `json:"state"`
 	Merged bool   `json:"merged"`
 	Draft  bool   `json:"draft"`
+	Head   struct {
+		SHA string `json:"sha"`
+	} `json:"head"`
 }
 
 // TokenSource returns a valid token for the repository.

@@ -105,6 +105,10 @@ in `web.hosts`.
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
+| `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |
+| `factory compare ISSUE -skills a,b [-complexity M] [-no-push]` | Build one issue once per skill set and report the arms side by side |
+| `factory pull ISSUE` | Fetch an item's branch into the current checkout and copy its job transcripts to `.factory/issue-N/` |
+| `factory last-job`, `factory wait-job AFTER TIMEOUT`, `factory db-path` | Used by `deploy/upgrade.sh` |
 | `factory mcp-bridge SOCKET` | Internal: the orchestrator's stdio MCP server, run inside its container |
 
 ## Orchestrator
@@ -134,6 +138,33 @@ label), may retry each item at most twice, and may only add labels listed in
 `orchestrator.labels`. Its spend has its own daily cap and does not count
 against the build budget.
 
+## Quality (M6)
+
+- **Hidden scenarios.** Set `gates.scenarios_dir` to a directory outside the
+  repository. After every other gate passes, each `name.sh` (run with sh in
+  the checkout) and each Playwright `name.spec.js|mjs|ts` (with a
+  `playwright.config.*` in the same directory) runs against the commit
+  under test. Builders and reviewers only learn `scenario:name pass|fail`; the
+  full output stays in `data/jobs/<id>/scenarios/`. Build the job image with
+  `--build-arg PLAYWRIGHT=1` for browser scenarios.
+- **Metrics** at `/metrics` (and `/metrics.json`): cost per merged PR by
+  complexity and by the model that landed it, first-pass rate, escalation
+  rate, reviewer blocks, review escapes (passed PRs you changed before merging
+  or closed), and hours spent awaiting you.
+- **Replay set.** `evals/<name>/case.yaml` freezes a past issue at
+  `base_sha`, and `evals/<name>/accept/` holds the hidden acceptance files.
+  `factory eval` runs every case through the real pipeline against a private
+  copy of the repo and an in-memory GitHub (nothing is pushed or posted),
+  then runs `accept` on the result. See `evals/README.md`.
+- **Session resume.** With the Docker runner, an implement retry on the same
+  model continues the previous attempt's Claude session (best effort; a
+  missing session starts fresh).
+- **Safe upgrade.** `sudo deploy/upgrade.sh NEW_BINARY` stops the daemon,
+  backs up the database, swaps the binary (keeping `factory.old`), migrates,
+  starts it and watches the next job. If the migration fails, the daemon
+  stops, or that job fails before doing any work, it restores the old binary
+  (and the database backup when the migration failed).
+
 ## Skill sets
 
 A skill set is a folder under `skills/` holding Claude Code skills
@@ -147,6 +178,18 @@ routing:
 
 Every job records the skill set it ran with (`factory status` shows it, and
 so does the PR's job table).
+
+**Comparing skill sets.** `factory compare 42 -skills tdd-strict,none` builds
+issue #42 once per skill set (`none` means no skills), in parallel, from one
+frozen copy of the base, at the same complexity tier (the item's triage, or
+`-complexity`). Every arm goes through the same gates and review, but no PR
+is opened. You get a side-by-side report covering the outcome, review
+verdict and findings, failed gates, implement attempts, cost, time and diff.
+It's saved under `data/compare/` and shown in the control room under
+Compare. Each arm's branch is pushed as `factory/compare-42-<set>` (pass
+`-no-push` to keep them local). Arms only see the base, never another
+arm's work or an earlier branch for the issue. They split what is left of
+today's budget, and their spend counts against it.
 
 ## Configuration
 
@@ -194,6 +237,8 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **Stuck items are reconciled:** an item in an active stage with no job for
   two minutes resumes from its last job's outcome.
 - **No separate spec stage yet.** Triage parks unclear issues with a question.
+- **Reviewer value is measured as review escapes** (passed PRs you changed or
+  closed), since blocked versions never reach you and so can't be judged.
 - **The orchestrator is off by default** in code (on in this repo's
   `factory.yaml`), since it spends on its own schedule.
 - **A drained queue only triggers the orchestrator for stuck work**, once per
@@ -203,6 +248,6 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 ## Status
 
 M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
-M4 (control room and notifications) and M5 (the orchestrator) are in. Next:
-hidden scenarios and `factory eval` (M6), side-by-side skill comparison, and
-Dashboard v2.
+M4 (control room and notifications), M5 (the orchestrator) and M6 (hidden
+scenarios, metrics, `factory eval`, session resume, safe upgrade) are in.
+Side-by-side skill comparison is in too. Next: Dashboard v2.

@@ -2,7 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/claptimes5/factory/internal/runner"
 
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -124,5 +127,36 @@ func TestParkedItemsQueuedJobDoesNotRun(t *testing.T) {
 	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
 	if jobs[0].State != state.Cancelled {
 		t.Fatalf("job = %s", jobs[0].State)
+	}
+}
+
+// With the Docker runner, a fix round on the same model resumes the
+// previous attempt's Claude session; a session that is gone falls back to a
+// fresh one. A retry after failed gates starts from a fresh checkout, so it
+// does not resume.
+func TestImplementRetryResumesSession(t *testing.T) {
+	fix := func(w string) error {
+		writeFile(w, "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n")
+		return commitIn(w, "fix")
+	}
+	for _, gone := range []bool{false, true} {
+		ctx := context.Background()
+		e := setup(t)
+		e.p.Runner = &runner.Docker{}
+		e.addIssue(95)
+		e.claude.builds = []func(string) error{badBuild, goodBuild, fix}
+		e.claude.noSess = gone
+		e.codex.reviews = []string{block, pass}
+		e.p.Drain(ctx)
+		if st := e.item(t, 95).Stage; st != state.AwaitingHuman {
+			t.Fatalf("gone=%v: stage = %s", gone, st)
+		}
+		want := []string{"", "", "session-1"}
+		if gone {
+			want = append(want, "")
+		}
+		if strings.Join(e.claude.resumes, ",") != strings.Join(want, ",") {
+			t.Fatalf("gone=%v: resumes = %q", gone, e.claude.resumes)
+		}
 	}
 }

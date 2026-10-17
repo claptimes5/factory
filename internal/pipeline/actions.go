@@ -141,7 +141,7 @@ func (p *Pipeline) stopJob(ctx context.Context, actor string, j *store.Job, reas
 	if c, ok := p.jobCancel.Load(j.ID); ok {
 		c.(context.CancelFunc)()
 	}
-	return p.Runner.Kill(ctx, containerName(j.ID))
+	return p.Runner.Kill(ctx, p.containerName(j.ID))
 }
 
 func (p *Pipeline) parkItem(ctx context.Context, actor string, itemID int64, reason string) error {
@@ -203,4 +203,18 @@ func (p *Pipeline) stopIfCancelled(ctx context.Context, j *store.Job, it *store.
 		}
 	}
 	return true
+}
+
+// StartImplement queues the first implement job for a ready item that
+// already has a complexity, skipping triage (factory compare uses it so
+// every arm builds at the same tier).
+func (p *Pipeline) StartImplement(ctx context.Context, it *store.WorkItem) error {
+	ok, err := p.enqueueImplement(ctx, it, 1, ImplementInput{})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no implement route for complexity %q", it.Complexity)
+	}
+	return p.Store.SetStage(ctx, it.ID, state.Implementing, "daemon", "implement queued")
 }

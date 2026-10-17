@@ -68,6 +68,9 @@ type Pipeline struct {
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
 	// Notify sends a message to the configured channel (may be nil).
 	Notify func(ctx context.Context, msg string)
+	// JobPrefix keeps container names unique when several pipelines with
+	// their own stores run at once (factory eval and factory compare).
+	JobPrefix string
 
 	mu         sync.Mutex
 	running    int
@@ -332,9 +335,14 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			continue
 		}
 		if pr.Merged {
+			// Metrics: did the human change the PR before merging it?
+			changed := pr.Head.SHA != "" && pr.Head.SHA != p.lastPushedHead(ctx, it.ID)
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
+				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 		} else if pr.State == "closed" {
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
@@ -431,6 +439,15 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 	}
 }
 
+// lastPushedHead is the commit the factory last pushed for an item.
+func (p *Pipeline) lastPushedHead(ctx context.Context, itemID int64) string {
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID, Kind: "implement", State: state.Succeeded, Limit: 1})
+	if err != nil || len(jobs) == 0 {
+		return ""
+	}
+	return jobs[0].HeadSHA
+}
+
 // hasLabel matches like GitHub does: case-insensitively.
 func hasLabel(ls []string, l string) bool {
 	for _, x := range ls {
@@ -441,7 +458,9 @@ func hasLabel(ls []string, l string) bool {
 	return false
 }
 
-func containerName(id int64) string { return fmt.Sprintf("factory-job-%d", id) }
+func (p *Pipeline) containerName(id int64) string {
+	return fmt.Sprintf("factory-%sjob-%d", p.JobPrefix, id)
+}
 
 func (p *Pipeline) jobDir(id int64) string {
 	return filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "jobs", fmt.Sprint(id))
@@ -530,10 +549,12 @@ func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, 
 
 // agentExtras are the less common knobs of an agent run.
 type agentExtras struct {
-	writable  bool
-	mounts    []runner.Mount
-	mcpConfig string
-	tools     []string
+	writable   bool
+	sessionDir string // keeps Claude sessions across an item's jobs
+	resume     string // the session to continue
+	mounts     []runner.Mount
+	mcpConfig  string
+	tools      []string
 }
 
 func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
@@ -542,8 +563,8 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		return agentRun{err: fmt.Errorf("no harness %q", j.Harness)}
 	}
 	logPath := filepath.Join(p.jobDir(j.ID), "log.jsonl")
-	p.warn(p.Store.SetJobRuntime(ctx, j.ID, containerName(j.ID), logPath, ""), "Store.SetJobRuntime")
-	lf, err := os.Create(logPath)
+	p.warn(p.Store.SetJobRuntime(ctx, j.ID, p.containerName(j.ID), logPath, ""), "Store.SetJobRuntime")
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return agentRun{err: err}
 	}
@@ -561,14 +582,32 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		}
 	}()
 	res, err := h.Run(ctx, harness.RunRequest{
-		Name: containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
+		Name: p.containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: secrets, Timeout: timeout, Image: p.Cfg.Runner.Image,
-		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools,
+		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume,
 	}, events)
+	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
+		// Resuming is best effort: if the session is gone, start fresh,
+		// keeping whatever the failed attempt cost.
+		p.log().Warn("resume failed; starting a fresh session", "job", j.ID, "session", x.resume)
+		x.resume = ""
+		close(events)
+		<-done
+		_ = lf.Close()
+		run := p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, x)
+		run.cost += res.CostUSD
+		if !res.CostKnown {
+			run.cost += p.Cfg.CostOf(j.Model, res.TokensIn, res.TokensOut)
+		}
+		return run
+	}
 	close(events)
 	<-done
 	run := agentRun{res: res, err: err}
+	if res != nil && res.SessionID != "" {
+		p.warn(os.WriteFile(filepath.Join(p.jobDir(j.ID), "session"), []byte(res.SessionID), 0o644), "save session")
+	}
 	if errors.Is(err, runner.ErrTimeout) {
 		run.timeout, run.err = true, nil
 	}
@@ -580,6 +619,36 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		}
 	}
 	return run
+}
+
+// sessionFor lets a retry of an implement job continue the previous
+// attempt's Claude session (same item, same model), so it keeps what it
+// learned. Only with the Docker runner, where the home is per job and the
+// session directory is mounted in.
+func (p *Pipeline) sessionFor(ctx context.Context, j *store.Job, fixRound bool) agentExtras {
+	x := agentExtras{writable: true}
+	if _, docker := p.Runner.(*runner.Docker); !docker || j.Harness != "claude" || j.ItemID == nil {
+		return x
+	}
+	x.sessionDir = filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "sessions", fmt.Sprintf("item-%d", *j.ItemID))
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: *j.ItemID, Kind: "implement"})
+	if err != nil {
+		return x
+	}
+	// Only a fix round continues on the previous attempt's branch; any other
+	// retry starts from a fresh checkout, which the old session would not know.
+	for _, prev := range jobs {
+		if prev.ID >= j.ID {
+			continue
+		}
+		if fixRound && prev.Harness == j.Harness && prev.Model == j.Model {
+			if b, err := os.ReadFile(filepath.Join(p.jobDir(prev.ID), "session")); err == nil {
+				x.resume = strings.TrimSpace(string(b))
+			}
+		}
+		break // only the attempt right before this one
+	}
+	return x
 }
 
 func scrub(s string, secrets map[string]string) string {
@@ -718,7 +787,7 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 	}
 	defer os.RemoveAll(outDir)
 	code, err := p.Runner.Run(ctx, runner.Spec{
-		Name: fmt.Sprintf("%s-gate-%d", containerName(jobID), p.gateSeq.Add(1)), Image: p.Cfg.Runner.Image, ReadOnly: true,
+		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: p.Cfg.Runner.Image, ReadOnly: true,
 		Workdir: workdir, OutDir: outDir, Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: p.Cfg.Timeout("gates"),
 	}, &out)
 	return code, out.String(), err

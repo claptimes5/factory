@@ -180,7 +180,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	run := p.runAgent(ctx, j, ws.Work, out, prompt, "", false, p.Cfg.Timeout("implement"))
+	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), p.sessionFor(ctx, j, in.FixRound))
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -249,6 +249,11 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, ws *Workspace, base,
 	})...)
 	if p.Cfg.Gates.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, ws.Repo, base, head))
+	}
+	// Scenarios are slow end-to-end checks: run them only on code that
+	// already passes everything else.
+	if gates.Passed(results) {
+		results = append(results, p.runScenarios(ctx, jobID, gateDir)...)
 	}
 	return results, nil
 }

@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -19,11 +20,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/eval"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/mcp"
@@ -43,7 +48,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -88,6 +93,34 @@ func run(args []string) error {
 		return st.Backup(ctx, fs.Arg(1))
 	case "status":
 		return status(ctx, st, cfg)
+	case "last-job":
+		jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 1})
+		if err != nil {
+			return err
+		}
+		var id int64
+		if len(jobs) > 0 {
+			id = jobs[0].ID
+		}
+		fmt.Println(id)
+		return nil
+	case "db-path":
+		fmt.Println(filepath.Join(dataDir, "factory.db"))
+		return nil
+	case "wait-job":
+		if fs.NArg() != 3 {
+			return usage()
+		}
+		return waitJob(ctx, st, fs.Arg(1), fs.Arg(2))
+	case "pull":
+		if fs.NArg() != 2 {
+			return usage()
+		}
+		return pull(ctx, cfg, st, fs.Arg(1))
+	case "compare":
+		return runCompare(ctx, cfg, st, fs.Args()[1:])
+	case "eval":
+		return runEval(ctx, cfg, fs.Args()[1:])
 	case "serve", "run-once":
 		p, err := build(cfg, st)
 		if err != nil {
@@ -153,6 +186,13 @@ func secrets() map[string]map[string]string {
 	}
 }
 
+func newRunner(cfg *config.Config) runner.Runner {
+	if cfg.Runner.Kind == "docker" {
+		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
+	}
+	return runner.Local{}
+}
+
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	ts, err := tokens(cfg)
 	if err != nil {
@@ -163,10 +203,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
 		cfg.Orchestrator.On = false
 	}
-	var r runner.Runner = runner.Local{}
-	if cfg.Runner.Kind == "docker" {
-		r = &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
-	}
+	r := newRunner(cfg)
 	return &pipeline.Pipeline{
 		Cfg:    cfg,
 		Store:  st,
@@ -222,7 +259,7 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 		return fmt.Errorf("web.listen: %w", err)
 	}
 	srv := &web.Server{Store: st, Actions: p, Repo: cfg.Repo, DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
-		Hosts: append([]string{host}, cfg.Web.Hosts...)}
+		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	if cfg.Runner.Kind == "docker" {
 		srv.Attach = web.TTYDAttach(st, host)
 	}
@@ -294,4 +331,249 @@ func trunc(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// runEval runs the replay set against a candidate config and, with a
+// baseline, rejects a candidate that passes less or costs more per pass.
+func runEval(ctx context.Context, cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
+	candidate := fs.String("config", "", "candidate factory.yaml (routing, prompts, skills) to evaluate; default the main config")
+	set := fs.String("set", "evals", "directory of replay cases")
+	baseline := fs.String("baseline", "", "report JSON of the current config to compare against")
+	out := fs.String("out", "", "write the report JSON here")
+	parallel := fs.Int("parallel", 1, "cases to run at once")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *candidate != "" {
+		c, err := config.Load(*candidate)
+		if err != nil {
+			return err
+		}
+		cfg = c
+	}
+	cases, err := eval.Load(cfg.Path(*set))
+	if err != nil {
+		return err
+	}
+	if len(cases) == 0 {
+		return fmt.Errorf("no cases in %s", *set)
+	}
+	ts, err := tokens(cfg)
+	if err != nil {
+		slog.Warn("no GitHub credentials; cases must name a local or public repo", "err", err)
+		ts = nil
+	}
+	r := newRunner(cfg)
+	work, err := os.MkdirTemp(cfg.Path(cfg.DataDir), "eval-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	rep, err := eval.Run(ctx, eval.Options{
+		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, WorkDir: work, Parallel: *parallel,
+		Harnesses: map[string]harness.Harness{"claude": harness.NewClaude(r), "codex": harness.NewCodex(r)},
+	}, cases)
+	if err != nil {
+		return err
+	}
+	rep.Config = *candidate
+	fmt.Print(rep.Table())
+	if *out != "" {
+		b, _ := json.MarshalIndent(rep, "", "  ")
+		if err := os.WriteFile(*out, b, 0o644); err != nil {
+			return err
+		}
+	}
+	if *baseline != "" {
+		b, err := os.ReadFile(*baseline)
+		if err != nil {
+			return err
+		}
+		var base eval.Report
+		if err := json.Unmarshal(b, &base); err != nil {
+			return fmt.Errorf("baseline: %w", err)
+		}
+		if why := eval.Compare(rep, &base); len(why) > 0 {
+			return fmt.Errorf("rejected: %s", strings.Join(why, "; "))
+		}
+		fmt.Println("accepted: no worse than the baseline")
+	}
+	return nil
+}
+
+// pull hands an item over for local work: it fetches the item's branch into
+// the git repository in the current directory and copies the item's job
+// transcripts (and Claude sessions, when kept) next to it.
+func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) error {
+	n, err := strconv.Atoi(strings.TrimPrefix(arg, "#"))
+	if err != nil {
+		return fmt.Errorf("pull: %q is not an issue number", arg)
+	}
+	it, err := st.ItemByIssue(ctx, cfg.Repo, n)
+	if err != nil {
+		return fmt.Errorf("no work item for issue #%d", n)
+	}
+	branch := it.Branch
+	if branch == "" {
+		branch = fmt.Sprintf("factory/issue-%d", n)
+	}
+	// The user's own git and credentials: this runs in their checkout.
+	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", "+refs/heads/"+branch+":refs/heads/"+branch)
+	fetch.Stdout, fetch.Stderr = os.Stdout, os.Stderr
+	if err := fetch.Run(); err != nil {
+		return fmt.Errorf("git fetch %s: %w", branch, err)
+	}
+	dst := filepath.Join(".factory", fmt.Sprintf("issue-%d", n))
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	jobs, err := st.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
+	if err != nil {
+		return err
+	}
+	var lastSession string
+	for i := len(jobs) - 1; i >= 0; i-- {
+		j := jobs[i]
+		if j.LogPath == "" {
+			continue
+		}
+		b, err := os.ReadFile(j.LogPath)
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dst, fmt.Sprintf("job-%d-%s.jsonl", j.ID, j.Kind)), b, 0o600); err != nil {
+			return err
+		}
+		if s, err := os.ReadFile(filepath.Join(filepath.Dir(j.LogPath), "session")); err == nil {
+			lastSession = strings.TrimSpace(string(s))
+		}
+	}
+	sessions := filepath.Join(cfg.Path(cfg.DataDir), "sessions", fmt.Sprintf("item-%d", it.ID))
+	if _, err := os.Stat(sessions); err == nil {
+		if err := exec.CommandContext(ctx, "cp", "-R", sessions, filepath.Join(dst, "claude-projects")).Run(); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("Branch %s fetched; %d job transcripts in %s\n", branch, len(jobs), dst)
+	if lastSession != "" {
+		fmt.Printf("Last Claude session: %s (its files are in %s/claude-projects; copy them under ~/.claude/projects to `claude --resume` it)\n", lastSession, dst)
+	}
+	return nil
+}
+
+// waitJob waits for the first job after a given id to finish, for
+// deploy/upgrade.sh. It fails when that job failed before its agent did
+// any work (cost 0), which points at the daemon or the image rather than
+// at the task. Nothing finishing in time is not a failure.
+func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) error {
+	after, err := strconv.ParseInt(afterArg, 10, 64)
+	if err != nil {
+		return err
+	}
+	timeout, err := time.ParseDuration(timeoutArg)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 50})
+		if err != nil {
+			return err
+		}
+		for i := len(jobs) - 1; i >= 0; i-- {
+			j := jobs[i]
+			if j.ID <= after || !j.State.Terminal() {
+				continue
+			}
+			if (j.State == state.Failed || j.State == state.TimedOut) && j.CostUSD == 0 {
+				return fmt.Errorf("job %d (%s) %s before doing any work: %s", j.ID, j.Kind, j.State, j.Error)
+			}
+			fmt.Printf("job %d (%s) finished: %s\n", j.ID, j.Kind, j.State)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+	}
+	// An idle factory runs no job; upgrade.sh then relies on the daemon
+	// still being up.
+	fmt.Printf("no job finished within %s\n", timeout)
+	return nil
+}
+
+// runCompare runs one issue once per skill set and writes a side-by-side
+// report under data/compare/.
+func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	skills := fs.String("skills", "", "comma-separated skill sets to compare (\"none\" for no skills)")
+	complexity := fs.String("complexity", "", "S, M or L (default: the item's triage, else M)")
+	noPush := fs.Bool("no-push", false, "keep the arms' branches local instead of pushing factory/compare-* branches")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: factory compare <issue> -skills a,b")
+	}
+	issue, err := strconv.Atoi(strings.TrimPrefix(args[0], "#"))
+	if err != nil {
+		return fmt.Errorf("compare: %q is not an issue number", args[0])
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	risk := "low"
+	if it, err := st.ItemByIssue(ctx, cfg.Repo, issue); err == nil {
+		if *complexity == "" {
+			*complexity = it.Complexity
+		}
+		if it.Risk != "" {
+			risk = it.Risk
+		}
+	}
+	if *complexity == "" {
+		*complexity = "M"
+	}
+	p, err := build(cfg, st)
+	if err != nil {
+		return err
+	}
+	// The arms share what is left of today's budget and their spend counts
+	// against it, so a comparison cannot run past the daily cap.
+	spent, err := st.SpendOn(ctx, store.Today())
+	if err != nil {
+		return err
+	}
+	left := cfg.Budgets.DailyTotal - spent
+	if cfg.Budgets.DailyTotal > 0 && left <= 0 {
+		return fmt.Errorf("today's budget is spent ($%.2f of $%.2f)", spent, cfg.Budgets.DailyTotal)
+	}
+	id := fmt.Sprintf("%d-%s", issue, time.Now().UTC().Format("20060102T150405Z"))
+	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
+	rep, err := compare.Run(ctx, compare.Options{
+		Cfg: cfg, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GH, Git: p.Git,
+		Dir: dir, Push: !*noPush, Budget: max(left, 0),
+	}, issue, strings.Split(*skills, ","), *complexity, risk)
+	if rep != nil {
+		var cost float64
+		for _, a := range rep.Arms {
+			cost += a.CostUSD
+		}
+		if cost > 0 {
+			if serr := st.AddSpend(context.WithoutCancel(ctx), cost, "human", fmt.Sprintf("compare #%d: %s", issue, *skills)); serr != nil {
+				slog.Error("recording compare spend", "err", serr)
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if err := rep.Save(dir); err != nil {
+		return err
+	}
+	_ = st.AddEvent(ctx, store.Event{Actor: "human", Type: "compare_done", Reason: fmt.Sprintf("#%d: %s", issue, *skills), Data: dir})
+	for _, a := range rep.Arms {
+		fmt.Printf("%-16s %-16s review=%-9s cost=$%.2f time=%.0fs %s\n", a.Skillset, a.Stage, a.Review, a.CostUSD, a.Seconds, a.Error)
+	}
+	fmt.Printf("\nReport: %s (also in the control room under Compare)\n", filepath.Join(dir, "report.md"))
+	return nil
 }

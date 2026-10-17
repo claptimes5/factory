@@ -1,0 +1,39 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"strconv"
+	"testing"
+
+	"github.com/claptimes5/factory/internal/state"
+	"github.com/claptimes5/factory/internal/store"
+)
+
+func TestWaitJob(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	finish := func(r store.Result) int64 {
+		id, _ := st.EnqueueJob(ctx, store.Job{Kind: "triage", Harness: "claude", Model: "m", BudgetUSD: 1})
+		st.ClaimJob(ctx)
+		st.FinishJob(ctx, id, r)
+		return id
+	}
+	first := finish(store.Result{State: state.Succeeded, CostUSD: 0.1})
+	if err := waitJob(ctx, st, "0", "1s"); err != nil {
+		t.Fatalf("a finished job: %v", err)
+	}
+	finish(store.Result{State: state.Failed, Error: "no such image"})
+	if err := waitJob(ctx, st, itoa(first), "1s"); err == nil {
+		t.Fatal("a job that failed before doing any work must fail the upgrade")
+	}
+	if err := waitJob(ctx, st, "99", "1ms"); err != nil {
+		t.Fatalf("an idle factory is not a failed upgrade: %v", err)
+	}
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }

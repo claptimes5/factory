@@ -721,6 +721,17 @@ func (s *Store) GateResults(ctx context.Context, jobID int64) ([]GateResult, err
 	return out, rows.Err()
 }
 
+// AddSpend adds cost spent outside this store's jobs (a compare run's
+// arms) to today's spend, with an event saying what it was.
+func (s *Store) AddSpend(ctx context.Context, cost float64, actor, reason string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), cost); err != nil {
+			return err
+		}
+		return insertEvent(tx, Event{Actor: actor, Type: "spend", Reason: reason, Data: fmt.Sprintf(`{"cost_usd":%g}`, cost)})
+	})
+}
+
 // SpendOn returns the recorded spend for a day (YYYY-MM-DD).
 func (s *Store) SpendOn(ctx context.Context, day string) (float64, error) {
 	var v sql.NullFloat64
