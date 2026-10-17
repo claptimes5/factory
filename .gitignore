@@ -1,0 +1,4 @@
+/data/
+/factory
+*.db
+*.db-*
