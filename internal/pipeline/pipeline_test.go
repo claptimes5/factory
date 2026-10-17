@@ -139,6 +139,8 @@ type fakeHarness struct {
 	prompts map[string][]string
 	plant   string // a verdict file written where a planted hook could write it
 	orch    func(req harness.RunRequest) (string, error)
+	resumes []string // Resume of each implement call
+	noSess  bool     // fail any resumed run, as if the session were gone
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -156,6 +158,12 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 	case "triage":
 		res.Final = h.triage
 	case "implement":
+		h.resumes = append(h.resumes, req.Resume)
+		if req.Resume != "" && h.noSess {
+			h.calls[req.Stage]--
+			return &harness.Result{IsError: true, Error: "No conversation found"}, nil
+		}
+		res.SessionID = fmt.Sprintf("session-%d", n)
 		if n >= len(h.builds) {
 			return nil, fmt.Errorf("no scripted build %d", n)
 		}

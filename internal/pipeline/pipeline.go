@@ -332,9 +332,14 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			continue
 		}
 		if pr.Merged {
+			// Metrics: did the human change the PR before merging it?
+			changed := pr.Head.SHA != "" && pr.Head.SHA != p.lastPushedHead(ctx, it.ID)
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
+				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 		} else if pr.State == "closed" {
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
@@ -429,6 +434,15 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 		}
 		return err
 	}
+}
+
+// lastPushedHead is the commit the factory last pushed for an item.
+func (p *Pipeline) lastPushedHead(ctx context.Context, itemID int64) string {
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID, Kind: "implement", State: state.Succeeded, Limit: 1})
+	if err != nil || len(jobs) == 0 {
+		return ""
+	}
+	return jobs[0].HeadSHA
 }
 
 // hasLabel matches like GitHub does: case-insensitively.
@@ -530,10 +544,12 @@ func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, 
 
 // agentExtras are the less common knobs of an agent run.
 type agentExtras struct {
-	writable  bool
-	mounts    []runner.Mount
-	mcpConfig string
-	tools     []string
+	writable   bool
+	sessionDir string // keeps Claude sessions across an item's jobs
+	resume     string // the session to continue
+	mounts     []runner.Mount
+	mcpConfig  string
+	tools      []string
 }
 
 func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
@@ -564,11 +580,22 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		Name: containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: secrets, Timeout: timeout, Image: p.Cfg.Runner.Image,
-		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools,
+		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume,
 	}, events)
+	if x.resume != "" && (err != nil || res == nil || res.IsError) && (res == nil || res.CostUSD == 0) && ctx.Err() == nil {
+		// Resuming is best effort: if the session is gone, start fresh.
+		p.log().Warn("resume failed; starting a fresh session", "job", j.ID, "session", x.resume)
+		x.resume = ""
+		close(events)
+		<-done
+		return p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, x)
+	}
 	close(events)
 	<-done
 	run := agentRun{res: res, err: err}
+	if res != nil && res.SessionID != "" {
+		p.warn(os.WriteFile(filepath.Join(p.jobDir(j.ID), "session"), []byte(res.SessionID), 0o644), "save session")
+	}
 	if errors.Is(err, runner.ErrTimeout) {
 		run.timeout, run.err = true, nil
 	}
@@ -580,6 +607,34 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		}
 	}
 	return run
+}
+
+// sessionFor lets a retry of an implement job continue the previous
+// attempt's Claude session (same item, same model), so it keeps what it
+// learned. Only with the Docker runner, where the home is per job and the
+// session directory is mounted in.
+func (p *Pipeline) sessionFor(ctx context.Context, j *store.Job) agentExtras {
+	x := agentExtras{writable: true}
+	if _, docker := p.Runner.(*runner.Docker); !docker || j.Harness != "claude" || j.ItemID == nil {
+		return x
+	}
+	x.sessionDir = filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "sessions", fmt.Sprintf("item-%d", *j.ItemID))
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: *j.ItemID, Kind: "implement"})
+	if err != nil {
+		return x
+	}
+	for _, prev := range jobs {
+		if prev.ID >= j.ID {
+			continue
+		}
+		if prev.Harness == j.Harness && prev.Model == j.Model {
+			if b, err := os.ReadFile(filepath.Join(p.jobDir(prev.ID), "session")); err == nil {
+				x.resume = strings.TrimSpace(string(b))
+			}
+		}
+		break // only the attempt right before this one
+	}
+	return x
 }
 
 func scrub(s string, secrets map[string]string) string {

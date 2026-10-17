@@ -130,3 +130,26 @@ func TestCodexTurnFailed(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 }
+
+func TestClaudeResumeAndSessionMount(t *testing.T) {
+	fr := &fakeRunner{out: `{"type":"system","subtype":"init","session_id":"abc-123"}` + "\n" + claudeStream}
+	r := req(t, false)
+	r.Resume, r.SessionDir = "prev-9", t.TempDir()
+	res, err := NewClaude(fr).Run(context.Background(), r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SessionID == "" {
+		t.Fatal("session id not parsed")
+	}
+	if cmd := strings.Join(fr.spec.Cmd, " "); !strings.Contains(cmd, "--resume prev-9") {
+		t.Fatalf("cmd = %s", cmd)
+	}
+	var mounted bool
+	for _, m := range fr.spec.Mounts {
+		mounted = mounted || (m.Host == r.SessionDir && m.Container == "/home/agent/.claude/projects" && !m.ReadOnly)
+	}
+	if !mounted {
+		t.Fatalf("mounts = %+v", fr.spec.Mounts)
+	}
+}

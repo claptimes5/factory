@@ -254,3 +254,9 @@ func (g *Git) Push(ctx context.Context, repo, sha, branch string, force bool) er
 	_, err := g.run(ctx, repo, nil, args...)
 	return err
 }
+
+// CloneBare makes a bare copy of the remote at dst.
+func (g *Git) CloneBare(ctx context.Context, dst string) error {
+	_, err := g.run(ctx, "", nil, "clone", "--quiet", "--bare", "--no-tags", g.remote(), dst)
+	return err
+}

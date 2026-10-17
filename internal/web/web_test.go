@@ -84,6 +84,8 @@ func TestPagesRender(t *testing.T) {
 		"/jobs/" + itoa(id): {"gates failed", "boom", "sse-connect"},
 		"/orchestrator":     {"No orchestrator actions yet"},
 		"/spend":            {"$0.50"},
+		"/metrics":          {"Cost per merged PR", "First-pass rate"},
+		"/metrics.json":     {"\"cost_per_merged_usd\""},
 	}
 	for path, wants := range pages {
 		body := get(t, srv.URL+path)

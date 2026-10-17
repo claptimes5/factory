@@ -77,6 +77,8 @@ gates:
   # Revert the code, keep the changed tests: they must fail. {pkgs} becomes
   # the packages holding changed tests. Empty disables the check.
   proves_fix: go test -count=1 {pkgs}
+  # Hidden end-to-end scenarios, kept outside the repo so builders never see them.
+  # scenarios_dir: /etc/factory/scenarios
   diff_guard:
     max_changed_lines: 400
     # The factory's own controls, and files that steer agents that later

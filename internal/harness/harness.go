@@ -36,6 +36,10 @@ type RunRequest struct {
 	Mounts    []runner.Mount // extra mounts, e.g. the orchestrator's MCP socket
 	MCPConfig string         // JSON for `claude --mcp-config` (Claude only)
 	Tools     []string       // extra allowed tools for read-only runs, e.g. mcp__factory
+	// SessionDir is a host directory that keeps the CLI's session files
+	// across jobs (Claude only), and Resume a session in it to continue.
+	SessionDir string
+	Resume     string
 }
 
 // Event is normalized from each CLI's JSON stream.
@@ -55,6 +59,7 @@ type Result struct {
 	IsError   bool
 	Error     string
 	ExitCode  int
+	SessionID string // the CLI's session, for a later Resume
 }
 
 // Harness runs one agent CLI.
@@ -90,6 +95,12 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	paths := h.runner.Paths(spec)
 	if req.SkillsDir != "" {
 		spec.Mounts = append(spec.Mounts, runner.Mount{Host: req.SkillsDir, Container: h.a.skillsPath(paths), ReadOnly: true})
+	}
+	if sp, ok := h.a.(interface{ sessionsPath(runner.Paths) string }); ok && req.SessionDir != "" {
+		if err := os.MkdirAll(req.SessionDir, 0o700); err != nil {
+			return nil, err
+		}
+		spec.Mounts = append(spec.Mounts, runner.Mount{Host: req.SessionDir, Container: sp.sessionsPath(paths)})
 	}
 	if req.Schema != "" {
 		if err := os.WriteFile(filepath.Join(req.OutDir, "schema.json"), []byte(req.Schema), 0o644); err != nil {

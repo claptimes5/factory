@@ -89,7 +89,10 @@ type Config struct {
 		// ProvesFix runs the changed tests against the base code; it must
 		// fail. {pkgs} is replaced by the packages holding changed tests.
 		ProvesFix string `yaml:"proves_fix"`
-		DiffGuard struct {
+		// ScenariosDir holds the hidden end-to-end scenarios. It must be
+		// outside the target repository so builders never see it.
+		ScenariosDir string `yaml:"scenarios_dir"`
+		DiffGuard    struct {
 			MaxChangedLines int      `yaml:"max_changed_lines"`
 			ProtectedPaths  []string `yaml:"protected_paths"`
 		} `yaml:"diff_guard"`

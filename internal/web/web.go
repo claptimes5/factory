@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -56,6 +57,13 @@ type Server struct {
 func (s *Server) Handler() (http.Handler, error) {
 	funcs := template.FuncMap{
 		"money": func(v float64) string { return fmt.Sprintf("$%.2f", v) },
+		"pct": func(v float64) string {
+			if v < 0 {
+				return "–"
+			}
+			return fmt.Sprintf("%.0f%%", v*100)
+		},
+		"hours": func(v float64) string { return fmt.Sprintf("%.1f h", v) },
 		"short": func(s string, n int) string {
 			if len(s) > n {
 				return s[:n] + "…"
@@ -101,6 +109,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /items/{id}/park", s.park)
 	mux.HandleFunc("GET /orchestrator", s.orchestrator)
 	mux.HandleFunc("GET /spend", s.spend)
+	mux.HandleFunc("GET /metrics", s.metrics)
+	mux.HandleFunc("GET /metrics.json", s.metricsJSON)
 	return s.guard(mux), nil
 }
 
@@ -465,6 +475,25 @@ func (s *Server) orchestrator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "orchestrator", map[string]any{"Events": evs})
+}
+
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	rep, err := metrics.Compute(r.Context(), s.Store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.render(w, "metrics", map[string]any{"R": rep})
+}
+
+func (s *Server) metricsJSON(w http.ResponseWriter, r *http.Request) {
+	rep, err := metrics.Compute(r.Context(), s.Store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rep)
 }
 
 type daySpend struct {

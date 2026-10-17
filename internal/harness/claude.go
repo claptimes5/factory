@@ -24,6 +24,10 @@ type claudeAdapter struct{}
 
 func (claudeAdapter) skillsPath(p runner.Paths) string { return path.Join(p.Home, ".claude", "skills") }
 
+func (claudeAdapter) sessionsPath(p runner.Paths) string {
+	return path.Join(p.Home, ".claude", "projects")
+}
+
 func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.Model == "" {
 		return nil, fmt.Errorf("claude: model is required")
@@ -53,14 +57,18 @@ func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.Effort != "" {
 		args = append(args, "--effort", req.Effort)
 	}
+	if req.Resume != "" {
+		args = append(args, "--resume", req.Resume)
+	}
 	_ = p
 	return args, nil
 }
 
 type claudeLine struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-	Message *struct {
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Subtype   string `json:"subtype"`
+	Message   *struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -84,6 +92,9 @@ func (claudeAdapter) parse(line []byte, res *Result, emit func(Event)) {
 	var l claudeLine
 	if json.Unmarshal(line, &l) != nil {
 		return
+	}
+	if l.SessionID != "" {
+		res.SessionID = l.SessionID
 	}
 	switch l.Type {
 	case "assistant":
