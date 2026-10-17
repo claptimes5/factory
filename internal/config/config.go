@@ -229,12 +229,8 @@ func (c *Config) Validate() error {
 	default:
 		bad("runner.kind must be docker or local")
 	}
-	for _, g := range c.Gates.Required {
-		if _, ok := c.Gates.Commands[g]; !ok {
-			// Allowed: the gate reports MISCONFIGURED and fails the job.
-			continue
-		}
-	}
+	// A required gate without a command is allowed here: it reports
+	// MISCONFIGURED at run time and fails the job, so the gap is visible.
 	return errors.Join(errs...)
 }
 

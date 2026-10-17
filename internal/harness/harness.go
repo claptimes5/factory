@@ -122,10 +122,10 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 			emit(Event{Kind: "raw", Payload: append(json.RawMessage(nil), line...)})
 			h.a.parse(line, res, emit)
 		}
-		io.Copy(io.Discard, pr)
+		_, _ = io.Copy(io.Discard, pr)
 	}()
 	code, runErr := h.runner.Run(ctx, spec, pw)
-	pw.Close()
+	_ = pw.Close()
 	<-parsed
 	res.ExitCode = code
 	if runErr != nil {
