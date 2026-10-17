@@ -668,3 +668,58 @@ func TestFence(t *testing.T) {
 		t.Fatalf("fence = %q", f)
 	}
 }
+
+// If the branch moves between the gates and the review, the review job
+// finishes (it is not left running) and the item parks.
+func TestReviewOfMovedBranchFinishesJob(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(16)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Intake(ctx)
+	for i := 0; i < 2; i++ { // triage, implement
+		j, _ := e.p.Store.ClaimJob(ctx)
+		e.p.runJob(ctx, j)
+	}
+	// A human pushes to the factory branch before the review runs.
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, "", "clone", "-q", "-b", "factory/issue-16", e.remote, other)
+	writeFile(other, "extra.go", "package fixture\n")
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "-qm", "unverified")
+	git(t, other, "push", "-q", "origin", "HEAD")
+	e.p.Drain(ctx)
+	if e.item(t, 16).Stage != state.Parked {
+		t.Fatalf("stage = %s", e.item(t, 16).Stage)
+	}
+	if n, _ := e.p.Store.CountJobs(ctx, state.Running, ""); n != 0 {
+		t.Fatalf("%d jobs left running", n)
+	}
+}
+
+func TestAskPassIsPrivateAndConcurrent(t *testing.T) {
+	g := &Git{AskPassDir: t.TempDir()}
+	var wg sync.WaitGroup
+	paths := make([]string, 8)
+	for i := range paths {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); paths[i], _ = g.askPass() }(i)
+	}
+	wg.Wait()
+	fi, err := os.Stat(paths[0])
+	if err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("askpass %v %v", fi, err)
+	}
+	for _, p := range paths {
+		if p != paths[0] {
+			t.Fatal("askpass created more than once")
+		}
+	}
+	cmd := exec.Command(paths[0])
+	cmd.Env = []string{"FACTORY_GIT_PASSWORD=s3cret"}
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "s3cret" {
+		t.Fatalf("askpass printed %q: %v", out, err)
+	}
+}

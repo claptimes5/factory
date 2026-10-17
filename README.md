@@ -122,7 +122,8 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **Reviewers only count their final message.** A verdict file anywhere is
   ignored, and Claude's read-only runs ignore the checkout's settings, hooks
   and MCP servers. The diff guard also protects files that steer agents
-  (`.claude/`, `CLAUDE.md`, `AGENTS.md`, `.codex/`, `.mcp.json`).
+  (`.claude/`, `CLAUDE.md`, `AGENTS.md`, `AGENTS.override.md`, `.codex/`,
+  `.mcp.json`).
 - **The review is pinned to the verified commit.** If the branch moved after
   the gates ran, the item parks.
 
@@ -138,6 +139,9 @@ The builder runs arbitrary code, so nothing it writes is trusted:
   a retry. Reattaching to them comes with container reattach (M2 recovery).
   Spend from a job killed mid-run is not recorded (the CLIs report cost only
   at the end), so the daily cap can undercount after a crash.
+- **Test-proves-fix counts a compile failure as a failing test.** A new test
+  that calls a function the change adds fails to build on the old code,
+  which is the expected TDD shape.
 - **Stuck items are reconciled:** an item in an active stage with no job for
   two minutes resumes from its last job's outcome.
 - **No separate spec stage yet.** Triage parks unclear issues with a question.

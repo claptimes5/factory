@@ -378,6 +378,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	if in.Head != "" && ws.Start != in.Head {
 		// Someone pushed after the gates ran: those commits were never verified.
+		p.finish(ctx, j, agentRun{}, state.Failed, "", "branch moved after the gates ran")
 		return p.park(ctx, it, fmt.Sprintf("Branch `%s` moved to %s after the gates verified %s. Push changes through the factory, or review them yourself.",
 			j.Branch, short(ws.Start), short(in.Head)))
 	}

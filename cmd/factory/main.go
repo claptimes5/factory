@@ -149,7 +149,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		Cfg:    cfg,
 		Store:  st,
 		GH:     &github.Client{Repo: cfg.Repo, Tokens: ts},
-		Git:    &pipeline.Git{RemoteURL: "https://github.com/" + cfg.Repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>"},
+		Git:    &pipeline.Git{RemoteURL: "https://github.com/" + cfg.Repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)},
 		Runner: r,
 		Harnesses: map[string]harness.Harness{
 			"claude": harness.NewClaude(r),

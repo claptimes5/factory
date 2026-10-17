@@ -68,4 +68,4 @@ gates:
     # The factory's own controls, and files that steer agents that later
     # read the checkout (the reviewer and critic).
     protected_paths: [".github/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
-                      ".claude/", "CLAUDE.md", "AGENTS.md", ".codex/", ".mcp.json"]
+                      ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json"]

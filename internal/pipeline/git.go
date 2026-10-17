@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/claptimes5/factory/internal/github"
 )
@@ -22,10 +23,14 @@ import (
 // honor. Credentials reach git through GIT_ASKPASS from the environment of
 // the one command that needs them, never on a command line or on disk.
 type Git struct {
-	RemoteURL string             // e.g. https://github.com/owner/repo.git, or a local path in tests
-	Tokens    github.TokenSource // nil for unauthenticated remotes
-	Author    string             // "name <email>" for commits the daemon makes
-	AskPass   string             // path of an askpass script; created on first use
+	RemoteURL  string             // e.g. https://github.com/owner/repo.git, or a local path in tests
+	Tokens     github.TokenSource // nil for unauthenticated remotes
+	Author     string             // "name <email>" for commits the daemon makes
+	AskPassDir string             // where the askpass script is created ("" = os.TempDir)
+
+	askOnce sync.Once
+	askPath string
+	askErr  error
 }
 
 // safe disables every config knob that would make git run a program.
@@ -59,15 +64,24 @@ func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...str
 }
 
 func (g *Git) askPass() (string, error) {
-	if g.AskPass == "" {
-		g.AskPass = filepath.Join(os.TempDir(), "factory-askpass.sh")
-	}
-	if _, err := os.Stat(g.AskPass); err == nil {
-		return g.AskPass, nil
-	}
-	// Username is in the URL (x-access-token); the password comes from env.
-	err := os.WriteFile(g.AskPass, []byte("#!/bin/sh\nprintf '%s\\n' \"$FACTORY_GIT_PASSWORD\"\n"), 0o700)
-	return g.AskPass, err
+	g.askOnce.Do(func() {
+		// A fresh, private file: a predictable shared path could be planted.
+		f, err := os.CreateTemp(g.AskPassDir, "factory-askpass-*.sh")
+		if err != nil {
+			g.askErr = err
+			return
+		}
+		// Username is in the URL (x-access-token); the password comes from env.
+		_, err = f.WriteString("#!/bin/sh\nprintf '%s\\n' \"$FACTORY_GIT_PASSWORD\"\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			err = os.Chmod(f.Name(), 0o700)
+		}
+		g.askPath, g.askErr = f.Name(), err
+	})
+	return g.askPath, g.askErr
 }
 
 func (g *Git) remote() string {

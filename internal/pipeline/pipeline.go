@@ -75,6 +75,7 @@ type Pipeline struct {
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
+	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -301,6 +302,9 @@ func (p *Pipeline) Reconcile(ctx context.Context, quiet time.Duration) error {
 		}
 		if len(jobs) > 0 && !jobs[0].State.Terminal() {
 			continue
+		}
+		if _, busy := p.inflight.Load(it.ID); busy {
+			continue // a job finished but its follow-up steps are still running
 		}
 		if len(jobs) > 0 {
 			if t, err := time.Parse(store.TimeFormat, jobs[0].FinishedAt); err == nil && time.Since(t) < quiet {
@@ -544,6 +548,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 	}()
 	var it *store.WorkItem
 	if j.ItemID != nil {
+		p.inflight.Store(*j.ItemID, true)
+		defer p.inflight.Delete(*j.ItemID)
 		var err error
 		if it, err = p.Store.GetItem(ctx, *j.ItemID); err != nil {
 			p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
