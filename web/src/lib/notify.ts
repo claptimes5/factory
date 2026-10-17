@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Notification as Note } from "@/api/client";
 
 // Browser notifications for new inbox entries. They show while a dashboard
@@ -7,11 +7,13 @@ import type { Notification as Note } from "@/api/client";
 
 const seenKey = "notified";
 
-function loadSeen(): Set<string> {
+/** The ids already shown, or null in a browser that has never loaded the inbox. */
+function loadSeen(): Set<string> | null {
   try {
-    return new Set(JSON.parse(localStorage.getItem(seenKey) ?? "[]") as string[]);
+    const raw = localStorage.getItem(seenKey);
+    return raw === null ? null : new Set(JSON.parse(raw) as string[]);
   } catch {
-    return new Set();
+    return null;
   }
 }
 
@@ -31,13 +33,11 @@ export function usePermission() {
 }
 
 export function useBrowserNotifications(notes: Note[] | undefined) {
-  const first = useRef(true);
   useEffect(() => {
     if (!notes) return;
     const seen = loadSeen();
     // Do not replay the whole inbox on the first load of a new browser.
-    const fresh = first.current && seen.size === 0 ? [] : notes.filter((n) => !seen.has(n.id));
-    first.current = false;
+    const fresh = seen === null ? [] : notes.filter((n) => !seen.has(n.id));
     if (notificationsSupported() && Notification.permission === "granted") {
       for (const n of fresh.slice(0, 3)) {
         const note = new Notification(n.title, { body: n.detail, tag: n.id });

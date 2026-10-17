@@ -271,18 +271,30 @@ func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
 
 // stageReason is the reason recorded when the item last entered stage.
 func (s *Server) stageReason(ctx context.Context, itemID int64, st state.Stage) string {
+	e := s.stageEntry(ctx, itemID, st)
+	if e == nil {
+		return ""
+	}
+	return e.Reason
+}
+
+// stageEntry is the event of the item's last move into stage.
+func (s *Server) stageEntry(ctx context.Context, itemID int64, st state.Stage) *store.Event {
 	evs, err := s.Store.Events(ctx, itemID)
 	if err != nil {
-		return ""
+		return nil
 	}
 	want := fmt.Sprintf(`"to":%q`, string(st))
 	for i := len(evs) - 1; i >= 0; i-- {
 		if evs[i].Type == "stage" && strings.Contains(evs[i].Data, want) {
-			return evs[i].Reason
+			return &evs[i]
 		}
 	}
-	return ""
+	return nil
 }
+
+// isReview covers the reviewer and, on high-risk items, the second-opinion critic.
+func isReview(j *store.Job) bool { return j.Kind == "review" || j.Kind == "critic" }
 
 func apiJob(j *store.Job) APIJob {
 	return APIJob{
@@ -464,11 +476,13 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// latestReview is the item's newest review job with a usable verdict.
+// latestReview is the item's newest review or critic job with a usable
+// verdict. The PR panel and the diff viewer both use it, so a finding's
+// link always lands on the diff that finding was made against.
 func latestReview(jobs []*store.Job) (*store.Job, *verdict.Review) {
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := jobs[i]
-		if j.Kind != "review" || j.State != state.Succeeded {
+		if !isReview(j) || j.State != state.Succeeded {
 			continue
 		}
 		var v verdict.Review
@@ -543,23 +557,29 @@ func (s *Server) apiDiff(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// The newest review that saved its diff; its verdict, when it has one.
-	for i := len(jobs) - 1; i >= 0; i-- {
-		j := jobs[i]
-		if j.Kind != "review" || s.JobsDir == "" {
-			continue
+	read := func(j *store.Job) ([]byte, bool) {
+		if s.JobsDir == "" {
+			return nil, false
 		}
 		b, err := os.ReadFile(filepath.Join(s.JobsDir, strconv.FormatInt(j.ID, 10), "diff.patch"))
-		if err != nil {
+		return b, err == nil
+	}
+	// The diff the latest verdict was made against, with its findings.
+	if j, v := latestReview(jobs); j != nil {
+		if b, ok := read(j); ok {
+			writeJSON(w, http.StatusOK, APIDiff{JobID: j.ID, Patch: string(b), Findings: apiFindings(v.Findings)})
+			return
+		}
+	}
+	// Otherwise the newest diff a review has saved (one still running).
+	for i := len(jobs) - 1; i >= 0; i-- {
+		if !isReview(jobs[i]) {
 			continue
 		}
-		d := APIDiff{JobID: j.ID, Patch: string(b), Findings: []APIFinding{}}
-		var v verdict.Review
-		if j.State == state.Succeeded && verdict.Parse([]byte(j.Verdict), &v) == nil {
-			d.Findings = apiFindings(v.Findings)
+		if b, ok := read(jobs[i]); ok {
+			writeJSON(w, http.StatusOK, APIDiff{JobID: jobs[i].ID, Patch: string(b), Findings: []APIFinding{}})
+			return
 		}
-		writeJSON(w, http.StatusOK, d)
-		return
 	}
 	apiErr(w, http.StatusNotFound, "no reviewed diff for this item yet")
 }
@@ -668,24 +688,18 @@ func (s *Server) apiPark(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	evs, err := s.Store.EventsByActor(ctx, "orchestrator", 500)
-	if err != nil {
-		apiErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	var item int64
 	if q := r.URL.Query().Get("item"); q != "" {
-		want, err := strconv.ParseInt(q, 10, 64)
-		if err != nil {
+		var err error
+		if item, err = strconv.ParseInt(q, 10, 64); err != nil || item <= 0 {
 			apiErr(w, http.StatusBadRequest, "item must be an item id")
 			return
 		}
-		kept := evs[:0]
-		for _, e := range evs {
-			if e.ItemID != nil && *e.ItemID == want {
-				kept = append(kept, e)
-			}
-		}
-		evs = kept
+	}
+	evs, err := s.Store.EventsByActorFor(ctx, "orchestrator", item, 500)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, APIFeed{Events: apiEvents(evs)})
 }
@@ -756,7 +770,13 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 				n.Detail = it.Title
 			}
 		}
-		n.ID = fmt.Sprintf("%s-%d-%s", n.Kind, it.ID, it.UpdatedAt)
+		// Stable while the item stays in the stage: priority or parent
+		// changes must not raise the same alert again.
+		n.ID = fmt.Sprintf("%s-%d", n.Kind, it.ID)
+		if e := s.stageEntry(ctx, it.ID, it.Stage); e != nil {
+			n.ID = fmt.Sprintf("%s-%d-%d", n.Kind, it.ID, e.ID)
+			n.At = e.At
+		}
 		out = append(out, n)
 	}
 	if s.DailyCap > 0 {

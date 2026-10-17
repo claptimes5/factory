@@ -298,3 +298,20 @@ func TestDependencyCyclesRefused(t *testing.T) {
 		t.Fatalf("deps = %v", deps)
 	}
 }
+
+func TestVersionMovesOnItemOnlyWrites(t *testing.T) {
+	st, _ := openTest(t)
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "x")
+	v1, err := st.Version(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := st.SetPriority(ctx, it.ID, 5); err != nil {
+		t.Fatal(err)
+	}
+	if v2, _ := st.Version(ctx); v2 == v1 {
+		t.Fatal("a priority change must move the version")
+	}
+}

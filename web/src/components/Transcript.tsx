@@ -20,6 +20,11 @@ export function Transcript({ jobId }: { jobId: number }) {
         setLines((l) => (l.length + add.length > 5000 ? [...l, ...add].slice(-5000) : [...l, ...add]));
       }
     }, 150);
+    // The server replays the log from the start on every (re)connect.
+    es.onopen = () => {
+      buf = [];
+      setLines([]);
+    };
     es.addEventListener("line", (e) => buf.push((JSON.parse((e as MessageEvent).data) as { text: string }).text));
     es.addEventListener("done", (e) => {
       setDone((JSON.parse((e as MessageEvent).data) as { state: string }).state);

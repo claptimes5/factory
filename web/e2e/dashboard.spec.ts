@@ -67,6 +67,7 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   await expect(page.getByTestId("transcript")).toContainText("Writing a failing test first.");
   await expect(page.getByTestId("transcript")).toContainText("→ Bash");
   if (phone(info)) await page.getByRole("tab", { name: "Terminal" }).click();
+  await page.getByRole("button", { name: "Connect terminal" }).click();
   const term = page.getByTestId("terminal");
   await expect(page.getByText("· connected")).toBeVisible();
   await term.click();

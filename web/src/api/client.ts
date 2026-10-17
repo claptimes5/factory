@@ -84,29 +84,59 @@ export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () =>
 export const useNotifications = () =>
   useQuery({ queryKey: ["notifications"], queryFn: () => getJSON<Notifications>("/notifications") });
 
-/** Refetches everything on screen whenever the daemon reports a change. */
+/**
+ * Refetches everything on screen whenever the daemon reports a change.
+ *
+ * Browsers allow six HTTP/1.1 connections per host, and an open stream holds
+ * one, so tabs share a single stream: whichever tab holds a Web Lock opens
+ * it and relays versions to the others over a BroadcastChannel. When that
+ * tab closes, the lock passes to another.
+ */
 export function useLiveUpdates() {
   const qc = useQueryClient();
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
     let last = "";
-    const open = () => {
-      es = new EventSource(base + "/stream");
-      es.addEventListener("version", (e) => {
-        const v = (JSON.parse((e as MessageEvent).data) as { version: string }).version;
-        if (last && v !== last) void qc.invalidateQueries();
-        last = v;
-      });
-      es.onerror = () => {
-        es?.close();
-        retry = setTimeout(open, 3000);
-      };
+    const seen = (v: string) => {
+      if (last && v !== last) void qc.invalidateQueries();
+      last = v;
     };
-    open();
+    const shared = typeof BroadcastChannel !== "undefined" && typeof navigator !== "undefined" && "locks" in navigator;
+    const bc = shared ? new BroadcastChannel("factory-version") : null;
+    if (bc) bc.onmessage = (e) => seen(e.data as string);
+    let stop = () => {};
+    const stream = () =>
+      new Promise<void>((resolve) => {
+        let es: EventSource | null = null;
+        let retry: ReturnType<typeof setTimeout> | undefined;
+        const open = () => {
+          es = new EventSource(base + "/stream");
+          es.addEventListener("version", (e) => {
+            const v = (JSON.parse((e as MessageEvent).data) as { version: string }).version;
+            bc?.postMessage(v);
+            seen(v);
+          });
+          es.onerror = () => {
+            es?.close();
+            retry = setTimeout(open, 3000);
+          };
+        };
+        open();
+        stop = () => {
+          es?.close();
+          clearTimeout(retry);
+          resolve();
+        };
+      });
+    const abort = new AbortController();
+    if (shared) {
+      navigator.locks.request("factory-version-stream", { signal: abort.signal }, stream).catch(() => {});
+    } else {
+      void stream();
+    }
     return () => {
-      es?.close();
-      clearTimeout(retry);
+      abort.abort();
+      stop();
+      bc?.close();
     };
   }, [qc]);
 }

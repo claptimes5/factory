@@ -373,3 +373,57 @@ func TestAppServesIndexForRoutes(t *testing.T) {
 		t.Fatalf("a missing asset must 404, got %d", resp.StatusCode)
 	}
 }
+
+// A critic that blocks after the reviewer passed is what the PR panel and
+// the diff viewer must show, both from the same job.
+func TestPanelAndDiffFollowTheLatestVerdict(t *testing.T) {
+	base, st, _, s := apiSetup(t)
+	ctx := context.Background()
+	itemID := int64(2)
+	crit, _ := st.EnqueueJob(ctx, store.Job{ItemID: &itemID, Kind: "critic", Harness: "claude", Model: "opus", BudgetUSD: 2})
+	st.ClaimJob(ctx)
+	st.FinishJob(ctx, crit, store.Result{State: state.Succeeded,
+		Verdict: `{"decision":"block","findings":[{"severity":"critical","file":"q.go","line":7,"claim":"races","evidence":"x"}],"challenged_assumptions":[]}`})
+	os.MkdirAll(filepath.Join(s.JobsDir, itoa(crit)), 0o755)
+	os.WriteFile(filepath.Join(s.JobsDir, itoa(crit), "diff.patch"), []byte("diff --git a/q.go b/q.go\n"), 0o644)
+	// A newer review still running has saved its diff but has no verdict yet.
+	rev, _ := st.EnqueueJob(ctx, store.Job{ItemID: &itemID, Kind: "review", Harness: "codex", Model: "gpt", BudgetUSD: 2})
+	st.ClaimJob(ctx)
+	os.MkdirAll(filepath.Join(s.JobsDir, itoa(rev)), 0o755)
+	os.WriteFile(filepath.Join(s.JobsDir, itoa(rev), "diff.patch"), []byte("diff --git a/r.go b/r.go\n"), 0o644)
+
+	var p APIPRPanel
+	getJSON(t, base+"/api/v1/items/2/pr", &p)
+	if p.Review == nil || p.Review.JobID != crit || p.Review.Decision != "block" {
+		t.Fatalf("panel review = %+v", p.Review)
+	}
+	var d APIDiff
+	getJSON(t, base+"/api/v1/items/2/diff", &d)
+	if d.JobID != crit || len(d.Findings) != 1 || d.Findings[0].File != "q.go" {
+		t.Fatalf("diff = %+v", d)
+	}
+}
+
+func TestNotificationIDsSurviveItemEdits(t *testing.T) {
+	base, st, _, _ := apiSetup(t)
+	ids := func() map[string]bool {
+		var n APINotifications
+		getJSON(t, base+"/api/v1/notifications", &n)
+		m := map[string]bool{}
+		for _, x := range n.Notifications {
+			m[x.ID] = true
+		}
+		return m
+	}
+	before := ids()
+	st.SetPriority(context.Background(), 2, 9)
+	after := ids()
+	if len(before) != len(after) {
+		t.Fatal()
+	}
+	for id := range before {
+		if !after[id] {
+			t.Fatalf("a priority change re-raised %s: %v", id, after)
+		}
+	}
+}

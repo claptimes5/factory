@@ -3,8 +3,27 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-/** A live shell in the job's container (xterm.js over the terminal WebSocket). */
+/**
+ * A live shell in the job's container (xterm.js over the terminal WebSocket).
+ * It connects only when asked: each connection starts a shell inside the
+ * job's container, which lives until the job ends.
+ */
 export function Terminal({ jobId }: { jobId: number }) {
+  const [on, setOn] = useState(false);
+  if (!on) {
+    return (
+      <div className="flex h-full min-h-64 flex-col items-center justify-center gap-2 rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+        <p>Open a shell inside this job's container.</p>
+        <button onClick={() => setOn(true)} className="cursor-pointer rounded-md border bg-card px-3 py-1.5 font-medium text-foreground hover:bg-accent">
+          Connect terminal
+        </button>
+      </div>
+    );
+  }
+  return <LiveTerminal jobId={jobId} />;
+}
+
+function LiveTerminal({ jobId }: { jobId: number }) {
   const el = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting");
   useEffect(() => {

@@ -135,6 +135,15 @@ npm run e2e                         # Playwright on desktop and phone sizes
 Commit the rebuilt `internal/web/app` with your change; CI checks it is
 current.
 
+### Windows (WSL2)
+
+Run the daemon inside a WSL2 distro with Docker available there (Docker
+Desktop's WSL integration, or Docker Engine in WSL), with the repo and
+`data/` under the Linux home rather than `/mnt/c`. Open
+`http://localhost:8080/app/` in a Windows browser: WSL2 forwards localhost.
+If that forwarding is unreliable, set `networkingMode=mirrored` in
+`.wslconfig`. The `factory` CLI runs inside WSL.
+
 ## Commands
 
 | Command | What it does |
@@ -285,7 +294,8 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **Browser notifications need an open tab.** There is no Web Push service;
   your notify channel (ntfy, Slack, Discord) covers a closed browser.
 - **The terminal is a plain `sh` in the container**, through `docker exec`
-  on the host, so it only exists while the job runs.
+  on the host. It connects only when you press Connect, and a shell left
+  behind ends with the job's container.
 - **A drained queue only triggers the orchestrator for stuck work**, once per
   distinct set of stuck items, so items waiting on your PR review don't cost
   a run every half hour.
