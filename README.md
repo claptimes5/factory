@@ -79,16 +79,31 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
       [Settings → Applications](https://github.com/settings/installations) →
       *Configure*.
 
-3. **Set the daemon's environment.** These are read by the daemon only and
-   injected into each job container as env vars, never written to disk.
+3. **Set the daemon's environment.** The daemon reads these and passes the
+   model keys to each job container as env vars; they are never written into
+   a job's files. Where they go depends on how you run the daemon:
 
-   ```sh
-   export FACTORY_GITHUB_APP_ID=...            # step 2.6
-   export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
-   export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
-   export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
-   export OPENAI_API_KEY=...                   # for the Codex reviewer (or CODEX_API_KEY)
-   ```
+   - **Trying it out:** paste them as `export` lines into the same terminal
+     you run `./factory serve` from in step 6. They last until you close it.
+
+     ```sh
+     export FACTORY_GITHUB_APP_ID=...            # step 2.6
+     export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
+     export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
+     export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
+     export OPENAI_API_KEY=...                   # for the Codex reviewer (or CODEX_API_KEY)
+     ```
+
+   - **As a service** ([`deploy/factory.service`](deploy/factory.service)):
+     put the same lines, without `export`, in `/etc/factory/env`, which the
+     service loads at start. Keep it private, and make the key readable by
+     the `factory` user the service runs as:
+
+     ```sh
+     sudoedit /etc/factory/env       # FACTORY_GITHUB_APP_ID=... one per line
+     sudo chmod 600 /etc/factory/env
+     sudo chown factory /etc/factory/app.pem
+     ```
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
 
@@ -110,8 +125,25 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    ```sh
    CGO_ENABLED=0 go build -o factory ./cmd/factory   # static: the orchestrator's container runs it too
    ./factory status        # creates data/factory.db
-   ./factory serve         # or install deploy/factory.service
+   ./factory serve         # or run it as a service, below
    ```
+
+   To run it as a service instead, using the env file from step 3, install
+   it from a checkout in `/opt/factory` and run it as a `factory` user that
+   can use Docker:
+
+   ```sh
+   sudo useradd --system --create-home --groups docker factory
+   sudo git clone https://github.com/<you>/factory /opt/factory   # this repo
+   sudo chown -R factory /opt/factory
+   cd /opt/factory && sudo -u factory env CGO_ENABLED=0 go build -o factory ./cmd/factory
+   sudo cp deploy/factory.service /etc/systemd/system/
+   sudo systemctl enable --now factory
+   journalctl -u factory -f     # follow its log
+   ```
+
+   Later upgrades go through `sudo deploy/upgrade.sh NEW_BINARY` (see
+   [Quality (M6)](#quality-m6) below), which can roll back.
 
    Then label an issue `factory:ready`.
 
