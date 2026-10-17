@@ -263,7 +263,7 @@ func (c *Config) Validate() error {
 			// Same harness is allowed only with a different model, at every
 			// tier a retry can move the builder to.
 			for _, m := range c.builderModels(b) {
-				if strings.EqualFold(m, r.Model) {
+				if sameModel(r.Harness, m, r.Model) {
 					bad("routing.%s reviews with %s/%s, which routing.implement.%s can build with (escalation included): a reviewer must differ from the builder in harness or model", rk, r.Harness, r.Model, size)
 					break
 				}
@@ -345,6 +345,24 @@ func (c *Config) builderModels(r Route) []string {
 		}
 	}
 	return append(ms, tiers[min(start, len(tiers)):]...)
+}
+
+// sameModel reports whether two model names on one harness may be the same
+// model. Claude accepts both aliases ("sonnet") and full ids
+// ("claude-sonnet-4-5"), so Claude models compare by family.
+func sameModel(harness, a, b string) bool {
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	if a == b {
+		return true
+	}
+	if harness == "claude" {
+		for _, f := range []string{"opus", "sonnet", "haiku"} {
+			if strings.Contains(a, f) && strings.Contains(b, f) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Review returns the reviewer route for an item's risk.

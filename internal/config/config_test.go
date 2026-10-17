@@ -38,6 +38,7 @@ func TestReviewerMustDifferFromBuilder(t *testing.T) {
 		{"model a retry escalates to", "opus", "[sonnet, opus]", false},
 		{"different model at every tier", "opus", "[sonnet]", true},
 		{"names compare without case", "Sonnet", "[sonnet]", false},
+		{"full id of a builder model", "claude-sonnet-4-5", "[sonnet]", false},
 	}
 	for _, tc := range cases {
 		_, err := Parse([]byte(claudeReview(tc.model, tc.tiers)))

@@ -536,7 +536,11 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		runs, err := s.Checks(cctx, p.HeadSHA)
 		cancel()
-		if err != nil {
+		var he *github.HTTPError
+		switch {
+		case errors.As(err, &he) && he.Status == http.StatusForbidden:
+			p.ChecksError = "GitHub refused to show check runs: give the factory's GitHub App the Checks: Read-only permission"
+		case err != nil:
 			p.ChecksError = err.Error()
 		}
 		for _, c := range runs {

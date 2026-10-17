@@ -294,11 +294,13 @@ same harness and model as the builder it reviews. Stage prompts are in
 
 ### Claude-only review
 
-By default Codex reviews what Claude builds, so neither grades its own work.
-If you only have Claude, a different Claude model can review instead. The
-reviewer's model must differ from every model the builder can reach,
-including the tiers a retry escalates to, so a reviewer on Opus means Opus
-cannot be a build tier:
+By default Codex reviews what Claude builds, so the reviewer is never the
+model that wrote the code. If you only have Claude, a different Claude model
+can review instead. The reviewer's model must differ from every model the
+builder can reach, including the tiers a retry escalates to, so a reviewer
+on Opus means Opus cannot be a build tier. Claude models compare by family,
+so `claude-sonnet-4-5` counts as `sonnet`. Change these entries in
+`factory.yaml` and leave the rest:
 
 ```yaml
 routing:
@@ -312,7 +314,11 @@ escalation:
 ```
 
 This is weaker than cross-vendor review: two models from one family tend to
-share blind spots. No OpenAI key is needed once no route names `codex`.
+share blind spots. The rule covers the reviewer, whose approval is needed
+before any PR opens. The critic that also reads high-risk diffs runs only
+after the reviewer approves and can only add a block, so it uses
+`routing.critic` (default: `implement.L`) even when that is the builder's
+model. No OpenAI key is needed once no route names `codex`.
 
 ## Isolation
 
