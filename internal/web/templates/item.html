@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h1>{{template "issue" .Item.IssueNumber}} {{.Item.Title}}</h1>
+<p><span class="pill">{{.Item.Stage}}</span> {{if .Item.Complexity}}size {{.Item.Complexity}} · risk {{.Item.Risk}}{{end}}
+{{if .Item.Branch}} · branch <code>{{.Item.Branch}}</code>{{end}} {{if .Item.PRNumber}} · {{template "pr" .Item.PRNumber}}{{end}}</p>
+{{if .Deps}}<p>Depends on: {{range .Deps}}<a href="/items/{{.}}">item {{.}}</a> {{end}}</p>{{end}}
+<form method="post" action="/items/{{.Item.ID}}/park"><input name="reason" placeholder="Reason" size="30"> <button>Park</button></form>
+<h2>Jobs</h2><div class="wrap"><table><tr><th>Job</th><th>Kind</th><th>State</th><th>Harness</th><th>Model</th><th>Skills</th><th>Attempt</th><th>Cost</th></tr>
+{{range .Jobs}}<tr><td><a href="/jobs/{{.ID}}">{{.ID}}</a></td><td>{{.Kind}}</td><td>{{.State}}</td><td>{{.Harness}}</td><td>{{.Model}}</td><td>{{.Skillset}}</td><td>{{.Attempt}}</td><td>{{money .CostUSD}}</td></tr>{{end}}</table></div>
+<h2>Audit trail</h2><div class="wrap"><table><tr><th>When</th><th>Actor</th><th>Type</th><th>Reason</th></tr>
+{{range .Events}}<tr><td class="mut">{{since .At}}</td><td>{{.Actor}}</td><td>{{.Type}}</td><td>{{short .Reason 300}} <span class="mut">{{short .Data 120}}</span></td></tr>{{end}}</table></div>
+{{template "foot" .}}

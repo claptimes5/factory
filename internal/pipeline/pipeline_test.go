@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -113,6 +114,18 @@ func (f *fakeGH) CreatePR(_ context.Context, title, body, head, base string, dra
 	return pr, nil
 }
 func (f *fakeGH) UpdatePRBody(_ context.Context, n int, body string) error { return nil }
+func (f *fakeGH) CreateIssue(_ context.Context, title, body string, labels []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 1
+	for k := range f.issues {
+		if k >= n {
+			n = k + 1
+		}
+	}
+	f.issues[n] = &github.Issue{Number: n, Title: title, Body: body, Labels: labels}
+	return n, nil
+}
 
 // fakeHarness plays a scripted role per stage. For implement it edits and
 // commits in the workdir like a real builder would.
@@ -125,6 +138,7 @@ type fakeHarness struct {
 	calls   map[string]int
 	prompts map[string][]string
 	plant   string // a verdict file written where a planted hook could write it
+	orch    func(req harness.RunRequest) (string, error)
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -149,6 +163,15 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, err
 		}
 		os.WriteFile(filepath.Join(req.OutDir, "verdict.json"), []byte(`{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":""}`), 0o644)
+	case "orchestrate":
+		if h.orch == nil {
+			return nil, errors.New("no scripted orchestrator")
+		}
+		final, err := h.orch(req)
+		if err != nil {
+			return nil, err
+		}
+		res.Final = final
 	case "review", "critic":
 		if n >= len(h.reviews) {
 			return nil, fmt.Errorf("no scripted review %d", n)

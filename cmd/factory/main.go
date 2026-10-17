@@ -12,19 +12,27 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
+	"github.com/claptimes5/factory/internal/mcp"
+	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/web"
 )
 
 func main() {
@@ -35,10 +43,15 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
+	// The orchestrator's MCP bridge runs inside the job container, where there
+	// is no config or database: it only joins stdio to the daemon's socket.
+	if len(args) == 2 && args[0] == "mcp-bridge" {
+		return mcp.Bridge(args[1], os.Stdin, os.Stdout)
+	}
 	fs := flag.NewFlagSet("factory", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FACTORY_CONFIG", "factory.yaml"), "path to factory.yaml")
 	if err := fs.Parse(args); err != nil {
@@ -81,7 +94,11 @@ func run(args []string) error {
 			return err
 		}
 		if cmd == "serve" {
-			slog.Info("factory serving", "repo", cfg.Repo, "runner", cfg.Runner.Kind)
+			if err := serveWeb(ctx, cfg, st, p); err != nil {
+				return err
+			}
+			healthCheck(ctx, cfg, p)
+			slog.Info("factory serving", "repo", cfg.Repo, "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
 			return p.Serve(ctx)
 		}
 		if err := p.Recover(ctx); err != nil {
@@ -141,6 +158,11 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
+		// Its container runs this binary as the MCP bridge.
+		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
+		cfg.Orchestrator.On = false
+	}
 	var r runner.Runner = runner.Local{}
 	if cfg.Runner.Kind == "docker" {
 		r = &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
@@ -157,7 +179,72 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		},
 		Secrets: secrets(),
 		Log:     slog.Default(),
+		Notify:  notifier(),
 	}, nil
+}
+
+// notifier sends to FACTORY_NOTIFY_URL (ntfy, Slack or Discord), at most
+// 20 messages an hour.
+func notifier() func(ctx context.Context, msg string) {
+	n, err := notify.New(os.Getenv("FACTORY_NOTIFY_URL"))
+	if err != nil {
+		slog.Warn("notifications disabled", "err", err)
+		return nil
+	}
+	if n == nil {
+		return nil
+	}
+	rl := &notify.RateLimited{Next: n, N: 20, Window: time.Hour}
+	return func(ctx context.Context, msg string) {
+		if err := rl.Send(ctx, "Factory", msg); err != nil {
+			slog.Warn("notify", "err", err)
+		}
+	}
+}
+
+// healthCheck warns when the job image is missing, since every job would fail.
+func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) {
+	if cfg.Runner.Kind != "docker" {
+		return
+	}
+	if err := exec.CommandContext(ctx, "docker", "image", "inspect", cfg.Runner.Image).Run(); err != nil {
+		msg := fmt.Sprintf("Job image %s is missing or Docker is down: %v", cfg.Runner.Image, err)
+		slog.Error(msg)
+		if p.Notify != nil {
+			p.Notify(ctx, msg)
+		}
+	}
+}
+
+func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipeline.Pipeline) error {
+	host, _, err := net.SplitHostPort(cfg.Web.Listen)
+	if err != nil {
+		return fmt.Errorf("web.listen: %w", err)
+	}
+	srv := &web.Server{Store: st, Actions: p, Repo: cfg.Repo, DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
+		Hosts: append([]string{host}, cfg.Web.Hosts...)}
+	if cfg.Runner.Kind == "docker" {
+		srv.Attach = web.TTYDAttach(st, host)
+	}
+	h, err := srv.Handler()
+	if err != nil {
+		return err
+	}
+	l, err := net.Listen("tcp", cfg.Web.Listen)
+	if err != nil {
+		return err
+	}
+	hs := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = hs.Close()
+	}()
+	go func() {
+		if err := hs.Serve(l); err != nil && err != http.ErrServerClosed {
+			slog.Error("control room", "err", err)
+		}
+	}()
+	return nil
 }
 
 func status(ctx context.Context, st *store.Store, cfg *config.Config) error {

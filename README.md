@@ -63,7 +63,7 @@ You need a Linux host with Docker and Go 1.23+.
 6. **Run it.**
 
    ```sh
-   go build -o factory ./cmd/factory
+   CGO_ENABLED=0 go build -o factory ./cmd/factory   # static: the orchestrator's container runs it too
    ./factory status        # creates data/factory.db
    ./factory serve         # or install deploy/factory.service
    ```
@@ -75,6 +75,27 @@ Set a spend alert on both API accounts. The daemon enforces its own caps
 jobs until midnight UTC, three concurrent jobs, and no new implement jobs
 while five PRs wait for you.
 
+## Control room
+
+`factory serve` also serves the control room on `web.listen`
+(default `127.0.0.1:8080`). There is no login, so keep it on localhost or a
+Tailscale address.
+
+- **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
+- **Board:** items by stage, with model and cost.
+- **Job view:** live log over SSE, gate results, verdict, cost; buttons to
+  retry, retry one tier up, cancel, and attach a terminal (with `ttyd`
+  installed; otherwise it shows the `docker exec` command).
+- **Orchestrator log** and **Spend** (today, 7 days, cost per merged PR).
+
+Notifications go to `FACTORY_NOTIFY_URL`: an ntfy topic URL for phone push,
+a Slack incoming webhook, or a Discord webhook. You get one when an item
+parks, a PR is ready, the daily budget is hit, or the job image is missing.
+
+The control room only answers to localhost names and the host in
+`web.listen`. To reach it under another name (a Tailscale name, say), list it
+in `web.hosts`.
+
 ## Commands
 
 | Command | What it does |
@@ -84,6 +105,34 @@ while five PRs wait for you.
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
+| `factory mcp-bridge SOCKET` | Internal: the orchestrator's stdio MCP server, run inside its container |
+
+## Orchestrator
+
+With `orchestrator.enabled: true`, a short read-only Claude run plans and
+steers through the daemon's MCP tools (`prompts/orchestrate.md`). It runs on
+a new `factory:epic` issue, when an item's last two jobs failed, when the
+queue drains with work stuck (ready with no job, or blocked on dependencies
+that are not moving), every `interval`, and once a day after
+`summary_hour` for the summary it sends to your notifier.
+
+Its tools are `list_items`, `get_item`, `get_issue`, `queue_status`,
+`get_job_log`, `create_issue`, `set_dependencies`, `set_priority`, `enqueue`, `retry`,
+`park` and `notify_human`. The daemon checks each against policy (daily
+issue cap, no dependency cycles, stage allowed for the item, review-queue
+cap, budget, notification rate) and writes every call, reads included, to
+the audit trail with the reason it gave; the control room's Orchestrator
+log shows them. There is no tool to merge, push, close a PR or edit config.
+One run at a time; extra triggers, and any that piled up while the daemon
+was down, coalesce into one run. Items whose dependencies are not done wait
+in `blocked` and start when the last one merges.
+
+An epic becomes an item in stage `epic` that is never built, even if it also
+carries `factory:ready`, and is done when all its children are. The
+orchestrator cannot restart parked items (that stays your `factory:retry`
+label), may retry each item at most twice, and may only add labels listed in
+`orchestrator.labels`. Its spend has its own daily cap and does not count
+against the build budget.
 
 ## Skill sets
 
@@ -145,10 +194,15 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **Stuck items are reconciled:** an item in an active stage with no job for
   two minutes resumes from its last job's outcome.
 - **No separate spec stage yet.** Triage parks unclear issues with a question.
+- **The orchestrator is off by default** in code (on in this repo's
+  `factory.yaml`), since it spends on its own schedule.
+- **A drained queue only triggers the orchestrator for stuck work**, once per
+  distinct set of stuck items, so items waiting on your PR review don't cost
+  a run every half hour.
 
 ## Status
 
-M1 (store, claim, config), M2 (runner and adapters) and M3 (the pipeline)
-are in. Next: the control room and notifications (M4), the orchestrator
-(M5), hidden scenarios and `factory eval` (M6), side-by-side skill
-comparison, and Dashboard v2.
+M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
+M4 (control room and notifications) and M5 (the orchestrator) are in. Next:
+hidden scenarios and `factory eval` (M6), side-by-side skill comparison, and
+Dashboard v2.

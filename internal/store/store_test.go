@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -274,4 +275,26 @@ func migrationFiles(t *testing.T) []string {
 		out[i] = m.name
 	}
 	return out
+}
+
+func TestDependencyCyclesRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTest(t)
+	a, b, c := newItem(t, s, 1), newItem(t, s, 2), newItem(t, s, 3)
+	if err := s.SetDependencies(ctx, b.ID, []int64{a.ID}, "orchestrator", "b after a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDependencies(ctx, c.ID, []int64{b.ID}, "orchestrator", "c after b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDependencies(ctx, a.ID, []int64{c.ID}, "orchestrator", "loop"); !errors.Is(err, ErrCycle) {
+		t.Fatalf("want cycle error, got %v", err)
+	}
+	if err := s.SetDependencies(ctx, a.ID, []int64{a.ID}, "orchestrator", "self"); !errors.Is(err, ErrCycle) {
+		t.Fatalf("self dependency must be refused, got %v", err)
+	}
+	deps, _ := s.Dependencies(ctx, c.ID)
+	if len(deps) != 1 || deps[0] != b.ID {
+		t.Fatalf("deps = %v", deps)
+	}
 }

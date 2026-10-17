@@ -9,6 +9,9 @@ intake:
   label: "factory:ready"      # issues with this label become work items
   poll_interval: 60s
 
+web:
+  listen: 127.0.0.1:8080      # control room; use a Tailscale IP for phone access
+
 runner:
   kind: docker                # docker | local (local runs CLIs on the host; dev only)
   image: factory-job:latest   # built from deploy/job-image
@@ -17,6 +20,7 @@ runner:
   memory: 4g
 
 routing:
+  orchestrate:       {harness: claude, model: opus}
   triage:            {harness: claude, model: haiku}
   implement.S:       {harness: claude, model: sonnet}
   implement.M:       {harness: claude, model: sonnet}
@@ -37,6 +41,16 @@ timeouts:
   implement: 60m
   review: 20m
   gates: 20m
+  orchestrate: 20m
+
+orchestrator:
+  enabled: true
+  run_budget: 3               # dollars per run
+  daily_budget: 15            # orchestration only, separate from build spend
+  daily_issue_cap: 10
+  interval: 60m
+  summary_hour: 8             # local time of the daily summary
+  notify_per_hour: 6
 
 budgets:
   per_job: {S: 2, M: 6, L: 15}

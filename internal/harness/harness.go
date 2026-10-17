@@ -33,6 +33,9 @@ type RunRequest struct {
 	Env       map[string]string // short-lived credentials only
 	Timeout   time.Duration
 	Image     string
+	Mounts    []runner.Mount // extra mounts, e.g. the orchestrator's MCP socket
+	MCPConfig string         // JSON for `claude --mcp-config` (Claude only)
+	Tools     []string       // extra allowed tools for read-only runs, e.g. mcp__factory
 }
 
 // Event is normalized from each CLI's JSON stream.
@@ -83,6 +86,7 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 		Name: req.Name, Image: req.Image, Workdir: req.Workdir, OutDir: req.OutDir,
 		ReadOnly: req.ReadOnly, Env: req.Env, Timeout: req.Timeout,
 	}
+	spec.Mounts = append(spec.Mounts, req.Mounts...)
 	paths := h.runner.Paths(spec)
 	if req.SkillsDir != "" {
 		spec.Mounts = append(spec.Mounts, runner.Mount{Host: req.SkillsDir, Container: h.a.skillsPath(paths), ReadOnly: true})

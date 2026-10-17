@@ -49,6 +49,7 @@ type GitHub interface {
 	GetPR(ctx context.Context, n int) (*github.PR, error)
 	CreatePR(ctx context.Context, title, body, head, base string, draft bool) (*github.PR, error)
 	UpdatePRBody(ctx context.Context, n int, body string) error
+	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
 }
 
 // Pipeline wires the store, GitHub, git, the runner and the harnesses.
@@ -75,7 +76,17 @@ type Pipeline struct {
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
-	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
+	inflight   sync.Map        // item id -> job id while a job for it, and its follow-ups, run
+	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
+	jobCancel  sync.Map        // job id -> context.CancelFunc of a running job
+	// act serializes state-changing actions that check and then act:
+	// intake, human actions and the orchestrator's tools.
+	act    sync.Mutex
+	orchMu sync.Mutex // guards coalescing of orchestrator requests
+
+	lastOrch    time.Time // last scheduled orchestrator request
+	lastSummary string    // day the daily summary was requested
+	lastDrain   time.Time // last drained-queue orchestrator request
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -113,7 +124,10 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return p.coalesceOrchestrate(ctx)
 }
 
 // Serve runs the daemon loop until ctx is cancelled, then waits for
@@ -159,8 +173,15 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 			p.log().Error("intake", "err", err)
 		}
 	}
-	for {
+	if p.Cfg.Orchestrator.On {
+		p.orchestratorTriggers(ctx, time.Now())
+	}
+	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
+		if err == nil && j == nil && !claimed && p.Cfg.Orchestrator.On {
+			p.drainedTrigger(ctx)
+			j, err = p.claimNext(ctx) // it may have queued an orchestrator run
+		}
 		if err != nil || j == nil {
 			return err
 		}
@@ -197,7 +218,14 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if running >= p.Cfg.Budgets.ConcurrentJobs {
 		return nil, nil
 	}
-	spent, err := p.Store.SpendOn(ctx, store.Today())
+	// One orchestrator at a time: its tools act on the whole queue.
+	var except []string
+	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
+		return nil, err
+	} else if n > 0 {
+		except = append(except, "orchestrate")
+	}
+	spent, err := p.buildSpend(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -206,27 +234,47 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.budgetHalt = store.Today()
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
-		return nil, nil
+		// The orchestrator has its own budget, checked when its run starts.
+		return p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...)
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return nil, err
 	}
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
-		return p.Store.ClaimJobExcept(ctx, "implement")
+		except = append(except, "implement")
+	}
+	if len(except) > 0 {
+		return p.Store.ClaimJobExcept(ctx, except...)
 	}
 	return p.Store.ClaimJob(ctx)
+}
+
+// buildSpend is today's spend on building, without orchestration, which
+// has its own daily cap.
+func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
+	all, err := p.Store.SpendOn(ctx, store.Today())
+	if err != nil {
+		return 0, err
+	}
+	orch, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	return all - orch, err
 }
 
 // Intake turns labeled issues into work items, sends items a human marked
 // factory:retry back to triage, closes out items whose PR merged or closed,
 // and reconciles items left with no job.
 func (p *Pipeline) Intake(ctx context.Context) error {
+	p.act.Lock()
+	defer p.act.Unlock()
 	issues, err := p.GH.ListIssues(ctx, p.Cfg.Intake.Label)
 	if err != nil {
 		return err
 	}
 	for _, is := range issues {
+		if hasLabel(is.Labels, LabelEpic) {
+			continue // epics are split by the orchestrator, never built whole
+		}
 		it, created, err := p.Store.UpsertItem(ctx, p.Cfg.Repo, is.Number, is.Title)
 		if err != nil {
 			return err
@@ -236,6 +284,9 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if p.Cfg.Orchestrator.On {
+		p.warn(p.intakeEpics(ctx), "epics")
 	}
 	retries, err := p.GH.ListIssues(ctx, LabelRetry)
 	if err != nil {
@@ -252,6 +303,14 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			continue
 		}
 		p.warn(p.GH.RemoveLabel(ctx, is.Number, LabelParked), "RemoveLabel")
+		if hasLabel(is.Labels, LabelEpic) {
+			// An unparked epic goes back to the orchestrator, never to triage.
+			if err := p.Store.SetStage(ctx, it.ID, state.Epic, "human", "factory:retry label added"); err != nil {
+				return err
+			}
+			p.warn(p.Orchestrate(ctx, fmt.Sprintf("epic #%d (item %d) was unparked: %s", is.Number, it.ID, is.Title), false), "orchestrate")
+			continue
+		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:retry label added"); err != nil {
 			return err
 		}
@@ -279,6 +338,9 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
+	}
+	if err := p.unblock(ctx); err != nil {
+		return err
 	}
 	return p.Reconcile(ctx, ReconcileAfter)
 }
@@ -369,9 +431,10 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 	}
 }
 
+// hasLabel matches like GitHub does: case-insensitively.
 func hasLabel(ls []string, l string) bool {
 	for _, x := range ls {
-		if x == l {
+		if strings.EqualFold(x, l) {
 			return true
 		}
 	}
@@ -462,6 +525,18 @@ type agentRun struct {
 // runAgent runs one harness invocation for a job, streams its events to the
 // job log (scrubbed of secrets) and returns the outcome.
 func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, readOnly bool, timeout time.Duration) agentRun {
+	return p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, agentExtras{writable: !readOnly})
+}
+
+// agentExtras are the less common knobs of an agent run.
+type agentExtras struct {
+	writable  bool
+	mounts    []runner.Mount
+	mcpConfig string
+	tools     []string
+}
+
+func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
 	h, ok := p.Harnesses[j.Harness]
 	if !ok {
 		return agentRun{err: fmt.Errorf("no harness %q", j.Harness)}
@@ -487,8 +562,9 @@ func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, 
 	}()
 	res, err := h.Run(ctx, harness.RunRequest{
 		Name: containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
-		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: readOnly, Schema: schema,
+		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: secrets, Timeout: timeout, Image: p.Cfg.Runner.Image,
+		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools,
 	}, events)
 	close(events)
 	<-done
@@ -529,6 +605,9 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
 		p.log().Error("finish job", "job", j.ID, "err", err)
 	}
+	if (st == state.Failed || st == state.TimedOut) && j.Kind != "orchestrate" && p.Cfg.Orchestrator.On {
+		p.failedTwice(ctx, j)
+	}
 }
 
 func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
@@ -546,13 +625,29 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	p.jobCancel.Store(j.ID, cancel)
+	defer p.jobCancel.Delete(j.ID)
 	var it *store.WorkItem
+	// A cancel that landed after the job's last cancellation check (for
+	// example while it opened the PR, or before the cancel func existed)
+	// still ends the job and parks the item.
+	defer func() { p.stopIfCancelled(ctx, j, it, agentRun{}) }()
+	if _, ok := p.cancelled.Load(j.ID); ok {
+		cancel()
+	}
 	if j.ItemID != nil {
-		p.inflight.Store(*j.ItemID, true)
+		p.inflight.Store(*j.ItemID, j.ID)
 		defer p.inflight.Delete(*j.ItemID)
 		var err error
 		if it, err = p.Store.GetItem(ctx, *j.ItemID); err != nil {
 			p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
+			return
+		}
+		// Parked (or finished) between being queued and being claimed.
+		if it.Stage == state.Parked || it.Stage == state.Done {
+			p.finish(ctx, j, agentRun{}, state.Cancelled, "", "item is "+string(it.Stage))
 			return
 		}
 	}
@@ -564,6 +659,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runImplement(ctx, j, it)
 	case "review", "critic":
 		err = p.runReview(ctx, j, it)
+	case "orchestrate":
+		err = p.runOrchestrate(ctx, j)
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -585,7 +682,10 @@ type PromptData struct {
 	PreviousFailure string
 	Gates           string
 	Diff            string
-	Fence           string // a code fence the diff cannot close
+	Fence           string   // a code fence the diff cannot close
+	Reasons         []string // why the orchestrator runs
+	Summary         bool     // the orchestrator writes the daily summary
+	Status          string   // queue snapshot for the orchestrator
 }
 
 func (p *Pipeline) render(stage string, d PromptData) (string, error) {
@@ -625,3 +725,5 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 }
 
 func specFor(work, out string) runner.Spec { return runner.Spec{Workdir: work, OutDir: out} }
+
+func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

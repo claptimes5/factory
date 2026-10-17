@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -263,12 +264,17 @@ func scanItem(r scanner) (*WorkItem, error) {
 
 // UpsertItem returns the work item for an issue, creating it in triage.
 func (s *Store) UpsertItem(ctx context.Context, repo string, issue int, title string) (*WorkItem, bool, error) {
+	return s.UpsertItemIn(ctx, repo, issue, title, state.Triage)
+}
+
+// UpsertItemIn is UpsertItem with the stage a new item starts in.
+func (s *Store) UpsertItemIn(ctx context.Context, repo string, issue int, title string, stage state.Stage) (*WorkItem, bool, error) {
 	var created bool
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := Now()
 		res, err := tx.Exec(`INSERT INTO work_items(repo, issue_number, title, stage, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, issue_number) DO NOTHING`,
-			repo, issue, title, string(state.Triage), now, now)
+			repo, issue, title, string(stage), now, now)
 		if err != nil {
 			return err
 		}
@@ -781,4 +787,184 @@ func (s *Store) Events(ctx context.Context, itemID int64) ([]Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// CancelQueued cancels a job that has not started.
+func (s *Store) CancelQueued(ctx context.Context, id int64, actor, reason string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var item sql.NullInt64
+		res, err := tx.Exec(`UPDATE jobs SET state = 'cancelled', finished_at = ?, error = ? WHERE id = ? AND state = 'queued'`, Now(), reason, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("job %d is not queued", id)
+		}
+		if err := tx.QueryRow(`SELECT item_id FROM jobs WHERE id = ?`, id).Scan(&item); err != nil {
+			return err
+		}
+		var itemID *int64
+		if item.Valid {
+			itemID = &item.Int64
+		}
+		return insertEvent(tx, Event{Actor: actor, ItemID: itemID, JobID: &id, Type: "job_cancelled", Reason: reason})
+	})
+}
+
+// Dependencies returns the ids of items an item depends on.
+func (s *Store) Dependencies(ctx context.Context, itemID int64) ([]int64, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT depends_on_id FROM dependencies WHERE item_id = ? ORDER BY depends_on_id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// EventsByActor returns the newest events by one actor, newest first.
+func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]Event, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id, at, actor, item_id, job_id, type, COALESCE(reason,''), COALESCE(data,'')
+		FROM events WHERE actor = ? ORDER BY id DESC LIMIT ?`, actor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var item, job sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &item, &job, &e.Type, &e.Reason, &e.Data); err != nil {
+			return nil, err
+		}
+		if item.Valid {
+			e.ItemID = &item.Int64
+		}
+		if job.Valid {
+			e.JobID = &job.Int64
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SpendByKind sums the cost of jobs of one kind that finished on a day.
+func (s *Store) SpendByKind(ctx context.Context, day, kind string) (float64, error) {
+	var v sql.NullFloat64
+	err := s.read.QueryRowContext(ctx, `SELECT SUM(cost_usd) FROM jobs WHERE kind = ? AND substr(finished_at, 1, 10) = ?`, kind, day).Scan(&v)
+	return v.Float64, err
+}
+
+// CountEventsSince counts events of a type by an actor at or after a time.
+func (s *Store) CountEventsSince(ctx context.Context, actor, typ, since string) (int, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE actor = ? AND type = ? AND at >= ?`, actor, typ, since).Scan(&n)
+	return n, err
+}
+
+// HasEvent reports whether an event with this type and reason exists.
+func (s *Store) HasEvent(ctx context.Context, typ, reason string) (bool, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE type = ? AND reason = ?`, typ, reason).Scan(&n)
+	return n > 0, err
+}
+
+// ErrCycle is returned when a dependency would create a cycle.
+var ErrCycle = errors.New("dependency cycle")
+
+// SetDependencies replaces an item's dependencies, refusing cycles.
+func (s *Store) SetDependencies(ctx context.Context, itemID int64, dependsOn []int64, actor, reason string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT item_id, depends_on_id FROM dependencies WHERE item_id != ?`, itemID)
+		if err != nil {
+			return err
+		}
+		graph := map[int64][]int64{}
+		for rows.Next() {
+			var a, b int64
+			if err := rows.Scan(&a, &b); err != nil {
+				rows.Close()
+				return err
+			}
+			graph[a] = append(graph[a], b)
+		}
+		rows.Close()
+		graph[itemID] = dependsOn
+		// A cycle through itemID exists if itemID is reachable from its deps.
+		seen := map[int64]bool{}
+		var reach func(n int64) bool
+		reach = func(n int64) bool {
+			if n == itemID {
+				return true
+			}
+			if seen[n] {
+				return false
+			}
+			seen[n] = true
+			for _, m := range graph[n] {
+				if reach(m) {
+					return true
+				}
+			}
+			return false
+		}
+		for _, d := range dependsOn {
+			if reach(d) {
+				return fmt.Errorf("%w: %d -> %d leads back to %d", ErrCycle, itemID, d, itemID)
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM dependencies WHERE item_id = ?`, itemID); err != nil {
+			return err
+		}
+		for _, d := range dependsOn {
+			if _, err := tx.Exec(`INSERT INTO dependencies(item_id, depends_on_id) VALUES (?, ?)`, itemID, d); err != nil {
+				return err
+			}
+		}
+		b, _ := json.Marshal(dependsOn)
+		return insertEvent(tx, Event{Actor: actor, ItemID: &itemID, Type: "set_dependencies", Reason: reason, Data: string(b)})
+	})
+}
+
+// SetPriority changes an item's priority and that of its queued jobs.
+func (s *Store) SetPriority(ctx context.Context, itemID int64, prio int) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE work_items SET priority = ?, updated_at = ? WHERE id = ?`, prio, Now(), itemID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE jobs SET priority = ? WHERE item_id = ? AND state = 'queued'`, prio, itemID)
+		return err
+	})
+}
+
+// SetParent records an epic's child.
+func (s *Store) SetParent(ctx context.Context, itemID, parentID int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE work_items SET parent_id = ?, updated_at = ? WHERE id = ?`, parentID, Now(), itemID)
+		return err
+	})
+}
+
+// SetJobInput replaces a queued job's input (used to coalesce triggers).
+// SetJobInput replaces a queued job's input. It reports false when the job
+// was no longer queued.
+func (s *Store) SetJobInput(ctx context.Context, id int64, input string) (bool, error) {
+	var ok bool
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE jobs SET input = ? WHERE id = ? AND state = 'queued'`, input, id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		ok = n == 1
+		return err
+	})
+	return ok, err
 }

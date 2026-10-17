@@ -18,17 +18,19 @@ const (
 	Done          Stage = "done"
 	Parked        Stage = "parked"
 	Blocked       Stage = "blocked"
+	Epic          Stage = "epic" // split by the orchestrator, never built itself
 )
 
 var stageEdges = map[Stage][]Stage{
-	Triage:        {Spec, Ready, Parked, Blocked},
+	Triage:        {Spec, Ready, Parked, Blocked, Epic},
 	Spec:          {Ready, Parked, Blocked},
 	Ready:         {Implementing, Parked, Blocked},
 	Implementing:  {Reviewing, Parked, Blocked},
 	Reviewing:     {Implementing, AwaitingHuman, Parked},
 	AwaitingHuman: {Done, Implementing, Parked},
-	Parked:        {Triage, Ready},
+	Parked:        {Triage, Ready, Epic},
 	Blocked:       {Ready, Parked},
+	Epic:          {Done, Parked},
 	Done:          {},
 }
 

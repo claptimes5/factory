@@ -1,0 +1,18 @@
+{{template "head" .}}
+<h1>Job {{.Job.ID}} · {{.Job.Kind}}</h1>
+{{if .Msg}}<p class="msg">{{.Msg}}</p>{{end}}
+<p><span class="pill">{{.Job.State}}</span> {{.Job.Harness}}/{{.Job.Model}}{{if .Job.Effort}} ({{.Job.Effort}}){{end}} · attempt {{.Job.Attempt}}
+{{if .Job.Skillset}} · skills <code>{{.Job.Skillset}}</code>{{end}} · {{money .Job.CostUSD}} of {{money .Job.BudgetUSD}} · tokens {{.Job.TokensIn}}/{{.Job.TokensOut}}
+{{if .Job.ItemID}} · <a href="/items/{{.Job.ItemID}}">item</a>{{end}}</p>
+<p>
+<form method="post" action="/jobs/{{.Job.ID}}/retry"><button>Retry</button></form>
+<form method="post" action="/jobs/{{.Job.ID}}/retry"><input type="hidden" name="tier" value="up"><button>Retry one tier up</button></form>
+<form method="post" action="/jobs/{{.Job.ID}}/cancel"><button>Cancel</button></form>
+{{if .Live}}<form method="post" action="/jobs/{{.Job.ID}}/attach"><button>Attach terminal</button></form>{{end}}
+</p>
+{{if .Job.Error}}<h2>Error</h2><pre>{{.Job.Error}}</pre>{{end}}
+{{if .Gates}}<h2>Gates</h2><table>{{range .Gates}}<tr><td>{{.Gate}}</td><td class="{{if eq .Status "pass"}}ok{{else}}bad{{end}}">{{.Status}}</td><td><pre>{{short .Detail 3000}}</pre></td></tr>{{end}}</table>{{end}}
+{{if .Job.Verdict}}<h2>Verdict</h2><pre>{{pretty .Job.Verdict}}</pre>{{end}}
+<h2>Log</h2>
+<div id="log" hx-ext="sse" sse-connect="/jobs/{{.Job.ID}}/stream" sse-swap="line,done" hx-swap="beforeend" sse-close="done"></div>
+{{template "foot" .}}

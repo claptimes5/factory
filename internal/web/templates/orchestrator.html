@@ -1,0 +1,7 @@
+{{template "head" .}}
+<h1>Orchestrator log</h1>
+<p class="mut">Every action the orchestrator took through the daemon, with its stated reason.</p>
+<div class="wrap"><table><tr><th>When</th><th>Item</th><th>Action</th><th>Reason</th></tr>
+{{range .Events}}<tr><td class="mut">{{since .At}}</td><td>{{if .ItemID}}<a href="/items/{{.ItemID}}">{{.ItemID}}</a>{{end}}</td><td>{{.Type}}</td><td>{{.Reason}} <span class="mut">{{short .Data 160}}</span></td></tr>
+{{else}}<tr><td colspan="4" class="mut">No orchestrator actions yet.</td></tr>{{end}}</table></div>
+{{template "foot" .}}
