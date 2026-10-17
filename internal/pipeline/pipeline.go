@@ -76,7 +76,7 @@ type Pipeline struct {
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
-	inflight   sync.Map        // item id -> true while a job for it, and its follow-ups, run
+	inflight   sync.Map        // item id -> job id while a job for it, and its follow-ups, run
 	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
 	jobCancel  sync.Map        // job id -> context.CancelFunc of a running job
 	// act serializes state-changing actions that check and then act:
@@ -218,6 +218,13 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if running >= p.Cfg.Budgets.ConcurrentJobs {
 		return nil, nil
 	}
+	// One orchestrator at a time: its tools act on the whole queue.
+	var except []string
+	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
+		return nil, err
+	} else if n > 0 {
+		except = append(except, "orchestrate")
+	}
 	spent, err := p.buildSpend(ctx)
 	if err != nil {
 		return nil, err
@@ -228,21 +235,14 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobExcept(ctx, "triage", "implement", "review", "critic")
+		return p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...)
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return nil, err
 	}
-	var except []string
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
-	}
-	// One orchestrator at a time: its tools act on the whole queue.
-	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
-		return nil, err
-	} else if n > 0 {
-		except = append(except, "orchestrate")
 	}
 	if len(except) > 0 {
 		return p.Store.ClaimJobExcept(ctx, except...)
@@ -303,6 +303,14 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			continue
 		}
 		p.warn(p.GH.RemoveLabel(ctx, is.Number, LabelParked), "RemoveLabel")
+		if hasLabel(is.Labels, LabelEpic) {
+			// An unparked epic goes back to the orchestrator, never to triage.
+			if err := p.Store.SetStage(ctx, it.ID, state.Epic, "human", "factory:retry label added"); err != nil {
+				return err
+			}
+			p.warn(p.Orchestrate(ctx, fmt.Sprintf("epic #%d (item %d) was unparked: %s", is.Number, it.ID, is.Title), false), "orchestrate")
+			continue
+		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:retry label added"); err != nil {
 			return err
 		}
@@ -423,9 +431,10 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 	}
 }
 
+// hasLabel matches like GitHub does: case-insensitively.
 func hasLabel(ls []string, l string) bool {
 	for _, x := range ls {
-		if x == l {
+		if strings.EqualFold(x, l) {
 			return true
 		}
 	}
@@ -621,8 +630,15 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 	p.jobCancel.Store(j.ID, cancel)
 	defer p.jobCancel.Delete(j.ID)
 	var it *store.WorkItem
+	// A cancel that landed after the job's last cancellation check (for
+	// example while it opened the PR, or before the cancel func existed)
+	// still ends the job and parks the item.
+	defer func() { p.stopIfCancelled(ctx, j, it, agentRun{}) }()
+	if _, ok := p.cancelled.Load(j.ID); ok {
+		cancel()
+	}
 	if j.ItemID != nil {
-		p.inflight.Store(*j.ItemID, true)
+		p.inflight.Store(*j.ItemID, j.ID)
 		defer p.inflight.Delete(*j.ItemID)
 		var err error
 		if it, err = p.Store.GetItem(ctx, *j.ItemID); err != nil {
@@ -635,9 +651,6 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 			return
 		}
 	}
-	// A cancel that landed after the job's last cancellation check (for
-	// example while it opened the PR) still parks the item.
-	defer p.stopIfCancelled(ctx, j, it, agentRun{})
 	var err error
 	switch j.Kind {
 	case "triage":

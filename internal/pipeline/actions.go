@@ -155,6 +155,14 @@ func (p *Pipeline) parkItem(ctx context.Context, actor string, itemID int64, rea
 	if active, err := p.activeJob(ctx, itemID); err == nil && active != nil {
 		p.warn(p.stopJob(ctx, actor, active, "item parked"), "stop job")
 	}
+	// A job that already finished may still be running its follow-up steps
+	// (queueing the next stage, opening the PR); stop those too.
+	if id, ok := p.inflight.Load(itemID); ok {
+		p.cancelled.Store(id.(int64), true)
+		if c, ok := p.jobCancel.Load(id.(int64)); ok {
+			c.(context.CancelFunc)()
+		}
+	}
 	return p.park(ctx, it, fmt.Sprintf("Parked by %s: %s", who(actor), reason))
 }
 

@@ -28,7 +28,7 @@ var stageEdges = map[Stage][]Stage{
 	Implementing:  {Reviewing, Parked, Blocked},
 	Reviewing:     {Implementing, AwaitingHuman, Parked},
 	AwaitingHuman: {Done, Implementing, Parked},
-	Parked:        {Triage, Ready},
+	Parked:        {Triage, Ready, Epic},
 	Blocked:       {Ready, Parked},
 	Epic:          {Done, Parked},
 	Done:          {},

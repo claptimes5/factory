@@ -110,8 +110,12 @@ func (p *Pipeline) orchestratorTriggers(ctx context.Context, now time.Time) {
 		p.lastSummary = day
 		// Recorded, so a restart after the summary hour does not send it again.
 		if seen, err := p.Store.HasEvent(ctx, "summary_requested", day); err == nil && !seen {
-			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "summary_requested", Reason: day}), "AddEvent")
-			p.warn(p.Orchestrate(ctx, "daily summary", true), "orchestrate")
+			if err := p.Orchestrate(ctx, "daily summary", true); err != nil {
+				p.lastSummary = "" // try again next tick
+				p.warn(err, "orchestrate")
+			} else {
+				p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "summary_requested", Reason: day}), "AddEvent")
+			}
 		}
 	}
 }
@@ -201,15 +205,12 @@ func (p *Pipeline) intakeEpics(ctx context.Context) error {
 		return err
 	}
 	for _, is := range epics {
-		it, created, err := p.Store.UpsertItem(ctx, p.Cfg.Repo, is.Number, is.Title)
+		it, created, err := p.Store.UpsertItemIn(ctx, p.Cfg.Repo, is.Number, is.Title, state.Epic)
 		if err != nil {
 			return err
 		}
 		if !created {
 			continue // already an epic, or already being built as a normal item
-		}
-		if err := p.Store.SetStage(ctx, it.ID, state.Epic, "daemon", "labeled "+LabelEpic); err != nil {
-			return err
 		}
 		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic #%d (item %d): %s", is.Number, it.ID, is.Title), false), "orchestrate")
 	}
@@ -508,10 +509,8 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 						return "", fmt.Errorf("refused: no parent item %d", a.Parent)
 					}
 				}
-				for _, d := range a.DependsOn {
-					if _, err := p.Store.GetItem(ctx, d); err != nil {
-						return "", fmt.Errorf("refused: no item %d to depend on", d)
-					}
+				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
+					return "", err
 				}
 				since := time.Now().UTC().Format("2006-01-02") + "T00:00:00"
 				n, err := p.Store.CountEventsSince(ctx, "orchestrator", "create_issue", since)
@@ -566,10 +565,11 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				if strings.TrimSpace(a.Reason) == "" {
 					return "", errors.New("reason is required")
 				}
-				for _, d := range append([]int64{a.Item}, a.DependsOn...) {
-					if _, err := p.Store.GetItem(ctx, d); err != nil {
-						return "", fmt.Errorf("no item %d", d)
-					}
+				if _, err := p.Store.GetItem(ctx, a.Item); err != nil {
+					return "", fmt.Errorf("no item %d", a.Item)
+				}
+				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
+					return "", err
 				}
 				if err := p.Store.SetDependencies(ctx, a.Item, a.DependsOn, "orchestrator", a.Reason); err != nil {
 					return "", err
@@ -692,6 +692,21 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				return "sent", nil
 			})},
 	}
+}
+
+// checkDeps refuses dependencies on missing items and on epics: an epic is
+// done only when its children are, so a child waiting on it waits forever.
+func (p *Pipeline) checkDeps(ctx context.Context, deps []int64) error {
+	for _, d := range deps {
+		it, err := p.Store.GetItem(ctx, d)
+		if err != nil {
+			return fmt.Errorf("refused: no item %d to depend on", d)
+		}
+		if it.Stage == state.Epic {
+			return fmt.Errorf("refused: item %d is an epic; depend on its children instead", d)
+		}
+	}
+	return nil
 }
 
 // orchestratorLabels keeps only the labels factory.yaml allows the

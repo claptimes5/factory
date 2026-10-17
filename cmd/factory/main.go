@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -156,6 +157,11 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	ts, err := tokens(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
+		// Its container runs this binary as the MCP bridge.
+		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
+		cfg.Orchestrator.On = false
 	}
 	var r runner.Runner = runner.Local{}
 	if cfg.Runner.Kind == "docker" {

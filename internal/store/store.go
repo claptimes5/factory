@@ -264,12 +264,17 @@ func scanItem(r scanner) (*WorkItem, error) {
 
 // UpsertItem returns the work item for an issue, creating it in triage.
 func (s *Store) UpsertItem(ctx context.Context, repo string, issue int, title string) (*WorkItem, bool, error) {
+	return s.UpsertItemIn(ctx, repo, issue, title, state.Triage)
+}
+
+// UpsertItemIn is UpsertItem with the stage a new item starts in.
+func (s *Store) UpsertItemIn(ctx context.Context, repo string, issue int, title string, stage state.Stage) (*WorkItem, bool, error) {
 	var created bool
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := Now()
 		res, err := tx.Exec(`INSERT INTO work_items(repo, issue_number, title, stage, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, issue_number) DO NOTHING`,
-			repo, issue, title, string(state.Triage), now, now)
+			repo, issue, title, string(stage), now, now)
 		if err != nil {
 			return err
 		}

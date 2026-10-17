@@ -442,3 +442,47 @@ func TestOrchestratorRetryCap(t *testing.T) {
 		t.Fatalf("third retry: %v", err)
 	}
 }
+
+func TestEpicEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	orchestratorOn(e)
+	// A mixed-case label is still an epic: never built whole.
+	e.gh.issues[7] = &github.Issue{Number: 7, Title: "Big", Labels: []string{"Factory:Epic", "factory:ready"}}
+	e.claude.orch = func(harness.RunRequest) (string, error) { return `{"summary":"later"}`, nil }
+	e.p.Drain(ctx)
+	ep := e.item(t, 7)
+	if ep.Stage != state.Epic || e.claude.calls["triage"] != 0 {
+		t.Fatalf("epic = %s, triage runs %d", ep.Stage, e.claude.calls["triage"])
+	}
+	tools := toolsByName(e.p, 0)
+	if _, err := callTool(t, tools, "create_issue", map[string]any{"title": "c", "body": "b", "parent": ep.ID, "depends_on": []int64{ep.ID}, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "epic") {
+		t.Fatalf("depending on an epic deadlocks: %v", err)
+	}
+	// Parked, then unparked by a human: back to the orchestrator, not triage.
+	if _, err := callTool(t, tools, "park", map[string]any{"item": ep.ID, "reason": "unclear"}); err != nil {
+		t.Fatal(err)
+	}
+	e.gh.issues[7].Labels = append(e.gh.issues[7].Labels, LabelRetry)
+	e.p.lastPoll = time.Time{}
+	e.p.Drain(ctx)
+	if st := e.item(t, 7).Stage; st != state.Epic || e.claude.calls["triage"] != 0 {
+		t.Fatalf("unparked epic = %s, triage runs %d", st, e.claude.calls["triage"])
+	}
+}
+
+// Over the build budget only orchestrator runs start, and still one at a time.
+func TestOneOrchestratorAtATimeOverBudget(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Budgets.DailyTotal = 0
+	for i := 0; i < 2; i++ {
+		e.p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: "claude", Model: "opus"})
+	}
+	if j, _ := e.p.claimNext(ctx); j == nil || j.Kind != "orchestrate" {
+		t.Fatalf("first claim = %+v", j)
+	}
+	if j, _ := e.p.claimNext(ctx); j != nil {
+		t.Fatalf("a second orchestrator started: %+v", j)
+	}
+}
