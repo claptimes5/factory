@@ -221,8 +221,8 @@ func (c *Config) defaults() {
 
 var harnesses = map[string]bool{"claude": true, "codex": true}
 
-// Validate checks the rules in SPEC.md, including that the builder and the
-// reviewer never share a harness.
+// Validate checks the rules in SPEC.md, including that a reviewer never runs
+// the same harness and model as the builder it reviews.
 func (c *Config) Validate() error {
 	var errs []error
 	bad := func(f string, a ...any) { errs = append(errs, fmt.Errorf(f, a...)) }
@@ -256,8 +256,17 @@ func (c *Config) Validate() error {
 			continue
 		}
 		for _, rk := range []string{"review", "review.high_risk"} {
-			if r, ok := c.Routing[rk]; ok && r.Harness == b.Harness {
-				bad("routing.implement.%s and routing.%s both use %s: the builder and reviewer must be different harnesses", size, rk, b.Harness)
+			r, ok := c.Routing[rk]
+			if !ok || r.Harness != b.Harness {
+				continue
+			}
+			// Same harness is allowed only with a different model, at every
+			// tier a retry can move the builder to.
+			for _, m := range c.builderModels(b) {
+				if strings.EqualFold(m, r.Model) {
+					bad("routing.%s reviews with %s/%s, which routing.implement.%s can build with (escalation included): a reviewer must differ from the builder in harness or model", rk, r.Harness, r.Model, size)
+					break
+				}
 			}
 		}
 		if c.Budgets.PerJob[size] <= 0 {
@@ -322,6 +331,20 @@ func (c *Config) Implement(complexity string, attempt int) (Route, bool) {
 		r.Model = tiers[tier]
 	}
 	return r, true
+}
+
+// builderModels lists every model an implement route can run with: its own,
+// then each escalation tier above it (see Implement).
+func (c *Config) builderModels(r Route) []string {
+	ms := []string{r.Model}
+	tiers := c.Escalation.Implement
+	start := 0
+	for i, m := range tiers {
+		if m == r.Model {
+			start = i
+		}
+	}
+	return append(ms, tiers[min(start, len(tiers)):]...)
 }
 
 // Review returns the reviewer route for an item's risk.

@@ -197,7 +197,7 @@ Rules:
 
 - Triage sets `complexity` and `risk`; routing reads them. Nothing else picks models.
 - Keep the reviewer strong even when the builder is cheap.
-- The builder and reviewer must be different harnesses. The daemon refuses a config where they match.
+- The reviewer must differ from the builder in harness or, failing that, in model at every tier the builder can escalate to. The daemon refuses a config where they could match. Cross-harness review is the default.
 
 ## Orchestrator agent
 

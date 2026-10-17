@@ -22,12 +22,31 @@ func TestRepoConfigLoads(t *testing.T) {
 	}
 }
 
-func TestRefusesSameHarnessForBuilderAndReviewer(t *testing.T) {
+func TestReviewerMustDifferFromBuilder(t *testing.T) {
 	b, _ := os.ReadFile("../../factory.yaml")
-	y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-5-codex}", "review: {harness: claude, model: opus}", 1)
-	_, err := Parse([]byte(y))
-	if err == nil || !strings.Contains(err.Error(), "different harnesses") {
-		t.Fatalf("want harness clash error, got %v", err)
+	claudeReview := func(model, tiers string) string {
+		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-5-codex}", "review: {harness: claude, model: "+model+"}", 1)
+		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-5-codex, effort: high}", "", 1)
+		y = strings.Replace(y, "implement.L:       {harness: claude, model: opus}", "implement.L:       {harness: claude, model: sonnet}", 1)
+		return strings.Replace(y, "implement: [sonnet, opus]", "implement: "+tiers, 1)
+	}
+	cases := []struct {
+		name, model, tiers string
+		ok                 bool
+	}{
+		{"same model", "sonnet", "[sonnet]", false},
+		{"model a retry escalates to", "opus", "[sonnet, opus]", false},
+		{"different model at every tier", "opus", "[sonnet]", true},
+		{"names compare without case", "Sonnet", "[sonnet]", false},
+	}
+	for _, tc := range cases {
+		_, err := Parse([]byte(claudeReview(tc.model, tc.tiers)))
+		if tc.ok && err != nil {
+			t.Errorf("%s: want ok, got %v", tc.name, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "differ from the builder")) {
+			t.Errorf("%s: want builder/reviewer clash, got %v", tc.name, err)
+		}
 	}
 }
 
