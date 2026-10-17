@@ -20,12 +20,20 @@ as_factory() { (cd "$DIR" && sudo -u "$USER_" --preserve-env "$@"); }
 
 "$NEW" 2>&1 | grep -q usage || { echo "upgrade: $NEW does not run" >&2; exit 1; }
 
+# Whatever stops this script before the new binary is running, the
+# daemon must not be left stopped.
+STARTED=0
+on_exit() { [ "$STARTED" = 1 ] || systemctl start "$UNIT" || echo "!! $UNIT did not start; check journalctl -u $UNIT" >&2; }
+trap on_exit EXIT
+
 echo "== draining (running jobs get the unit's stop timeout)"
 systemctl stop "$UNIT"
 
 # Taken with the daemon stopped, so the backup is exactly the state the
-# old binary left. Read the last job id now too, for the same reason.
-DB=$(as_factory "$BIN" db-path)
+# old binary left. Read the last job id and schema version now too, for
+# the same reason. (Binaries before db-path keep the database here.)
+DB=$(as_factory "$BIN" db-path 2>/dev/null) || DB="$DIR/data/factory.db"
+OLD_SCHEMA=$(as_factory "$BIN" migrate | awk '{print $NF}')
 BACKUP="$(dirname "$DB")/backups/pre-upgrade-$STAMP.db"
 echo "== backing up the database to $BACKUP"
 as_factory mkdir -p "$(dirname "$BACKUP")"
@@ -34,28 +42,34 @@ LAST=$(as_factory "$BIN" last-job)
 
 echo "== swapping the binary (old one kept as factory.old)"
 cp -p "$BIN" "$BIN.old"
-install -m 0755 "$NEW" "$BIN"
+install -m 0755 "$NEW" "$BIN" || { install -m 0755 "$BIN.old" "$BIN"; exit 1; }
 
-# restore_db is only for a failed migration: after the new binary has run
-# jobs, restoring the backup would forget work it did on GitHub and the
-# spend it recorded, so a later rollback keeps the database.
+# The old binary refuses a database migrated past it, so a rollback after a
+# schema change must restore the backup. That forgets what the new binary
+# recorded since; the startup GitHub catch-up re-reads labels and PRs.
+# Without a schema change the database is kept.
+NEW_SCHEMA=$OLD_SCHEMA
 rollback() {
 	set +e
 	echo "== rolling back: $1" >&2
 	systemctl stop "$UNIT"
 	install -m 0755 "$BIN.old" "$BIN" || echo "!! could not restore $BIN from $BIN.old" >&2
-	if [ "${2:-}" = restore_db ]; then
+	if [ "${2:-}" = restore_db ] || [ "$NEW_SCHEMA" != "$OLD_SCHEMA" ]; then
+		echo "== restoring the database from $BACKUP" >&2
 		as_factory cp "$BACKUP" "$DB" && rm -f "$DB-wal" "$DB-shm"
 	fi
+	STARTED=1
 	systemctl start "$UNIT" || echo "!! $UNIT did not start; check journalctl -u $UNIT" >&2
 	exit 1
 }
 
 echo "== migrating"
-as_factory "$BIN" migrate || rollback "migration failed" restore_db
+NEW_SCHEMA=$(as_factory "$BIN" migrate | awk '{print $NF}') || rollback "migration failed" restore_db
+[ -n "$NEW_SCHEMA" ] || rollback "migration failed" restore_db
 
 echo "== starting and watching the next job (up to $WATCH)"
 systemctl start "$UNIT" || rollback "the new binary did not start"
+STARTED=1
 as_factory "$BIN" wait-job "$LAST" "$WATCH" || rollback "the first job after the upgrade failed before doing any work"
 systemctl is-active --quiet "$UNIT" || rollback "the daemon is not running"
 echo "== upgraded; previous binary at $BIN.old, database backup at $BACKUP"

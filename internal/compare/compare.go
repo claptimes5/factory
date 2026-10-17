@@ -45,7 +45,10 @@ type Options struct {
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
 	Dir      string // where the run keeps its files and the report
 	Push     bool   // push the arms' branches to the real remote
-	Log      *slog.Logger
+	// Budget is what the arms may spend together (the daemon's remaining
+	// daily budget); 0 means no limit. Each arm gets an equal share.
+	Budget float64
+	Log    *slog.Logger
 }
 
 // Arm is one skill set's run.
@@ -106,7 +109,9 @@ func Run(ctx context.Context, o Options, issue int, sets []string, complexity, r
 		return nil, err
 	}
 	// Every arm builds from one frozen copy of the base, so a commit landing
-	// on the base mid-run cannot make the comparison unfair.
+	// on the base mid-run cannot make the comparison unfair, and holding
+	// nothing but the base, so no arm can read an earlier solution (the
+	// daemon's PR branch or a previous comparison's).
 	frozen := filepath.Join(o.Dir, "remote.git")
 	if err := o.Git.CloneBare(ctx, frozen); err != nil {
 		return nil, err
@@ -115,14 +120,28 @@ func Run(ctx context.Context, o Options, issue int, sets []string, complexity, r
 	if err != nil {
 		return nil, err
 	}
+	if err := o.Git.Freeze(ctx, frozen, "refs/heads/"+o.Cfg.BaseBranch); err != nil {
+		return nil, err
+	}
 	rep := &Report{Repo: o.Cfg.Repo, Issue: issue, Title: is.Title, BaseSHA: base, Complexity: complexity, Started: time.Now().UTC()}
 	rep.Arms = make([]Arm, len(sets))
+	remotes := make([]string, len(sets))
+	share := 0.0
+	if o.Budget > 0 {
+		share = o.Budget / float64(len(sets))
+	}
 	var wg sync.WaitGroup
 	for i, set := range sets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			arm, err := runArm(ctx, o, is, set, complexity, risk, frozen, i)
+			// Each arm pushes to its own copy, so arms never see each other.
+			remotes[i] = filepath.Join(o.Dir, set, "remote.git")
+			arm := Arm{Skillset: set}
+			err := (&pipeline.Git{RemoteURL: frozen}).CloneBare(ctx, remotes[i])
+			if err == nil {
+				arm, err = runArm(ctx, o, is, set, complexity, risk, remotes[i], i, share)
+			}
 			if err != nil {
 				arm.Error = err.Error()
 			}
@@ -135,10 +154,10 @@ func Run(ctx context.Context, o Options, issue int, sets []string, complexity, r
 		if a.Head == "" {
 			continue
 		}
-		a.DiffStat, _ = gitOut(ctx, frozen, "diff", "--no-ext-diff", "--no-textconv", "--stat", base, a.Head)
-		a.Diff, _ = gitOut(ctx, frozen, "diff", "--no-ext-diff", "--no-textconv", base, a.Head)
+		a.DiffStat, _ = gitOut(ctx, remotes[i], "diff", "--no-ext-diff", "--no-textconv", "--stat", base, a.Head)
+		a.Diff, _ = gitOut(ctx, remotes[i], "diff", "--no-ext-diff", "--no-textconv", base, a.Head)
 		if o.Push {
-			if err := o.Git.Push(ctx, frozen, a.Head, a.Branch, true); err != nil {
+			if err := o.Git.Push(ctx, remotes[i], a.Head, a.Branch, true); err != nil {
 				a.Error = strings.TrimSpace(a.Error + "; push failed: " + err.Error())
 			}
 		}
@@ -146,12 +165,15 @@ func Run(ctx context.Context, o Options, issue int, sets []string, complexity, r
 	return rep, ctx.Err()
 }
 
-func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, risk, frozen string, i int) (Arm, error) {
+func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, risk, remote string, i int, budget float64) (Arm, error) {
 	arm := Arm{Skillset: set, Branch: fmt.Sprintf("factory/compare-%d-%s", is.Number, set)}
 	dir := filepath.Join(o.Dir, set)
 	cfg := *o.Cfg
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Orchestrator.On = false
+	if budget > 0 {
+		cfg.Budgets.DailyTotal = budget
+	}
 	cfg.Routing = map[string]config.Route{}
 	for k, r := range o.Cfg.Routing {
 		if strings.HasPrefix(k, "implement") {
@@ -174,8 +196,8 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	gh.AddIssue(is.Number, is.Title, is.Body)
 	p := &pipeline.Pipeline{
 		Cfg: &cfg, Store: st, GH: gh, Runner: o.Runner, Harnesses: o.Harnesses, Secrets: o.Secrets,
-		Git:      &pipeline.Git{RemoteURL: frozen, Author: o.Git.Author, AskPassDir: dir},
-		GateExec: o.GateExec, JobPrefix: fmt.Sprintf("cmp%d-", i), Log: o.Log.With("skillset", set),
+		Git:      &pipeline.Git{RemoteURL: remote, Author: o.Git.Author, AskPassDir: dir},
+		GateExec: o.GateExec, JobPrefix: fmt.Sprintf("cmp%d-%d-", os.Getpid(), i), Log: o.Log.With("skillset", set),
 	}
 	it, _, err := st.UpsertItem(ctx, cfg.Repo, is.Number, is.Title)
 	if err != nil {

@@ -537,12 +537,33 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 	if err != nil {
 		return err
 	}
+	// The arms share what is left of today's budget and their spend counts
+	// against it, so a comparison cannot run past the daily cap.
+	spent, err := st.SpendOn(ctx, store.Today())
+	if err != nil {
+		return err
+	}
+	left := cfg.Budgets.DailyTotal - spent
+	if cfg.Budgets.DailyTotal > 0 && left <= 0 {
+		return fmt.Errorf("today's budget is spent ($%.2f of $%.2f)", spent, cfg.Budgets.DailyTotal)
+	}
 	id := fmt.Sprintf("%d-%s", issue, time.Now().UTC().Format("20060102T150405Z"))
 	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
 	rep, err := compare.Run(ctx, compare.Options{
 		Cfg: cfg, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GH, Git: p.Git,
-		Dir: dir, Push: !*noPush,
+		Dir: dir, Push: !*noPush, Budget: max(left, 0),
 	}, issue, strings.Split(*skills, ","), *complexity, risk)
+	if rep != nil {
+		var cost float64
+		for _, a := range rep.Arms {
+			cost += a.CostUSD
+		}
+		if cost > 0 {
+			if serr := st.AddSpend(context.WithoutCancel(ctx), cost, "human", fmt.Sprintf("compare #%d: %s", issue, *skills)); serr != nil {
+				slog.Error("recording compare spend", "err", serr)
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}

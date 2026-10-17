@@ -187,7 +187,9 @@ is opened. You get a side-by-side report covering the outcome, review
 verdict and findings, failed gates, implement attempts, cost, time and diff.
 It's saved under `data/compare/` and shown in the control room under
 Compare. Each arm's branch is pushed as `factory/compare-42-<set>` (pass
-`-no-push` to keep them local).
+`-no-push` to keep them local). Arms only see the base, never another
+arm's work or an earlier branch for the issue. They split what is left of
+today's budget, and their spend counts against it.
 
 ## Configuration
 

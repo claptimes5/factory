@@ -140,7 +140,9 @@ func (g *Git) Prepare(ctx context.Context, dir, base, branch string, fresh, buil
 	}
 	if builder {
 		ws.Work = filepath.Join(dir, "work")
-		if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-hardlinks", "--branch", branch, ws.Repo, ws.Work); err != nil {
+		// --no-local copies only what the branch reaches: a local clone would
+		// copy the whole object store, other branches' work included.
+		if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-local", "--single-branch", "--branch", branch, ws.Repo, ws.Work); err != nil {
 			return nil, err
 		}
 		for k, v := range map[string]string{"user.name": name, "user.email": email} {
@@ -252,6 +254,28 @@ func (g *Git) Push(ctx context.Context, repo, sha, branch string, force bool) er
 		args = append(args, "--force")
 	}
 	_, err := g.run(ctx, repo, nil, args...)
+	return err
+}
+
+// Freeze deletes every ref of a bare repository but keep, and prunes what
+// is no longer reachable, so nothing cloned from it can hold other work.
+func (g *Git) Freeze(ctx context.Context, bare, keep string) error {
+	gd := "--git-dir=" + bare
+	refs, err := g.run(ctx, "", nil, gd, "for-each-ref", "--format=%(refname)")
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(refs) {
+		if ref != keep {
+			if _, err := g.run(ctx, "", nil, gd, "update-ref", "-d", ref); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := g.run(ctx, "", nil, gd, "reflog", "expire", "--expire=now", "--all"); err != nil {
+		return err
+	}
+	_, err = g.run(ctx, "", nil, gd, "gc", "--quiet", "--prune=now")
 	return err
 }
 

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -19,6 +20,10 @@ import (
 // with "tdd" it writes a test, without skills it forgets one.
 type fakeAgent struct{ name string }
 
+// leaked is set when a builder's checkout holds an object from a branch
+// other than the base it was given.
+var leaked atomic.Bool
+
 func (f *fakeAgent) Name() string { return f.name }
 func (f *fakeAgent) Run(_ context.Context, req harness.RunRequest, _ chan<- harness.Event) (*harness.Result, error) {
 	res := &harness.Result{CostUSD: 0.5, CostKnown: true}
@@ -26,6 +31,9 @@ func (f *fakeAgent) Run(_ context.Context, req harness.RunRequest, _ chan<- harn
 	case "review":
 		res.Final = `{"decision":"pass","findings":[],"challenged_assumptions":[]}`
 	case "implement":
+		if strings.Contains(run(req.Workdir, "cat-file", "--batch-all-objects", "--batch"), "EARLIER-SOLUTION") {
+			leaked.Store(true)
+		}
 		write(req.Workdir, "add.go", "package fixture\n\nfunc Add(a, b int) int { return a + b }\n")
 		if filepath.Base(req.SkillsDir) == "tdd" {
 			write(req.Workdir, "add_test.go", "package fixture\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal()\n\t}\n}\n")
@@ -81,6 +89,12 @@ func TestCompareSkillSets(t *testing.T) {
 	run(seed, "commit", "-qm", "base")
 	remote := filepath.Join(root, "remote.git")
 	run(root, "clone", "-q", "--bare", seed, remote)
+	// An earlier solution on the remote: no arm may be able to read it.
+	run(seed, "checkout", "-qb", "factory/issue-5")
+	write(seed, "add.go", "package fixture\n\n// EARLIER-SOLUTION\n")
+	run(seed, "add", "-A")
+	run(seed, "commit", "-qm", "earlier")
+	run(seed, "push", "-q", remote, "factory/issue-5")
 
 	cfg, err := config.Parse([]byte(cfgYAML))
 	if err != nil {
@@ -109,6 +123,9 @@ func TestCompareSkillSets(t *testing.T) {
 	}, 5, []string{"tdd", None}, "S", "low")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if leaked.Load() {
+		t.Fatal("a builder could read another branch's work")
 	}
 	tdd, none := rep.Arms[0], rep.Arms[1]
 	if tdd.Stage != "awaiting_human" || tdd.Review != "pass" || !strings.Contains(tdd.DiffStat, "add_test.go") {
