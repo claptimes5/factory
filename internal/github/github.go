@@ -355,9 +355,18 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	body := map[string]any{"repositories": []string{name}, "permissions": map[string]string{
-		"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read"}}
-	if err := doJSON(ctx, hc, "POST", base+"/app/installations/"+a.InstallationID+"/access_tokens", "Bearer "+jwt, body, &r); err != nil {
+	perms := map[string]string{"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read",
+		"checks": "read"} // checks: the dashboard's CI panel
+	u := base + "/app/installations/" + a.InstallationID + "/access_tokens"
+	err = doJSON(ctx, hc, "POST", u, "Bearer "+jwt, map[string]any{"repositories": []string{name}, "permissions": perms}, &r)
+	var he *HTTPError
+	if errors.As(err, &he) && he.Status == http.StatusUnprocessableEntity {
+		// GitHub refuses the whole token when the app lacks a permission we ask
+		// for. Apps set up before Checks was needed still work, minus the CI panel.
+		delete(perms, "checks")
+		err = doJSON(ctx, hc, "POST", u, "Bearer "+jwt, map[string]any{"repositories": []string{name}, "permissions": perms}, &r)
+	}
+	if err != nil {
 		return "", err
 	}
 	a.token, a.expires = r.Token, r.ExpiresAt

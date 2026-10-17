@@ -34,30 +34,75 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    docker build -t factory-job:latest deploy/job-image
    ```
 
-2. **Create a GitHub App** on your account with repository permissions
-   *Contents: read & write*, *Issues: read & write*, *Pull requests: read &
-   write*, *Metadata: read*. Do **not** grant *Workflows*, so the factory
-   cannot edit its own CI. Install it on this repo and download a private key.
+2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
+   access is limited to one repo and a few permissions you choose.
+   ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app))
+
+   1. Open [New GitHub App](https://github.com/settings/apps/new). For a repo
+      owned by an organization, use
+      `https://github.com/organizations/<org>/settings/apps/new` instead.
+   2. **GitHub App name:** anything unique, such as `factory-<your-login>`.
+      **Homepage URL:** this repo's URL.
+   3. **Webhook:** untick **Active**. The factory polls GitHub, so it needs no
+      public URL.
+   4. **Repository permissions:** set these four and leave everything else
+      at *No access*. Metadata switches to *Read-only* by itself.
+
+      | Permission | Access | Used for |
+      | --- | --- | --- |
+      | Contents | Read and write | pushing `factory/*` branches |
+      | Issues | Read and write | reading issues, labels and comments |
+      | Pull requests | Read and write | opening and updating draft PRs |
+      | Checks | Read-only | the CI panel in the dashboard |
+
+      Leave **Workflows** at *No access*, so the factory can never edit its
+      own CI. An app made without *Checks* still works, but the dashboard's
+      CI panel stays empty until you add it (then accept the new permission
+      on the installation page).
+   5. **Where can this GitHub App be installed?** *Only on this account.*
+      Click **Create GitHub App**.
+   6. On the app's page, copy the **App ID** shown under *About*.
+   7. Scroll to **Private keys**, click **Generate a private key**, and keep
+      the downloaded `.pem` where only the daemon can read it
+      ([about keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)):
+
+      ```sh
+      sudo install -D -m 600 -o "$USER" ~/Downloads/<the-downloaded-file>.pem /etc/factory/app.pem
+      ```
+   8. In the app's left sidebar, click **Install App**, then **Install** next
+      to your account. Choose **Only select repositories**, pick the repo the
+      factory works on, and click **Install**
+      ([about installing](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app)).
+   9. You land on `https://github.com/settings/installations/<number>` (for
+      an organization, `https://github.com/organizations/<org>/settings/installations/<number>`).
+      That number is the **installation ID**. You can find it again later under
+      [Settings → Applications](https://github.com/settings/installations) →
+      *Configure*.
 
 3. **Set the daemon's environment.** These are read by the daemon only and
    injected into each job container as env vars, never written to disk.
 
    ```sh
-   export FACTORY_GITHUB_APP_ID=...            # app id
-   export FACTORY_GITHUB_INSTALLATION_ID=...   # installation id
+   export FACTORY_GITHUB_APP_ID=...            # step 2.6
+   export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
    export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
    export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
-   export OPENAI_API_KEY=...                   # for the Codex reviewer
+   export OPENAI_API_KEY=...                   # for the Codex reviewer (or CODEX_API_KEY)
    ```
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
+
+   Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
+   billed per use; a ChatGPT subscription is not needed. Without one, review
+   jobs fail and their items park. To run on Claude alone, see
+   [Claude-only review](#claude-only-review).
 
 4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,
    `factory:retry` and `factory:awaiting-you` (`scripts/setup-labels.sh` does
    it with `gh`).
 
 5. **Protect `main`:** require a pull request with your review, and require
-   the `ci` check. `.github/CODEOWNERS` makes you the owner of `.github/`,
+   the `test` and `web` checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
    `factory.yaml`, `prompts/` and the lint config.
 
 6. **Run it.**
@@ -243,8 +288,37 @@ today's budget, and their spend counts against it.
 
 Everything lives in [`factory.yaml`](factory.yaml): routing per stage,
 escalation tiers, timeouts, budgets, Codex token pricing, gate commands and
-the diff guard. The daemon refuses a config where the builder and the
-reviewer use the same harness. Stage prompts are in [`prompts/`](prompts).
+the diff guard. The daemon refuses a config where a reviewer could run the
+same harness and model as the builder it reviews. Stage prompts are in
+[`prompts/`](prompts).
+
+### Claude-only review
+
+By default Codex reviews what Claude builds, so the reviewer is never the
+model that wrote the code. If you only have Claude, a different Claude model
+can review instead. The reviewer's model must differ from every model the
+builder can reach, including the tiers a retry escalates to, so a reviewer
+on Opus means Opus cannot be a build tier. Claude models compare by family,
+so `claude-sonnet-4-5` counts as `sonnet`. Change these entries in
+`factory.yaml` and leave the rest:
+
+```yaml
+routing:
+  implement.S:       {harness: claude, model: sonnet}
+  implement.M:       {harness: claude, model: sonnet}
+  implement.L:       {harness: claude, model: sonnet}
+  review:            {harness: claude, model: opus}
+  # drop review.high_risk, or point it at opus too
+escalation:
+  implement: [sonnet]
+```
+
+This is weaker than cross-vendor review: two models from one family tend to
+share blind spots. The rule covers the reviewer, whose approval is needed
+before any PR opens. The critic that also reads high-risk diffs runs only
+after the reviewer approves and can only add a block, so it uses
+`routing.critic` (default: `implement.L`) even when that is the builder's
+model. No OpenAI key is needed once no route names `codex`.
 
 ## Isolation
 
