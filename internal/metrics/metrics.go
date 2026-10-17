@@ -42,6 +42,34 @@ type Report struct {
 	// AwaitingHours is the total and mean time items sat in awaiting_human.
 	AwaitingHours     float64 `json:"awaiting_human_hours"`
 	AwaitingMeanHours float64 `json:"awaiting_human_mean_hours"`
+	// Weekly is the same numbers per ISO week (Monday, UTC), oldest first.
+	Weekly []Week `json:"weekly"`
+}
+
+// Week is one week of the trend lines. Merged items count in the week
+// they merged; first-pass and escalation count in the week the item's
+// first implement job was queued.
+type Week struct {
+	Start         string  `json:"start"` // YYYY-MM-DD, a Monday
+	Merged        int     `json:"merged"`
+	Cost          float64 `json:"cost_usd"` // spend on the items merged this week
+	CostPerMerged float64 `json:"cost_per_merged_usd"`
+	Implemented   int     `json:"implemented"`
+	FirstPass     float64 `json:"first_pass_rate"`
+	Escalation    float64 `json:"escalation_rate"`
+
+	firstPass, escalated int
+}
+
+// weekOf returns the Monday that starts ts's week, or "" when ts is not a time.
+func weekOf(ts string) string {
+	t, err := time.Parse(store.TimeFormat, ts)
+	if err != nil {
+		return ""
+	}
+	t = t.UTC()
+	t = t.AddDate(0, 0, -((int(t.Weekday()) + 6) % 7))
+	return t.Format("2006-01-02")
 }
 
 func rate(n, d int) float64 {
@@ -61,6 +89,17 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 	var mergedCost float64
 	byCx, byModel := map[string]*Group{}, map[string]*Group{}
 	var implemented, firstPass, escalated, passedPRs, escapes, awaitingStays int
+	weeks := map[string]*Week{}
+	week := func(ts string) *Week {
+		k := weekOf(ts)
+		if k == "" {
+			return nil
+		}
+		if weeks[k] == nil {
+			weeks[k] = &Week{Start: k}
+		}
+		return weeks[k]
+	}
 	for _, it := range items {
 		jobs, err := st.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
 		if err != nil {
@@ -95,21 +134,33 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 			for _, j := range impls {
 				models[j.Model] = true
 			}
+			w := week(impls[0].QueuedAt)
+			if w != nil {
+				w.Implemented++
+			}
 			if len(models) > 1 {
 				escalated++
+				if w != nil {
+					w.escalated++
+				}
 			}
 			var v verdict.Review
 			if impls[0].State == state.Succeeded && firstReview != nil &&
 				verdict.Parse([]byte(firstReview.Verdict), &v) == nil && !v.Blocks() {
 				firstPass++
+				if w != nil {
+					w.firstPass++
+				}
 			}
 		}
 		merged, closed, changed := false, false, false
+		mergedAt := it.UpdatedAt
 		var awaitSince time.Time
 		for _, e := range evs {
 			switch e.Type {
 			case "pr_merged":
 				merged = true
+				mergedAt = e.At
 				var d struct{ Changed bool }
 				_ = json.Unmarshal([]byte(e.Data), &d)
 				changed = d.Changed
@@ -145,6 +196,10 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 		case merged:
 			r.Merged++
 			mergedCost += cost
+			if w := week(mergedAt); w != nil {
+				w.Merged++
+				w.Cost += cost
+			}
 			cx := it.Complexity
 			if cx == "" {
 				cx = "?"
@@ -174,6 +229,16 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 	if awaitingStays > 0 {
 		r.AwaitingMeanHours = r.AwaitingHours / float64(awaitingStays)
 	}
+	r.Weekly = []Week{}
+	for _, w := range weeks {
+		if w.Merged > 0 {
+			w.CostPerMerged = w.Cost / float64(w.Merged)
+		}
+		w.FirstPass = rate(w.firstPass, w.Implemented)
+		w.Escalation = rate(w.escalated, w.Implemented)
+		r.Weekly = append(r.Weekly, *w)
+	}
+	sort.Slice(r.Weekly, func(a, b int) bool { return r.Weekly[a].Start < r.Weekly[b].Start })
 	return r, nil
 }
 

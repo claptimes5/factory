@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"sort"
 	"strconv"
@@ -978,4 +979,26 @@ func (s *Store) SetJobInput(ctx context.Context, id int64, input string) (bool, 
 		return err
 	})
 	return ok, err
+}
+
+// Version is a cheap fingerprint of everything the dashboard shows: it
+// changes whenever an event is written or a job changes state, cost or
+// head. Clients poll it (over SSE) and refetch when it moves.
+func (s *Store) Version(ctx context.Context) (string, error) {
+	var ev, jobs, finished int64
+	var cost float64
+	var live string
+	err := s.read.QueryRowContext(ctx, `SELECT
+		(SELECT COALESCE(MAX(id),0) FROM events),
+		(SELECT COALESCE(MAX(id),0) FROM jobs),
+		(SELECT COUNT(*) FROM jobs WHERE finished_at IS NOT NULL),
+		(SELECT COALESCE(SUM(cost_usd),0) FROM jobs),
+		(SELECT COALESCE(GROUP_CONCAT(id || state || COALESCE(head_sha,''), ','),'') FROM jobs WHERE state IN ('queued','running'))`).
+		Scan(&ev, &jobs, &finished, &cost, &live)
+	if err != nil {
+		return "", err
+	}
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%d|%d|%d|%.6f|%s", ev, jobs, finished, cost, live)
+	return strconv.FormatUint(h.Sum64(), 36), nil
 }

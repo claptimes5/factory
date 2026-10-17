@@ -260,8 +260,14 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 	}
 	srv := &web.Server{Store: st, Actions: p, Repo: cfg.Repo, DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
+	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
+	srv.Issue = p.GH.GetIssue
+	if c, ok := p.GH.(*github.Client); ok {
+		srv.Checks = c.CheckRuns
+	}
 	if cfg.Runner.Kind == "docker" {
 		srv.Attach = web.TTYDAttach(st, host)
+		srv.Exec = web.DockerExec(st)
 	}
 	h, err := srv.Handler()
 	if err != nil {

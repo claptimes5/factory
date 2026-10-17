@@ -23,3 +23,37 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # The built app and the generated API types are committed so the Go
+      # build needs no Node; fail if either is stale.
+      - name: build
+        run: npm run build
+      - name: built app and types are up to date
+        run: |
+          git status --porcelain -- . ../internal/web/app
+          test -z "$(git status --porcelain -- . ../internal/web/app)"
+      - run: npx playwright install --with-deps chromium
+      - name: playwright (desktop and phone)
+        run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7

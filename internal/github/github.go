@@ -250,6 +250,23 @@ func (c *Client) GetPR(ctx context.Context, n int) (*PR, error) {
 	return &pr, err
 }
 
+// CheckRun is one CI check on a commit.
+type CheckRun struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // queued|in_progress|completed
+	Conclusion string `json:"conclusion"` // success|failure|neutral|cancelled|skipped|timed_out|action_required
+	URL        string `json:"html_url"`
+}
+
+// CheckRuns lists the CI checks on a commit.
+func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) {
+	var out struct {
+		CheckRuns []CheckRun `json:"check_runs"`
+	}
+	err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", c.Repo, url.PathEscape(sha)), nil, &out)
+	return out.CheckRuns, err
+}
+
 // CreatePR opens a pull request.
 func (c *Client) CreatePR(ctx context.Context, title, body, head, base string, draft bool) (*PR, error) {
 	var pr PR

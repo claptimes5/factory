@@ -96,6 +96,45 @@ The control room only answers to localhost names and the host in
 `web.listen`. To reach it under another name (a Tailscale name, say), list it
 in `web.hosts`.
 
+## Dashboard (M7)
+
+The dashboard is at `/app/` on the same address as the control room (the
+"Classic view" link goes back). It is a React app built from `web/` and
+embedded in the binary, so running the factory needs no Node.
+
+- **Board:** items in columns by stage, with a live dot when a job runs,
+  model, cost, PR, and a needs-you or blocked badge. On a phone the columns
+  stack, with what needs you first.
+- **Item:** the issue, triage's spec, jobs, audit trail, and the PR panel:
+  CI checks from GitHub, gate results, the reviewer's verdict with each
+  finding linked to its diff line, and Approve (on GitHub), Retry, Retry a
+  tier up and Park.
+- **Session:** the job's transcript live beside the issue and spec, and a
+  live terminal in the job's container (xterm.js over a WebSocket; Docker
+  runner only).
+- **Diff:** side by side or unified, the exact patch the reviewer saw, with
+  its findings inline.
+- **Orchestrator:** every decision with its reason, filterable by item and type.
+- **Spend:** cost per merged PR, first-pass and escalation rates per week,
+  daily spend against the cap, and cost by size and model.
+- **Inbox:** PRs ready for review, parked items and budget alerts. "Notify
+  me in this browser" turns on browser notifications while a dashboard tab
+  is open.
+
+The JSON API is at `/api/v1/` and described in
+`internal/web/openapi.yaml`; the app's types are generated from it, and a
+Go test fails if the spec and the Go types drift. To work on the app:
+
+```sh
+go run ./internal/web/devserver &   # sample data on 127.0.0.1:8090
+cd web && npm ci && npm run dev     # http://localhost:5173/app/
+npm run build                       # regenerate types, typecheck, build into internal/web/app
+npm run e2e                         # Playwright on desktop and phone sizes
+```
+
+Commit the rebuilt `internal/web/app` with your change; CI checks it is
+current.
+
 ## Commands
 
 | Command | What it does |
@@ -241,6 +280,12 @@ The builder runs arbitrary code, so nothing it writes is trusted:
   closed), since blocked versions never reach you and so can't be judged.
 - **The orchestrator is off by default** in code (on in this repo's
   `factory.yaml`), since it spends on its own schedule.
+- **Approve opens the PR on GitHub.** The dashboard has no GitHub login of
+  yours, and the factory never approves its own PRs.
+- **Browser notifications need an open tab.** There is no Web Push service;
+  your notify channel (ntfy, Slack, Discord) covers a closed browser.
+- **The terminal is a plain `sh` in the container**, through `docker exec`
+  on the host, so it only exists while the job runs.
 - **A drained queue only triggers the orchestrator for stuck work**, once per
   distinct set of stuck items, so items waiting on your PR review don't cost
   a run every half hour.
@@ -250,4 +295,4 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
 M4 (control room and notifications), M5 (the orchestrator) and M6 (hidden
 scenarios, metrics, `factory eval`, session resume, safe upgrade) are in.
-Side-by-side skill comparison is in too. Next: Dashboard v2.
+Side-by-side skill comparison and M7 (Dashboard v2) are in too.
