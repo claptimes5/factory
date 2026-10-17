@@ -104,9 +104,11 @@ type Guard struct {
 // DiffGuard blocks changes a builder must not make: deleted or renamed
 // tests, new t.Skip or //nolint, protected-path edits (workflows, prompts,
 // factory.yaml, lint config) and oversized diffs.
-func DiffGuard(ctx context.Context, repoDir, base string, g Guard) Result {
+//
+// base and head are commits in a daemon-owned repository.
+func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result {
 	var problems []string
-	status, err := git(ctx, repoDir, "diff", "--name-status", "-M", base, "HEAD")
+	status, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-M", base, head)
 	if err != nil {
 		return Result{"diff_guard", Fail, err.Error()}
 	}
@@ -117,18 +119,27 @@ func DiffGuard(ctx context.Context, repoDir, base string, g Guard) Result {
 		}
 		code, paths := f[0], f[1:]
 		for _, p := range paths {
-			for _, pp := range g.ProtectedPaths {
-				if p == pp || (strings.HasSuffix(pp, "/") && strings.HasPrefix(p, pp)) {
-					problems = append(problems, "edits protected path "+p)
-				}
+			if protected(p, g.ProtectedPaths) {
+				problems = append(problems, "edits protected path "+p)
 			}
 		}
-		if (code == "D" || strings.HasPrefix(code, "R")) && isTest(paths[0]) {
+		if (code == "D" || strings.HasPrefix(code, "R")) && IsTest(paths[0]) {
 			problems = append(problems, "deletes or renames test "+paths[0])
 		}
 	}
 
-	numstat, err := git(ctx, repoDir, "diff", "--numstat", base, "HEAD")
+	raw, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--raw", "--no-renames", base, head)
+	if err != nil {
+		return Result{"diff_guard", Fail, err.Error()}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		// :oldmode newmode oldsha newsha status\tpath
+		if f := strings.Fields(line); len(f) >= 6 && f[1] == "160000" {
+			problems = append(problems, "adds a submodule or nested repository at "+f[len(f)-1])
+		}
+	}
+
+	numstat, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--numstat", base, head)
 	if err != nil {
 		return Result{"diff_guard", Fail, err.Error()}
 	}
@@ -136,6 +147,10 @@ func DiffGuard(ctx context.Context, repoDir, base string, g Guard) Result {
 	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 3 || path.Base(f[2]) == "go.sum" {
+			continue
+		}
+		if f[0] == "-" { // binary file
+			total += binaryLines
 			continue
 		}
 		a, _ := strconv.Atoi(f[0])
@@ -146,7 +161,7 @@ func DiffGuard(ctx context.Context, repoDir, base string, g Guard) Result {
 		problems = append(problems, fmt.Sprintf("changes %d lines (max %d); split the task", total, g.MaxChangedLines))
 	}
 
-	patch, err := git(ctx, repoDir, "diff", "-U0", base, "HEAD", "--", "*.go")
+	patch, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "-U0", base, head, "--", "*.go")
 	if err != nil {
 		return Result{"diff_guard", Fail, err.Error()}
 	}
@@ -173,12 +188,40 @@ func DiffGuard(ctx context.Context, repoDir, base string, g Guard) Result {
 	return Result{"diff_guard", Pass, ""}
 }
 
-func isTest(p string) bool {
+// protected matches a path against the protected list: "dir/" protects a
+// tree, "a/b.yml" one file, and a bare name such as "CLAUDE.md" that file
+// name in any directory.
+func protected(p string, list []string) bool {
+	for _, pp := range list {
+		switch {
+		case strings.HasSuffix(pp, "/"):
+			if strings.HasPrefix(p, pp) {
+				return true
+			}
+		case strings.Contains(pp, "/"):
+			if p == pp {
+				return true
+			}
+		default:
+			if path.Base(p) == pp {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// binaryLines is what one changed binary file counts toward max_changed_lines.
+const binaryLines = 100
+
+// IsTest reports whether a path is test code or test data.
+func IsTest(p string) bool {
 	return strings.HasSuffix(p, "_test.go") || strings.Contains(p, "/testdata/") || strings.HasPrefix(p, "testdata/")
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	safe := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "--no-pager"}
+	cmd := exec.CommandContext(ctx, "git", append(safe, args...)...)
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

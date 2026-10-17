@@ -15,15 +15,18 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/verdict"
 )
 
 // Labels the daemon manages on issues and PRs.
@@ -32,6 +35,7 @@ const (
 	LabelParked      = "factory:parked"
 	LabelAwaitingYou = "factory:awaiting-you"
 	LabelReview      = "factory:review"
+	LabelRetry       = "factory:retry" // a human adds it to send a parked item back to triage
 )
 
 // GitHub is the subset of the GitHub client the pipeline uses.
@@ -70,6 +74,7 @@ type Pipeline struct {
 	budgetHalt string // day the daily cap halted dequeuing, to notify once
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
+	gateSeq    atomic.Int64    // unique suffix for gate container names
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -101,10 +106,9 @@ func (p *Pipeline) notify(ctx context.Context, msg string) {
 // running when the daemon stopped are killed and the jobs requeued
 // without using a retry.
 func (p *Pipeline) Recover(ctx context.Context) error {
-	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool {
-		_ = p.Runner.Kill(ctx, containerName(j.ID))
-		return false
-	})
+	// Nothing runs yet, so every factory container (jobs and gates) is stale.
+	p.warn(p.Runner.KillAll(ctx), "kill stale containers")
+	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool { return false })
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
 	}
@@ -213,8 +217,9 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	return p.Store.ClaimJob(ctx)
 }
 
-// Intake turns labeled issues into work items, unparks items a human has
-// released, and closes out items whose PR merged.
+// Intake turns labeled issues into work items, sends items a human marked
+// factory:retry back to triage, closes out items whose PR merged or closed,
+// and reconciles items left with no job.
 func (p *Pipeline) Intake(ctx context.Context) error {
 	issues, err := p.GH.ListIssues(ctx, p.Cfg.Intake.Label)
 	if err != nil {
@@ -225,19 +230,32 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		switch {
-		case created:
+		if created {
 			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
 				return err
 			}
-		case it.Stage == state.Parked && !hasLabel(is.Labels, LabelParked):
-			// A human removed factory:parked: start over from triage.
-			if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:parked label removed"); err != nil {
-				return err
-			}
-			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
-				return err
-			}
+		}
+	}
+	retries, err := p.GH.ListIssues(ctx, LabelRetry)
+	if err != nil {
+		return err
+	}
+	for _, is := range retries {
+		it, err := p.Store.ItemByIssue(ctx, p.Cfg.Repo, is.Number)
+		if err != nil || it.Stage != state.Parked {
+			continue
+		}
+		// Remove the signal first so a failure below cannot loop.
+		if err := p.GH.RemoveLabel(ctx, is.Number, LabelRetry); err != nil {
+			p.warn(err, "RemoveLabel")
+			continue
+		}
+		p.warn(p.GH.RemoveLabel(ctx, is.Number, LabelParked), "RemoveLabel")
+		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:retry label added"); err != nil {
+			return err
+		}
+		if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
+			return err
 		}
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
@@ -254,12 +272,97 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			continue
 		}
 		if pr.Merged {
-			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "Store.SetStage")
+			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
+			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 		} else if pr.State == "closed" {
-			p.warn(p.Store.SetStage(ctx, it.ID, state.Parked, "human", fmt.Sprintf("PR #%d closed without merging", pr.Number)), "Store.SetStage")
+			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
+		}
+	}
+	return p.Reconcile(ctx, ReconcileAfter)
+}
+
+// ReconcileAfter is how long an in-flight item may sit with no queued or
+// running job before Reconcile picks it up again.
+var ReconcileAfter = 2 * time.Minute
+
+// Reconcile finds items in an active stage with no queued or running job
+// (a follow-up step failed after a job finished, for example a GitHub error
+// while opening the PR) and resumes them from their last job's outcome.
+func (p *Pipeline) Reconcile(ctx context.Context, quiet time.Duration) error {
+	items, err := p.Store.ListItems(ctx, state.Triage, state.Ready, state.Implementing, state.Reviewing)
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
+		if err != nil {
+			return err
+		}
+		if len(jobs) > 0 && !jobs[0].State.Terminal() {
+			continue
+		}
+		if len(jobs) > 0 {
+			if t, err := time.Parse(store.TimeFormat, jobs[0].FinishedAt); err == nil && time.Since(t) < quiet {
+				continue
+			}
+		}
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "reconcile", Reason: "no active job in stage " + string(it.Stage)}), "AddEvent")
+		if err := p.resume(ctx, it, jobs); err != nil {
+			p.log().Error("reconcile", "item", it.ID, "err", err)
 		}
 	}
 	return nil
+}
+
+func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store.Job) error {
+	var last *store.Job
+	if len(jobs) > 0 {
+		last = jobs[0]
+	}
+	switch {
+	case last == nil || it.Stage == state.Triage && last.Kind != "triage":
+		return p.enqueueTriage(ctx, it, 1, "")
+	case last.Kind == "triage" && last.State == state.Succeeded:
+		var v verdict.Triage
+		if err := verdict.Parse([]byte(last.Verdict), &v); err != nil {
+			return p.enqueueTriage(ctx, it, 1, "")
+		}
+		return p.afterTriage(ctx, it, &v)
+	case last.Kind == "triage":
+		return p.enqueueTriage(ctx, it, last.Attempt+1, "")
+	case (last.Kind == "review" || last.Kind == "critic") && last.State == state.Succeeded:
+		var v verdict.Review
+		var in ReviewInput
+		if verdict.Parse([]byte(last.Verdict), &v) != nil || json.Unmarshal([]byte(last.Input), &in) != nil {
+			return p.enqueueReview(ctx, it, last.Kind, 1, in)
+		}
+		return p.afterReview(ctx, it, last.Kind, &v, in)
+	case last.Kind == "review" || last.Kind == "critic":
+		var in ReviewInput
+		_ = json.Unmarshal([]byte(last.Input), &in)
+		return p.enqueueReview(ctx, it, last.Kind, last.Attempt+1, in)
+	case last.Kind == "implement" && last.State == state.Succeeded:
+		gr, _ := p.Store.GateResults(ctx, last.ID)
+		rs := make([]gates.Result, len(gr))
+		for i, g := range gr {
+			rs[i] = gates.Result{Gate: g.Gate, Status: g.Status, Detail: g.Detail}
+		}
+		if it.Stage != state.Reviewing {
+			if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", "reconciled after implement"); err != nil {
+				return err
+			}
+		}
+		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs)})
+	default:
+		var in ImplementInput
+		_ = json.Unmarshal([]byte(last.Input), &in)
+		ok, err := p.enqueueImplement(ctx, it, last.Attempt+1, in)
+		if err == nil && !ok {
+			return p.park(ctx, it, "Implementation failed on every model tier.")
+		}
+		return err
+	}
 }
 
 func hasLabel(ls []string, l string) bool {
@@ -315,6 +418,7 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 // ReviewInput is carried to review and critic jobs.
 type ReviewInput struct {
 	ImplementJob int64  `json:"implement_job"`
+	Head         string `json:"head"` // the commit the gates verified
 	Gates        string `json:"gates"`
 }
 
@@ -427,11 +531,17 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 	log := p.log().With("job", j.ID, "kind", j.Kind)
 	log.Info("job started", "harness", j.Harness, "model", j.Model, "attempt", j.Attempt, "skillset", j.Skillset)
 	dir := p.jobDir(j.ID)
+	// A requeued job may find a previous run's checkout and verdict here.
+	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
 		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
 		return
 	}
-	defer os.RemoveAll(filepath.Join(dir, "work"))
+	defer func() {
+		for _, d := range []string{"repo", "work", "gate", "proves"} {
+			_ = os.RemoveAll(filepath.Join(dir, d))
+		}
+	}()
 	var it *store.WorkItem
 	if j.ItemID != nil {
 		var err error
@@ -469,6 +579,7 @@ type PromptData struct {
 	PreviousFailure string
 	Gates           string
 	Diff            string
+	Fence           string // a code fence the diff cannot close
 }
 
 func (p *Pipeline) render(stage string, d PromptData) (string, error) {
@@ -488,14 +599,20 @@ func (p *Pipeline) render(stage string, d PromptData) (string, error) {
 	return buf.String(), nil
 }
 
-func (p *Pipeline) gateExec(ctx context.Context, workdir, command string) (int, string, error) {
+// gateExec runs one gate command in the job image against a read-only
+// export of the commit under test.
+func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command string) (int, string, error) {
 	if p.GateExec != nil {
 		return p.GateExec(ctx, workdir, command)
 	}
 	var out bytes.Buffer
-	outDir := filepath.Join(filepath.Dir(workdir), "out")
+	outDir, err := os.MkdirTemp(p.jobDir(jobID), "gate-out-")
+	if err != nil {
+		return -1, "", err
+	}
+	defer os.RemoveAll(outDir)
 	code, err := p.Runner.Run(ctx, runner.Spec{
-		Name: fmt.Sprintf("factory-gate-%d", time.Now().UnixNano()), Image: p.Cfg.Runner.Image,
+		Name: fmt.Sprintf("%s-gate-%d", containerName(jobID), p.gateSeq.Add(1)), Image: p.Cfg.Runner.Image, ReadOnly: true,
 		Workdir: workdir, OutDir: outDir, Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: p.Cfg.Timeout("gates"),
 	}, &out)
 	return code, out.String(), err

@@ -60,6 +60,12 @@ gates:
     test: go test -race ./...
     build: go build ./...
     audit: ""
+  # Revert the code, keep the changed tests: they must fail. {pkgs} becomes
+  # the packages holding changed tests. Empty disables the check.
+  proves_fix: go test -count=1 {pkgs}
   diff_guard:
     max_changed_lines: 400
-    protected_paths: [".github/", "factory.yaml", ".golangci.yml", "prompts/", "CODEOWNERS"]
+    # The factory's own controls, and files that steer agents that later
+    # read the checkout (the reviewer and critic).
+    protected_paths: [".github/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
+                      ".claude/", "CLAUDE.md", "AGENTS.md", ".codex/", ".mcp.json"]

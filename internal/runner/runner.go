@@ -48,6 +48,8 @@ type Runner interface {
 	Run(ctx context.Context, s Spec, stdout io.Writer) (exitCode int, err error)
 	Alive(ctx context.Context, name string) bool
 	Kill(ctx context.Context, name string) error
+	// KillAll removes every container this runner started.
+	KillAll(ctx context.Context) error
 }
 
 // Docker runs each job in a fresh `docker run --rm` container.
@@ -147,6 +149,18 @@ func (d *Docker) Kill(ctx context.Context, name string) error {
 	return exec.CommandContext(ctx, d.bin(), "rm", "-f", name).Run()
 }
 
+func (d *Docker) KillAll(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-aq", "--filter", "label=factory.job").Output()
+	if err != nil {
+		return err
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return nil
+	}
+	return exec.CommandContext(ctx, d.bin(), append([]string{"rm", "-f"}, ids...)...).Run()
+}
+
 // Local runs the command directly on the host, in the job's workdir. It
 // gives no isolation and is meant for development and dry runs only.
 type Local struct{}
@@ -175,6 +189,7 @@ func (Local) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 
 func (Local) Alive(context.Context, string) bool { return false }
 func (Local) Kill(context.Context, string) error { return nil }
+func (Local) KillAll(context.Context) error      { return nil }
 
 func withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if d <= 0 {

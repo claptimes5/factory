@@ -21,6 +21,6 @@ Reply with only the JSON object described by the schema.
 
 ## Diff
 
-```diff
+{{.Fence}}diff
 {{.Diff}}
-```
+{{.Fence}}

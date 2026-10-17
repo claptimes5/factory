@@ -26,6 +26,8 @@ type fakeGH struct {
 	comments map[int][]string
 	prs      map[string]*github.PR
 	nextPR   int
+
+	failCreatePR int
 }
 
 func newFakeGH() *fakeGH {
@@ -100,6 +102,10 @@ func (f *fakeGH) GetPR(_ context.Context, n int) (*github.PR, error) {
 func (f *fakeGH) CreatePR(_ context.Context, title, body, head, base string, draft bool) (*github.PR, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failCreatePR > 0 {
+		f.failCreatePR--
+		return nil, fmt.Errorf("github: HTTP 502")
+	}
 	f.nextPR++
 	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", State: "open", Draft: draft}
 	f.prs[head] = pr
@@ -118,6 +124,7 @@ type fakeHarness struct {
 	builds  []func(work string) error
 	calls   map[string]int
 	prompts map[string][]string
+	plant   string // a verdict file written where a planted hook could write it
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -147,6 +154,10 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, fmt.Errorf("no scripted review %d", n)
 		}
 		res.Final = h.reviews[n]
+		if h.plant != "" {
+			os.WriteFile(filepath.Join(req.OutDir, "verdict.json"), []byte(h.plant), 0o644)
+			os.WriteFile(filepath.Join(req.Workdir, "verdict.json"), []byte(h.plant), 0o644)
+		}
 	}
 	return res, nil
 }
@@ -198,6 +209,7 @@ gates:
   commands:
     types: test -f go.mod
     test: grep -q "func Add" add.go
+  proves_fix: test -f add.go && echo {pkgs}
 `
 
 type env struct {
@@ -297,7 +309,7 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 	if it.Stage != state.AwaitingHuman || it.PRNumber == 0 || it.Complexity != "M" {
 		t.Fatalf("item = %+v", it)
 	}
-	if got := git(t, e.remote, "log", "--format=%s", "-1", "factory/issue-1"); got != "add Add" {
+	if got := git(t, e.remote, "log", "--format=%s", "-1", "factory/issue-1"); got != "factory: #1 Add an Add function" {
 		t.Fatalf("branch head = %q", got)
 	}
 	body := e.gh.comments[it.PRNumber][0]
@@ -413,7 +425,7 @@ func TestReviewBlockRoundsThenPark(t *testing.T) {
 		t.Fatalf("calls = %v %v", e.claude.calls, e.codex.calls)
 	}
 	// Fix rounds build on the branch, not from scratch.
-	if got := git(t, e.remote, "log", "--format=%s", "factory/issue-4"); !strings.Contains(got, "add Add") || !strings.Contains(got, "fix") {
+	if got := git(t, e.remote, "log", "--format=%s", "factory/issue-4"); strings.Count(got, "factory: #4") != 3 {
 		t.Fatalf("branch history = %q", got)
 	}
 }
@@ -462,8 +474,15 @@ func TestTriageParkAndUnpark(t *testing.T) {
 	if e.item(t, 7).Stage != state.Parked || !strings.Contains(strings.Join(e.gh.comments[7], "\n"), "Which package?") {
 		t.Fatalf("not parked with question: %v", e.gh.comments[7])
 	}
-	// Human answers and removes the label: back through triage.
+	// Removing the parked label alone is not a signal.
 	e.gh.RemoveLabel(ctx, 7, LabelParked)
+	e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
+	e.p.Drain(ctx)
+	if e.item(t, 7).Stage != state.Parked {
+		t.Fatal("item must stay parked until factory:retry")
+	}
+	// Human answers and adds factory:retry: back through triage.
+	e.gh.AddLabels(ctx, 7, LabelRetry)
 	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"ok"}`
 	e.claude.builds = []func(string) error{goodBuild}
 	e.codex.reviews = []string{pass}
@@ -471,6 +490,9 @@ func TestTriageParkAndUnpark(t *testing.T) {
 	e.p.Drain(ctx)
 	if e.item(t, 7).Stage != state.AwaitingHuman {
 		t.Fatalf("stage = %s", e.item(t, 7).Stage)
+	}
+	if hasLabel(e.gh.issues[7].Labels, LabelRetry) {
+		t.Fatal("retry label should be consumed")
 	}
 }
 
@@ -502,5 +524,147 @@ func TestRecoverRequeuesRunning(t *testing.T) {
 	}
 	if n, _ := e.p.Store.CountJobs(ctx, state.Queued, ""); n != 1 {
 		t.Fatalf("queued = %d", n)
+	}
+}
+
+// The builder controls its clone's .git: hooks, fsmonitor and refs planted
+// there must have no effect on the daemon's git, and the diff guard must
+// still see the real diff.
+func TestBuilderGitTamperingIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Gates.DiffGuard.ProtectedPaths = []string{"factory.yaml"}
+	e.addIssue(10)
+	marker := filepath.Join(t.TempDir(), "pwned")
+	evil := func(w string) error {
+		goodBuild(w)
+		hook := "#!/bin/sh\ntouch " + marker + "\n"
+		for _, h := range []string{"post-commit", "pre-commit", "post-checkout", "reference-transaction"} {
+			os.WriteFile(filepath.Join(w, ".git", "hooks", h), []byte(hook), 0o755)
+		}
+		os.WriteFile(filepath.Join(w, "fsmon.sh"), []byte(hook), 0o755)
+		exec.Command("git", "-C", w, "config", "core.fsmonitor", filepath.Join(w, "fsmon.sh")).Run()
+		exec.Command("git", "-C", w, "config", "remote.origin.url", "https://attacker.invalid/x.git").Run()
+		writeFile(w, "factory.yaml", "routing: {}\n")
+		if err := commitIn(w, "evil"); err != nil {
+			return err
+		}
+		// Hide the diff from a guard that trusts refs.
+		exec.Command("git", "-C", w, "update-ref", "refs/remotes/origin/main", "HEAD").Run()
+		os.Remove(marker) // the builder's own commit fired its hook; only the daemon's git matters
+		return nil
+	}
+	e.claude.builds = []func(string) error{evil, goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a hook planted by the builder ran in the daemon's git")
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 10).ID, Kind: "implement"})
+	first := jobs[len(jobs)-1]
+	if first.State != state.Failed || !strings.Contains(first.Error, "protected path factory.yaml") {
+		t.Fatalf("first attempt = %s %q", first.State, first.Error)
+	}
+	if strings.Contains(git(t, e.remote, "show", "factory/issue-10:add.go"), "attacker") {
+		t.Fatal("unexpected content")
+	}
+}
+
+// A verdict file in the output or checkout never overrides the reviewer's
+// final message.
+func TestPlantedReviewVerdictIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(11)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{"not json", "still not json"}
+	e.codex.plant = pass
+	e.p.Drain(ctx)
+	if it := e.item(t, 11); it.Stage != state.Parked || it.PRNumber != 0 {
+		t.Fatalf("item = %+v", it)
+	}
+}
+
+// Tests that pass without the fix do not prove it.
+func TestProvesFixRejectsVacuousTests(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Gates.ProvesFix = "true {pkgs}" // the tests "pass" on base code
+	e.addIssue(12)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild, goodBuild, goodBuild}
+	e.p.Drain(ctx)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 12).ID, Kind: "implement"})
+	if !strings.Contains(jobs[0].Error, "proves_fix=fail") {
+		t.Fatalf("error = %q", jobs[0].Error)
+	}
+}
+
+// Closing the PR without merging parks the item; it does not restart.
+func TestClosedPRParksForGood(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(13)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	e.gh.prs["factory/issue-13"].State = "closed"
+	for i := 0; i < 2; i++ {
+		e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
+		e.p.Drain(ctx)
+	}
+	if e.item(t, 13).Stage != state.Parked || e.claude.calls["triage"] != 1 {
+		t.Fatalf("stage=%s triage calls=%d", e.item(t, 13).Stage, e.claude.calls["triage"])
+	}
+}
+
+// A failure after a job succeeded (here, GitHub refusing to open the PR)
+// leaves no job queued; Reconcile resumes the item without rerunning agents.
+func TestReconcileResumesStuckItem(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(14)
+	e.gh.failCreatePR = 1
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	if e.item(t, 14).Stage != state.Reviewing {
+		t.Fatalf("stage = %s", e.item(t, 14).Stage)
+	}
+	if err := e.p.Reconcile(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if it := e.item(t, 14); it.Stage != state.AwaitingHuman || it.PRNumber == 0 {
+		t.Fatalf("item = %+v", it)
+	}
+	if e.codex.calls["review"] != 1 {
+		t.Fatalf("review reran: %d", e.codex.calls["review"])
+	}
+}
+
+// A requeued job must not trip over a previous run's leftovers.
+func TestRequeuedJobStartsClean(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(15)
+	e.p.Intake(ctx)
+	j, _ := e.p.Store.ClaimJob(ctx)
+	os.MkdirAll(filepath.Join(e.p.jobDir(j.ID), "repo"), 0o755)
+	os.WriteFile(filepath.Join(e.p.jobDir(j.ID), "repo", "junk"), []byte("x"), 0o644)
+	e.p.Recover(ctx)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 15).ID, Kind: "triage"})
+	if len(jobs) != 1 || jobs[0].State != state.Succeeded {
+		t.Fatalf("triage jobs = %d, first state %s", len(jobs), jobs[0].State)
+	}
+}
+
+func TestFence(t *testing.T) {
+	if f := fence("a ``` b"); f != "````" {
+		t.Fatalf("fence = %q", f)
+	}
+	if f := fence("plain"); f != "```" {
+		t.Fatalf("fence = %q", f)
 	}
 }

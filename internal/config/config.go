@@ -62,8 +62,11 @@ type Config struct {
 	Pricing map[string]Price `yaml:"pricing"`
 
 	Gates struct {
-		Required  []string          `yaml:"required"`
-		Commands  map[string]string `yaml:"commands"`
+		Required []string          `yaml:"required"`
+		Commands map[string]string `yaml:"commands"`
+		// ProvesFix runs the changed tests against the base code; it must
+		// fail. {pkgs} is replaced by the packages holding changed tests.
+		ProvesFix string `yaml:"proves_fix"`
 		DiffGuard struct {
 			MaxChangedLines int      `yaml:"max_changed_lines"`
 			ProtectedPaths  []string `yaml:"protected_paths"`

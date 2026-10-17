@@ -6,3 +6,4 @@ gh label create "factory:ready"        -R "$repo" -c 0e8a16 -d "Factory: pick th
 gh label create "factory:running"      -R "$repo" -c fbca04 -d "Factory: a job is running" --force
 gh label create "factory:parked"       -R "$repo" -c d93f0b -d "Factory: needs a human; remove to retry" --force
 gh label create "factory:awaiting-you" -R "$repo" -c 1d76db -d "Factory: draft PR ready for your review" --force
+gh label create "factory:retry"        -R "$repo" -c 5319e7 -d "Factory: send a parked issue back to triage" --force

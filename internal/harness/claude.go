@@ -29,7 +29,10 @@ func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	}
 	args := []string{"claude", "-p", "--model", req.Model, "--output-format", "stream-json", "--verbose"}
 	if req.ReadOnly {
-		args = append(args, "--permission-mode", "dontAsk", "--allowedTools", "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git show:*)")
+		// Read-only stages review content the builder wrote, so ignore the
+		// checkout's own settings, hooks and MCP servers.
+		args = append(args, "--permission-mode", "dontAsk", "--setting-sources", "user", "--strict-mcp-config",
+			"--allowedTools", "Read,Glob,Grep")
 	} else {
 		args = append(args, "--permission-mode", "bypassPermissions", "--disallowedTools", "WebSearch")
 	}

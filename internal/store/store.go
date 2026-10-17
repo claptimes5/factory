@@ -332,6 +332,9 @@ func (s *Store) SetStage(ctx context.Context, id int64, to state.Stage, actor, r
 		if err := tx.QueryRow(`SELECT stage FROM work_items WHERE id = ?`, id).Scan(&from); err != nil {
 			return err
 		}
+		if state.Stage(from) == to {
+			return nil // already there: SetStage is idempotent
+		}
 		if err := state.CheckStage(state.Stage(from), to); err != nil {
 			return err
 		}
@@ -415,11 +418,12 @@ type Job struct {
 	Skillset    string
 	CompareID   string
 	Input       string // JSON stage input, e.g. reviewer findings for a fix round
+	HeadSHA     string // commit an implement job produced
 }
 
 const jobCols = `id, item_id, kind, state, harness, model, COALESCE(effort,''), attempt, COALESCE(priority,0), COALESCE(container_id,''),
 	budget_usd, COALESCE(cost_usd,0), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(verdict,''), COALESCE(error,''), COALESCE(log_path,''),
-	queued_at, COALESCE(started_at,''), COALESCE(finished_at,''), COALESCE(base_sha,''), COALESCE(branch,''), COALESCE(skillset,''), COALESCE(compare_id,''), COALESCE(input,'')`
+	queued_at, COALESCE(started_at,''), COALESCE(finished_at,''), COALESCE(base_sha,''), COALESCE(branch,''), COALESCE(skillset,''), COALESCE(compare_id,''), COALESCE(input,''), COALESCE(head_sha,'')`
 
 func scanJob(r scanner) (*Job, error) {
 	var j Job
@@ -427,7 +431,7 @@ func scanJob(r scanner) (*Job, error) {
 	var st string
 	if err := r.Scan(&j.ID, &item, &j.Kind, &st, &j.Harness, &j.Model, &j.Effort, &j.Attempt, &j.Priority, &j.ContainerID,
 		&j.BudgetUSD, &j.CostUSD, &j.TokensIn, &j.TokensOut, &j.Verdict, &j.Error, &j.LogPath,
-		&j.QueuedAt, &j.StartedAt, &j.FinishedAt, &j.BaseSHA, &j.Branch, &j.Skillset, &j.CompareID, &j.Input); err != nil {
+		&j.QueuedAt, &j.StartedAt, &j.FinishedAt, &j.BaseSHA, &j.Branch, &j.Skillset, &j.CompareID, &j.Input, &j.HeadSHA); err != nil {
 		return nil, err
 	}
 	j.State = state.JobState(st)
@@ -584,6 +588,14 @@ func (s *Store) SetJobRuntime(ctx context.Context, id int64, containerID, logPat
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`UPDATE jobs SET container_id = COALESCE(?, container_id), log_path = COALESCE(?, log_path), base_sha = COALESCE(?, base_sha) WHERE id = ?`,
 			nullable(containerID), nullable(logPath), nullable(baseSHA), id)
+		return err
+	})
+}
+
+// SetJobHead records the commit an implement job produced.
+func (s *Store) SetJobHead(ctx context.Context, id int64, sha string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE jobs SET head_sha = ? WHERE id = ?`, sha, id)
 		return err
 	})
 }

@@ -27,6 +27,7 @@ func (f *fakeRunner) Run(ctx context.Context, s runner.Spec, w io.Writer) (int, 
 }
 func (f *fakeRunner) Alive(context.Context, string) bool { return false }
 func (f *fakeRunner) Kill(context.Context, string) error { return nil }
+func (f *fakeRunner) KillAll(context.Context) error      { return nil }
 
 func req(t *testing.T, readOnly bool) RunRequest {
 	dir := t.TempDir()
