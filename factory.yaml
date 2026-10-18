@@ -55,6 +55,10 @@ orchestrator:
   summary_hour: 8             # local time of the daily summary
   notify_per_hour: 6
 
+# Let small, low-risk PRs merge themselves once CI passes. Off unless set;
+# see docs/configuration.md#auto-merge.
+# auto_merge: {up_to: low, max_size: S, method: merge}
+
 budgets:
   per_job: {XS: 0.5, S: 2, M: 6, L: 15}
   triage: 0.5

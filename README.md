@@ -3,8 +3,9 @@
 Factory is a single Go binary that turns labeled GitHub (or GitLab) issues
 into reviewed draft PRs. Claude Code builds each change in a fresh
 container, deterministic gates check it, Codex reviews it adversarially,
-and you merge. The factory never merges anything itself. The full design
-is in [SPEC.md](SPEC.md).
+and you merge. It only merges on its own if you turn on
+[auto-merge](docs/configuration.md#auto-merge) for small, low-risk changes.
+The full design is in [SPEC.md](SPEC.md).
 
 ```
 issue labeled factory:ready

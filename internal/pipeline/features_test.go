@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -221,5 +224,147 @@ func TestStepInstructionsReachPrompts(t *testing.T) {
 	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 1).ID, Kind: "implement"})
 	if len(jobs) != 1 || jobs[0].Route != "implement.M" {
 		t.Fatalf("implement jobs: %+v", jobs)
+	}
+}
+
+func TestAutoMergeUpToARiskLevel(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name, upTo, size string
+		fail             error
+		auto             bool
+	}{
+		{"low and small", "low", "S", nil, true},
+		{"turned off", "none", "S", nil, false},
+		{"too big", "low", "M", nil, false},
+		{"forge refuses", "medium", "XS", fmt.Errorf("auto-merge is not allowed for this repository"), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: c.upTo}
+			e.claude.triage = fmt.Sprintf(`{"decision":"ready","complexity":%q,"risk":"low","question":"","summary":"add Add"}`, c.size)
+			e.gh.failAutoMerge = c.fail
+			var notes []string
+			e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
+			e.addIssue(1)
+			e.claude.builds = []func(string) error{goodBuild}
+			e.codex.reviews = []string{pass}
+			if err := e.p.Drain(ctx); err != nil {
+				t.Fatal(err)
+			}
+			it := e.item(t, 1)
+			if it.PRNumber == 0 || it.Stage != state.AwaitingHuman {
+				t.Fatalf("item: %+v", it)
+			}
+			labels := e.gh.prLabels[it.PRNumber]
+			got, queued := e.gh.autoMerged[it.PRNumber]
+			if queued != c.auto || slices.Contains(labels, LabelAutoMerge) != c.auto || slices.Contains(labels, LabelAwaitingYou) == c.auto {
+				t.Fatalf("auto-merge %v (%q), PR labels %v", queued, got, labels)
+			}
+			if c.fail != nil && !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "Couldn't turn on auto-merge") }) {
+				t.Fatalf("notes: %q", notes)
+			}
+			if body := e.gh.bodies[it.PRNumber]; c.fail != nil && (!strings.Contains(body, humanFooter) || strings.Contains(body, autoFooter)) {
+				t.Fatalf("a PR that won't merge itself must not say it will:\n%s", body)
+			}
+			if !c.auto {
+				return
+			}
+			jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+			if want := jobs[len(jobs)-1].HeadSHA + " merge"; got != want {
+				t.Fatalf("auto-merge pinned to %q, want %q", got, want)
+			}
+			// GitHub merges it once CI passes; the next poll closes it out.
+			e.gh.prs["factory/issue-1"].Merged = true
+			e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
+			e.p.Drain(ctx)
+			if e.item(t, 1).Stage != state.Done {
+				t.Fatalf("stage after merge = %s", e.item(t, 1).Stage)
+			}
+			evs, _ := e.p.Store.Events(ctx, it.ID)
+			if !slices.ContainsFunc(evs, func(ev store.Event) bool { return ev.Type == "pr_merged" && ev.Actor == "daemon" }) {
+				t.Fatalf("no daemon merge event: %+v", evs)
+			}
+		})
+	}
+}
+
+func TestAutoMergeIsCancelledBeforeAnythingNewCanMerge(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if _, on := e.gh.autoMerged[it.PRNumber]; !on {
+		t.Fatal("auto-merge should be on")
+	}
+	// Waiting on CI or an approval, a human parks it: it must not merge.
+	if err := e.p.Park(ctx, it.ID, "not yet"); err != nil {
+		t.Fatal(err)
+	}
+	if _, on := e.gh.autoMerged[it.PRNumber]; on || !slices.Contains(e.gh.cancelled, it.PRNumber) {
+		t.Fatalf("auto-merge still on after parking; cancelled %v", e.gh.cancelled)
+	}
+	if slices.Contains(e.gh.prLabels[it.PRNumber], LabelAutoMerge) {
+		t.Fatal("auto-merge label left on")
+	}
+	if p := e.p; p.autoMerged(ctx, e.item(t, 1)) {
+		t.Fatal("the item still reads as auto-merging")
+	}
+}
+
+func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": "features: [not valid"})
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.PRNumber == 0 {
+		t.Fatalf("no PR: %s", it.Stage)
+	}
+	if _, on := e.gh.autoMerged[it.PRNumber]; on {
+		t.Fatal("auto-merged with an unreadable feature map")
+	}
+}
+
+func TestNoPushWhileAutoMergeCantBeTurnedOff(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild}
+	e.codex.reviews = []string{pass, pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	e.gh.failCancel = fmt.Errorf("github: HTTP 502")
+	if err := e.p.Park(ctx, it.ID, "not yet"); err != nil {
+		t.Fatal(err)
+	}
+	before := git(t, e.remote, "rev-parse", "factory/issue-1")
+	e.gh.issues[1].Labels = append(e.gh.issues[1].Labels, LabelRetry)
+	e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := git(t, e.remote, "rev-parse", "factory/issue-1"); after != before {
+		t.Fatal("pushed to a PR whose auto-merge is still on")
+	}
+	if got := e.item(t, 1); got.Stage != state.Parked {
+		t.Fatalf("stage = %s", got.Stage)
 	}
 }

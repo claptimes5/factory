@@ -155,6 +155,8 @@ func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone strin
 		return withReason("risk raised", e.Reason), "info"
 	case "budget_exceeded":
 		return "went over its budget", "bad"
+	case "auto_merge":
+		return withReason("set to merge itself once its checks pass", e.Reason), "info"
 	case "pr_merged":
 		return "merged", "done"
 	case "pr_closed":

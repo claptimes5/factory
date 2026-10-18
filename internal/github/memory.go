@@ -143,3 +143,19 @@ func (m *Memory) Approver(ctx context.Context, n int, _ string) (Approval, error
 	}
 	return Approval{By: "factory", OK: true, Issue: *is}, nil
 }
+
+// AutoMerge merges at once: an eval has no CI to wait for.
+func (m *Memory) AutoMerge(_ context.Context, n int, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pr := range m.prs {
+		if pr.Number == n {
+			pr.Draft, pr.Merged, pr.State = false, true, "closed"
+			return nil
+		}
+	}
+	return fmt.Errorf("no PR %d", n)
+}
+
+// CancelAutoMerge has nothing to cancel: AutoMerge merges at once.
+func (m *Memory) CancelAutoMerge(context.Context, int) error { return nil }

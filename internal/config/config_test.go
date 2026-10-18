@@ -420,3 +420,46 @@ func TestWorkspaceInstructionsAreLabeled(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestAutoMergeLevels(t *testing.T) {
+	var off *AutoMerge
+	low, med := &AutoMerge{UpTo: "low"}, &AutoMerge{UpTo: "medium", MaxSize: "M", Method: "squash"}
+	for _, c := range []struct {
+		a          *AutoMerge
+		risk, size string
+		want       bool
+	}{
+		{off, "low", "XS", false},
+		{low, "low", "XS", true},
+		{low, "low", "S", true},
+		{low, "low", "M", false}, // max_size defaults to S
+		{low, "medium", "S", false},
+		{med, "medium", "M", true},
+		{med, "high", "S", false},
+		{med, "", "S", false}, // no rating, no merge
+		{&AutoMerge{UpTo: "none"}, "low", "XS", false},
+	} {
+		if got := c.a.Allows(c.risk, c.size); got != c.want {
+			t.Errorf("%+v allows %s %s = %v", c.a, c.risk, c.size, got)
+		}
+	}
+	if off.MergeMethod() != "merge" || med.MergeMethod() != "squash" {
+		t.Fatal("merge method")
+	}
+	c := load(t)
+	c.Repos[0].AutoMerge = &AutoMerge{UpTo: "high"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "always wait for you") {
+		t.Fatalf("up_to high: %v", err)
+	}
+	c.Repos[0].AutoMerge = &AutoMerge{UpTo: "low", Method: "fast-forward"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown method accepted")
+	}
+	c.Repos[0].AutoMerge, c.AutoMerge = nil, low
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := c.RepoConf(c.Repos[0].Name); r.AutoMerge != low {
+		t.Fatal("repo should inherit the top-level auto_merge")
+	}
+}

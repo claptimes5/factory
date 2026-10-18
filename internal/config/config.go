@@ -31,6 +31,41 @@ type Route struct {
 	InstructionsFile string `yaml:"instructions_file,omitempty"`
 }
 
+// AutoMerge says which of the factory's PRs merge without you.
+type AutoMerge struct {
+	// UpTo is the highest risk that merges on its own: low or medium, or
+	// none. High-risk changes always wait for you.
+	UpTo string `yaml:"up_to"`
+	// MaxSize is the largest triage size that qualifies: XS, S (the
+	// default), M or L.
+	MaxSize string `yaml:"max_size,omitempty"`
+	// Method is merge (the default), squash or rebase.
+	Method string `yaml:"method,omitempty"`
+}
+
+// Allows says whether a change of this risk and size merges on its own.
+func (a *AutoMerge) Allows(risk, size string) bool {
+	if a == nil {
+		return false
+	}
+	rank := func(list []string, v string) int { return slices.Index(list, v) }
+	r, max := rank([]string{"low", "medium"}, risk), rank([]string{"low", "medium"}, a.UpTo)
+	sizes := []string{"XS", "S", "M", "L"}
+	ms := a.MaxSize
+	if ms == "" {
+		ms = "S"
+	}
+	return r >= 0 && max >= 0 && r <= max && rank(sizes, size) >= 0 && rank(sizes, size) <= rank(sizes, ms)
+}
+
+// MergeMethod is how an auto-merge merges.
+func (a *AutoMerge) MergeMethod() string {
+	if a == nil || a.Method == "" {
+		return "merge"
+	}
+	return a.Method
+}
+
 // Gates are the checks a change must pass before review.
 type Gates struct {
 	// Install runs first, on a writable export with the network on, to
@@ -85,6 +120,9 @@ type Repo struct {
 	// commands replace the top level's. install, proves_fix, coverage or
 	// scenarios_dir "none" turns one off.
 	Gates *Gates `yaml:"gates,omitempty"`
+	// AutoMerge replaces the top level's for this repo; up_to: none
+	// turns it off.
+	AutoMerge *AutoMerge `yaml:"auto_merge,omitempty"`
 	// Instructions are added to this repo's prompts, by step: triage,
 	// implement, review or critic.
 	Instructions map[string]string `yaml:"instructions,omitempty"`
@@ -114,7 +152,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -161,6 +199,9 @@ type Config struct {
 	// across all of them, with a PR in each repo it touches. Members are
 	// listed in the order their PRs should merge.
 	Workspaces map[string][]string `yaml:"workspaces,omitempty"`
+	// AutoMerge lets the factory merge its own PRs up to a risk level and
+	// size, once CI passes. Unset, every PR waits for you.
+	AutoMerge *AutoMerge `yaml:"auto_merge,omitempty"`
 	// BaseBranch, Env and Gates are the defaults for every repo.
 	BaseBranch string             `yaml:"base_branch"`
 	Env        map[string]string  `yaml:"env"`
@@ -486,8 +527,27 @@ func (c *Config) Validate() error {
 	if len(c.Repos) == 0 {
 		bad("repos needs at least one owner/name")
 	}
+	checkAutoMerge := func(where string, a *AutoMerge) {
+		if a == nil {
+			return
+		}
+		switch {
+		case a.UpTo == "high":
+			bad("%sauto_merge.up_to: high-risk changes always wait for you; use low or medium", where)
+		case !slices.Contains([]string{"none", "low", "medium"}, a.UpTo):
+			bad("%sauto_merge.up_to must be none, low or medium", where)
+		}
+		if a.MaxSize != "" && !slices.Contains([]string{"XS", "S", "M", "L"}, a.MaxSize) {
+			bad("%sauto_merge.max_size must be XS, S, M or L", where)
+		}
+		if a.Method != "" && !slices.Contains([]string{"merge", "squash", "rebase"}, a.Method) {
+			bad("%sauto_merge.method must be merge, squash or rebase", where)
+		}
+	}
+	checkAutoMerge("", c.AutoMerge)
 	seen := map[string]bool{}
 	for _, r := range c.Repos {
+		checkAutoMerge("repo "+r.Name+": ", r.AutoMerge)
 		switch o, n, ok := strings.Cut(r.Path(), "/"); {
 		case r.GitLab() && (!ok || o == "" || n == "" || strings.Contains(r.Name, "//")):
 			bad("repo %s must be %s/group/project", r.Name, r.Host)
@@ -774,6 +834,9 @@ func (c *Config) resolve(r Repo) Repo {
 	r.Env = env
 	if r.Services == nil {
 		r.Services = c.Services
+	}
+	if r.AutoMerge == nil {
+		r.AutoMerge = c.AutoMerge
 	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	if r.GitLab() {
