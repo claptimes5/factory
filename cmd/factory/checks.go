@@ -50,8 +50,8 @@ func setupChecks(ctx context.Context, p *prompter, cfgPath string, cfg *config.C
 		}
 		var gates *config.Gates
 		if !s.Go {
-			// proves_fix is Go-only for now.
-			gates = &config.Gates{Install: s.Install, Required: s.Required, Commands: s.Commands, ProvesFix: "none"}
+			// proves_fix and coverage are Go-only for now.
+			gates = &config.Gates{Install: s.Install, Required: s.Required, Commands: s.Commands, ProvesFix: "none", Coverage: "none"}
 		}
 		if gates == nil && s.ImageFrom == "" {
 			p.say("%s is %s; the top-level checks fit it.", r.Name, s.Stack)

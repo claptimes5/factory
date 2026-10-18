@@ -422,8 +422,24 @@ repos:
 
 A repo's `gates` override the top-level ones field by field. Its
 `commands` replace the top-level commands; anything it leaves out, such as
-the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
-`scenarios_dir: none` to turn one off for that repo.
+the diff guard or `proves_fix`, is inherited. Set `proves_fix: none`,
+`coverage: none` or `scenarios_dir: none` to turn one off for that repo.
+
+### Coverage floor
+
+`gates.coverage` runs, with coverage, the tests of every package whose
+code the change touches, on the base and on the change. A package can't
+end up less covered than on the base (`coverage_slack: 1` allows a drop of
+one point). Packages the change adds have no floor. If the base can't be
+measured, because its tests fail, nothing is held against the change.
+The check reads Go's `coverage: N% of statements` lines, or `name N%`
+lines from a script of your own. The builder is told the floor exists.
+
+```yaml
+gates:
+  coverage: go test -count=1 -cover {pkgs}
+  coverage_slack: 0.5
+```
 
 ### Workspaces: one change across repos
 
@@ -607,7 +623,8 @@ repos:
       install: bundle install
       required: [lint, test]
       commands: {lint: bundle exec rubocop, test: bin/rails db:prepare test}
-      proves_fix: none              # the proves-fix check is Go-only for now
+      proves_fix: none              # the proves-fix and coverage checks are Go-only for now
+      coverage: none
   - name: you/web                   # Node is in the default image
     env: {VITE_API_URL: http://localhost:3000}
     gates:
@@ -615,6 +632,7 @@ repos:
       required: [lint, test, build]
       commands: {lint: npm run lint, test: CI=true npm run test, build: npm run build}
       proves_fix: none
+      coverage: none
 ```
 
 - **`install`** runs first on each commit's export, with the network on.
