@@ -389,7 +389,6 @@ func SplitRepo(host, name string) (string, string) {
 	return host, host + "/" + name
 }
 
-// GitLab reports whether the repo is on GitLab.
 // EgressAllowlist reports whether jobs reach only allowlisted hosts.
 func (c *Config) EgressAllowlist() bool {
 	return c.Runner.Kind == "docker" && c.Runner.Egress.Mode != "open"
@@ -414,6 +413,7 @@ func (c *Config) EgressRules() (allow, private []string) {
 	return allow, private
 }
 
+// GitLab reports whether the repo is on GitLab.
 func (r Repo) GitLab() bool { return r.Host != "" }
 
 // Path is the repo's path on its host: owner/name, or group/project.
@@ -621,6 +621,9 @@ func (c *Config) Validate() error {
 			bad("runner.network: host leaves the egress allowlist nothing to control; set runner.egress.mode: open to run that way")
 		}
 		allow, private := c.EgressRules()
+		if c.Runner.Kind == "docker" && len(allow)+len(private) == 0 {
+			bad("runner.egress: with no_defaults, list the hosts jobs may reach in allow")
+		}
 		for _, r := range append(allow, private...) {
 			if _, err := egress.ParseRule(r); err != nil {
 				bad("runner.egress: %v", err)

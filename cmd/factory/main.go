@@ -247,7 +247,7 @@ func newRunner(cfg *config.Config) (runner.Runner, error) {
 			return nil, err
 		}
 		allow, private := cfg.EgressRules()
-		d.Egress = &runner.Egress{Allow: allow, Private: private, Image: cfg.Runner.Image, Binary: bin}
+		d.Egress = &runner.Egress{Allow: allow, Private: private, Binary: bin}
 	}
 	return d, nil
 }

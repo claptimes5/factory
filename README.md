@@ -764,24 +764,32 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 ### Network: the egress allowlist
 
 With the docker runner, jobs can reach only the hosts on an allowlist. A
-builder that reads a prompt injection in an issue or a dependency then
-has nowhere to send the keys it holds.
+builder that reads a prompt injection in an issue or a dependency can
+then send what it holds only to those hosts. This narrows the ways out;
+it doesn't close them. An injection that brings its own credentials could
+still push to the attacker's GitHub repo or publish a package. Keep
+secrets the jobs don't need out of `env`.
 
 - **Jobs sit on a network with no way out** (`factory-egress`, internal,
   with its gateway off the host). They can't resolve outside names, reach
-  an address, or reach the host's ports. Their HTTP(S) goes through the
-  egress proxy (`factory-egress-proxy`). That proxy is this binary, run in
-  a locked-down container on that network and on the usual one.
+  an address, or reach the host's ports. The factory refuses to use an
+  existing network of that name that isn't set up this way. Their HTTP(S)
+  goes through the egress proxy (`factory-egress-proxy-…`). That proxy is
+  this binary, run from an empty image in a locked-down container on that
+  network and on the usual one.
 - **The proxy forwards only to listed host names,** on ports 443 and 80.
-  It never forwards to IP addresses or to names that resolve to private,
-  loopback or link-local addresses. That rules out the cloud metadata
-  service and your LAN.
+  A TLS connection must name the same host it asked for, so a tunnel to an
+  allowed name can't be pointed at another site on the same CDN. It never
+  forwards to IP addresses, or to names that resolve to private, loopback
+  or link-local addresses. That rules out the cloud metadata service and
+  your LAN.
 - **The built-in list** covers the Claude and OpenAI APIs and their
   sign-in, GitHub, gitlab.com, and the Go, npm, PyPI, RubyGems, crates.io
-  and Maven registries. None of them accepts an upload without
-  credentials the job doesn't have. Each repo's own self-hosted GitLab is
-  added for you.
+  and Maven registries. Each repo's own self-hosted GitLab is added for
+  you.
 - **Tests and hidden scenarios that run with no network** still get none.
+- **Jobs that run at the same time share the network,** so they can reach
+  each other's open ports, as they could on Docker's default network.
 
 ```yaml
 runner:
@@ -792,11 +800,14 @@ runner:
     # mode: open                     # Docker's usual network: the whole internet
 ```
 
-When a job hits a host that isn't listed, it gets a 403 that names the
-setting to change. `docker logs factory-egress-proxy` lists every refusal.
-The allowlist needs Docker 28 or later on a Linux host (WSL counts). On
-anything else, the factory won't start until you set `mode: open`.
-Changing the list restarts the proxy before the next job.
+Jobs get the proxy in `HTTPS_PROXY` and the other usual variables, which
+git, Go, npm, pip, cargo, Claude Code and Codex all honor. They also get it
+in `JAVA_TOOL_OPTIONS` for the JVM. Maven may still need a proxy in its
+`settings.xml`. When a job hits a host that isn't listed, it gets a 403
+that names the setting to change, and `docker logs` on the proxy lists
+every refusal. The allowlist needs Docker 28 or later on a Linux host (WSL
+counts). On anything else, the factory won't start until you set
+`mode: open`. Changing the list starts a new proxy before the next job.
 
 ## Where this differs from SPEC.md
 

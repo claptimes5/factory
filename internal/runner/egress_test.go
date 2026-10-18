@@ -10,7 +10,7 @@ import (
 )
 
 func TestEgressArgsAndEnv(t *testing.T) {
-	e := &Egress{Allow: []string{"api.anthropic.com"}, Image: "img", Binary: "/bin/factory"}
+	e := &Egress{Allow: []string{"api.anthropic.com"}, Binary: "/bin/factory"}
 	d := &Docker{Network: "mynet", Egress: e}
 	args := strings.Join(d.Args(Spec{Name: "factory-job-1", Image: "img", Workdir: "/w", OutDir: "/o"}), " ")
 	if !strings.Contains(args, "--network "+EgressNet) || strings.Contains(args, "mynet") {
@@ -20,7 +20,7 @@ func TestEgressArgsAndEnv(t *testing.T) {
 		t.Fatalf("no network: %s", args)
 	}
 	env := e.proxyEnv(map[string]string{"A": "1"}, []string{"db"})
-	if env["A"] != "1" || env["HTTPS_PROXY"] != "http://"+EgressProxy+":3128" || env["no_proxy"] != "localhost,127.0.0.1,::1,db" {
+	if env["A"] != "1" || env["HTTPS_PROXY"] != "http://"+e.name()+":3128" || !strings.Contains(env["JAVA_TOOL_OPTIONS"], "-Dhttps.proxyHost="+e.name()) || env["no_proxy"] != "localhost,127.0.0.1,::1,db" {
 		t.Fatalf("env = %v", env)
 	}
 }
@@ -35,8 +35,11 @@ echo "$@" >> ` + log + `
 case "$1 $2" in
   "inspect -f") exit 1 ;;
   "version --format") echo 28.1.0 ;;
-  "network inspect") exit 1 ;;
-  "logs factory-egress-proxy") echo 'level=INFO msg="egress proxy listening"' ;;
+  "network inspect") test -f ` + dir + `/net && echo 'true isolated isolated' || exit 1 ;;
+  "network create") touch ` + dir + `/net ;;
+  "image inspect") exit 1 ;;
+  "import -") cat > /dev/null ;;
+  logs*) echo 'level=INFO msg="egress proxy listening"' ;;
   "run --rm") echo hi ;;
 esac
 exit 0
@@ -45,7 +48,7 @@ exit 0
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &Docker{Bin: bin, Egress: &Egress{Allow: []string{"api.anthropic.com", "*.example.com"}, Private: []string{"git.corp.example"}, Image: "img", Binary: "/opt/factory"}}, log
+	return &Docker{Bin: bin, Egress: &Egress{Allow: []string{"api.anthropic.com", "*.example.com"}, Private: []string{"git.corp.example"}, Binary: "/opt/factory"}}, log
 }
 
 func TestEnsureEgressStartsTheProxyOnce(t *testing.T) {
@@ -61,12 +64,13 @@ func TestEnsureEgressStartsTheProxyOnce(t *testing.T) {
 	calls := string(b)
 	for _, want := range []string{
 		"network create --internal -o com.docker.network.bridge.gateway_mode_ipv4=isolated",
-		"create --name factory-egress-proxy",
+		"import - factory-egress-base:1",
+		"create --name " + d.Egress.name(),
 		"--network factory-egress --user 65534:65534 --cap-drop ALL",
 		"-v /opt/factory:/opt/factory/factory:ro --entrypoint /opt/factory/factory",
 		"FACTORY_EGRESS_ALLOW=api.anthropic.com,*.example.com", "FACTORY_EGRESS_PRIVATE=git.corp.example",
-		"img egress-proxy -listen :3128",
-		"network connect bridge factory-egress-proxy", "start factory-egress-proxy",
+		"factory-egress-base:1 egress-proxy -listen :3128",
+		"network connect bridge " + d.Egress.name(), "start " + d.Egress.name(),
 		"run --rm -i --name factory-job-1", "-e HTTPS_PROXY",
 	} {
 		if !strings.Contains(calls, want) {
@@ -74,8 +78,21 @@ func TestEnsureEgressStartsTheProxyOnce(t *testing.T) {
 		}
 	}
 	// The second job finds it up (cached), so it's created once.
-	if n := strings.Count(calls, "create --name factory-egress-proxy"); n != 1 {
+	if n := strings.Count(calls, "create --name "+d.Egress.name()); n != 1 {
 		t.Errorf("proxy created %d times", n)
+	}
+}
+
+// A network of the jobs' name that isn't internal is refused, not used.
+func TestEgressRefusesAnOpenNetwork(t *testing.T) {
+	d, _ := fakeEgressDocker(t)
+	script, _ := os.ReadFile(d.Bin)
+	if err := os.WriteFile(d.Bin, []byte(strings.Replace(string(script), "test -f", "echo 'false  '; exit 0; test -f", 1)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := d.Run(context.Background(), Spec{Name: "factory-job-1", Image: "img", Cmd: []string{"true"}}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "isn't the factory's") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

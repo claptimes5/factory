@@ -2,11 +2,13 @@
 // on a Docker network with no way out; the proxy, on that network and on
 // one that does, forwards only to the hosts on its allowlist: the model
 // APIs, the git host and package registries. A builder that reads a
-// prompt injection can't send what it holds anywhere else.
+// prompt injection can send what it holds only there.
 package egress
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -20,8 +22,7 @@ import (
 )
 
 // Defaults are the hosts a job needs whatever the repo: the agents' APIs
-// and sign-in, GitHub and GitLab, and the common package registries. None
-// is a place anyone can upload to without credentials the job lacks.
+// and sign-in, GitHub and GitLab, and the common package registries.
 var Defaults = []string{
 	// Claude
 	"api.anthropic.com", "claude.ai", "console.anthropic.com", "platform.claude.com",
@@ -96,18 +97,35 @@ type Proxy struct {
 	// cloud metadata service, private networks. Replaced in tests.
 	Blocked func(netip.Addr) bool
 
-	once sync.Once
-	tr   *http.Transport
+	once  sync.Once
+	tr    *http.Transport
+	slots chan struct{}
+}
+
+// blockedNets are ranges no allowlisted name should resolve into: shared
+// address space (carrier-grade NAT, Tailscale), "this network", benchmark,
+// reserved, NAT64 and IPv4-compatible IPv6 (which reach IPv4 addresses).
+var blockedNets = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48"), netip.MustParsePrefix("::/96"),
 }
 
 // Blocked is the default: loopback, link-local (the metadata service),
-// private, shared and unspecified addresses, and multicast. A host on a
-// private network needs a Private rule.
+// private, unspecified and multicast addresses, and blockedNets. A host on
+// a private network needs a Private rule.
 func Blocked(a netip.Addr) bool {
 	a = a.Unmap()
-	return a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsPrivate() ||
-		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() ||
-		netip.MustParsePrefix("100.64.0.0/10").Contains(a) // carrier-grade NAT, Tailscale
+	if a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsPrivate() ||
+		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, n := range blockedNets {
+		if n.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // privateOnly is a private-network address that isn't this machine's or
@@ -134,6 +152,7 @@ func (p *Proxy) init() {
 		if p.Blocked == nil {
 			p.Blocked = Blocked
 		}
+		p.slots = make(chan struct{}, maxConns)
 		p.tr = &http.Transport{
 			DialContext:           func(ctx context.Context, _, addr string) (net.Conn, error) { return p.dial(ctx, addr) },
 			Proxy:                 nil,
@@ -190,6 +209,13 @@ func (p *Proxy) dial(ctx context.Context, addr string) (net.Conn, error) {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.init()
+	select {
+	case p.slots <- struct{}{}:
+		defer func() { <-p.slots }()
+	default:
+		http.Error(w, "factory egress proxy: too many connections", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method == http.MethodConnect {
 		p.connect(w, r)
 		return
@@ -218,48 +244,126 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// tunnelIdle closes a tunnel that has carried nothing either way for
+// this long; maxConns bounds the proxy's open requests and tunnels.
+var (
+	tunnelIdle = 10 * time.Minute
+	maxConns   = 1024
+)
+
+// errSNI is a TLS ClientHello naming another host than the CONNECT did.
+var errSNI = errors.New("sni mismatch")
+
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	addr := r.Host
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		addr = net.JoinHostPort(addr, "443")
 	}
+	host, _, _ := net.SplitHostPort(addr)
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	up, err := p.dial(r.Context(), addr)
 	if err != nil {
 		p.fail(w, addr, err)
 		return
 	}
+	defer func() { _ = up.Close() }()
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		_ = up.Close()
 		http.Error(w, "can't tunnel", http.StatusInternalServerError)
 		return
 	}
 	down, buf, err := hj.Hijack()
 	if err != nil {
-		_ = up.Close()
 		return
 	}
-	_, _ = down.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	defer func() { _ = down.Close() }()
+	if _, err := down.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
+		return
+	}
+	// What the client sends first: with TLS, its ClientHello must name the
+	// host it asked for, so a tunnel to an allowed name can't carry a
+	// session to another name on the same CDN.
+	var first bytes.Buffer
+	in := io.MultiReader(buf.Reader, down)
+	_ = down.SetReadDeadline(time.Now().Add(30 * time.Second))
+	sni, isTLS, err := clientHelloSNI(io.TeeReader(in, &first))
+	_ = down.SetReadDeadline(time.Time{})
+	switch {
+	case isTLS && err != nil:
+		p.Log.Warn("egress denied", "to", addr, "why", "unreadable TLS ClientHello: "+err.Error())
+		return
+	case isTLS && strings.TrimSuffix(strings.ToLower(sni), ".") != host:
+		p.Log.Warn("egress denied", "to", addr, "why", fmt.Sprintf("TLS names %q, not %s", sni, host))
+		return
+	case !isTLS && strings.HasSuffix(addr, ":443"):
+		p.Log.Warn("egress denied", "to", addr, "why", "not TLS on port 443")
+		return
+	}
+	if _, err := up.Write(first.Bytes()); err != nil {
+		return
+	}
 	done := make(chan struct{}, 2)
-	go func() {
-		// Bytes the client sent after the CONNECT, then the rest.
-		if r := buf.Reader; r.Buffered() > 0 {
-			b, _ := r.Peek(r.Buffered())
-			_, _ = up.Write(b)
+	go func() { pipe(up, in, down); done <- struct{}{} }()
+	go func() { pipe(down, up, up); done <- struct{}{} }()
+	<-done
+	<-done
+}
+
+// pipe copies src to dst until either ends or src is idle for tunnelIdle;
+// conn is src's connection, whose read deadline marks idleness.
+func pipe(dst net.Conn, src io.Reader, conn net.Conn) {
+	b := make([]byte, 32<<10)
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(tunnelIdle))
+		n, err := src.Read(b)
+		if n > 0 {
+			if _, werr := dst.Write(b[:n]); werr != nil {
+				break
+			}
 		}
-		_, _ = io.Copy(up, down)
-		closeWrite(up)
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(down, up)
-		closeWrite(down)
-		done <- struct{}{}
-	}()
-	<-done
-	<-done
-	_ = up.Close()
-	_ = down.Close()
+		if err != nil {
+			break
+		}
+	}
+	closeWrite(dst)
+}
+
+// clientHelloSNI reads a TLS ClientHello from r and returns the server
+// name it carries. isTLS is false when r doesn't start a TLS handshake;
+// then only the first byte has been read.
+func clientHelloSNI(r io.Reader) (sni string, isTLS bool, err error) {
+	var b [1]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return "", false, err
+	}
+	if b[0] != 0x16 { // handshake record
+		return "", false, nil
+	}
+	conn := &helloConn{r: io.MultiReader(bytes.NewReader(b[:]), r)}
+	err = tls.Server(conn, &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		sni = h.ServerName
+		return nil, errSNI
+	}}).Handshake()
+	if sni != "" || errors.Is(err, errSNI) {
+		return sni, true, nil
+	}
+	return "", true, err
+}
+
+// helloConn feeds a TLS server the client's bytes and accepts no writes:
+// the handshake stops once the ClientHello is read.
+type helloConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *helloConn) Read(b []byte) (int, error)      { return c.r.Read(b) }
+func (c *helloConn) Write([]byte) (int, error)       { return 0, io.ErrClosedPipe }
+func (c *helloConn) Close() error                    { return nil }
+func (c *helloConn) SetDeadline(time.Time) error     { return nil }
+func (c *helloConn) SetReadDeadline(time.Time) error { return nil }
+func (c *helloConn) SetWriteDeadline(time.Time) error {
+	return nil
 }
 
 func closeWrite(c net.Conn) {
@@ -287,7 +391,7 @@ func Serve(ctx context.Context, addr string, p *Proxy) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
+	srv := &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

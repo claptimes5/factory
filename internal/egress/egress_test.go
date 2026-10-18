@@ -106,7 +106,7 @@ func TestProxyTunnels(t *testing.T) {
 	pu, _ := url.Parse(px.URL)
 	tr := up.Client().Transport.(*http.Transport).Clone()
 	tr.Proxy = http.ProxyURL(pu)
-	tr.TLSClientConfig.ServerName = "example.com" // the test certificate's name
+	tr.TLSClientConfig.InsecureSkipVerify = true // the test certificate is for example.com
 	resp, err := (&http.Client{Transport: tr}).Get("https://api.example.com:" + port + "/")
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +115,12 @@ func TestProxyTunnels(t *testing.T) {
 	resp.Body.Close()
 	if string(b) != "secure" {
 		t.Fatalf("body = %q", b)
+	}
+	// A ClientHello naming another host than the CONNECT is cut off.
+	tr2 := tr.Clone()
+	tr2.TLSClientConfig.ServerName = "evil.example.com"
+	if _, err := (&http.Client{Transport: tr2}).Get("https://api.example.com:" + port + "/"); err == nil {
+		t.Fatal("a tunnel carried TLS for another name")
 	}
 	// CONNECT to a host off the list is refused before any tunnel.
 	conn, err := net.Dial("tcp", strings.TrimPrefix(px.URL, "http://"))
@@ -132,7 +138,7 @@ func TestProxyTunnels(t *testing.T) {
 func TestBlocked(t *testing.T) {
 	for a, want := range map[string]bool{"127.0.0.1": true, "10.1.2.3": true, "192.168.1.1": true, "172.17.0.1": true,
 		"169.254.169.254": true, "100.100.1.1": true, "::1": true, "fd00::1": true, "0.0.0.0": true, "::ffff:10.0.0.1": true,
-		"140.82.112.3": false, "2606:4700::1": false} {
+		"140.82.112.3": false, "2606:4700::1": false, "64:ff9b::a00:1": true, "::10.0.0.1": true, "0.1.2.3": true, "198.18.0.1": true, "240.0.0.1": true} {
 		if got := Blocked(netip.MustParseAddr(a)); got != want {
 			t.Errorf("%s: %v", a, got)
 		}
