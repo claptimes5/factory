@@ -44,6 +44,13 @@ export function MetricsScreen() {
         <Table title="Cost per PR by size" rows={r.by_complexity.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Size", "Merged", "Per PR"]} />
         <Table title="Cost per PR by model" rows={r.by_model.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Model", "Merged", "Per PR"]} />
         <Table title="Spend by model (all time)" rows={sp.by_model.map((x) => [x.model, money(x.cost_usd)])} head={["Model", "Spend"]} />
+        {sp.usage.length > 0 && (
+          <Table
+            title="Usage limits (last reported)"
+            rows={sp.usage.map((u) => [u.harness, u.window, `${Math.round(u.used_percent)}%`, u.resets_at ? new Date(u.resets_at).toLocaleString() : "unknown"])}
+            head={["Harness", "Window", "Used", "Resets"]}
+          />
+        )}
       </div>
       <p className="text-xs text-muted-foreground">
         Human time: items sat {r.awaiting_human_hours.toFixed(1)} h awaiting review in total ({r.awaiting_human_mean_hours.toFixed(1)} h on average).

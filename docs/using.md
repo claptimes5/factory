@@ -79,6 +79,7 @@ the command name to use other files.
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |
+| `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
 | `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |

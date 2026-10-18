@@ -495,10 +495,22 @@ func (s *Store) ClaimJob(ctx context.Context) (*Job, error) {
 // ClaimJobExcept is ClaimJob restricted to kinds not in the excluded list,
 // used when a cap (such as awaiting-human) pauses one kind of work.
 func (s *Store) ClaimJobExcept(ctx context.Context, kinds ...string) (*Job, error) {
-	if len(kinds) == 0 {
-		return s.claim(ctx, "")
+	return s.ClaimJobSkipping(ctx, kinds, nil)
+}
+
+// ClaimJobSkipping is ClaimJob without jobs of the given kinds or on the
+// given harnesses (one whose usage limit is spent, say).
+func (s *Store) ClaimJobSkipping(ctx context.Context, kinds, harnesses []string) (*Job, error) {
+	filter, args := "", []any{}
+	if len(kinds) > 0 {
+		filter += ` AND kind NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `)`
+		args = append(args, toAny(kinds)...)
 	}
-	return s.claim(ctx, ` AND kind NOT IN (`+strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")+`)`, toAny(kinds)...)
+	if len(harnesses) > 0 {
+		filter += ` AND harness NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(harnesses)), ",") + `)`
+		args = append(args, toAny(harnesses)...)
+	}
+	return s.claim(ctx, filter, args...)
 }
 
 func toAny(ss []string) []any {

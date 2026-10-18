@@ -420,10 +420,33 @@ values below are this repo's.
 | `concurrent_jobs` | Jobs running at once (3). |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
+| `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
 build budget. `factory compare` arms split what's left of today's budget.
+
+**Subscription usage limits.** On a Claude subscription, Claude Code has a
+five-hour and a weekly usage window. The factory records the latest
+reading each run reports, and `factory status`, the dashboard's
+**Metrics** page and the orchestrator show how much is used and when it
+resets. When the five-hour or weekly window reaches `pause_at_usage`, that
+harness's jobs wait in the queue until it resets, instead of failing and
+using up retries. The other harness keeps working, and you're notified
+when it pauses and resumes. A window that only one model has, such as a
+weekly Opus limit, is shown but doesn't pause anything. With API keys
+there are no windows, so nothing pauses.
+
+If a window resets early, or a reading is wrong, run
+`factory limits clear claude` (or `codex`, or no name for both) and the
+jobs start on the daemon's next pass.
+
+Claude Code reports these readings in its output, but this isn't in its
+documentation, so a reading may be missing. Codex writes them only to its
+session file, which the factory copies out inside the job container (the
+Docker runner only, and the job image needs `sh`). Codex only has windows
+when it's signed in to a ChatGPT plan, and the factory runs it with an API
+key, so for now there are no Codex readings to pause on.
 
 Set a spend alert on both API accounts as well. Spend from a job killed
 mid-run is not recorded (the CLIs report cost only at the end), so the

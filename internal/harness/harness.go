@@ -43,6 +43,18 @@ type RunRequest struct {
 	Resume     string
 	// Services is the job's services network, when it has services.
 	Services string
+	// CaptureLimits asks the CLI for its usage-limit windows where it only
+	// writes them to its own files (Codex). Only in a container: on the
+	// host those files are the user's own sessions.
+	CaptureLimits bool
+}
+
+// Limit is one usage-limit window the CLI reported, such as a
+// subscription's five-hour or weekly allowance.
+type Limit struct {
+	Window      string // "5h", "weekly", or the CLI's own name
+	UsedPercent float64
+	ResetsAt    time.Time // zero when unknown
 }
 
 // Event is normalized from each CLI's JSON stream.
@@ -66,6 +78,21 @@ type Result struct {
 	Error        string
 	ExitCode     int
 	SessionID    string // the CLI's session, for a later Resume
+	Limits       []Limit
+}
+
+// setLimit replaces the reading for l's window.
+func (r *Result) setLimit(l Limit) {
+	for i := range r.Limits {
+		if r.Limits[i].Window == l.Window {
+			if l.ResetsAt.IsZero() {
+				l.ResetsAt = r.Limits[i].ResetsAt
+			}
+			r.Limits[i] = l
+			return
+		}
+	}
+	r.Limits = append(r.Limits, l)
 }
 
 // Harness runs one agent CLI.
@@ -149,6 +176,11 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	_ = pw.Close()
 	<-parsed
 	res.ExitCode = code
+	if la, ok := h.a.(interface {
+		limitsAfter(outDir string, res *Result)
+	}); ok && req.CaptureLimits {
+		la.limitsAfter(req.OutDir, res)
+	}
 	if runErr != nil {
 		return res, runErr
 	}

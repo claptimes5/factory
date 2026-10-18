@@ -373,9 +373,13 @@ func (p *Pipeline) statusText(ctx context.Context) (string, error) {
 	r, _ := p.Store.CountJobs(ctx, state.Running, "")
 	spent, _ := p.buildSpend(ctx)
 	orch, _ := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
-	return fmt.Sprintf("items: %s\njobs: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (orchestration $%.2f of $%.2f)\nawaiting human: %d of max %d",
+	out := fmt.Sprintf("items: %s\njobs: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (orchestration $%.2f of $%.2f)\nawaiting human: %d of max %d",
 		strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.Orchestrator.DailyBudget,
-		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax), nil
+		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax)
+	if limits, _ := p.Store.Limits(ctx); len(limits) > 0 {
+		out += "\nusage limits: " + store.FormatLimits(limits)
+	}
+	return out, nil
 }
 
 // --- tools ---

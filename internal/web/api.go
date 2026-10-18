@@ -232,12 +232,22 @@ type APIModelSpend struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
+// APIUsage is a usage-limit window a harness last reported.
+type APIUsage struct {
+	Harness     string  `json:"harness"`
+	Window      string  `json:"window"`
+	UsedPercent float64 `json:"used_percent"`
+	ResetsAt    string  `json:"resets_at"`
+	SeenAt      string  `json:"seen_at"`
+}
+
 // APISpend is spend by day (newest first, 30 days) and by model.
 type APISpend struct {
 	Days        []APIDaySpend   `json:"days"`
 	WeekUSD     float64         `json:"week_usd"`
 	DailyCapUSD float64         `json:"daily_cap_usd"`
 	ByModel     []APIModelSpend `json:"by_model"`
+	Usage       []APIUsage      `json:"usage"`
 }
 
 // APINotification is one thing the human may need to act on.
@@ -776,7 +786,15 @@ func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	out := APISpend{Days: []APIDaySpend{}, DailyCapUSD: s.DailyCap, ByModel: []APIModelSpend{}}
+	out := APISpend{Days: []APIDaySpend{}, DailyCapUSD: s.DailyCap, ByModel: []APIModelSpend{}, Usage: []APIUsage{}}
+	limits, err := s.Store.Limits(ctx)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, l := range limits {
+		out.Usage = append(out.Usage, APIUsage{Harness: l.Harness, Window: l.Window, UsedPercent: l.UsedPercent, ResetsAt: l.ResetsAt, SeenAt: l.SeenAt})
+	}
 	for i := 0; i < 30; i++ {
 		d := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
 		c, err := s.Store.SpendOn(ctx, d)

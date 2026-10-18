@@ -52,7 +52,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -131,6 +131,15 @@ func run(args []string) error {
 		}
 		fmt.Println(id)
 		return nil
+	case "limits":
+		if fs.NArg() < 2 || fs.NArg() > 3 || fs.Arg(1) != "clear" {
+			return usage()
+		}
+		n, err := st.ClearLimits(ctx, fs.Arg(2))
+		if err == nil {
+			fmt.Printf("cleared %d usage-limit readings\n", n)
+		}
+		return err
 	case "db-path":
 		fmt.Println(filepath.Join(dataDir, "factory.db"))
 		return nil
@@ -443,6 +452,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	}
 	spent, _ := st.SpendOn(ctx, store.Today())
 	fmt.Fprintf(w, "spend today:\t$%.2f of $%.2f\n", spent, cfg.Budgets.DailyTotal)
+	if limits, _ := st.Limits(ctx); len(limits) > 0 {
+		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
