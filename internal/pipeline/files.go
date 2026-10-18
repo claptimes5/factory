@@ -24,12 +24,26 @@ func (p *Pipeline) hostFiles(ctx context.Context, repo string) (string, []string
 	if f == nil {
 		return "", nil, nil
 	}
-	from := p.Cfg.FilesFrom(f)
+	from, err := p.Cfg.FilesFrom(f)
+	if err != nil {
+		return "", nil, err
+	}
+	if fi, err := os.Stat(from); err != nil || !fi.IsDir() {
+		return "", nil, fmt.Errorf("files: from %s is not a folder the factory can read", from)
+	}
 	if len(f.Paths) == 0 {
 		rel, err := worktreeInclude(ctx, from)
 		return from, rel, err
 	}
+	// Files git tracks in from are the repo's: a commit under test that
+	// deletes one must not get the owner's copy back.
+	tracked, _ := gitList(ctx, from, "ls-files", "-z")
 	var rel []string
+	add := func(r string) {
+		if !tracked[r] {
+			rel = append(rel, r)
+		}
+	}
 	for _, raw := range f.Paths {
 		c, err := config.CleanFilePath(raw)
 		if err != nil {
@@ -42,15 +56,28 @@ func (p *Pipeline) hostFiles(ctx context.Context, repo string) (string, []string
 			return "", nil, fmt.Errorf("files: %s is not in %s", c, from)
 		}
 		if !fi.IsDir() {
-			rel = append(rel, c)
+			if fi.Mode().IsRegular() {
+				add(c)
+			}
 			continue
 		}
-		err = filepath.WalkDir(filepath.Join(from, c), func(path string, d fs.DirEntry, err error) error {
+		// WalkDir doesn't follow a link at its root, so walk where it
+		// points, and name what it finds by the path under from.
+		root, err := filepath.EvalSymlinks(filepath.Join(from, c))
+		if err != nil {
+			return "", nil, err
+		}
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err
 			}
-			r, _ := filepath.Rel(from, path)
-			rel = append(rel, filepath.ToSlash(r))
+			// Only files, or links to files: a socket or a FIFO (a
+			// running server's) would fail or hang the copy.
+			if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() {
+				return nil
+			}
+			r, _ := filepath.Rel(root, path)
+			add(underDir(c, filepath.ToSlash(r)))
 			return nil
 		})
 		if err != nil {
@@ -64,34 +91,22 @@ func (p *Pipeline) hostFiles(ctx context.Context, repo string) (string, []string
 // worktreeInclude is what Claude Code copies into a new worktree: the files
 // in from that match its .worktreeinclude and are gitignored.
 func worktreeInclude(ctx context.Context, from string) ([]string, error) {
-	list := func(args ...string) (map[string]bool, error) {
-		cmd := exec.CommandContext(ctx, "git", append(append(append([]string{}, safe...), "-C", from, "ls-files", "-z", "--others", "--ignored"), args...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("files: listing %s: %v: %s", from, err, strings.TrimSpace(stderr.String()))
-		}
-		set := map[string]bool{}
-		for _, f := range strings.Split(string(out), "\x00") {
-			if f != "" {
-				set[f] = true
-			}
-		}
-		return set, nil
+	inc := filepath.Join(from, ".worktreeinclude")
+	if _, err := os.Stat(inc); err != nil {
+		return nil, fmt.Errorf("files: %s has no .worktreeinclude, and files.paths is empty", from)
 	}
-	match, err := list("--exclude-from=" + filepath.Join(from, ".worktreeinclude"))
+	match, err := gitList(ctx, from, "ls-files", "-z", "--others", "--ignored", "--exclude-from="+inc)
 	if err != nil {
 		return nil, err
 	}
-	ignored, err := list("--exclude-standard")
+	ignored, err := gitList(ctx, from, "ls-files", "-z", "--others", "--ignored", "--exclude-standard")
 	if err != nil {
 		return nil, err
 	}
 	var rel []string
 	for f := range match {
-		if ignored[f] {
+		// A nested repo comes back as its folder.
+		if ignored[f] && !strings.HasSuffix(f, "/") {
 			rel = append(rel, f)
 		}
 	}
@@ -99,14 +114,48 @@ func worktreeInclude(ctx context.Context, from string) ([]string, error) {
 	return rel, nil
 }
 
+// gitList runs a NUL-separated git listing in from, the owner's checkout.
+// It names from as safe: the daemon often runs as its own user.
+func gitList(ctx context.Context, from string, args ...string) (map[string]bool, error) {
+	all := append(append(append([]string{}, safe...), "-c", "safe.directory="+from, "-C", from), args...)
+	cmd := exec.CommandContext(ctx, "git", all...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("files: listing %s: %v: %s", from, err, strings.TrimSpace(stderr.String()))
+	}
+	set := map[string]bool{}
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			set[f] = true
+		}
+	}
+	return set, nil
+}
+
+// underDir joins a files.paths folder and a path under it.
+func underDir(dir, rel string) string {
+	if rel == "." {
+		return dir
+	}
+	return dir + "/" + rel
+}
+
 // placeFiles copies rel from from into dst, a fresh checkout or export, and
 // returns the ones it placed. It never overwrites what dst already has
-// (the repo's own files win), nor writes through a symlink in dst, which
-// a builder's commit could have planted to point anywhere on the host.
+// (the repo's own files win), and works through an os.Root, so a symlink
+// a builder's commit planted in dst can't send a write anywhere else.
 func placeFiles(from, dst string, rel []string) ([]string, error) {
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
 	var placed []string
 	for _, r := range rel {
-		ok, err := placeFile(filepath.Join(from, r), dst, r)
+		ok, err := placeFile(root, filepath.Join(from, r), r)
 		if err != nil {
 			return placed, fmt.Errorf("files: %s: %w", r, err)
 		}
@@ -117,15 +166,14 @@ func placeFiles(from, dst string, rel []string) ([]string, error) {
 	return placed, nil
 }
 
-func placeFile(src, dst, rel string) (bool, error) {
+func placeFile(root *os.Root, src, rel string) (bool, error) {
 	parts := strings.Split(rel, "/")
-	dir := dst
-	for _, part := range parts[:len(parts)-1] {
-		dir = filepath.Join(dir, part)
-		fi, err := os.Lstat(dir)
+	for i := 1; i < len(parts); i++ {
+		dir := strings.Join(parts[:i], "/")
+		fi, err := root.Lstat(dir)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			if err := os.Mkdir(dir, 0o755); err != nil {
+			if err := root.Mkdir(dir, 0o755); err != nil {
 				return false, err
 			}
 		case err != nil:
@@ -148,7 +196,7 @@ func placeFile(src, dst, rel string) (bool, error) {
 	if !fi.Mode().IsRegular() {
 		return false, nil
 	}
-	out, err := os.OpenFile(filepath.Join(dir, parts[len(parts)-1]), os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm()|0o600)
+	out, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm()|0o600)
 	if errors.Is(err, fs.ErrExist) {
 		return false, nil
 	}
@@ -201,6 +249,13 @@ func escapePattern(p string) string {
 		return strings.TrimSuffix(b.String(), " ") + `\ `
 	}
 	return b.String()
+}
+
+// CopyFiles places a repo's files (files.from) in dst, for a check run
+// outside a job: readiness, or an eval's acceptance check.
+func (p *Pipeline) CopyFiles(ctx context.Context, repo, dst string) error {
+	_, err := p.copyFilesInto(ctx, repo, dst)
+	return err
 }
 
 // copyFilesInto places a repo's files in a gate's or builder's folder.

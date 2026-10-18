@@ -173,6 +173,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	rc, known := o.Cfg.RepoConf(c.Repo)
 	if !known {
 		rc = o.Cfg.Primary()
+		rc.Files = nil // the primary repo's files aren't this one's
 	}
 	cfg.Repos = []config.Repo{rc}
 	base := rc.BaseBranch
@@ -223,6 +224,9 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 		return res, err
 	}
 	if err := overlay(filepath.Join(c.Dir, "accept"), check); err != nil {
+		return res, err
+	}
+	if err := p.CopyFiles(ctx, rc.Name, check); err != nil {
 		return res, err
 	}
 	code, out, err := p.Check(ctx, rc.Name, check, c.Accept)

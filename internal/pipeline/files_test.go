@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -123,10 +124,9 @@ func TestFilesConfig(t *testing.T) {
 	for _, tc := range []struct{ yaml, err string }{
 		{"files: {from: " + dir + ", paths: [.env]}", ""},
 		{"files: {paths: [.env]}", "from is required"},
-		{"files: {from: " + dir + "/nope, paths: [.env]}", "is not a folder"},
 		{"files: {from: " + dir + ", paths: [../x]}", "inside the repo"},
 		{"files: {from: " + dir + ", paths: [.git/config]}", "inside .git"},
-		{"files: {from: " + dir + "}", ".worktreeinclude"},
+		{"files: {from: " + dir + "/not-mounted-yet}", ""},
 	} {
 		_, err := config.Parse([]byte(testConfig + "repos:\n  - name: o/r\n    " + tc.yaml + "\n"))
 		switch {
@@ -135,5 +135,40 @@ func TestFilesConfig(t *testing.T) {
 		case tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)):
 			t.Errorf("%s: err %v, want %q", tc.yaml, err, tc.err)
 		}
+	}
+}
+
+// A listed folder brings only what git doesn't track there, and only
+// plain files; a missing checkout fails the job with its path.
+func TestHostFilesSkipTrackedAndSpecialFiles(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	host := t.TempDir()
+	git(t, host, "init", "-q")
+	writeFile(host, "config/app.yml", "tracked\n")
+	git(t, host, "add", "-A")
+	git(t, host, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+	writeFile(host, "config/master.key", "k\n")
+	if err := syscall.Mkfifo(filepath.Join(host, "config", "pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A listed folder that's a link to where the owner keeps them.
+	kept := t.TempDir()
+	writeFile(kept, "cert.pem", "c\n")
+	if err := os.Symlink(kept, filepath.Join(host, "certs")); err != nil {
+		t.Fatal(err)
+	}
+	e.p.Cfg.Repos[0].Files = &config.Files{From: host, Paths: []string{"config", "certs"}}
+	_, rel, err := e.p.hostFiles(ctx, "o/r")
+	if err != nil || !slices.Equal(rel, []string{"certs/cert.pem", "config/master.key"}) {
+		t.Fatalf("rel %v, %v", rel, err)
+	}
+	e.p.Cfg.Repos[0].Files = &config.Files{From: filepath.Join(host, "gone")}
+	if _, _, err := e.p.hostFiles(ctx, "o/r"); err == nil || !strings.Contains(err.Error(), "gone") {
+		t.Fatalf("err %v", err)
+	}
+	e.p.Cfg.Repos[0].Files = &config.Files{From: host}
+	if _, _, err := e.p.hostFiles(ctx, "o/r"); err == nil || !strings.Contains(err.Error(), ".worktreeinclude") {
+		t.Fatalf("err %v", err)
 	}
 }

@@ -188,7 +188,7 @@ func (g *Git) Ingest(ctx context.Context, ws *Workspace, msg string) (sha string
 	// info/exclude keeps them out of add -A, but a builder's .gitignore
 	// can override it, so take them back out by name.
 	if len(ws.Placed) > 0 {
-		args := append(gd, "rm", "--cached", "--quiet", "--ignore-unmatch", "--")
+		args := append(gd, "rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--")
 		for _, f := range ws.Placed {
 			args = append(args, ":(literal)"+f)
 		}

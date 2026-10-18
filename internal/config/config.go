@@ -933,15 +933,18 @@ func mergeGates(top Gates, own *Gates) *Gates {
 }
 
 // FilesFrom is where a repo's files are copied from: files.from with ~
-// expanded, resolved against the config file's directory.
-func (c *Config) FilesFrom(f *Files) string {
+// expanded to the home of the user the daemon runs as, resolved against
+// the config file's directory.
+func (c *Config) FilesFrom(f *Files) (string, error) {
 	from := f.From
-	if rest, ok := strings.CutPrefix(from, "~/"); ok {
-		if home, err := os.UserHomeDir(); err == nil {
-			from = filepath.Join(home, rest)
+	if from == "~" || strings.HasPrefix(from, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("files.from %s: %w", from, err)
 		}
+		from = filepath.Join(home, strings.TrimPrefix(from, "~"))
 	}
-	return c.Path(from)
+	return c.Path(from), nil
 }
 
 // CleanFilePath checks a path under files.paths: relative, inside the
@@ -960,21 +963,14 @@ func CleanFilePath(p string) (string, error) {
 }
 
 func (c *Config) checkFiles(f *Files) error {
+	// Only the syntax: a checkout that's moved or not mounted yet fails
+	// that repo's jobs, with the path, rather than every command.
 	if f.From == "" {
 		return errors.New("from is required: a checkout of the repo on this machine")
-	}
-	from := c.FilesFrom(f)
-	if fi, err := os.Stat(from); err != nil || !fi.IsDir() {
-		return fmt.Errorf("from %s is not a folder", from)
 	}
 	for _, p := range f.Paths {
 		if _, err := CleanFilePath(p); err != nil {
 			return err
-		}
-	}
-	if len(f.Paths) == 0 {
-		if _, err := os.Stat(filepath.Join(from, ".worktreeinclude")); err != nil {
-			return fmt.Errorf("list paths, or add a .worktreeinclude to %s", from)
 		}
 	}
 	return nil
