@@ -42,7 +42,7 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	if err := p.Store.SetStage(ctx, it.ID, state.Parked, "daemon", reason); err != nil {
 		return err
 	}
-	p.cancelAutoMerge(ctx, it, "the item was parked")
+	_ = p.cancelAutoMerge(ctx, it, "the item was parked") // it notifies on failure
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
 	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
@@ -158,7 +158,10 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	// This build will push to the PR's branch: nothing it pushes may merge
 	// before the gates and reviewer pass it.
-	p.cancelAutoMerge(ctx, it, "the factory is building on it again")
+	if err := p.cancelAutoMerge(ctx, it, "the factory is building on it again"); err != nil {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
+		return p.park(ctx, it, "Auto-merge is on for its PR and the factory couldn't turn it off, so it won't push a new commit that could merge unchecked: "+err.Error())
+	}
 
 	fail := func(run agentRun, st state.JobState, msg string) error {
 		if p.stopIfCancelled(ctx, j, it, run) {
@@ -863,13 +866,20 @@ func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in R
 func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.Issue, pr *github.PR, head string) bool {
 	am := p.repoConf(it.Repo).AutoMerge
 	m := p.gh(it.Repo).(AutoMerger)
+	// Recorded first: if the daemon stops between the forge turning it on
+	// and the record, a later park or build must still turn it off.
+	if err := p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge",
+		Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"head":%q,"method":%q}`, head, am.MergeMethod())}); err != nil {
+		p.log().Warn("auto-merge", "pr", pr.Number, "err", err)
+		return false
+	}
 	if err := m.AutoMerge(ctx, pr.Number, head, am.MergeMethod()); err != nil {
 		p.log().Warn("auto-merge", "pr", pr.Number, "err", err)
+		// It may have taken effect anyway (a timeout): make sure it's off.
+		_ = p.cancelAutoMerge(ctx, it, "turning it on failed")
 		p.notify(ctx, fmt.Sprintf("Couldn't turn on auto-merge for %s, so it waits for you: %v", p.ref(it.Repo, pr.Number), err))
 		return false
 	}
-	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge",
-		Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"head":%q,"method":%q}`, head, am.MergeMethod())}), "AddEvent")
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAutoMerge), "LabelPR")
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
@@ -905,21 +915,22 @@ func (p *Pipeline) autoMerged(ctx context.Context, it *store.WorkItem) bool {
 // cancelAutoMerge turns auto-merge off on the item's PR if the factory
 // turned it on, so nothing merges that the gates and reviewer haven't
 // passed.
-func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why string) {
+func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why string) error {
 	if !p.autoMerged(ctx, it) {
-		return
+		return nil
 	}
 	gh := p.gh(it.Repo)
 	m, ok := gh.(AutoMerger)
 	if !ok {
-		return
+		return nil
 	}
 	if err := m.CancelAutoMerge(ctx, it.PRNumber); err != nil {
 		p.log().Warn("cancel auto-merge", "pr", it.PRNumber, "err", err)
 		p.notify(ctx, fmt.Sprintf("Couldn't turn off auto-merge on %s (%s): %v. Turn it off on the PR yourself.", p.ref(it.Repo, it.PRNumber), why, err))
-		return
+		return err
 	}
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge_off", Reason: fmt.Sprintf("PR #%d", it.PRNumber), Data: fmt.Sprintf(`{"why":%q}`, why)}), "AddEvent")
 	p.warn(gh.UnlabelPR(ctx, it.PRNumber, LabelAutoMerge), "UnlabelPR")
 	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
+	return nil
 }

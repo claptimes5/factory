@@ -338,3 +338,33 @@ func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
 		t.Fatal("auto-merged with an unreadable feature map")
 	}
 }
+
+func TestNoPushWhileAutoMergeCantBeTurnedOff(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild}
+	e.codex.reviews = []string{pass, pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	e.gh.failCancel = fmt.Errorf("github: HTTP 502")
+	if err := e.p.Park(ctx, it.ID, "not yet"); err != nil {
+		t.Fatal(err)
+	}
+	before := git(t, e.remote, "rev-parse", "factory/issue-1")
+	e.gh.issues[1].Labels = append(e.gh.issues[1].Labels, LabelRetry)
+	e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := git(t, e.remote, "rev-parse", "factory/issue-1"); after != before {
+		t.Fatal("pushed to a PR whose auto-merge is still on")
+	}
+	if got := e.item(t, 1); got.Stage != state.Parked {
+		t.Fatalf("stage = %s", got.Stage)
+	}
+}

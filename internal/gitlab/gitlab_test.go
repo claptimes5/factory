@@ -181,9 +181,12 @@ func TestAutoMerge(t *testing.T) {
 		want     string
 		err      bool
 	}{
-		{`{"sha":"abc"}`, `PUT title=Fix it|PUT merge {"auto_merge":true,"merge_when_pipeline_succeeds":true,"sha":"abc","squash":true}`, false},
+		{`{"sha":"abc","status":"running"}`, `PUT title=Fix it|PUT merge {"auto_merge":true,"merge_when_pipeline_succeeds":true,"sha":"abc","squash":true}`, false},
 		{`null`, ``, true},
-		{`{"sha":"old"}`, ``, true},
+		{`{"sha":"old","status":"running"}`, ``, true},
+		// Finished red: GitLab would merge it at once.
+		{`{"sha":"abc","status":"failed"}`, ``, true},
+		{`{"sha":"abc","status":"skipped"}`, ``, true},
 	} {
 		var calls []string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

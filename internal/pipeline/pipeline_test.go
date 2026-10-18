@@ -38,11 +38,15 @@ type fakeGH struct {
 	autoMerged    map[int]string // PR -> the head it may merge at
 	failAutoMerge error
 	cancelled     []int
+	failCancel    error
 }
 
 func (f *fakeGH) CancelAutoMerge(_ context.Context, n int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failCancel != nil {
+		return f.failCancel
+	}
 	f.cancelled = append(f.cancelled, n)
 	delete(f.autoMerged, n)
 	return nil

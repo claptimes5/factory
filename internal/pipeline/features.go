@@ -167,6 +167,9 @@ func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int
 		}
 	}
 	if !found {
+		// No feature map: recorded too, so auto-merge can tell this from a
+		// map it couldn't read.
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "blast_radius", Data: `{"markdown":"","unread":false}`}), "AddEvent")
 		return ""
 	}
 	if features.Higher(risk, it.Risk) {
@@ -267,7 +270,8 @@ func cell(s string) string {
 }
 
 // blastUnread says whether the feature map couldn't be read for a job, so
-// the item's risk may be understated.
+// the item's risk may be understated. With no record of it, it can't be
+// known to have been read.
 func (p *Pipeline) blastUnread(ctx context.Context, itemID, jobID int64) bool {
 	evs, err := p.Store.Events(ctx, itemID)
 	if err != nil {
@@ -275,10 +279,12 @@ func (p *Pipeline) blastUnread(ctx context.Context, itemID, jobID int64) bool {
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
 		if e := evs[i]; e.Type == "blast_radius" && e.JobID != nil && *e.JobID == jobID {
-			var d struct{ Unread bool }
-			_ = json.Unmarshal([]byte(e.Data), &d)
-			return d.Unread
+			var d struct{ Unread *bool }
+			if json.Unmarshal([]byte(e.Data), &d) != nil || d.Unread == nil {
+				return true
+			}
+			return *d.Unread
 		}
 	}
-	return false
+	return true
 }

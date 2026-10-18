@@ -56,18 +56,37 @@ func allPassed(runs []CheckRun) bool {
 
 // CancelAutoMerge turns auto-merge off on PR n, if it's on.
 func (c *Client) CancelAutoMerge(ctx context.Context, n int) error {
-	var pr struct {
-		NodeID string `json:"node_id"`
+	owner, name, _ := strings.Cut(c.Repo, "/")
+	var r struct {
+		Data struct {
+			Repository *struct {
+				PullRequest *struct {
+					ID               string    `json:"id"`
+					AutoMergeRequest *struct{} `json:"autoMergeRequest"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
 	}
-	if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", c.Repo, n), nil, &pr); err != nil {
+	if err := c.graphql(ctx, `query($owner: String!, $name: String!, $n: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $n) { id autoMergeRequest { enabledAt } } }
+}`, map[string]any{"owner": owner, "name": name, "n": n}, &r); err != nil {
 		return err
 	}
-	err := c.mutate(ctx, `mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }`,
-		map[string]any{"id": pr.NodeID})
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "not enabled") {
-		return nil
+	if len(r.Errors) > 0 {
+		return fmt.Errorf("github: %s", r.Errors[0].Message)
 	}
-	return err
+	if r.Data.Repository == nil || r.Data.Repository.PullRequest == nil {
+		return fmt.Errorf("github: PR %d not found", n)
+	}
+	pr := r.Data.Repository.PullRequest
+	if pr.AutoMergeRequest == nil {
+		return nil // off already: merged, closed, or turned off by hand
+	}
+	return c.mutate(ctx, `mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }`,
+		map[string]any{"id": pr.ID})
 }
 
 // mutate runs a GraphQL mutation and turns its errors into one.

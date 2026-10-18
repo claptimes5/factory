@@ -188,7 +188,9 @@ func (p *Pipeline) repoConf(repo string) config.Repo {
 	// Resolved like a listed repo, so a GitLab one keeps its host and the
 	// diff guard's GitLab paths.
 	host, name := config.SplitRepo("", repo)
-	return p.Cfg.Resolve(config.Repo{Name: name, Host: host})
+	r := p.Cfg.Resolve(config.Repo{Name: name, Host: host})
+	r.AutoMerge = nil // its own setting is gone: never merge for it
+	return r
 }
 
 // ref names an issue for people: #12 with one repo, owner/name#12 with several.

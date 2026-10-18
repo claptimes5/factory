@@ -357,7 +357,8 @@ map couldn't be read always wait for you. For a qualifying PR, the factory:
 
 To stop one, park the item, turn off auto-merge on the PR, or close it. The
 factory also turns auto-merge off itself before it builds on the branch
-again, so a new commit never merges before it has been checked. If you push
+again; if it can't, it parks the item rather than push a commit that could
+merge unchecked. If you push
 to the PR yourself, turn auto-merge off first: GitHub keeps it on for a
 push from anyone with write access.
 
@@ -367,12 +368,15 @@ The repo has to be set up for it:
 - **Make your CI checks required** in branch protection. GitHub's
   auto-merge waits only for required checks. If nothing is required, the
   factory merges only when every check on the commit has already passed,
-  and otherwise leaves the PR for you. On GitLab, a pipeline must have run
-  on the commit.
+  and otherwise leaves the PR for you. CI that only posts commit statuses,
+  not check runs, counts as no checks here. On GitLab, the commit's
+  pipeline must be running or passed, and you should turn on **Pipelines
+  must succeed** in the project's merge settings.
 - **Required reviews still apply.** If branch protection requires an
   approving review, the PR merges the moment you approve it. To let these
-  PRs merge without you, require status checks but no review, or give the
-  factory's GitHub App a bypass in a ruleset.
+  PRs merge without you, require status checks but no review. If you use
+  rulesets, put the review rule in its own ruleset and give the factory's
+  GitHub App a bypass on that one only, so the checks still apply to it.
 
 If the factory can't turn on auto-merge, it says why and the PR waits for
 you as usual. On GitLab, `method: rebase` and `merge` both follow the

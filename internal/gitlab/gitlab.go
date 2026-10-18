@@ -438,12 +438,14 @@ func (c *Client) User(ctx context.Context) (string, error) {
 // AutoMerge takes the merge request out of draft and has GitLab merge it
 // when its pipeline succeeds, but only while its head is still sha.
 // method squash squashes; merge and rebase follow the project's setting.
-// With no pipeline GitLab would merge at once, so that is refused.
+// With no pipeline, or one that finished without passing, GitLab would
+// merge at once, so those are refused.
 func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error {
 	var r struct {
 		rawMR
 		Pipeline *struct {
-			SHA string `json:"sha"`
+			SHA    string `json:"sha"`
+			Status string `json:"status"`
 		} `json:"head_pipeline"`
 	}
 	if err := c.do(ctx, "GET", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), nil, &r); err != nil {
@@ -451,6 +453,13 @@ func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error
 	}
 	if r.Pipeline == nil || r.Pipeline.SHA != sha {
 		return fmt.Errorf("no pipeline has run on the verified commit, so GitLab would merge it untested")
+	}
+	// A pipeline that already finished without passing would not hold the
+	// merge back: GitLab merges at once unless "Pipelines must succeed" is on.
+	switch r.Pipeline.Status {
+	case "created", "waiting_for_resource", "preparing", "pending", "running", "scheduled", "success":
+	default:
+		return fmt.Errorf("the verified commit's pipeline is %s", r.Pipeline.Status)
 	}
 	if t, ok := undraft(r.Title); ok {
 		if err := c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), map[string]any{"title": t}, nil); err != nil {
