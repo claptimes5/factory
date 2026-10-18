@@ -27,10 +27,10 @@ var (
 	errUnapproved = errors.New("no approval is recorded for the issue")
 )
 
-// issueHash identifies an issue's text: what an approval approves. Line
+// IssueHash identifies an issue's text: what an approval approves. Line
 // endings and surrounding space don't count, so the same text read
 // through another API, or stored with CRLFs, still matches.
-func issueHash(is github.Issue) string {
+func IssueHash(is github.Issue) string {
 	norm := func(s string) string { return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")) }
 	sum := sha256.Sum256([]byte(norm(is.Title) + "\x00" + norm(is.Body)))
 	return hex.EncodeToString(sum[:])
@@ -81,7 +81,7 @@ func (p *Pipeline) isNew(ctx context.Context, repo string, n int) (bool, error) 
 
 // approve records the issue's text as what who approved for the item.
 func (p *Pipeline) approve(ctx context.Context, it *store.WorkItem, is github.Issue, who string) error {
-	return p.Store.SetApproval(ctx, it.ID, store.Approval{IssueHash: issueHash(is), ApprovedBy: who})
+	return p.Store.SetApproval(ctx, it.ID, store.Approval{IssueHash: IssueHash(is), ApprovedBy: who})
 }
 
 // unchanged returns errEdited when the issue isn't the text that was
@@ -97,7 +97,7 @@ func (p *Pipeline) unchanged(ctx context.Context, it *store.WorkItem, is github.
 		return errUnapproved
 	case a.IssueHash == "":
 		return p.approve(ctx, it, is, "(approved before the factory recorded approvals)")
-	case a.IssueHash != issueHash(is):
+	case a.IssueHash != IssueHash(is):
 		return errEdited
 	}
 	return nil

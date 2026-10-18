@@ -104,10 +104,11 @@ func (c *Client) editedSince(ctx context.Context, n int, t time.Time) (bool, err
 			return false, err
 		}
 		for _, x := range notes { // newest first
-			if !x.CreatedAt.After(t) {
+			if x.CreatedAt.Before(t) { // to the second: the label's own counts
 				return false, nil
 			}
-			if x.System && (strings.HasPrefix(x.Body, "changed the description") || strings.HasPrefix(x.Body, "changed title")) {
+			if x.System && (strings.HasPrefix(x.Body, "changed the description") || strings.HasPrefix(x.Body, "changed title") ||
+				strings.HasPrefix(x.Body, "marked the checklist item")) {
 				return true, nil
 			}
 		}

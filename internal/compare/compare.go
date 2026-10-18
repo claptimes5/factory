@@ -214,7 +214,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 		return arm, err
 	}
 	// Whoever runs a comparison chose the issue: its text is approved.
-	if err := st.SetApproval(ctx, it.ID, store.Approval{ApprovedBy: "factory compare"}); err != nil {
+	if err := st.SetApproval(ctx, it.ID, store.Approval{IssueHash: pipeline.IssueHash(*is), ApprovedBy: "factory compare"}); err != nil {
 		return arm, err
 	}
 	if err := st.UpdateItem(ctx, it.ID, store.ItemUpdate{Branch: &arm.Branch, Complexity: &complexity, Risk: &risk}); err != nil {

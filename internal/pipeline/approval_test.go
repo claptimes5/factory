@@ -165,11 +165,11 @@ func TestNoApprovalParks(t *testing.T) {
 }
 
 func TestIssueHashIgnoresLineEndings(t *testing.T) {
-	a := issueHash(github.Issue{Title: "t", Body: "a\r\nb\n"})
-	if b := issueHash(github.Issue{Title: "t", Body: "a\nb"}); a != b {
+	a := IssueHash(github.Issue{Title: "t", Body: "a\r\nb\n"})
+	if b := IssueHash(github.Issue{Title: "t", Body: "a\nb"}); a != b {
 		t.Fatal("CRLF changed the hash")
 	}
-	if b := issueHash(github.Issue{Title: "t", Body: "a\nc"}); a == b {
+	if b := IssueHash(github.Issue{Title: "t", Body: "a\nc"}); a == b {
 		t.Fatal("different text, same hash")
 	}
 }

@@ -103,7 +103,8 @@ func (c *Client) Approver(ctx context.Context, n int, label string) (Approval, e
 	if at.IsZero() || a.By == "" {
 		return a, nil
 	}
-	a.Edited = renamed.After(at) || (is.LastEditedAt != nil && is.LastEditedAt.After(at))
+	// Timestamps are to the second: an edit in the label's second counts.
+	a.Edited = !renamed.IsZero() && !renamed.Before(at) || is.LastEditedAt != nil && !is.LastEditedAt.Before(at)
 	self, err := c.self(ctx)
 	if err != nil {
 		return a, err // unsure who the factory is: decide on a later poll
