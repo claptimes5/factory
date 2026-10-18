@@ -144,3 +144,21 @@ func TestFeatureCheckBaseGetsInstall(t *testing.T) {
 		t.Fatalf("a real failure was excused as red on base: %+v", it)
 	}
 }
+
+// An issue triage rated high still hears where the high-risk features are.
+func TestImplementPromptHighRisk(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": featureMap})
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.claude.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := e.claude.prompts["implement"][0]
+	if !strings.Contains(b, "This issue is rated high risk. These features are high risk: Math (`add.go`);") || !strings.Contains(b, "property-based test") {
+		t.Fatalf("implement prompt:\n%s", b)
+	}
+}

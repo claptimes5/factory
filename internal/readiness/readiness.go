@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -394,7 +395,7 @@ func e2e(files []string) bool {
 func (r *Report) mapHealth(dir string, files []string) {
 	var raw []byte
 	for _, name := range features.Files {
-		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+		if b, err := readCapped(filepath.Join(dir, name)); err == nil {
 			raw = b
 			break
 		}
@@ -465,13 +466,35 @@ func propertyGaps(dir string, m *features.Map, files []string) []string {
 			continue
 		}
 		if !slices.ContainsFunc(tests, func(t string) bool {
-			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(t)))
-			return err == nil && len(b) < 1<<20 && features.HasProperties(string(b))
+			if !gates.IsTest(t) {
+				return false // test data, or source a tests: directory also holds
+			}
+			b, err := readCapped(filepath.Join(dir, filepath.FromSlash(t)))
+			return err == nil && features.HasProperties(string(b))
 		}) {
 			gaps = append(gaps, f.Name)
 		}
 	}
 	return gaps
+}
+
+// readCapped reads the first MiB of a regular file. The export comes from
+// the repo, so a symlink in it could point anywhere on the host, or at a
+// file that never ends.
+func readCapped(p string) ([]byte, error) {
+	st, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", p)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, 1<<20))
 }
 
 func featureMap(files []string) bool {

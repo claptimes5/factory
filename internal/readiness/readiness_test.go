@@ -175,6 +175,11 @@ func TestSave(t *testing.T) {
 func TestPropertyTests(t *testing.T) {
 	dir := tree(t, "go.mod", "go.sum", "pay/pay.go", "pay/pay_test.go", "auth/auth.go", "auth/auth_test.go", "ui/ui.go", "ui/ui_test.go", "ops/ops.go", ".github/workflows/ci.yml")
 	os.WriteFile(filepath.Join(dir, "auth/auth_test.go"), []byte("package auth\n\nfunc FuzzLogin(f *testing.F) {}\n"), 0o644)
+	// A symlink out of the export doesn't count, whatever it points at.
+	outside := filepath.Join(t.TempDir(), "rapid_test.go")
+	os.WriteFile(outside, []byte("import \"pgregory.net/rapid\"\n"), 0o644)
+	os.Remove(filepath.Join(dir, "pay/pay_test.go"))
+	os.Symlink(outside, filepath.Join(dir, "pay/pay_test.go"))
 	os.WriteFile(filepath.Join(dir, "features.yaml"), []byte(`features:
   - {name: Payments, paths: [pay/], tests: [pay/], risk: high}
   - {name: Auth, paths: [auth/], tests: [auth/auth_test.go], risk: high}

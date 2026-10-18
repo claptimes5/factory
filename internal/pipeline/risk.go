@@ -121,13 +121,22 @@ func capitalize(s string) string {
 func (p *Pipeline) riskyFeatures(ctx context.Context, repo, dir, base string) []string {
 	m, err := p.loadMap(ctx, repo, dir, base)
 	if err != nil || m == nil {
+		p.warn(err, "loadMap") // the gates report a bad map to the reviewer
 		return nil
 	}
 	var out []string
+	more := 0
 	for _, f := range m.Features {
-		if f.Risk == "high" {
-			out = append(out, fmt.Sprintf("%s (%s)", f.Name, strings.Join(code(f.Paths), ", ")))
+		switch {
+		case f.Risk != "high":
+		case len(out) == 10:
+			more++
+		default:
+			out = append(out, fmt.Sprintf("%s (%s)", f.Name, list(f.Paths, 5)))
 		}
+	}
+	if more > 0 {
+		out = append(out, fmt.Sprintf("and %d more in features.yaml", more))
 	}
 	return out
 }
