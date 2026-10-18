@@ -669,7 +669,7 @@ func (p *Pipeline) skillsDir(set string) string {
 func (p *Pipeline) enqueueTriage(ctx context.Context, it *store.WorkItem, attempt int, input string) error {
 	r := p.Cfg.Routing["triage"]
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "triage", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: "triage", Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("triage", ""), Input: input})
+		Skillset: r.Skills, Route: "triage", Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("triage", ""), r.FastFor(r.Harness, r.Model)), Input: input})
 	return err
 }
 
@@ -687,7 +687,7 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: p.Cfg.ImplementKey(it.Complexity), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("implement", it.Complexity),
+		Skillset: r.Skills, Route: p.Cfg.ImplementKey(it.Complexity), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("implement", it.Complexity), r.FastFor(r.Harness, r.Model)),
 		Branch: p.branchFor(it), Input: string(b)})
 	return true, err
 }
@@ -709,14 +709,16 @@ func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind s
 	if kind == "critic" {
 		route = "critic"
 		r = p.Cfg.Routing["implement.L"] // the strongest Claude tier
-		r.Skills, r.Use, r.Instructions, r.InstructionsFile = "", nil, "", ""
+		// Only what makes it the strongest model: not the builder's skills,
+		// instructions or fast mode.
+		r.Skills, r.Use, r.Instructions, r.InstructionsFile, r.Fast = "", nil, "", "", false
 		if c, ok := p.Cfg.Routing["critic"]; ok {
 			r = c
 		}
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: kind, Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: route, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""),
+		Skillset: r.Skills, Route: route, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("review", ""), r.FastFor(r.Harness, r.Model)),
 		Branch: p.branchFor(it), Input: string(b)})
 	return err
 }

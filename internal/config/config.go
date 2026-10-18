@@ -289,6 +289,9 @@ type Config struct {
 		// the data directory and wherever Docker stores containers;
 		// default 10, negative to turn the check off.
 		MinFreeDiskGB float64 `yaml:"min_free_disk_gb"`
+		// FastMultiplier scales the dollar cap of a job in fast mode;
+		// default 2.
+		FastMultiplier float64 `yaml:"fast_multiplier,omitempty"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -616,7 +619,7 @@ func (c *Config) Validate() error {
 			bad("routing.%s: skills must be a folder name under skills_dir", k)
 		}
 		if r.Fast && (r.Harness != "claude" || !IsOpus(r.Model)) {
-			bad("routing.%s: fast mode is Claude's, and only Opus models have it", k)
+			bad("routing.%s: fast mode is Claude's, on Opus 4.8 or Opus 5 and later", k)
 		}
 		if len(r.Use) > 0 && r.Skills == "" {
 			bad("routing.%s: use names skills, so it needs a skill set (skills:)", k)
@@ -973,9 +976,31 @@ func sameModel(harness, a, b string) bool {
 	return false
 }
 
-// IsOpus says whether a Claude model is an Opus, the only family with
-// fast mode.
-func IsOpus(model string) bool { return strings.Contains(strings.ToLower(model), "opus") }
+// IsOpus says whether a Claude model has fast mode: the opus alias, Opus
+// 4.8, and Opus 5 and later.
+func IsOpus(model string) bool {
+	m := strings.ToLower(model)
+	if m == "opus" || strings.Contains(m, "opus-4-8") {
+		return true
+	}
+	if _, after, ok := strings.Cut(m, "opus-"); ok && after != "" && after[0] >= '5' && after[0] <= '9' {
+		return true
+	}
+	return false
+}
+
+// FastBudget scales a job's dollar cap for fast mode, which costs more per
+// token: by budgets.fast_multiplier, 2 unless set.
+func (c *Config) FastBudget(usd float64, fast bool) float64 {
+	if !fast {
+		return usd
+	}
+	m := c.Budgets.FastMultiplier
+	if m <= 0 {
+		m = 2
+	}
+	return usd * m
+}
 
 // FastFor says whether a job on route r with this model runs in fast mode.
 func (r Route) FastFor(harness, model string) bool {

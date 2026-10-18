@@ -386,6 +386,9 @@ func TestFastModeJobs(t *testing.T) {
 		if want := j.Kind == "implement"; j.Fast != want {
 			t.Errorf("%s job on %s: fast = %v", j.Kind, j.Model, j.Fast)
 		}
+		if j.Kind == "implement" && j.BudgetUSD != 2*e.p.Cfg.Budgets.PerJob["M"] {
+			t.Errorf("a fast job's budget should double: $%.2f", j.BudgetUSD)
+		}
 	}
 	if body := e.gh.comments[e.item(t, 1).PRNumber][0]; !strings.Contains(body, "| opus (fast) |") {
 		t.Errorf("PR body should show fast mode:\n%s", body)

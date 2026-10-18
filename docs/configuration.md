@@ -328,12 +328,19 @@ routing:
   implement.L: {harness: claude, model: opus, fast: true}
 ```
 
-Only Opus models have it, so the daemon refuses `fast` on any other model.
-If escalation moves a job to a tier that isn't Opus, that job runs at
-normal speed. The job table and `factory status` show `opus (fast)`. Fast
-mode needs your Anthropic account to have it turned on; on a subscription it
-draws on usage credits, not the plan's limits. The cost recorded is what
-Claude Code reports, so check it against your console the first few times.
+Only Opus 4.8 and Opus 5 and later have it, so the daemon refuses `fast` on
+any other model. If escalation moves a job to a model without it, that job
+runs at normal speed. A fast job's dollar cap is its usual budget times
+`budgets.fast_multiplier` (2 by default); raise it if fast jobs stop at
+their cap. The critic doesn't inherit `fast` from `implement.L`; give
+`routing.critic` its own entry for that.
+
+The job table and `factory status` show `opus (fast)` for a job that asked
+for fast mode. Claude Code runs at normal speed instead if your account
+doesn't have fast mode turned on, or its fast-mode limit is reached. On a
+subscription it draws on usage credits, not the plan's limits. The cost
+recorded is what Claude Code reports, so check it against your console the
+first few times.
 
 **Session resume.** With the Docker runner, an implement retry on the same
 model continues the previous attempt's Claude session. This is best

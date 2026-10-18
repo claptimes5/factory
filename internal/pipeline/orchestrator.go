@@ -65,7 +65,7 @@ func (p *Pipeline) Orchestrate(ctx context.Context, reason string, summary bool)
 	r := p.Cfg.Routing["orchestrate"]
 	b, _ := json.Marshal(OrchestrateInput{Reasons: []string{reason}, Summary: summary})
 	_, err = p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.Orchestrator.RunBudget, Priority: 10, Input: string(b)})
+		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.FastBudget(p.Cfg.Orchestrator.RunBudget, r.FastFor(r.Harness, r.Model)), Priority: 10, Input: string(b)})
 	return err
 }
 
@@ -486,7 +486,7 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				}
 				var js []jrow
 				for _, j := range jobs {
-					js = append(js, jrow{j.ID, j.Kind, string(j.State), j.Model, j.Attempt, j.CostUSD, truncate(j.Error, 500)})
+					js = append(js, jrow{j.ID, j.Kind, string(j.State), j.ModelLabel(), j.Attempt, j.CostUSD, truncate(j.Error, 500)})
 				}
 				var es []string
 				for _, e := range evs {

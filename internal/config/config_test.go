@@ -475,10 +475,18 @@ func TestFastMode(t *testing.T) {
 	if !r.FastFor("claude", "opus") || r.FastFor("claude", "sonnet") || r.FastFor("codex", "opus") {
 		t.Fatal("FastFor")
 	}
+	for m, want := range map[string]bool{"opus": true, "claude-opus-4-8": true, "claude-opus-5": true, "claude-opus-5-5": true, "claude-opus-4-1": false, "claude-opus-4-7": false, "sonnet": false} {
+		if IsOpus(m) != want {
+			t.Errorf("IsOpus(%s) = %v", m, !want)
+		}
+	}
+	if c.FastBudget(15, true) != 30 || c.FastBudget(15, false) != 15 {
+		t.Fatal("fast budget")
+	}
 	s := c.Routing["implement.S"] // haiku
 	s.Fast = true
 	c.Routing["implement.S"] = s
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "only Opus") {
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "Opus 4.8 or Opus 5") {
 		t.Fatalf("fast on haiku: %v", err)
 	}
 	s.Fast = false
