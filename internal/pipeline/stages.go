@@ -786,7 +786,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
+	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return nil
 }
 
@@ -895,7 +895,7 @@ func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAutoMerge), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself once its checks pass: %s %s %s", capitalize(it.Risk), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
+	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself once its checks pass: %s %s %s", capitalize(it.Risk), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return true
 }
 
@@ -946,10 +946,13 @@ func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why 
 	return nil
 }
 
-// closeRE is a closing keyword and the issue it names: "fixes #12",
-// "Closes: o/r#12".
-var closeRE = regexp.MustCompile(`(?i)\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s*)((?:[\w.-]+/[\w.-]+)?)#(\d)`)
+// closeRE is an issue reference a closing keyword could act on:
+// "#12", "o/r#12", or an issue's URL. Forges accept more keywords and
+// forms ("Closes #1, #2 and #3", "Implements #5", "fixes <url>") than a
+// keyword list can keep up with, so every reference is broken.
+var closeRE = regexp.MustCompile(`(#|/issues/|/work_items/)(\d)`)
 
-// noClose keeps text an issue's author wrote from closing other issues
-// when the factory's commit or PR merges: "fixes #12" becomes "fixes # 12".
-func noClose(s string) string { return closeRE.ReplaceAllString(s, "$1$2$3# $4") }
+// noClose keeps text an issue's author or a job wrote from closing
+// issues when the factory's commit or PR merges: "fixes #12" becomes
+// "fixes # 12", and an issue's URL loses its number.
+func noClose(s string) string { return closeRE.ReplaceAllString(s, "$1 $2") }

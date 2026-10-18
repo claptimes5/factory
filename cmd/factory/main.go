@@ -97,6 +97,8 @@ func run(args []string) error {
 	if fs.NArg() == 0 {
 		return usage()
 	}
+	// Now, so codex-login and the rest don't hand on a token the shell exported.
+	takeSentryToken()
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
@@ -122,7 +124,7 @@ func run(args []string) error {
 	if err := loadEnvFile(*envPath); err != nil {
 		return err
 	}
-	takeSentryToken()
+	takeSentryToken() // and the one factory.env sets
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err

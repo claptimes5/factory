@@ -683,10 +683,14 @@ func TestSourcesTrigger(t *testing.T) {
 
 func TestNoClose(t *testing.T) {
 	for in, want := range map[string]string{
-		"TODO: fix #123 race":           "TODO: fix # 123 race",
-		"Closes: o/r#9 and resolves #1": "Closes: o/r# 9 and resolves # 1",
-		"Add retries (#12)":             "Add retries (#12)",
-		"prefix #3":                     "prefix #3",
+		"TODO: fix #123 race":                      "TODO: fix # 123 race",
+		"Closes: o/r#9 and resolves #1":            "Closes: o/r# 9 and resolves # 1",
+		"Closes #1, #2 and #3":                     "Closes # 1, # 2 and # 3",
+		"Implements #5":                            "Implements # 5",
+		"Add retries (#12)":                        "Add retries (# 12)",
+		"fixes https://github.com/o/r/issues/12":   "fixes https://github.com/o/r/issues/ 12",
+		"fixes https://gitlab.com/g/p/-/issues/12": "fixes https://gitlab.com/g/p/-/issues/ 12",
+		"see #x": "see #x",
 	} {
 		if got := noClose(in); got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)

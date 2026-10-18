@@ -294,7 +294,7 @@ func (p *Pipeline) sourceUnreadable(ctx context.Context, st store.SourceState, w
 	st.State, st.Detail = store.SourceUnreadable, firstLine(why)
 	if st.Notified != store.SourceUnreadable {
 		st.Notified = store.SourceUnreadable
-		p.notify(ctx, fmt.Sprintf("%s: can't read it for %s (%s), so the factory files no issues from it.", sourceTitle(st.Source), st.Repo, truncate(firstLine(why), 200)))
+		p.notify(ctx, fmt.Sprintf("%s: can't read it for %s (%s), so the factory files no issues from it.", sourceTitle(st.Source), st.Repo, SafeText(firstLine(why), 200)))
 	}
 	return p.Store.SetSourceState(ctx, st)
 }
@@ -360,7 +360,7 @@ func (p *Pipeline) prepare(ctx context.Context, src, repo string, sc *scan, trac
 		// Only the factory's own, by the last line: the text above it may
 		// quote anything, and anyone who can label could file a marker.
 		body := strings.TrimSpace(is.Body)
-		if m := markerRE.FindStringSubmatch(body[strings.LastIndex(body, "\n")+1:]); m != nil && m[1] == src && !known[m[2]] && pr.self != "" && is.Author == pr.self {
+		if m := markerRE.FindStringSubmatch(body[strings.LastIndex(body, "\n")+1:]); m != nil && m[1] == src && !known[m[2]] && pr.self != "" && strings.EqualFold(is.Author, pr.self) {
 			pr.onForge[m[2]] = is
 		}
 	}
@@ -508,7 +508,7 @@ func (p *Pipeline) retireSource(ctx context.Context, si store.SourceIssue, self,
 	case err != nil:
 		return err
 	}
-	ours := self != "" && is.Author == self && si.BodyHash != "" && IssueHash(*is) == si.BodyHash
+	ours := self != "" && strings.EqualFold(is.Author, self) && si.BodyHash != "" && IssueHash(*is) == si.BodyHash
 	if is.State != "closed" && hasLabel(is.Labels, SourceLabel(si.Source)) && ours {
 		ok, err := p.approved(ctx, si.Repo, is)
 		if err != nil || ok {
@@ -541,8 +541,10 @@ var refRE = regexp.MustCompile(`([#@])([\w])`)
 
 // titleText is untrusted text fit for an issue's title, which becomes
 // the factory's commit message and PR title: clipped, and with no "#123"
-// to close or "@name" to mention.
-func titleText(s string, n int) string { return refRE.ReplaceAllString(clip(s, n), "$1 $2") }
+// or issue URL to close and no "@name" to mention.
+func titleText(s string, n int) string {
+	return noClose(refRE.ReplaceAllString(clip(s, n), "$1 $2"))
+}
 
 // plainRE is what an id or a date from an API may hold in an issue's
 // text outside a fence.
