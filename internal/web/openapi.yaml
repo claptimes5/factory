@@ -689,7 +689,7 @@ components:
         precision: { type: number, description: "0..1, or -1 with no data" }
     Metrics:
       type: object
-      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, revert_window_days, revert_merged, reverted, revert_rate, broke_main, reverts_by_repo, risk_raised_by_diff, awaiting_human_hours, awaiting_human_mean_hours, weekly]
+      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, security_passes, security_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, revert_window_days, revert_merged, reverted, revert_rate, broke_main, reverts_by_repo, risk_raised_by_diff, awaiting_human_hours, awaiting_human_mean_hours, weekly]
       properties:
         items: { type: integer }
         merged: { type: integer }
@@ -701,6 +701,8 @@ components:
         first_pass_rate: { type: number }
         escalation_rate: { type: number }
         review_blocks: { type: integer }
+        security_passes: { type: integer, description: "Security passes that ran to a verdict" }
+        security_blocks: { type: integer, description: "Review rounds that blocked on a security pass's finding the verifier didn't refute" }
         review_escape_rate: { type: number }
         review_precision: { type: number, description: "Share of settled blocking findings that led to a fix, 0..1, or -1 with no data" }
         precision_by_reviewer: { type: array, items: { $ref: "#/components/schemas/Precision" } }

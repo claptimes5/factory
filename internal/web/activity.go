@@ -132,6 +132,8 @@ func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone strin
 			return j.Harness + " started reviewing", "live"
 		case "critic":
 			return "a second critic started reviewing", "live"
+		case store.KindSecurity:
+			return "a security review started", "live"
 		case "triage":
 			return "triage started", "live"
 		}

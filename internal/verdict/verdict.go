@@ -68,7 +68,8 @@ type Finding struct {
 
 	// ID names the finding across an item's review rounds: F1, F2, ...
 	ID string `json:"id,omitempty"`
-	// By is the reviewer that raised it in a paired review: review or critic.
+	// By is the reviewer that raised it when several read the change: review,
+	// critic or security.
 	By string `json:"by,omitempty"`
 	// Carried marks an earlier round's finding this round's reviewer upheld.
 	Carried bool `json:"carried,omitempty"`
@@ -105,8 +106,11 @@ type Review struct {
 	// Verified says the daemon sent the blocking findings to the verifier.
 	Verified bool `json:"verified,omitempty"`
 	// Reviewers are the reviewers whose findings this verdict holds, when
-	// two reviewed side by side (a paired high-risk review).
+	// several reviewed side by side (a paired high-risk review, or the
+	// security pass beside the reviewer).
 	Reviewers []string `json:"reviewers,omitempty"`
+	// Security says why the security pass read the change, when it did.
+	Security []string `json:"security,omitempty"`
 	// BlockedWithoutFinding says a reviewer of this verdict decided block
 	// without raising a finding that can block (see MarkBlocking): the
 	// verdict blocks whatever findings it holds, from a paired reviewer or
@@ -295,8 +299,8 @@ func ParseReview(raw []byte) (*Review, error) {
 		return nil, err
 	}
 	var errs []error
-	if r.Verified || len(r.Reviewers) > 0 || r.BlockedWithoutFinding {
-		errs = append(errs, errors.New("verified, reviewers and blocked_without_finding are the factory's to set"))
+	if r.Verified || len(r.Reviewers) > 0 || len(r.Security) > 0 || r.BlockedWithoutFinding {
+		errs = append(errs, errors.New("verified, reviewers, security and blocked_without_finding are the factory's to set"))
 	}
 	for n, f := range r.Findings {
 		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil || f.Blocks != nil {

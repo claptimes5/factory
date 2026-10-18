@@ -1464,6 +1464,10 @@ export interface components {
             first_pass_rate: number;
             escalation_rate: number;
             review_blocks: number;
+            /** @description Security passes that ran to a verdict */
+            security_passes: number;
+            /** @description Review rounds that blocked on a security pass's finding the verifier didn't refute */
+            security_blocks: number;
             review_escape_rate: number;
             /** @description Share of settled blocking findings that led to a fix, 0..1, or -1 with no data */
             review_precision: number;

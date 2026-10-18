@@ -365,6 +365,9 @@ type Config struct {
 	// Risk says how a built change's diff raises its risk, and which
 	// kinds of change always wait for you. See Risk.
 	Risk Risk `yaml:"risk"`
+	// Security is the security pass for changes that touch auth, input
+	// handling, commands, SQL or dependencies. See Security.
+	Security Security `yaml:"security"`
 	// NoGuard turns off auto-merge's guard rails' polling and breaker: the
 	// revert watch and the strikes that trip it. eval and compare set it,
 	// since the base branch they'd read is the real repo's, not the run's.
@@ -737,8 +740,8 @@ func (c *Config) Validate() error {
 		}
 		seen[strings.ToLower(r.Name)] = true
 		for _, step := range sortedKeys(r.Instructions) {
-			if !slices.Contains([]string{"triage", "implement", "review", "critic"}, step) {
-				bad("repo %s: instructions.%s: the steps are triage, implement, review and critic", r.Name, step)
+			if !slices.Contains([]string{"triage", "implement", "review", "critic", "security"}, step) {
+				bad("repo %s: instructions.%s: the steps are triage, implement, review, critic and security", r.Name, step)
 			}
 		}
 		if f := r.Files; f != nil {
@@ -875,6 +878,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkPreviews()...)
 	errs = append(errs, c.checkReview()...)
 	errs = append(errs, c.checkRisk()...)
+	errs = append(errs, c.checkSecurity()...)
 	switch c.PR.CheckOutput {
 	case "", CheckOutputPrivate, CheckOutputAlways, CheckOutputNever:
 	default:

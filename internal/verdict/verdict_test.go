@@ -160,6 +160,8 @@ func TestParseReviewRefusesDaemonFields(t *testing.T) {
 		`{"decision":"block","findings":[{"severity":"major","file":"","line":0,"claim":"x","evidence":"","id":"F9"}],"challenged_assumptions":[]}`,
 		`{"decision":"pass","findings":[],"challenged_assumptions":[],"verified":true}`,
 		`{"decision":"pass","findings":[],"challenged_assumptions":[],"reviewers":["critic"]}`,
+		`{"decision":"pass","findings":[],"challenged_assumptions":[],"security":["it changes auth.go"]}`,
+		`{"decision":"pass","findings":[{"severity":"critical","file":"","line":0,"claim":"x","evidence":"","by":"security"}],"challenged_assumptions":[]}`,
 		`{"decision":"pass","findings":[],"earlier":[{"id":"F1","ruling":"forgotten","reason":""}],"challenged_assumptions":[]}`,
 	} {
 		if _, err := ParseReview([]byte(raw)); err == nil {

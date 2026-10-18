@@ -23,7 +23,7 @@ To reach it from another machine, or to put a password on it, see
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
-| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes and the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
+| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 

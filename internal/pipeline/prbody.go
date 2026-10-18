@@ -501,6 +501,9 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 	if in.ImplementJob != 0 {
 		bp.sections[secRisk] += "\n" + p.diffRiskSection(ctx, it, in.ImplementJob)
 	}
+	if note := p.securityRefutedNote(ctx, it.ID); note != "" {
+		bp.sections[secRisk] += "\n" + note
+	}
 	bp.sections[secTesting] = p.testingSection(ctx, repo, in, impl, o)
 	if in.Features != "" {
 		blast := "What this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features

@@ -469,15 +469,19 @@ func nullable(s string) any {
 }
 
 // Sub-job kinds: agent runs a job makes on another route, inside its own
-// run (the verifier, a paired critic). Each is a job row of its own, so its
-// model, cost and log are on record, but it never sits in the queue.
+// run (the verifier, a paired critic, the security pass). Each is a job
+// row of its own, so its model, cost and log are on record, but it never
+// sits in the queue.
 const (
 	KindVerify         = "verify"
 	KindParallelCritic = "parallel_critic"
+	KindSecurity       = "security"
 )
 
 // IsSubKind says whether jobs of this kind run only inside another job.
-func IsSubKind(kind string) bool { return kind == KindVerify || kind == KindParallelCritic }
+func IsSubKind(kind string) bool {
+	return kind == KindVerify || kind == KindParallelCritic || kind == KindSecurity
+}
 
 // StartSubJob records a sub-job as running from the start: the job it
 // runs inside holds the concurrency slot. Its input names that job.
@@ -564,7 +568,8 @@ func (s *Store) ClaimJobExcept(ctx context.Context, kinds ...string) (*Job, erro
 }
 
 // ClaimJobSkipping is ClaimJob without jobs of the given kinds or on the
-// given harnesses (one whose usage limit is spent, say).
+// given harnesses (one whose usage limit is spent, say), nor jobs whose
+// input says they wait on one of those harnesses (waits_on).
 func (s *Store) ClaimJobSkipping(ctx context.Context, kinds, harnesses []string) (*Job, error) {
 	filter, args := "", []any{}
 	if len(kinds) > 0 {
@@ -572,8 +577,11 @@ func (s *Store) ClaimJobSkipping(ctx context.Context, kinds, harnesses []string)
 		args = append(args, toAny(kinds)...)
 	}
 	if len(harnesses) > 0 {
-		filter += ` AND harness NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(harnesses)), ",") + `)`
-		args = append(args, toAny(harnesses)...)
+		in := strings.TrimSuffix(strings.Repeat("?,", len(harnesses)), ",")
+		// A job that waits on another harness too (a review whose security
+		// pass runs there) is held with it.
+		filter += ` AND harness NOT IN (` + in + `) AND coalesce(CASE WHEN json_valid(input) THEN json_extract(input, '$.waits_on') END, '') NOT IN (` + in + `)`
+		args = append(append(args, toAny(harnesses)...), toAny(harnesses)...)
 	}
 	return s.claim(ctx, filter, args...)
 }

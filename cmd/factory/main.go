@@ -223,6 +223,9 @@ func run(args []string) error {
 		if err := p.CheckGroomPrompt(); err != nil {
 			return err
 		}
+		if err := p.CheckSecurityPrompt(); err != nil {
+			return err
+		}
 		if cmd == "serve" {
 			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
 				return err
