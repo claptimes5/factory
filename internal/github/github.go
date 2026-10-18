@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -121,7 +122,9 @@ func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, ou
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("Authorization", auth)
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -213,6 +216,20 @@ func (c *Client) RemoveLabel(ctx context.Context, n int, label string) error {
 // Comment posts a comment on an issue or PR.
 func (c *Client) Comment(ctx context.Context, n int, body string) error {
 	return c.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", c.Repo, n), map[string]any{"body": body}, nil)
+}
+
+// EnsureLabel creates a label unless one with that name exists, and reports
+// whether it created it. Existing labels are left as they are.
+func (c *Client) EnsureLabel(ctx context.Context, name, color, description string) (bool, error) {
+	err := c.do(ctx, "GET", "/repos/"+c.Repo+"/labels/"+url.PathEscape(name), nil, nil)
+	if err == nil {
+		return false, nil
+	}
+	if !IsNotFound(err) {
+		return false, err
+	}
+	err = c.do(ctx, "POST", "/repos/"+c.Repo+"/labels", map[string]any{"name": name, "color": color, "description": description}, nil)
+	return err == nil, err
 }
 
 // BranchSHA returns a branch's head commit, or "" if it does not exist.
@@ -371,4 +388,75 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 	}
 	a.token, a.expires = r.Token, r.ExpiresAt
 	return a.token, nil
+}
+
+// DefaultBranch returns the repository's default branch.
+func (c *Client) DefaultBranch(ctx context.Context) (string, error) {
+	var r struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	err := c.do(ctx, "GET", "/repos/"+c.Repo, nil, &r)
+	return r.DefaultBranch, err
+}
+
+// CreatedApp is what GitHub returns once an app made from a manifest exists.
+type CreatedApp struct {
+	ID      int64  `json:"id"`
+	Slug    string `json:"slug"`
+	HTMLURL string `json:"html_url"`
+	PEM     string `json:"pem"`
+	Owner   struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+}
+
+// ConvertManifest exchanges the code GitHub sends back after you create an
+// app from a manifest for the app's ID and private key. It needs no token.
+func ConvertManifest(ctx context.Context, base, code string) (*CreatedApp, error) {
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	var app CreatedApp
+	err := doJSON(ctx, &http.Client{Timeout: 30 * time.Second}, "POST", base+"/app-manifests/"+url.PathEscape(code)+"/conversions", "", nil, &app)
+	return &app, err
+}
+
+// FindInstallation returns the ID of the app's installation on the given
+// account, or "" if the app is not installed there yet.
+func (a *AppTokens) FindInstallation(ctx context.Context, account string) (string, error) {
+	jwt, err := a.JWT(time.Now())
+	if err != nil {
+		return "", err
+	}
+	base := a.BaseURL
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	var list []struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
+	}
+	if err := doJSON(ctx, &http.Client{Timeout: 30 * time.Second}, "GET", base+"/app/installations?per_page=100", "Bearer "+jwt, nil, &list); err != nil {
+		return "", err
+	}
+	for _, in := range list {
+		if strings.EqualFold(in.Account.Login, account) {
+			return strconv.FormatInt(in.ID, 10), nil
+		}
+	}
+	return "", nil
+}
+
+// IsOrg reports whether a GitHub account is an organization.
+func IsOrg(ctx context.Context, base, login string) (bool, error) {
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	var u struct {
+		Type string `json:"type"`
+	}
+	err := doJSON(ctx, &http.Client{Timeout: 30 * time.Second}, "GET", base+"/users/"+url.PathEscape(login), "", nil, &u)
+	return u.Type == "Organization", err
 }

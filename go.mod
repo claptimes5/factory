@@ -7,6 +7,7 @@ toolchain go1.27.2
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.60.1
 )

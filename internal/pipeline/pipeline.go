@@ -38,6 +38,21 @@ const (
 	LabelRetry       = "factory:retry" // a human adds it to send a parked item back to triage
 )
 
+// Label is one GitHub label the factory reads or sets.
+type Label struct{ Name, Color, Description string }
+
+// Labels lists every label the factory uses, for `factory setup` to create.
+func Labels(intake string) []Label {
+	return []Label{
+		{intake, "0e8a16", "Factory: pick this up"},
+		{LabelRunning, "fbca04", "Factory: a job is running"},
+		{LabelParked, "d93f0b", "Factory: needs a human; remove to retry"},
+		{LabelAwaitingYou, "1d76db", "Factory: draft PR ready for your review"},
+		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
+		{LabelEpic, "c5def5", "Factory: split into child issues"},
+	}
+}
+
 // GitHub is the subset of the GitHub client the pipeline uses.
 type GitHub interface {
 	ListIssues(ctx context.Context, label string) ([]github.Issue, error)

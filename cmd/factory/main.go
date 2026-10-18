@@ -1,5 +1,6 @@
 // Command factory turns labeled GitHub issues into reviewed draft PRs.
 //
+//	factory setup      ask for keys and settings, save them, create labels
 //	factory serve      run the daemon
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
@@ -48,7 +49,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -59,6 +60,7 @@ func run(args []string) error {
 	}
 	fs := flag.NewFlagSet("factory", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FACTORY_CONFIG", "factory.yaml"), "path to factory.yaml")
+	envPath := fs.String("env", os.Getenv("FACTORY_ENV_FILE"), "settings file `factory setup` writes (default: factory.env next to the config)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,6 +69,16 @@ func run(args []string) error {
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
+		return err
+	}
+	if *envPath == "" {
+		*envPath = cfg.Path("factory.env")
+	}
+	if fs.Arg(0) == "setup" {
+		// Setup waits on the terminal, so Ctrl-C ends it at once (see newPrompter).
+		return setup(context.Background(), *cfgPath, cfg, *envPath, newPrompter())
+	}
+	if err := loadEnvFile(*envPath); err != nil {
 		return err
 	}
 	dataDir := cfg.Path(cfg.DataDir)
@@ -161,11 +173,11 @@ func tokens(cfg *config.Config) (github.TokenSource, error) {
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		return github.StaticToken(t), nil
 	}
-	return nil, fmt.Errorf("set FACTORY_GITHUB_APP_ID, FACTORY_GITHUB_INSTALLATION_ID and FACTORY_GITHUB_APP_KEY (or GITHUB_TOKEN for development)")
+	return nil, fmt.Errorf("no GitHub credentials: run `factory setup`, or set FACTORY_GITHUB_APP_ID, FACTORY_GITHUB_INSTALLATION_ID and FACTORY_GITHUB_APP_KEY (or GITHUB_TOKEN for development)")
 }
 
 // secrets collects model credentials from the daemon's environment. They are
-// injected into job containers per job and never written to disk.
+// injected into job containers per job and never written into a job's files.
 func secrets() map[string]map[string]string {
 	pick := func(names ...string) map[string]string {
 		m := map[string]string{}
