@@ -47,7 +47,7 @@ func sh(t *testing.T, dir string, args ...string) string {
 // fix's tests as the hidden acceptance files and the issue it closed as
 // the task, however it was merged.
 func TestCaptureMergedPR(t *testing.T) {
-	for _, how := range []string{"merge", "squash"} {
+	for _, how := range []string{"merge", "squash", "rebase", "ff"} {
 		t.Run(how, func(t *testing.T) {
 			ctx := context.Background()
 			root := t.TempDir()
@@ -66,17 +66,31 @@ func TestCaptureMergedPR(t *testing.T) {
 			os.Remove(filepath.Join(seed, "old_test.go"))
 			sh(t, seed, "add", "-A")
 			sh(t, seed, "commit", "-qm", "fix")
+			// A second commit, so a base taken from the wrong parent lands
+			// in the middle of the fix.
+			os.MkdirAll(filepath.Join(seed, "testdata"), 0o755)
+			os.WriteFile(filepath.Join(seed, "testdata", "cases.json"), []byte("[]\n"), 0o644)
+			os.Symlink("add_test.go", filepath.Join(seed, "link_test.go"))
+			sh(t, seed, "add", "-A")
+			sh(t, seed, "commit", "-qm", "fix data")
 			head := sh(t, seed, "rev-parse", "HEAD")
 
 			sh(t, seed, "checkout", "-q", "main")
-			os.WriteFile(filepath.Join(seed, "later.go"), []byte("package x\n"), 0o644)
-			sh(t, seed, "add", "-A")
-			sh(t, seed, "commit", "-qm", "main moved on")
-			if how == "merge" {
+			if how != "ff" {
+				os.WriteFile(filepath.Join(seed, "later.go"), []byte("package x\n"), 0o644)
+				sh(t, seed, "add", "-A")
+				sh(t, seed, "commit", "-qm", "main moved on")
+			}
+			switch how {
+			case "merge":
 				sh(t, seed, "merge", "-q", "--no-ff", "-m", "merge", "fix")
-			} else {
+			case "squash":
 				sh(t, seed, "merge", "-q", "--squash", "fix")
 				sh(t, seed, "commit", "-qm", "squashed")
+			case "rebase":
+				sh(t, seed, "cherry-pick", base+".."+head)
+			case "ff":
+				sh(t, seed, "merge", "-q", "--ff-only", "fix")
 			}
 			merge := sh(t, seed, "rev-parse", "HEAD")
 			sh(t, seed, "update-ref", "refs/pull/7/head", head)
@@ -91,7 +105,7 @@ func TestCaptureMergedPR(t *testing.T) {
 			}
 			f := &prForge{issues: map[int]github.Issue{3: {Number: 3, Title: "Add an Add function!", Body: "We need Add."}}}
 			f.pr = github.PR{Number: 7, Merged: true, Title: "factory: #3", Body: "Closes #3\n\nBuilt by the factory.", MergeCommit: merge}
-			f.pr.Head.SHA = head
+			f.pr.Head.SHA, f.pr.Base.SHA = head, base
 			set := filepath.Join(root, "evals")
 			c, err := capture(ctx, cfg, "o/r", 7, f, &pipeline.Git{RemoteURL: remote}, t.TempDir(), set, "", "")
 			if err != nil {
@@ -100,8 +114,12 @@ func TestCaptureMergedPR(t *testing.T) {
 			if want := filepath.Join(set, "pr-7-add-an-add-function"); c.Dir != want {
 				t.Fatalf("dir = %s, want %s", c.Dir, want)
 			}
-			if len(c.Tests) != 1 || c.Tests[0] != "add_test.go" {
+			if strings.Join(c.Tests, ",") != "add_test.go,testdata/cases.json" {
 				t.Fatalf("tests = %v", c.Tests)
+			}
+			notes := strings.Join(c.Notes, "\n")
+			if !strings.Contains(notes, "link_test.go: not copied, it's a symlink") || !strings.Contains(notes, "old_test.go: the fix deleted it") {
+				t.Fatalf("notes = %s", notes)
 			}
 			if b, _ := os.ReadFile(filepath.Join(c.Dir, "accept", "add_test.go")); string(b) != "package x\n\n// TestAdd\n" {
 				t.Fatalf("accept file = %q", b)
@@ -115,6 +133,10 @@ func TestCaptureMergedPR(t *testing.T) {
 				t.Fatalf("case = %+v (base %s)", k, base)
 			}
 
+			if ents, _ := os.ReadDir(set); len(ents) != 1 {
+				t.Fatalf("set holds %v", ents) // no temp directory left behind
+			}
+
 			// It won't overwrite a case, or capture what isn't merged.
 			if _, err := capture(ctx, cfg, "o/r", 7, f, &pipeline.Git{RemoteURL: remote}, t.TempDir(), set, "", ""); err == nil {
 				t.Fatal("captured over an existing case")
@@ -123,6 +145,29 @@ func TestCaptureMergedPR(t *testing.T) {
 			if _, err := capture(ctx, cfg, "o/r", 7, f, &pipeline.Git{RemoteURL: remote}, t.TempDir(), set, "other", ""); err == nil || !strings.Contains(err.Error(), "isn't merged") {
 				t.Fatalf("err = %v", err)
 			}
+			// With no issue to read, the PR's own text is the task, and it says so.
+			f.pr.Merged, f.pr.Body = true, "Adds Add."
+			c, err = capture(ctx, cfg, "o/r", 7, f, &pipeline.Git{RemoteURL: remote}, t.TempDir(), set, "", "go test ./...")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cases, _ = eval.Load(set)
+			if len(cases) != 2 || cases[1].Title != "factory: #3" || cases[1].Accept != "go test ./..." || !strings.Contains(strings.Join(c.Notes, "\n"), "names no issue") {
+				t.Fatalf("cases = %+v, notes = %v", cases, c.Notes)
+			}
 		})
+	}
+}
+
+// A case runs against a configured repo's remote and gates, so a PR from
+// any other repo is refused.
+func TestCaptureUnconfiguredRepo(t *testing.T) {
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = capture(context.Background(), cfg, "other/repo", 1, &prForge{}, &pipeline.Git{}, t.TempDir(), t.TempDir(), "", "")
+	if err == nil || !strings.Contains(err.Error(), "isn't in the config") {
+		t.Fatalf("err = %v", err)
 	}
 }

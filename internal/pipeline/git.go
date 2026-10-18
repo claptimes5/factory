@@ -315,10 +315,28 @@ func (g *Git) Freeze(ctx context.Context, bare, keep string) error {
 // FetchRef fetches one ref from the remote (a pull request's head, for
 // example) and returns the commit it points at.
 func (g *Git) FetchRef(ctx context.Context, repo, ref string) (string, error) {
-	if _, err := g.run(ctx, repo, nil, "fetch", "--quiet", "--no-tags", g.remote(), ref); err != nil {
+	// Into a ref of its own, not FETCH_HEAD, which a fetch can leave stale.
+	if _, err := g.run(ctx, repo, nil, "fetch", "--quiet", "--no-tags", g.remote(), "+"+ref+":refs/factory/fetched"); err != nil {
 		return "", err
 	}
-	return g.run(ctx, repo, nil, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+	return g.run(ctx, repo, nil, "rev-parse", "--verify", "refs/factory/fetched^{commit}")
+}
+
+// IsAncestor reports whether commit a is an ancestor of (or is) b.
+func (g *Git) IsAncestor(ctx context.Context, repo, a, b string) bool {
+	_, err := g.run(ctx, repo, nil, "merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
+// Mode is a path's git mode at sha (100644, 120000 for a symlink, 160000
+// for a submodule), or "" when it isn't there.
+func (g *Git) Mode(ctx context.Context, repo, sha, path string) (string, error) {
+	out, err := g.run(ctx, repo, nil, "ls-tree", sha, "--", path)
+	if err != nil || out == "" {
+		return "", err
+	}
+	mode, _, _ := strings.Cut(out, " ")
+	return mode, nil
 }
 
 // CloneBare makes a bare copy of the remote at dst.

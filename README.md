@@ -325,7 +325,7 @@ against the build budget.
   it, the daemon tells you, because what you changed is what the factory
   missed. `factory eval capture PR` turns that PR, or any merged fix, into a
   case: frozen at the commit its branch started from, with the issue it
-  closed as the task and its own test files as the acceptance files. Every
+  closed as the task and its own tests and test data as the acceptance files. Every
   later config is then measured against the miss.
 - **Session resume.** With the Docker runner, an implement retry on the same
   model continues the previous attempt's Claude session (best effort; a

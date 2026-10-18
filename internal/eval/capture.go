@@ -30,13 +30,20 @@ type Fix struct {
 // Captured is the case Capture wrote.
 type Captured struct {
 	Dir   string
-	Tests []string // the fix's test files, now in accept/
+	Tests []string // the fix's test files and test data, now in accept/
+	Notes []string // what wasn't copied, and why
+}
+
+// Exists reports whether set already has a case called name.
+func Exists(set, name string) bool {
+	_, err := os.Stat(filepath.Join(set, name))
+	return err == nil
 }
 
 // Capture writes set/name from a merged fix: case.yaml frozen at the
-// fix's base, and accept/ holding the fix's own test files as merged, so
-// the case passes only when the factory's result passes the tests the
-// human's fix came with.
+// fix's base, and accept/ holding the fix's own test files and test data
+// as merged, so the case passes only when the factory's result passes the
+// tests the human's fix came with. It writes all of it or nothing.
 func Capture(ctx context.Context, git *pipeline.Git, repoDir, set, name string, f Fix) (*Captured, error) {
 	if f.Base == "" || f.Head == "" || f.Title == "" || f.Accept == "" {
 		return nil, errors.New("capture: base, head, title and accept are required")
@@ -45,26 +52,50 @@ func Capture(ctx context.Context, git *pipeline.Git, repoDir, set, name string, 
 		return nil, fmt.Errorf("capture: %q is not a usable case name", name)
 	}
 	dir := filepath.Join(set, name)
-	if _, err := os.Stat(dir); err == nil {
+	if Exists(set, name) {
 		return nil, fmt.Errorf("capture: %s already exists", dir)
 	}
 	changed, err := git.ChangedFiles(ctx, repoDir, f.Base, f.Head)
 	if err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(set, 0o755); err != nil {
+		return nil, err
+	}
+	// Built beside it and moved into place, so a failure leaves no partial
+	// case to block a retry (Load skips the dot directory meanwhile).
+	tmp, err := os.MkdirTemp(set, ".capture-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
 	c := &Captured{Dir: dir}
 	for _, p := range changed {
-		if !gates.IsTest(p) || !safePath(p) {
+		if !testFile(p) {
 			continue
 		}
-		body, ok, err := git.FileAt(ctx, repoDir, f.Head, p)
+		if !safePath(p) {
+			c.Notes = append(c.Notes, fmt.Sprintf("%s: not copied, the path isn't usable", p))
+			continue
+		}
+		mode, err := git.Mode(ctx, repoDir, f.Head, p)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			continue // the fix deleted it
+		switch mode {
+		case "":
+			c.Notes = append(c.Notes, fmt.Sprintf("%s: the fix deleted it, and accept/ can only add files; delete it from the result if it's stale", p))
+			continue
+		case "100644", "100755":
+		default:
+			c.Notes = append(c.Notes, fmt.Sprintf("%s: not copied, it's a symlink or submodule; copy what it points at into accept/ by hand", p))
+			continue
 		}
-		dst := filepath.Join(dir, "accept", filepath.FromSlash(p))
+		body, _, err := git.FileAt(ctx, repoDir, f.Head, p)
+		if err != nil {
+			return nil, err
+		}
+		dst := filepath.Join(tmp, "accept", filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return nil, err
 		}
@@ -77,10 +108,34 @@ func Capture(ctx context.Context, git *pipeline.Git, repoDir, set, name string, 
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "case.yaml"), b, 0o644); err != nil {
 		return nil, err
 	}
-	return c, os.WriteFile(filepath.Join(dir, "case.yaml"), b, 0o644)
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// testFile is a test, or data only tests read (fixtures, snapshots, and
+// anything else under a test directory), which a fix's tests may need.
+// Never app code: laid over the factory's result, the fix itself would
+// make every candidate pass. So no bare spec/, which is as often an API
+// spec as tests.
+func testFile(p string) bool {
+	if gates.IsTest(p) || path.Ext(p) == ".snap" {
+		return true
+	}
+	for _, d := range strings.Split(path.Dir(p), "/") {
+		switch d {
+		case "testdata", "fixtures", "__fixtures__", "__snapshots__", "test", "tests", "__tests__", "e2e", "cypress":
+			return true
+		}
+	}
+	return false
 }
 
 // safePath keeps a repo path inside accept/.
