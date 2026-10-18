@@ -159,6 +159,16 @@ A workspace change is reviewed whole each round.
 Every finding and how it ended is kept in the database, so the metrics
 can say how often a reviewer's findings were worth a round.
 
+**To revisit after real use.** These defaults were picked before any
+real runs, and are to be looked at again once the metrics have data:
+- The verifier confirms a finding when it can't tell, so a finding it's
+  unsure of still blocks. That's safe, but a light filter; a stricter
+  verifier would refute more.
+- `review.paired_high_risk` is off: a critic beside the reviewer costs a
+  run on every high-risk round.
+- A finding the builder doesn't answer is recorded as unanswered and the
+  build goes on; it could fail the round instead.
+
 ## Feature map
 
 A feature map, `features.yaml` at the repo root, lists what the product
