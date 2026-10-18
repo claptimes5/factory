@@ -658,6 +658,8 @@ export interface components {
         Overview: {
             /** @description Why no job is starting for lack of disk; empty when there's room */
             disk_low: string;
+            /** @description The control room asks for a password (so the app can sign out) */
+            signed_in: boolean;
             /** @description the first repo; see repos */
             repo: string;
             /** @description every repo the factory works on, as owner/name */

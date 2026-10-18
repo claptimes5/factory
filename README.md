@@ -206,8 +206,13 @@ while five PRs wait for you.
 ## Control room
 
 `factory serve` also serves the control room on `web.listen`
-(default `127.0.0.1:8080`). There is no login, so keep it on localhost or a
-Tailscale address.
+(default `127.0.0.1:8080`). To make it ask for a password, set
+`FACTORY_WEB_PASSWORD` in `factory.env`. Sign-in lasts 30 days, and
+changing the password signs everyone out. A wrong password is limited to
+five tries a minute per address. The password is required whenever
+`web.listen` reaches beyond this machine and a tailnet, as `0.0.0.0` or a
+LAN address does. Without one, the factory won't start. Behind HTTPS (for
+example `tailscale serve`), the session cookie is marked secure.
 
 - **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
 - **Board:** items by stage, with model and cost.

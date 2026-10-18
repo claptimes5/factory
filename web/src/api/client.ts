@@ -37,8 +37,14 @@ export class APIError extends Error {
 
 const base = "/api/v1";
 
+/** A signed-out (or expired) session goes to the sign-in page, then back. */
+function signIn(r: Response) {
+  if (r.status === 401) window.location.assign("/login?next=" + encodeURIComponent(location.pathname + location.search));
+}
+
 export async function getJSON<T>(path: string): Promise<T> {
   const r = await fetch(base + path, { headers: { Accept: "application/json" } });
+  signIn(r);
   const body = await r.json().catch(() => ({ error: r.statusText }));
   if (!r.ok) throw new APIError((body as S["Error"]).error ?? r.statusText, r.status);
   return body as T;
@@ -51,6 +57,7 @@ export async function act(path: string, body: unknown = {}): Promise<ActionResul
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
+  signIn(r);
   const res = (await r.json().catch(() => ({ ok: false, message: r.statusText }))) as ActionResult;
   return { ok: r.ok && res.ok, message: res.message ?? (res as unknown as S["Error"]).error ?? r.statusText };
 }

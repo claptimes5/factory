@@ -3,9 +3,9 @@ info:
   title: Factory control room API
   version: "1"
   description: |
-    The JSON API behind the dashboard at /app/. It is served on the same
-    localhost or Tailscale address as the control room and has no login, so
-    never expose it publicly. POST requests must be application/json and
+    The JSON API behind the dashboard at /app/, served beside the control
+    room. When the control room has a password, requests without a session
+    get 401 and the dashboard sends you to /login. POST requests must be application/json and
     same-origin. Every property is always present; nullable ones are null
     when unset.
 servers:
@@ -168,9 +168,10 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in]
       properties:
         disk_low: { type: string, description: "Why no job is starting for lack of disk; empty when there's room" }
+        signed_in: { type: boolean, description: "The control room asks for a password (so the app can sign out)" }
         repo: { type: string, description: "the first repo; see repos" }
         repos: { type: array, items: { type: string }, description: "every repo the factory works on, as owner/name" }
         spent_today_usd: { type: number }

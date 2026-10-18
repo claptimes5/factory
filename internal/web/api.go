@@ -98,6 +98,9 @@ type APIOverview struct {
 	Version       string   `json:"version"`
 	// DiskLow says why no job is starting for lack of disk, or "".
 	DiskLow string `json:"disk_low"`
+	// SignedIn is true when the control room asks for a password, so the
+	// app offers to sign out.
+	SignedIn bool `json:"signed_in"`
 }
 
 // APIJob is one job.
@@ -442,7 +445,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
-		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow()})
+		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != ""})
 }
 
 func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
