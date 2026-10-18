@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/claptimes5/factory/internal/diffrisk"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/state"
@@ -236,6 +237,14 @@ type APIItemDetail struct {
 	Spec string `json:"spec"`
 	// Estimate is triage's cost estimate; null before one is made.
 	Estimate *APIEstimate `json:"estimate"`
+	// RiskReasons are every reason the rating of the latest build's diff
+	// found, each with the level it rates the change at ("high: adds or
+	// changes a migration: `db/1.sql`"), whether or not it raised the
+	// item's risk.
+	RiskReasons []string `json:"risk_reasons"`
+	// NeedsPerson are why the latest build waits for you whatever its
+	// risk (risk.needs_person); empty when nothing does.
+	NeedsPerson []string `json:"needs_person"`
 }
 
 // APIJobDetail is one job with its gates.
@@ -789,6 +798,7 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 		d.DependsOn = []int64{}
 	}
 	d.Estimate = s.apiEstimate(r, it, jobs)
+	d.RiskReasons, d.NeedsPerson = diffRisk(jobs, evs)
 	for _, j := range jobs {
 		d.Jobs = append(d.Jobs, apiJob(j))
 		if j.Kind == "triage" && j.State == state.Succeeded {
@@ -1315,4 +1325,39 @@ func firstOr(xs []string, def string) string {
 		return xs[0]
 	}
 	return def
+}
+
+// diffRisk reads the rating of the item's latest build since its latest
+// triage: the reasons its diff raised the risk, and the ones it waits for
+// a person on. A rating from before a retry's new triage is no longer
+// the item's.
+func diffRisk(jobs []*store.Job, evs []store.Event) (reasons, person []string) {
+	reasons, person = []string{}, []string{}
+	var triage int64
+	for _, j := range jobs {
+		if j.Kind == "triage" && j.ID > triage {
+			triage = j.ID
+		}
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		if e.Type != "diff_risk" || e.JobID == nil {
+			continue
+		}
+		if *e.JobID < triage {
+			break
+		}
+		var a diffrisk.Assessment
+		if json.Unmarshal([]byte(e.Data), &a) != nil {
+			break
+		}
+		for _, r := range a.Reasons {
+			reasons = append(reasons, r.Risk+": "+r.Text(diffrisk.Code))
+		}
+		for _, r := range a.NeedsPerson() {
+			person = append(person, r.Text(diffrisk.Code))
+		}
+		break
+	}
+	return reasons, person
 }

@@ -11,6 +11,7 @@
 <tr><td>Verifier refuted</td><td><b>{{pct .VerifierRefuted}}</b></td><td class="mut">checked findings the verifier refuted, so they didn't block</td></tr>
 <tr><td>Rounds to pass</td><td><b>{{rounds .RoundsToPass}}</b></td><td class="mut">review rounds an item took before its review passed</td></tr>
 <tr><td>Revert rate</td><td><b>{{pct .RevertRate}}</b></td><td class="mut">{{.Reverted}} of {{.RevertMerged}} factory PRs merged in the last {{.RevertWindowDays}} days were reverted; {{.BrokeMain}} turned main red</td></tr>
+<tr><td>Raised by the diff</td><td><b>{{.RiskRaisedByDiff}}</b></td><td class="mut">items whose built diff raised their risk above triage's</td></tr>
 <tr><td>Time awaiting you</td><td><b>{{hours .AwaitingHours}}</b></td><td class="mut">{{hours .AwaitingMeanHours}} per review on average</td></tr>
 </table>
 <h2>Reviewer precision by reviewer</h2>

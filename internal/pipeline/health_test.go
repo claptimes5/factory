@@ -536,6 +536,7 @@ func TestHealthFixNeverMergesItself(t *testing.T) {
 		it.Risk, it.Complexity = "low", "S"
 		job := int64(n)
 		e.p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &job, Type: "blast_radius", Data: `{"Unread":false}`})
+		e.p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &job, Type: "diff_risk", Data: `{"risk":"low","reasons":[]}`})
 		return e.p.autoMergeWanted(ctx, it, ReviewInput{Head: "abc", ImplementJob: job})
 	}
 	if wanted(1) {

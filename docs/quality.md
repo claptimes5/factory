@@ -102,10 +102,11 @@ issue that is really a logic change.
 
 ## Review scaled by risk
 
-Every item has a risk. Triage rates it `low` or `high`, and a
-[feature map](#feature-map) can raise it to `medium` or `high`. Review gets
-stricter with it, and the PR tells you how much of your attention it
-needs:
+Every item has a risk. Triage rates it `low` or `high` from the issue,
+before any code exists. Once the change is built and its gates pass, a
+[feature map](#feature-map) can raise it to `medium` or `high`, and so can
+[its diff](#risk-from-the-diff). Nothing lowers it. Review gets stricter
+with it, and the PR tells you how much of your attention it needs:
 
 | Risk | Reviewers | The PR says |
 | --- | --- | --- |
@@ -121,6 +122,75 @@ its risk.
 Merging is yours at every level. To make GitHub enforce it, give the paths
 behind your high-risk features a CODEOWNERS entry and require code owner
 review on the base branch.
+
+## Risk from the diff
+
+After the gates pass and before review starts, the daemon rates the change
+again from what was actually built, and the item keeps the higher of that
+and triage's rating. So a change that grew while it was built gets the
+stronger reviewer (and the critic, at high), and can no longer merge
+itself. It reads the diff in its own repository, never the builder's
+checkout. What it looks at:
+
+| Signal | Raises it to |
+| --- | --- |
+| Changed lines, lockfiles left out: `risk.medium_lines` (150), `risk.high_lines` (300) | medium, high |
+| Changed files: `risk.medium_files` (10), `risk.high_files` (25) | medium, high |
+| A path in `risk.medium_paths` (deploy and infrastructure files by default) or `risk.high_paths` (none by default) | medium, high |
+| A feature the change touches, by its `risk` in the [feature map](#feature-map) | its risk |
+| A migration: a change to a file under `risk.migration_paths`, other than a test or a doc | high |
+| Auth code: a change to a file matching `risk.auth_paths`, other than a test, a doc or an image, or vendored code (`vendor/`, `node_modules/`, `third_party/`) | high |
+| A new dependency: a name a manifest or lockfile lists that it didn't before, or one whose source changed | medium |
+| A deleted test: a test file deleted, or a test function or case taken out and not put back elsewhere | medium |
+
+New dependencies are read from Go (`go.mod`), npm (`package.json`,
+`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`), Python
+(`requirements*.txt`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`,
+`poetry.lock`, `uv.lock`), Ruby (`Gemfile`, `*.gemspec`, `Gemfile.lock`)
+and Rust (`Cargo.toml`, `Cargo.lock`). A version bump from the usual
+registry doesn't count; a package a lockfile pulls in with it does, and so
+does a change of where one comes from: an npm alias (`npm:other@1`), a
+git, GitHub, file or URL spec, an override or resolution, a go.mod
+`replace`, a Cargo `[patch]` or `[replace]`, a pip index, find-links,
+direct URL or git line, another registry in a lockfile. Other ecosystems
+get no dependency check of their own: a change to their manifests
+(`composer.json`, `setup.py`, `setup.cfg`, `pom.xml`, `build.gradle*`,
+`*.csproj`, `mix.exs`, `Package.swift`, `Podfile`, `deno.json`, `go.work`
+and the like) counts as a new dependency whatever it changes.
+
+Deleted tests are found in Go (testify suite methods too), Python, Ruby,
+JavaScript and TypeScript test files by name, and Rust's test attributes
+(`#[test]`, `#[tokio::test(...)]`, `#[rstest]`, `#[test_case(...)]`) by
+count. A test counts as deleted when the change takes out more of that
+name than it puts back in the same directory, so moving one within its
+package doesn't. The diff guard already blocks a deleted test file; a test
+taken out of a file that stays gets this far. A test that's skipped or
+disabled rather than taken out isn't found here.
+
+Paths, package and test names come from the builder's diff, so the PR
+quotes each in a code span, clipped, with any issue reference or mention
+broken.
+
+When the rating raises the risk, the item's audit trail says so ("low ->
+high from the diff: adds or changes a migration: `db/migrate/2_users.rb`"),
+the PR's "How to review" says why, and every reason it found is listed
+under it, with its level.
+
+**Changes that always need you.** Some kinds of change wait for you
+whatever their risk: by default migrations, new dependencies, auth code
+and deleted tests (`risk.needs_person`). Such a PR never merges itself,
+even when `auto_merge` covers its risk and size. Its "How to review" says
+which kind and where, under **Needs a person**, the notification that it's
+ready ends with "It needs you whatever its risk: it adds dependencies",
+and the dashboard's item view shows both lists. A diff the factory
+couldn't rate (a manifest it can't parse, say), or a build with no rating
+on record, waits for you the same way, and the PR says so. If the raised
+risk can't be saved, the build fails and is retried rather than reviewed
+at the lower risk.
+
+The rating is saved with the build job, so the PR, auto-merge and a review
+resumed after a restart all read the same one, and every fix round rates
+the whole change again.
 
 ## Review findings
 
@@ -195,6 +265,15 @@ real runs, and are to be looked at again once the metrics have data:
   text (the diff, the issue, the findings). It is fenced, and all it can
   do is refute, but refuting is removing a block: a verifier talked into
   refuting passes code the reviewer stopped.
+- [Risk from the diff](#risk-from-the-diff): the thresholds (medium at 150
+  lines or 10 files, high at 300 lines or 25 files), the default paths
+  (deploy and infrastructure files medium, none high), what counts as auth
+  code (a broad list of names: `auth`, `session*`, `login*`, `*jwt*`,
+  `permission*` and more, which will catch some code that isn't), the
+  levels each kind raises to (migrations and auth high, new dependencies
+  and deleted tests medium), and the four kinds that always need you.
+  The metrics, and the dashboard's Spend screen, count how often the
+  diff raised an item's risk.
 
 ## Feature map
 
@@ -332,6 +411,8 @@ still get none.
   commit or PR reverted on the base branch, overall and per repo, and how
   many turned main red (see
   [Auto-merge guard rails](using.md#auto-merge-guard-rails));
+- items whose built diff raised their risk above triage's (see
+  [Risk from the diff](#risk-from-the-diff));
 - hours spent awaiting you.
 
 Escapes say what the reviewer missed; precision says how much of what it

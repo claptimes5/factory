@@ -18,6 +18,7 @@ change something by hand.
 - [Skill sets](#skill-sets)
 - [Models and escalation](#models-and-escalation)
 - [Auto-merge](#auto-merge)
+- [Risk from the diff](#risk-from-the-diff)
 - [Budgets](#budgets)
 - [Asking before costly builds](#asking-before-costly-builds)
 - [Tuning](#tuning)
@@ -425,9 +426,12 @@ repos:
 ```
 
 A PR qualifies when its risk (after the [feature map](quality.md#feature-map)
-has had its say) is at or below `up_to` and its size is at or below
-`max_size`. High-risk changes, workspace changes, and changes whose feature
-map couldn't be read always wait for you. For a qualifying PR, the factory:
+and [its diff](#risk-from-the-diff) have had their say) is at or below
+`up_to` and its size is at or below `max_size`. High-risk changes,
+workspace changes, changes whose feature map couldn't be read, and changes
+of a kind `risk.needs_person` lists (a migration, a new dependency, auth
+code or a deleted test, by default) always wait for you. For a qualifying
+PR, the factory:
 
 1. Makes sure it's tested against the current base branch: where the
    base has a merge queue (GitHub's, or GitLab's merge trains) the PR goes
@@ -497,6 +501,51 @@ If the factory can't turn on auto-merge, it says why and the PR waits for
 you as usual. On GitLab, `method: rebase` and `merge` both follow the
 project's own merge method; only `squash` changes it. PRs waiting to
 auto-merge count toward `awaiting_human_max` until they merge.
+
+## Risk from the diff
+
+Once a change is built, the factory rates its risk again from the diff and
+keeps the higher of that and triage's rating (see
+[Risk from the diff](quality.md#risk-from-the-diff)). The `risk` block sets
+what it looks for; these are the defaults:
+
+```yaml
+risk:
+  medium_lines: 150     # changed lines (lockfiles left out) for medium risk
+  high_lines: 300       # ... and for high; -1 turns either off
+  medium_files: 10      # changed files for medium risk
+  high_files: 25        # ... and for high
+  high_paths: []        # e.g. [billing/, "config/secrets*"]
+  # medium_paths, auth_paths, migration_paths: see below
+  needs_person: [migrations, new_dependencies, auth, deleted_tests]
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `medium_lines`, `high_lines` | `150`, `300` | A change of at least this many changed lines is at least medium, or high, risk. Lockfiles and binary files don't count. `-1` turns one off. |
+| `medium_files`, `high_files` | `10`, `25` | The same for the number of changed files. |
+| `medium_paths` | deploy and infrastructure files: `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `docker-compose*.yml`/`.yaml`, `*.tf`, `terraform/`, `infra/`, `deploy/`, `k8s/`, `helm/`, `Procfile`, `fly.toml`, `vercel.json`, `netlify.toml` | A change touching one is at least medium risk. |
+| `high_paths` | none | A change touching one is high risk. |
+| `auth_paths` | names of auth code: `auth`, `auth.*`, `auth_*`, `*_auth`, `authn*`, `authz*`, `authenticat*`, `authoriz*`, `oauth*`, `oidc*`, `saml*`, `sso`, `*jwt*`, `login*`, `logout*`, `session`, `sessions_*`, `password*`, `credential*`, `permission*`, `rbac*`, `acl`, `devise*` and a few more | A change to a file matching one is auth code: high risk. Tests, docs and images (`.md`, `.txt`, `.png` and the like) and vendored code (`vendor/`, `node_modules/`, `third_party/`) don't count. |
+| `migration_paths` | `migrations/`, `migration/`, `migrate/`, `alembic/`, `flyway/`, `liquibase/` | A change to a file under one, other than a test or a doc, is a migration: high risk. |
+| `needs_person` | all four | The kinds of change that never merge themselves, whatever their risk: `migrations`, `new_dependencies`, `auth`, `deleted_tests`. `[]` lists none; the kinds still raise the risk. |
+
+Setting a list replaces its defaults, so to add to `auth_paths`, list the
+defaults you want to keep too.
+
+A pattern ignores case. One with a `/` inside is matched against the whole
+path (`db/schema.rb`, `app/*/auth.rb`), and one ending in `/` against the
+path's leading directories (`config/initializers/`). One without a `/` is
+matched against each part of the path: `auth` matches
+`internal/auth/token.go`, and `session*` matches
+`app/controllers/sessions_controller.rb`. Ending in `/`, it matches only a
+directory (`migrations/` matches `db/migrations/0003.sql` at any depth).
+`*` stops at `/`. A leading `/` or `./` is taken off (every path is from
+the repo's root anyway), and `**` is refused: a pattern without a `/`
+already matches at any depth.
+
+The block applies to every repo. A diff the factory can't rate (it can't
+read a manifest, say) waits for you as if it needed a person.
 
 ## Budgets
 

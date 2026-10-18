@@ -354,8 +354,13 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		heads = nil
 	}
 	// Before the job is marked done, so a restart that resumes at review
-	// finds both: the risk raised and the blast radius saved.
+	// finds them all: the risk raised, the blast radius and the diff's
+	// rating saved. Before the review is queued, so a risk the diff raises
+	// picks the reviewer (and the critic for high risk).
 	blastMD := p.applyBlast(ctx, it, j.ID, blasts)
+	if _, err := p.rateDiff(ctx, it, j.ID, touched, blasts); err != nil {
+		return fail(run, state.Failed, err.Error())
+	}
 	// Push exactly the commits that were verified. A workspace repo new to
 	// a fix round replaces whatever an earlier run left on its branch.
 	for _, pt := range touched {
@@ -880,7 +885,8 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
+	msg := fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL)
+	p.notify(ctx, msg+p.needsPersonNote(ctx, it.ID, in.ImplementJob))
 	return nil
 }
 
@@ -947,8 +953,9 @@ const (
 
 // autoMergeWanted says whether the item's PR should merge itself: the
 // repo's auto_merge covers its risk and size, it is one repo's change, the
-// feature map that rates its risk could be read, and the repo's auto-merge
-// breaker hasn't tripped. A fix main health started on its own never
+// feature map that rates its risk could be read, its diff was rated and is
+// of no kind that always needs a person, and the repo's auto-merge breaker
+// hasn't tripped. A fix main health started on its own never
 // qualifies: no human read its issue.
 func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in ReviewInput) bool {
 	if len(in.Heads) > 0 || p.inWorkspace(it) || in.Head == "" || p.healthApproved(ctx, it) {
@@ -957,7 +964,8 @@ func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in R
 	if _, ok := p.gh(it.Repo).(AutoMerger); !ok {
 		return false
 	}
-	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob) && !p.breakerTripped(ctx, it.Repo)
+	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob) &&
+		len(p.needsPerson(ctx, it.ID, in.ImplementJob)) == 0 && !p.breakerTripped(ctx, it.Repo)
 }
 
 // autoMerge hands a PR to the forge to merge once its checks pass, pinned

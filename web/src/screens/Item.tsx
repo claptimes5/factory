@@ -15,7 +15,7 @@ export function ItemScreen() {
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { item: it, jobs, events, depends_on, issue_body, spec, estimate } = data!;
+  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, risk_reasons, needs_person } = data!;
   const live = jobs.find((j) => j.state === "running");
   return (
     <div className="space-y-4">
@@ -72,6 +72,7 @@ export function ItemScreen() {
                   </div>
                 )}
               </dl>
+              {(risk_reasons.length > 0 || needs_person.length > 0) && <DiffRisk reasons={risk_reasons} person={needs_person} />}
             </CardContent>
           </Card>
           <Screenshots itemId={it.id} />
@@ -231,5 +232,29 @@ export function Trail({ events }: { events: Event[] }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+// DiffRisk is the latest build's rating from its diff: why it raised the
+// risk, and what keeps it waiting for you whatever its risk.
+function DiffRisk({ reasons, person }: { reasons: string[]; person: string[] }) {
+  return (
+    <div className="mt-3 space-y-2 text-xs">
+      {reasons.length > 0 && (
+        <div>
+          <div className="mb-1 font-semibold text-muted-foreground uppercase">Risk from the diff</div>
+          <ul className="list-disc space-y-0.5 pl-4">
+            {reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {person.length > 0 && (
+        <p className="rounded-md bg-warning/10 p-2 text-warning">
+          Needs you whatever its risk, so it won't merge itself: it {person.join("; ")}.
+        </p>
+      )}
+    </div>
   );
 }
