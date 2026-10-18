@@ -95,6 +95,11 @@ func (p *Pipeline) baseExport(ctx context.Context, jobID int64, repo, repoDir, b
 	if err := p.git(repo).Export(ctx, repoDir, base, dir); err != nil {
 		return "-"
 	}
+	// Without them the base would fail the way the change does, and
+	// excuse it.
+	if _, err := p.copyFilesInto(ctx, repo, dir); err != nil {
+		return "-"
+	}
 	if install := p.repoConf(repo).Gates.Install; install != "" {
 		if code, _, err := p.gateExec(ctx, jobID, dir, install, gateRun{repo: repo, install: true}); err != nil || code != 0 {
 			return "-"

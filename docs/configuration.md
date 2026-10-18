@@ -13,9 +13,11 @@ change something by hand.
 - [GitLab repos](#gitlab-repos)
 - [Each repo's toolchain and checks](#each-repos-toolchain-and-checks)
 - [Services: databases and the like](#services-databases-and-the-like)
+- [Files a repo doesn't commit](#files-a-repo-doesnt-commit)
 - [Disk space](#disk-space)
 - [Skill sets](#skill-sets)
 - [Models and escalation](#models-and-escalation)
+- [Auto-merge](#auto-merge)
 - [Budgets](#budgets)
 - [Claude-only review](#claude-only-review)
 
@@ -217,6 +219,45 @@ If a check fails because it can't connect to a database and the repo has
 no services, the readiness check says so. It suggests the services to add,
 read from the repo's `docker-compose.yml` or `config/database.yml`, instead
 of filing an issue for a builder, who can't edit `factory.yaml`.
+
+## Files a repo doesn't commit
+
+Some repos need a file to build or run their tests that isn't in git, such
+as a `.env` or `config/master.key`. List them under `files`, with `from`
+set to a checkout of the repo on the factory's machine, and the factory
+copies them into every job's checkout: the builder's, and each check's,
+including the readiness check and evals.
+
+```yaml
+repos:
+  - name: you/app
+    files:
+      from: ~/code/app            # a checkout of you/app on this machine
+      paths: [.env, config/master.key, certs/]   # files or folders
+```
+
+`from` must be readable by the user the daemon runs as, and `~` is that
+user's home. Run as a service, that's the `factory` user, so give it a
+path like `/home/you/code/app` and read access to it. A folder in `paths`
+brings only the files git doesn't track there.
+
+Leave out `paths` and the `.worktreeinclude` file in `from` picks them,
+the way Claude Code does for its worktrees: the files that match its
+patterns (gitignore syntax) and are gitignored.
+
+```
+# .worktreeinclude
+.env
+config/*.key
+```
+
+A copied file never ends up on the branch. It is left out of every commit
+the factory makes, even if the builder edits it or changes `.gitignore`.
+If the repo itself has a file at that path, the repo's wins. Since the
+agent can read the files, give it test credentials, never production
+ones: the builder could still copy a secret into a file it commits.
+If `from` or a listed path is missing (the checkout moved, say), that
+repo's jobs fail with the path in their error; other repos keep working.
 
 ## Disk space
 

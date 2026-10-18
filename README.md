@@ -101,7 +101,7 @@ file issues and you choose which ones to build. See
 | --- | --- |
 | [Setup](docs/setup.md) | Dependencies, what setup asks, running as a service, upgrades, manual setup with a GitHub App, WSL2 |
 | [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, `factory pull`, `eval` and `compare` |
-| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, disk space, skill sets, models, budgets, Claude-only review |
+| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, Claude-only review |
 | [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, the feature map, readiness, hidden scenarios, metrics, the replay set |
 | [Security](docs/security.md) | Who can start work, how jobs are isolated, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |

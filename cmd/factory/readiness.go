@@ -41,6 +41,9 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err := g.Export(ctx, ws.Repo, ws.BaseSHA, export); err != nil {
 		return nil, err
 	}
+	if err := p.CopyFiles(ctx, repo, export); err != nil {
+		return nil, err
+	}
 	stop, err := p.StartServices(ctx, 0, repo)
 	defer stop()
 	if err != nil {

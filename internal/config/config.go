@@ -130,6 +130,19 @@ type Repo struct {
 	// Instructions are added to this repo's prompts, by step: triage,
 	// implement, review or critic.
 	Instructions map[string]string `yaml:"instructions,omitempty"`
+	// Files are copied from a checkout on this machine into each of this
+	// repo's job checkouts, and never committed. See Files.
+	Files *Files `yaml:"files,omitempty"`
+}
+
+// Files are files a repo needs to build or test but doesn't commit, such
+// as a .env: they're copied from From, a checkout of the repo on this
+// machine. Paths lists them (files or folders, relative to the repo);
+// without it, the .worktreeinclude file in From picks them, as Claude Code
+// does for its worktrees: the files that match it and are gitignored.
+type Files struct {
+	From  string   `yaml:"from"`
+	Paths []string `yaml:"paths,omitempty"`
 }
 
 // MarshalYAML writes Required even when it is empty but not nil, since an
@@ -156,7 +169,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -574,6 +587,11 @@ func (c *Config) Validate() error {
 				bad("repo %s: instructions.%s: the steps are triage, implement, review and critic", r.Name, step)
 			}
 		}
+		if f := r.Files; f != nil {
+			if err := c.checkFiles(f); err != nil {
+				bad("repo %s: files: %v", r.Name, err)
+			}
+		}
 	}
 	inWS := map[string]string{}
 	for _, name := range sortedKeys(c.Workspaces) {
@@ -912,6 +930,50 @@ func mergeGates(top Gates, own *Gates) *Gates {
 		g.DiffGuard.ProtectedPaths = top.DiffGuard.ProtectedPaths
 	}
 	return &g
+}
+
+// FilesFrom is where a repo's files are copied from: files.from with ~
+// expanded to the home of the user the daemon runs as, resolved against
+// the config file's directory.
+func (c *Config) FilesFrom(f *Files) (string, error) {
+	from := f.From
+	if from == "~" || strings.HasPrefix(from, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("files.from %s: %w", from, err)
+		}
+		from = filepath.Join(home, strings.TrimPrefix(from, "~"))
+	}
+	return c.Path(from), nil
+}
+
+// CleanFilePath checks a path under files.paths: relative, inside the
+// repo, and not in .git. It returns it cleaned, with forward slashes.
+func CleanFilePath(p string) (string, error) {
+	c := filepath.ToSlash(filepath.Clean(p))
+	switch {
+	case p == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "/"):
+		return "", fmt.Errorf("%q must be a path inside the repo", p)
+	case c == "." || c == ".." || strings.HasPrefix(c, "../"):
+		return "", fmt.Errorf("%q must be a path inside the repo", p)
+	case c == ".git" || strings.HasPrefix(c, ".git/"):
+		return "", fmt.Errorf("%q is inside .git", p)
+	}
+	return c, nil
+}
+
+func (c *Config) checkFiles(f *Files) error {
+	// Only the syntax: a checkout that's moved or not mounted yet fails
+	// that repo's jobs, with the path, rather than every command.
+	if f.From == "" {
+		return errors.New("from is required: a checkout of the repo on this machine")
+	}
+	for _, p := range f.Paths {
+		if _, err := CleanFilePath(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Path resolves p against the config file's directory.
