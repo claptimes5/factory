@@ -459,25 +459,27 @@ func TestLessonsTarget(t *testing.T) {
 		files  map[string]string // a value of "-> x" is a symlink to x
 		claude bool
 		file   string
-		imp    bool
+		imp    string
 		refuse string
 	}{
-		"agents, claude":           {map[string]string{"AGENTS.md": "a"}, true, "AGENTS.md", true, ""},
-		"agents, codex":            {map[string]string{"AGENTS.md": "a"}, false, "AGENTS.md", false, ""},
-		"claude only":              {map[string]string{"CLAUDE.md": "c"}, false, "CLAUDE.md", false, ""},
-		"both, claude":             {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
-		"both, codex":              {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, false, "AGENTS.md", false, ""},
-		"claude loads agents":      {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "# C\n\n@AGENTS.md\n"}, true, "AGENTS.md", false, ""},
-		"agents links to claude":   {map[string]string{"AGENTS.md": "-> CLAUDE.md", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
-		"claude links to agents":   {map[string]string{"CLAUDE.md": "-> AGENTS.md", "AGENTS.md": "a"}, true, "AGENTS.md", false, ""},
-		"agents links in the repo": {map[string]string{"AGENTS.md": "-> docs/agents.md", "docs/agents.md": "a"}, false, "docs/agents.md", false, ""},
-		"neither, claude":          {nil, true, "AGENTS.md", true, ""},
-		"neither, codex":           {nil, false, "AGENTS.md", false, ""},
-		"link out":                 {map[string]string{"AGENTS.md": "-> ../x.md"}, true, "", false, "symlink out of the repo"},
-		"link absolute":            {map[string]string{"AGENTS.md": "-> /etc/passwd"}, true, "", false, "symlink out of the repo"},
-		"link to nothing":          {map[string]string{"AGENTS.md": "-> gone.md"}, true, "", false, "isn't a plain file tracked"},
-		"link to a folder":         {map[string]string{"AGENTS.md": "-> docs", "docs/x.md": "x"}, true, "", false, "isn't a plain file tracked"},
-		"claude links out":         {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "-> ../../c"}, true, "", false, "symlink out of the repo"},
+		"agents, claude":           {map[string]string{"AGENTS.md": "a"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"agents, codex":            {map[string]string{"AGENTS.md": "a"}, false, "AGENTS.md", "", ""},
+		"claude only":              {map[string]string{"CLAUDE.md": "c"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"claude only, codex":       {map[string]string{"CLAUDE.md": "c"}, false, "AGENTS.md", "", ""},
+		"both, claude":             {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"both, codex":              {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, false, "AGENTS.md", "", ""},
+		"claude loads agents":      {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "# C\n\n@AGENTS.md\n"}, true, "AGENTS.md", "", ""},
+		"claude links elsewhere":   {map[string]string{"CLAUDE.md": "-> docs/claude.md", "docs/claude.md": "c"}, true, "AGENTS.md", "docs/claude.md", ""},
+		"agents links to claude":   {map[string]string{"AGENTS.md": "-> CLAUDE.md", "CLAUDE.md": "c"}, true, "CLAUDE.md", "", ""},
+		"claude links to agents":   {map[string]string{"CLAUDE.md": "-> AGENTS.md", "AGENTS.md": "a"}, true, "AGENTS.md", "", ""},
+		"agents links in the repo": {map[string]string{"AGENTS.md": "-> docs/agents.md", "docs/agents.md": "a"}, false, "docs/agents.md", "", ""},
+		"neither, claude":          {nil, true, "AGENTS.md", "CLAUDE.md", ""},
+		"neither, codex":           {nil, false, "AGENTS.md", "", ""},
+		"link out":                 {map[string]string{"AGENTS.md": "-> ../x.md"}, true, "", "", "symlink out of the repo"},
+		"link absolute":            {map[string]string{"AGENTS.md": "-> /etc/passwd"}, true, "", "", "symlink out of the repo"},
+		"link to nothing":          {map[string]string{"AGENTS.md": "-> gone.md"}, true, "", "", "isn't a plain file tracked"},
+		"link to a folder":         {map[string]string{"AGENTS.md": "-> docs", "docs/x.md": "x"}, true, "", "", "isn't a plain file tracked"},
+		"claude links out":         {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "-> ../../c"}, true, "", "", "symlink out of the repo"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -503,7 +505,7 @@ func TestLessonsTarget(t *testing.T) {
 				return
 			}
 			if err != nil || file != c.file || imp != c.imp {
-				t.Fatalf("= %s %t %v, want %s %t", file, imp, err, c.file, c.imp)
+				t.Fatalf("= %s %q %v, want %s %q", file, imp, err, c.file, c.imp)
 			}
 		})
 	}
@@ -529,6 +531,79 @@ func TestLessonsFollowTheLink(t *testing.T) {
 	}
 	if p := e.claude.prompts["learn"][0]; !strings.Contains(p, "read the repository's `CLAUDE.md`") || strings.Count(p, "Run the tests.") != 1 {
 		t.Fatalf("learn prompt:\n%s", p)
+	}
+}
+
+// A repo with its own CLAUDE.md gets its lessons in AGENTS.md, and its
+// CLAUDE.md keeps what it says and gains a line loading AGENTS.md.
+func TestLessonsLoadedFromClaudeMD(t *testing.T) {
+	e := setupWith(t, map[string]string{"CLAUDE.md": "# Claude\n\nRun the tests.\n"})
+	e.built(t, 1)
+	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
+	e.claude.learn = []string{oneLesson}
+	e.poll(t)
+	if md := git(t, e.remote, "show", LessonsBranch+":AGENTS.md"); !strings.Contains(md, "- Check arithmetic helpers for integer overflow.") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); md != "# Claude\n\nRun the tests.\n\n@AGENTS.md" {
+		t.Fatalf("CLAUDE.md:\n%s", md)
+	}
+}
+
+// learnFrom has a human edit item n's PR, then runs the day's learn job
+// with the scripted lessons.
+func (e *env) learnFrom(t *testing.T, n int, lessons ...string) {
+	t.Helper()
+	var ls []string
+	for _, l := range lessons {
+		ls = append(ls, fmt.Sprintf(`{"line":%q,"why":"seen in #1","evidence":["#1"]}`, l))
+	}
+	e.built(t, n)
+	e.merge(fmt.Sprintf("factory/issue-%d", n), e.humanPush(t, fmt.Sprintf("factory/issue-%d", n), "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
+	e.claude.learn = append(e.claude.learn, `{"lessons":[`+strings.Join(ls, ",")+`],"skip_reason":""}`)
+	learnDay = func() string { return fmt.Sprintf("day %d", n) }
+	t.Cleanup(func() { learnDay = store.Today })
+	e.poll(t)
+}
+
+// A lessons PR opened before lessons moved to AGENTS.md has its lines in
+// CLAUDE.md: they stay proposed, not declined, and aren't proposed again.
+// The PR says why it changes CLAUDE.md, and adds the import once.
+func TestLessonsInClaudeMDOnAnOpenPRStayProposed(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
+	e.learnFrom(t, 1, "Check for overflow.")
+	if pr := e.gh.prs[LessonsBranch]; pr == nil || !strings.Contains(pr.Body, "adds an `@AGENTS.md` line to `CLAUDE.md`") {
+		t.Fatalf("lessons PR = %+v", pr)
+	}
+	// The line moves to CLAUDE.md, as the old code put it.
+	e.humanPush(t, LessonsBranch, "AGENTS.md", "# Agents\n")
+	e.humanPush(t, LessonsBranch, "CLAUDE.md", "# Claude\n\n@AGENTS.md\n\n## Lessons from the factory\n\n- Check for overflow.\n")
+	e.learnFrom(t, 2, "Check for overflow.", "Run go vet.")
+	ls, _ := e.p.Store.Lessons(ctx, "o/r")
+	for _, l := range ls {
+		if l.Status != store.LessonProposed {
+			t.Errorf("%s is %s", l.Line, l.Status)
+		}
+	}
+	if md := e.lessonsMD(t); strings.Contains(md, "overflow") || !strings.Contains(md, "- Run go vet.") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); strings.Count(md, "@AGENTS.md") != 1 {
+		t.Fatalf("CLAUDE.md:\n%s", md)
+	}
+}
+
+// An import added on base since the lessons PR opened isn't added again
+// on the PR's branch.
+func TestLessonsImportAddedOnBaseIsNotRepeated(t *testing.T) {
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
+	e.learnFrom(t, 1, "Check for overflow.")
+	e.humanPush(t, LessonsBranch, "CLAUDE.md", "# Claude\n")
+	e.humanPush(t, "main", "CLAUDE.md", "# Claude\n\n@AGENTS.md\n")
+	e.learnFrom(t, 2, "Run go vet.")
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); md != "# Claude" {
+		t.Fatalf("CLAUDE.md on the branch:\n%s", md)
 	}
 }
 

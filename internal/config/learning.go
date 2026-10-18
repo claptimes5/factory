@@ -7,8 +7,8 @@ import (
 
 // Learning is the learn loop: from the changes you push to a factory PR
 // before merging it, and from findings reviewers repeat across items, a
-// daily learn job proposes lines for the repo's AGENTS.md (or CLAUDE.md) in a PR of its
-// own.
+// daily learn job proposes lines for the repo's AGENTS.md, which its
+// CLAUDE.md loads, in a PR of its own.
 type Learning struct {
 	// Enabled is on unless set to false.
 	Enabled *bool `yaml:"enabled,omitempty"`

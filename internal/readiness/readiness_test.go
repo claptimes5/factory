@@ -257,3 +257,59 @@ func TestServicesHint(t *testing.T) {
 		t.Fatalf("with services: %s", titles(r, Blocker))
 	}
 }
+
+func TestClaudeLoadsAgents(t *testing.T) {
+	const gap = "CLAUDE.md doesn't load AGENTS.md"
+	for name, c := range map[string]struct {
+		files  map[string]string // a value of "-> x" is a symlink to x
+		claude bool
+		gap    bool
+	}{
+		"neither":               {nil, true, true},
+		"codex builds":          {nil, false, false},
+		"no import":             {map[string]string{"CLAUDE.md": "# Rules\n"}, true, true},
+		"imports":               {map[string]string{"CLAUDE.md": "# Rules\n\n@AGENTS.md\n"}, true, false},
+		"agents links":          {map[string]string{"CLAUDE.md": "rules", "AGENTS.md": "-> CLAUDE.md"}, true, false},
+		"claude links":          {map[string]string{"AGENTS.md": "rules", "CLAUDE.md": "-> AGENTS.md"}, true, false},
+		"links to an import":    {map[string]string{"docs/claude.md": "@AGENTS.md", "CLAUDE.md": "-> docs/claude.md"}, true, false},
+		"links out of the repo": {map[string]string{"CLAUDE.md": "-> ../outside.md"}, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := tree(t, "go.mod", "x_test.go")
+			os.WriteFile(filepath.Join(filepath.Dir(dir), "outside.md"), []byte("@AGENTS.md"), 0o644)
+			for f, body := range c.files {
+				p := filepath.Join(dir, f)
+				os.MkdirAll(filepath.Dir(p), 0o755)
+				if target, ok := strings.CutPrefix(body, "-> "); ok {
+					os.Symlink(target, p)
+				} else {
+					os.WriteFile(p, []byte(body), 0o644)
+				}
+			}
+			exec, _ := fails()
+			r := Assess(context.Background(), Input{Repo: repo("go mod download", "test"), Dir: dir, Exec: exec, Claude: c.claude})
+			if got := strings.Contains(titles(r, Gap), gap); got != c.gap {
+				t.Fatalf("gap = %t, want %t:\n%s", got, c.gap, r.Text())
+			}
+		})
+	}
+}
+
+func TestImportsAgents(t *testing.T) {
+	for md, want := range map[string]bool{
+		"@AGENTS.md":                        true,
+		"# Rules\n\nSee @AGENTS.md.\n":      true,
+		"Read @./AGENTS.md, then start.":    true,
+		"```\n@AGENTS.md\n```\n":            false,
+		"~~~md\n@AGENTS.md\n~~~\n":          false,
+		"Write `@AGENTS.md` to import it.":  false,
+		"<!-- @AGENTS.md -->":               false,
+		"```\nexample\n```\n\n@AGENTS.md\n": true,
+		"mail me@AGENTS.md":                 false,
+		"@AGENTS.mdx":                       false,
+	} {
+		if got := ImportsAgents(md); got != want {
+			t.Errorf("%q: %t, want %t", md, got, want)
+		}
+	}
+}

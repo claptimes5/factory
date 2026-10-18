@@ -291,18 +291,19 @@ builder would follow next time, not one fix restated. It may propose none. A
 lone finding waits, for up to 30 days, for one like it. It reads your five
 newest edits and ten findings per group at most; older ones are set aside.
 
-The lines go under a `## Lessons from the factory` section of the file your
-builders read:
+The lines go under a `## Lessons from the factory` section of `AGENTS.md`,
+which Codex reads. If it's a symlink to another file tracked in the repo,
+the lines go in that file. A symlink out of the repo, or to anything but a
+plain tracked file, is refused. With no `AGENTS.md`, the PR makes one.
 
-- `AGENTS.md`, which Codex reads. If it's a symlink to another file tracked
-  in the repo (often `CLAUDE.md`), the lines go in that file. A symlink out
-  of the repo, or to anything but a plain tracked file, is refused.
-- `CLAUDE.md` instead when Claude builds (Claude Code reads `CLAUDE.md`,
-  not `AGENTS.md`) and your `CLAUDE.md` doesn't load `AGENTS.md` with an
-  `@AGENTS.md` line, or when it's the only one of the two.
-- With neither, a new `AGENTS.md`, and when Claude builds, a new
-  `CLAUDE.md` of `@AGENTS.md` so Claude reads it too. The same goes when
-  there's an `AGENTS.md` and no `CLAUDE.md`.
+Claude Code reads `CLAUDE.md`, not `AGENTS.md`. So when Claude builds and
+your `CLAUDE.md` doesn't load `AGENTS.md`, the same PR adds an `@AGENTS.md`
+line at its end (or makes a `CLAUDE.md` of just that line), so one file
+steers both. An import inside a code block or comment doesn't count, as it
+doesn't for Claude. Take the line out and the next lessons PR adds it
+again; to keep Claude off `AGENTS.md`, route builds to Codex. Set this up when you add a repo, and the readiness check
+reports it as a gap until you do (see
+[Starting a new project](new-project.md)).
 
 The daemon, not the agent, makes the change: on the `factory/lessons`
 branch, in a draft PR labeled `factory:awaiting-you`. If that branch has

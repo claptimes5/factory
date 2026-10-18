@@ -49,7 +49,7 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err != nil {
 		return nil, err
 	}
-	r := readiness.Assess(ctx, readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export,
+	r := readiness.Assess(ctx, readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
 		Exec: func(ctx context.Context, dir, cmd string, install bool) (int, string, error) {
 			fmt.Fprintf(out, "  running %s\n", cmd)
 			return p.Exec(ctx, repo, dir, cmd, install)
