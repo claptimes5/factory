@@ -57,6 +57,9 @@ func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.Effort != "" {
 		args = append(args, "--effort", req.Effort)
 	}
+	if req.Fast {
+		args = append(args, "--settings", `{"fastMode":true}`)
+	}
 	if req.Resume != "" {
 		args = append(args, "--resume", req.Resume)
 	}

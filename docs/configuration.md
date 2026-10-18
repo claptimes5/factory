@@ -300,9 +300,11 @@ get every member repo's instructions, each labeled with its repo.
 
 ## Models and escalation
 
-`routing` picks the harness and model for each stage, such as
-`implement.S` or `review`. Triage rates each issue `XS`, `S`, `M` or `L`,
-and the item builds on the matching `implement.<size>` entry.
+`routing` picks the harness, model and effort for each step: `triage`,
+`implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
+`review.high_risk`), `critic` and `orchestrate`. Triage rates each issue
+`XS`, `S`, `M` or `L`, and the item builds on the matching
+`implement.<size>` entry.
 
 The defaults lean on the cheap models where a miss is cheap to retry:
 
@@ -317,6 +319,28 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 
 The daemon refuses a config where a reviewer could run the same harness
 and model as the builder it reviews.
+
+**Fast mode.** `fast: true` on a Claude route runs Claude Code's fast mode,
+which answers up to 2.5 times faster at a higher price per token:
+
+```yaml
+routing:
+  implement.L: {harness: claude, model: opus, fast: true}
+```
+
+Only Opus 4.8 and Opus 5 and later have it, so the daemon refuses `fast` on
+any other model. If escalation moves a job to a model without it, that job
+runs at normal speed. A fast job's dollar cap is its usual budget times
+`budgets.fast_multiplier` (2 by default); raise it if fast jobs stop at
+their cap. The critic doesn't inherit `fast` from `implement.L`; give
+`routing.critic` its own entry for that.
+
+The job table and `factory status` show `opus (fast)` for a job that asked
+for fast mode. Claude Code runs at normal speed instead if your account
+doesn't have fast mode turned on, or its fast-mode limit is reached. On a
+subscription it draws on usage credits, not the plan's limits. The cost
+recorded is what Claude Code reports, so check it against your console the
+first few times.
 
 **Session resume.** With the Docker runner, an implement retry on the same
 model continues the previous attempt's Claude session. This is best

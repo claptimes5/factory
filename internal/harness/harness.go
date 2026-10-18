@@ -21,6 +21,7 @@ type RunRequest struct {
 	Name      string // container name
 	Stage     string // triage|implement|review|...
 	Model     string
+	Fast      bool // Claude only: fast mode
 	Effort    string
 	Prompt    string
 	Workdir   string // host path of the checkout

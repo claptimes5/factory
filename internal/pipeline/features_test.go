@@ -368,3 +368,29 @@ func TestNoPushWhileAutoMergeCantBeTurnedOff(t *testing.T) {
 		t.Fatalf("stage = %s", got.Stage)
 	}
 }
+
+func TestFastModeJobs(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	r := e.p.Cfg.Routing["implement.M"]
+	r.Model, r.Fast = "opus", true
+	e.p.Cfg.Routing["implement.M"] = r
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 1).ID})
+	for _, j := range jobs {
+		if want := j.Kind == "implement"; j.Fast != want {
+			t.Errorf("%s job on %s: fast = %v", j.Kind, j.Model, j.Fast)
+		}
+		if j.Kind == "implement" && j.BudgetUSD != 2*e.p.Cfg.Budgets.PerJob["M"] {
+			t.Errorf("a fast job's budget should double: $%.2f", j.BudgetUSD)
+		}
+	}
+	if body := e.gh.comments[e.item(t, 1).PRNumber][0]; !strings.Contains(body, "| opus (fast) |") {
+		t.Errorf("PR body should show fast mode:\n%s", body)
+	}
+}

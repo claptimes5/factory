@@ -125,9 +125,9 @@ func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone strin
 		switch j.Kind {
 		case "implement":
 			if j.Attempt > 1 {
-				return fmt.Sprintf("started building with %s, attempt %d", j.Model, j.Attempt), "live"
+				return fmt.Sprintf("started building with %s, attempt %d", j.ModelLabel(), j.Attempt), "live"
 			}
-			return "started building with " + j.Model, "live"
+			return "started building with " + j.ModelLabel(), "live"
 		case "review":
 			return j.Harness + " started reviewing", "live"
 		case "critic":
