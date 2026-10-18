@@ -427,13 +427,16 @@ the diff guard or `proves_fix`, is inherited. Set `proves_fix: none`,
 
 ### Coverage floor
 
-`gates.coverage` runs, with coverage, the tests of every package whose
+`gates.coverage` runs, with coverage, the tests of every Go package whose
 code the change touches, on the base and on the change. A package can't
 end up less covered than on the base (`coverage_slack: 1` allows a drop of
-one point). Packages the change adds have no floor. If the base can't be
-measured, because its tests fail, nothing is held against the change.
-The check reads Go's `coverage: N% of statements` lines, or `name N%`
-lines from a script of your own. The builder is told the floor exists.
+one point). Packages compare by directory, so renaming the module doesn't
+reset them. A package the change adds has no floor, but it must have some
+tests. A package the base can't measure, because its tests fail, has no
+floor either. Vendored code, generated files (`// Code generated … DO NOT
+EDIT.`) and nested modules don't count. The check reads Go's `coverage: N%
+of statements` lines; a script of your own can print `dir N%` lines
+instead. The builder is told the floor exists.
 
 ```yaml
 gates:
