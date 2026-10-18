@@ -110,9 +110,9 @@ func ruby(s *Suggestion, read func(string) string, has func(string) bool, add fu
 	}
 	switch {
 	case gem("pg"):
-		s.Notes = append(s.Notes, "It uses PostgreSQL. The factory can't start a database for jobs yet, so tests that need one will fail until it can.")
+		s.Notes = append(s.Notes, "It uses PostgreSQL. Declare the database under the repo's services in factory.yaml, or tests that need it will fail.")
 	case gem("mysql2") || gem("trilogy"):
-		s.Notes = append(s.Notes, "It uses MySQL. The factory can't start a database for jobs yet, so tests that need one will fail until it can.")
+		s.Notes = append(s.Notes, "It uses MySQL. Declare the database under the repo's services in factory.yaml, or tests that need it will fail.")
 	}
 	return stack
 }

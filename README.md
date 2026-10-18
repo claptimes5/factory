@@ -58,14 +58,14 @@ and admin rights on the repo you want the factory to work on.
 4. **Run `./factory serve`.** This is the daemon. To keep it running across
    reboots, [run it as a service](docs/setup.md#running-it-as-a-service).
 
-5. **Open the dashboard** at http://127.0.0.1:8080/app/.
+5. **Protect your repo's default branch.** This is the one thing setup
+   can't do for you. In the repo's settings, require a pull request with
+   your review before merging, plus your CI checks if it has any. The
+   factory only opens draft PRs, so this keeps every merge in your hands.
 
-6. **Label an issue `factory:ready`.** Watch it move across the board.
+6. **Open the dashboard** at http://127.0.0.1:8080/app/.
 
-7. **Protect `main`.** This is the one thing setup can't do for you. In the
-   repo's settings, require a pull request with your review and the `test`
-   and `web` checks. `.github/CODEOWNERS` makes you the owner of
-   `.github/`, `factory.yaml`, `prompts/` and the lint config.
+7. **Label an issue `factory:ready`.** Watch it move across the board.
 
 Set a spend alert on your API accounts too. The factory has its own
 [budgets](docs/configuration.md#budgets), but a second line of defense is
