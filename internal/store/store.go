@@ -426,11 +426,12 @@ type Job struct {
 	CompareID   string
 	Input       string // JSON stage input, e.g. reviewer findings for a fix round
 	HeadSHA     string // commit an implement job produced
+	Route       string // the routing entry it runs under, e.g. implement.S
 }
 
 const jobCols = `id, item_id, kind, state, harness, model, COALESCE(effort,''), attempt, COALESCE(priority,0), COALESCE(container_id,''),
 	budget_usd, COALESCE(cost_usd,0), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(verdict,''), COALESCE(error,''), COALESCE(log_path,''),
-	queued_at, COALESCE(started_at,''), COALESCE(finished_at,''), COALESCE(base_sha,''), COALESCE(branch,''), COALESCE(skillset,''), COALESCE(compare_id,''), COALESCE(input,''), COALESCE(head_sha,'')`
+	queued_at, COALESCE(started_at,''), COALESCE(finished_at,''), COALESCE(base_sha,''), COALESCE(branch,''), COALESCE(skillset,''), COALESCE(compare_id,''), COALESCE(input,''), COALESCE(head_sha,''), COALESCE(route,'')`
 
 func scanJob(r scanner) (*Job, error) {
 	var j Job
@@ -438,7 +439,7 @@ func scanJob(r scanner) (*Job, error) {
 	var st string
 	if err := r.Scan(&j.ID, &item, &j.Kind, &st, &j.Harness, &j.Model, &j.Effort, &j.Attempt, &j.Priority, &j.ContainerID,
 		&j.BudgetUSD, &j.CostUSD, &j.TokensIn, &j.TokensOut, &j.Verdict, &j.Error, &j.LogPath,
-		&j.QueuedAt, &j.StartedAt, &j.FinishedAt, &j.BaseSHA, &j.Branch, &j.Skillset, &j.CompareID, &j.Input, &j.HeadSHA); err != nil {
+		&j.QueuedAt, &j.StartedAt, &j.FinishedAt, &j.BaseSHA, &j.Branch, &j.Skillset, &j.CompareID, &j.Input, &j.HeadSHA, &j.Route); err != nil {
 		return nil, err
 	}
 	j.State = state.JobState(st)
@@ -462,10 +463,10 @@ func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
 	}
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, base_sha, branch, skillset, compare_id, input)
-			VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, base_sha, branch, skillset, compare_id, input, route)
+			VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			j.ItemID, j.Kind, j.Harness, j.Model, nullable(j.Effort), j.Attempt, j.Priority, j.BudgetUSD, Now(),
-			nullable(j.BaseSHA), nullable(j.Branch), nullable(j.Skillset), nullable(j.CompareID), nullable(j.Input))
+			nullable(j.BaseSHA), nullable(j.Branch), nullable(j.Skillset), nullable(j.CompareID), nullable(j.Input), nullable(j.Route))
 		if err != nil {
 			return err
 		}

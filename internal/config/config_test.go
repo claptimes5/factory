@@ -2,6 +2,7 @@ package config
 
 import (
 	"gopkg.in/yaml.v3"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -309,5 +310,58 @@ func TestCostOfPricesCachedInput(t *testing.T) {
 	c.Pricing["plain"] = Price{InputPerMTok: 1, OutputPerMTok: 2}
 	if got := c.CostOf("plain", 1_000_000, 500_000, 0); got != 1 {
 		t.Errorf("CostOf without a cached price = %v, want 1", got)
+	}
+}
+
+func TestStepInstructions(t *testing.T) {
+	c := load(t)
+	dir := t.TempDir()
+	c.SkillsDir = dir
+	if err := os.MkdirAll(dir+"/go/tdd", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go/tdd/SKILL.md", []byte("---\nname: tdd\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/style.md", []byte("Keep functions short.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := c.Routing["implement.M"]
+	r.Skills, r.Use, r.Instructions, r.InstructionsFile = "go", []string{"tdd"}, "Prefer table tests.", dir+"/style.md"
+	c.Routing["implement.M"] = r
+	c.Repos[0].Instructions = map[string]string{"implement": "Run make generate after editing the schema."}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.StepInstructions("implement.M", "implement", "claptimes5/factory")
+	want := "Use these skills from your skills directory, in this order: tdd.\n\nPrefer table tests.\n\nKeep functions short.\n\nRun make generate after editing the schema."
+	if err != nil || got != want {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, _ := c.StepInstructions("review", "review", "claptimes5/factory"); got != "" {
+		t.Fatalf("review got %q", got)
+	}
+
+	for name, mutate := range map[string]func(c *Config){
+		"missing skill": func(c *Config) { r := c.Routing["implement.M"]; r.Use = []string{"nope"}; c.Routing["implement.M"] = r },
+		"use without set": func(c *Config) {
+			r := c.Routing["implement.M"]
+			r.Skills = ""
+			c.Routing["implement.M"] = r
+		},
+		"missing file": func(c *Config) {
+			r := c.Routing["implement.M"]
+			r.InstructionsFile = dir + "/gone.md"
+			c.Routing["implement.M"] = r
+		},
+		"unknown step": func(c *Config) { c.Repos[0].Instructions = map[string]string{"deploy": "x"} },
+	} {
+		bad := *c
+		bad.Routing = maps.Clone(c.Routing)
+		bad.Repos = slices.Clone(c.Repos)
+		mutate(&bad)
+		if err := bad.Validate(); err == nil {
+			t.Errorf("%s: want a validation error", name)
+		}
 	}
 }
