@@ -94,6 +94,9 @@ type Input struct {
 	SHA  string
 	Dir  string
 	Exec Exec
+	// Claude says Claude Code builds for the repo, so its CLAUDE.md
+	// should load AGENTS.md.
+	Claude bool
 }
 
 // slowTests is when a test run starts to hold up every job.
@@ -265,6 +268,10 @@ func Assess(ctx context.Context, in Input) *Report {
 			Issue: &Issue{Key: "feature-map", Title: "Start a feature map",
 				Body: "Create `features.yaml` at the repo root listing the product's user-facing features, under `features:`. For each: `name`, a one-line `description`, `paths` (the files, directories ending in `/`, or globs that implement it), `tests` (the test files that prove it), and where it's cheap, `check` (a command that runs just those tests) and `risk` (`low`, `medium` or `high`; high for auth, payments, data loss). Cover the main features first; mark any feature with no tests with `tests: []` rather than leaving it out."}})
 	}
+	if in.Claude && !loadsAgents(in.Dir) {
+		r.add(Finding{Level: Gap, Area: "instructions", Title: "CLAUDE.md doesn't load AGENTS.md",
+			Detail: "Claude Code reads CLAUDE.md, not AGENTS.md, so Claude builders miss what AGENTS.md says, including the lessons the factory proposes there. Add a line `@AGENTS.md` to CLAUDE.md (create it if there's none). Builders can't edit these files, so this one is yours; the factory's next lessons PR adds it too."})
+	}
 	if ci(files) {
 		r.add(Finding{Level: Good, Area: "ci", Title: "CI runs on the repo"})
 	} else {
@@ -274,6 +281,31 @@ func Assess(ctx context.Context, in Input) *Report {
 
 	return r.finish()
 }
+
+// loadsAgents says whether Claude, reading CLAUDE.md in dir, reads
+// AGENTS.md too: it imports it, or one links to the other.
+func loadsAgents(dir string) bool {
+	cl, agents := filepath.Join(dir, "CLAUDE.md"), filepath.Join(dir, "AGENTS.md")
+	if a, err := os.Stat(agents); err == nil {
+		if c, err := os.Stat(cl); err == nil && os.SameFile(a, c) {
+			return true
+		}
+	}
+	// A CLAUDE.md that links to another file in the repo is read there.
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	p, err := filepath.EvalSymlinks(cl)
+	if err != nil || !strings.HasPrefix(p, root+string(filepath.Separator)) {
+		return false
+	}
+	b, err := readCapped(p)
+	return err == nil && importsAgents.Match(b)
+}
+
+// importsAgents finds a CLAUDE.md line that loads AGENTS.md into Claude.
+var importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md(\s|$)`)
 
 // finish scores the report.
 func (r *Report) finish() *Report {

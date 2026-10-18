@@ -24,7 +24,7 @@ import (
 // and blocking findings that repeat across items, become signals. Once a
 // day per repo, when there's enough to go on, a read-only learn job turns
 // them into lines for the instructions file the repo's builders read
-// (AGENTS.md, or CLAUDE.md; see lessonsTarget), and the daemon proposes
+// (AGENTS.md, which CLAUDE.md loads; see lessonsTarget), and the daemon proposes
 // those in a draft PR of its own on LessonsBranch. That PR is no item's,
 // so it never auto-merges and no builder ever runs on its branch.
 
@@ -595,7 +595,7 @@ func (p *Pipeline) refuseLearn(ctx context.Context, j *store.Job, in LearnInput,
 // lessonsPlan is where a repo's lessons go: the file and the PR's branch.
 type lessonsPlan struct {
 	File   string     // the instructions file, such as AGENTS.md
-	Import bool       // and a new CLAUDE.md of "@AGENTS.md", so Claude reads it too
+	Import string     // the CLAUDE.md to add "@AGENTS.md" to, so Claude reads it too; or ""
 	Branch string     // LessonsBranch, or one with a suffix
 	Open   *github.PR // the open lessons PR on Branch, or nil
 }
@@ -612,7 +612,7 @@ func (p *Pipeline) lessonsPlan(ctx context.Context, repo string, ws *Workspace) 
 	if open != nil {
 		rev = "refs/remotes/origin/" + branch
 	}
-	file, imp, err := lessonsTarget(ctx, g, ws.Repo, rev, p.claudeBuilds())
+	file, imp, err := lessonsTarget(ctx, g, ws.Repo, rev, p.ClaudeBuilds())
 	if err != nil {
 		return nil, err
 	}
@@ -645,9 +645,9 @@ func lessonsBranch(ctx context.Context, g *Git, gh GitHub, ws *Workspace) (strin
 	return "", nil, refusal{fmt.Sprintf("every %s branch has commits of someone else's", LessonsBranch)}
 }
 
-// claudeBuilds says whether any build runs on Claude Code, which reads
+// ClaudeBuilds says whether any build runs on Claude Code, which reads
 // CLAUDE.md and not AGENTS.md.
-func (p *Pipeline) claudeBuilds() bool {
+func (p *Pipeline) ClaudeBuilds() bool {
 	for k, r := range p.Cfg.Routing {
 		if strings.HasPrefix(k, "implement") && r.Harness == "claude" {
 			return true
@@ -659,39 +659,47 @@ func (p *Pipeline) claudeBuilds() bool {
 // importsAgents finds a CLAUDE.md line that loads AGENTS.md into Claude.
 var importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md(\s|$)`)
 
-// lessonsTarget is the file at rev that lessons go in: the one builders
-// read. AGENTS.md (Codex's), or the tracked file it links to; but
-// CLAUDE.md when Claude builds and CLAUDE.md doesn't load AGENTS.md, or
-// when it's the only one. With neither, a new AGENTS.md, and with imp set
-// a new CLAUDE.md loading it, so Claude builders read it too.
-func lessonsTarget(ctx context.Context, g *Git, repo, rev string, claude bool) (file string, imp bool, err error) {
-	agents, err := instructionsFile(ctx, g, repo, rev, "AGENTS.md")
+// lessonsTarget is the file at rev that lessons go in: AGENTS.md, or the
+// tracked file it links to, new when there's none. Claude Code reads
+// CLAUDE.md, not AGENTS.md, so when Claude builds, imp names the CLAUDE.md
+// (or the file it links to) that needs an "@AGENTS.md" line to load it;
+// "" when it already does, or is the same file.
+func lessonsTarget(ctx context.Context, g *Git, repo, rev string, claude bool) (file, imp string, err error) {
+	file, err = instructionsFile(ctx, g, repo, rev, "AGENTS.md")
 	if err != nil {
-		return "", false, err
+		return "", "", err
+	}
+	if file == "" {
+		file = "AGENTS.md"
+	}
+	if !claude {
+		return file, "", nil
 	}
 	cl, err := instructionsFile(ctx, g, repo, rev, "CLAUDE.md")
-	if err != nil {
-		return "", false, err
-	}
 	switch {
-	case agents != "" && cl != "":
-		if agents == cl || !claude {
-			return agents, false, nil
-		}
-		md, _, err := g.FileAt(ctx, repo, rev, cl)
-		if err != nil {
-			return "", false, err
-		}
-		if importsAgents.MatchString(md) {
-			return agents, false, nil
-		}
-		return cl, false, nil
-	case cl != "":
-		return cl, false, nil
-	case agents != "":
-		return agents, claude, nil
+	case err != nil:
+		return "", "", err
+	case cl == "":
+		return file, "CLAUDE.md", nil
+	case cl == file:
+		return file, "", nil
 	}
-	return "AGENTS.md", claude, nil
+	md, _, err := g.FileAt(ctx, repo, rev, cl)
+	if err != nil {
+		return "", "", err
+	}
+	if importsAgents.MatchString(md) {
+		return file, "", nil
+	}
+	return file, cl, nil
+}
+
+// withImport is a CLAUDE.md that loads AGENTS.md: md with the line added.
+func withImport(md string) string {
+	if md == "" {
+		return "@AGENTS.md\n"
+	}
+	return strings.TrimRight(md, "\n") + "\n\n@AGENTS.md\n"
 }
 
 // instructionsFile is the tracked plain file that name is at rev: name
@@ -737,8 +745,8 @@ func checkWritable(repo string, plan *lessonsPlan) error {
 	}
 	defer func() { _ = root.Close() }()
 	files := []string{plan.File}
-	if plan.Import {
-		files = append(files, "CLAUDE.md")
+	if plan.Import != "" {
+		files = append(files, plan.Import)
 	}
 	for _, f := range files {
 		if _, err := root.Lstat(f); errors.Is(err, fs.ErrNotExist) {
@@ -906,11 +914,15 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		return err
 	}
 	paths := []string{plan.File}
-	if plan.Import {
-		if err := writePlain(root, "CLAUDE.md", []byte("@AGENTS.md\n")); err != nil {
+	if plan.Import != "" {
+		md, _, err := g.FileAt(ctx, ws.Repo, "HEAD", plan.Import)
+		if err != nil {
 			return err
 		}
-		paths = append(paths, "CLAUDE.md")
+		if err := writePlain(root, plan.Import, []byte(withImport(md))); err != nil {
+			return err
+		}
+		paths = append(paths, plan.Import)
 	}
 	what := fmt.Sprintf("%d %s for %s", len(add), plural(len(add), "lesson", "lessons"), plan.File)
 	sha, err := g.commitFiles(ctx, ws.Repo, fmt.Sprintf("factory: %s\n\nLearned by job %d.", what, j.ID), paths...)

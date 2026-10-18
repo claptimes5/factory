@@ -532,8 +532,9 @@ routing:
 
 ## Learning from your edits
 
-The factory proposes lines for each repo's agent instructions (`AGENTS.md`,
-or `CLAUDE.md` for Claude builders) from the changes you make to its PRs and from findings its reviewers repeat (see
+The factory proposes lines for each repo's `AGENTS.md` (loaded from
+`CLAUDE.md` for Claude builders) from the changes you make to its PRs and
+from findings its reviewers repeat (see
 [Learning from your edits](quality.md#learning-from-your-edits)). It's on
 unless you turn it off:
 

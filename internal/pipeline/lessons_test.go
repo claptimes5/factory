@@ -459,25 +459,27 @@ func TestLessonsTarget(t *testing.T) {
 		files  map[string]string // a value of "-> x" is a symlink to x
 		claude bool
 		file   string
-		imp    bool
+		imp    string
 		refuse string
 	}{
-		"agents, claude":           {map[string]string{"AGENTS.md": "a"}, true, "AGENTS.md", true, ""},
-		"agents, codex":            {map[string]string{"AGENTS.md": "a"}, false, "AGENTS.md", false, ""},
-		"claude only":              {map[string]string{"CLAUDE.md": "c"}, false, "CLAUDE.md", false, ""},
-		"both, claude":             {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
-		"both, codex":              {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, false, "AGENTS.md", false, ""},
-		"claude loads agents":      {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "# C\n\n@AGENTS.md\n"}, true, "AGENTS.md", false, ""},
-		"agents links to claude":   {map[string]string{"AGENTS.md": "-> CLAUDE.md", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
-		"claude links to agents":   {map[string]string{"CLAUDE.md": "-> AGENTS.md", "AGENTS.md": "a"}, true, "AGENTS.md", false, ""},
-		"agents links in the repo": {map[string]string{"AGENTS.md": "-> docs/agents.md", "docs/agents.md": "a"}, false, "docs/agents.md", false, ""},
-		"neither, claude":          {nil, true, "AGENTS.md", true, ""},
-		"neither, codex":           {nil, false, "AGENTS.md", false, ""},
-		"link out":                 {map[string]string{"AGENTS.md": "-> ../x.md"}, true, "", false, "symlink out of the repo"},
-		"link absolute":            {map[string]string{"AGENTS.md": "-> /etc/passwd"}, true, "", false, "symlink out of the repo"},
-		"link to nothing":          {map[string]string{"AGENTS.md": "-> gone.md"}, true, "", false, "isn't a plain file tracked"},
-		"link to a folder":         {map[string]string{"AGENTS.md": "-> docs", "docs/x.md": "x"}, true, "", false, "isn't a plain file tracked"},
-		"claude links out":         {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "-> ../../c"}, true, "", false, "symlink out of the repo"},
+		"agents, claude":           {map[string]string{"AGENTS.md": "a"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"agents, codex":            {map[string]string{"AGENTS.md": "a"}, false, "AGENTS.md", "", ""},
+		"claude only":              {map[string]string{"CLAUDE.md": "c"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"claude only, codex":       {map[string]string{"CLAUDE.md": "c"}, false, "AGENTS.md", "", ""},
+		"both, claude":             {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, true, "AGENTS.md", "CLAUDE.md", ""},
+		"both, codex":              {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, false, "AGENTS.md", "", ""},
+		"claude loads agents":      {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "# C\n\n@AGENTS.md\n"}, true, "AGENTS.md", "", ""},
+		"claude links elsewhere":   {map[string]string{"CLAUDE.md": "-> docs/claude.md", "docs/claude.md": "c"}, true, "AGENTS.md", "docs/claude.md", ""},
+		"agents links to claude":   {map[string]string{"AGENTS.md": "-> CLAUDE.md", "CLAUDE.md": "c"}, true, "CLAUDE.md", "", ""},
+		"claude links to agents":   {map[string]string{"CLAUDE.md": "-> AGENTS.md", "AGENTS.md": "a"}, true, "AGENTS.md", "", ""},
+		"agents links in the repo": {map[string]string{"AGENTS.md": "-> docs/agents.md", "docs/agents.md": "a"}, false, "docs/agents.md", "", ""},
+		"neither, claude":          {nil, true, "AGENTS.md", "CLAUDE.md", ""},
+		"neither, codex":           {nil, false, "AGENTS.md", "", ""},
+		"link out":                 {map[string]string{"AGENTS.md": "-> ../x.md"}, true, "", "", "symlink out of the repo"},
+		"link absolute":            {map[string]string{"AGENTS.md": "-> /etc/passwd"}, true, "", "", "symlink out of the repo"},
+		"link to nothing":          {map[string]string{"AGENTS.md": "-> gone.md"}, true, "", "", "isn't a plain file tracked"},
+		"link to a folder":         {map[string]string{"AGENTS.md": "-> docs", "docs/x.md": "x"}, true, "", "", "isn't a plain file tracked"},
+		"claude links out":         {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "-> ../../c"}, true, "", "", "symlink out of the repo"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -503,7 +505,7 @@ func TestLessonsTarget(t *testing.T) {
 				return
 			}
 			if err != nil || file != c.file || imp != c.imp {
-				t.Fatalf("= %s %t %v, want %s %t", file, imp, err, c.file, c.imp)
+				t.Fatalf("= %s %q %v, want %s %q", file, imp, err, c.file, c.imp)
 			}
 		})
 	}
@@ -529,6 +531,22 @@ func TestLessonsFollowTheLink(t *testing.T) {
 	}
 	if p := e.claude.prompts["learn"][0]; !strings.Contains(p, "read the repository's `CLAUDE.md`") || strings.Count(p, "Run the tests.") != 1 {
 		t.Fatalf("learn prompt:\n%s", p)
+	}
+}
+
+// A repo with its own CLAUDE.md gets its lessons in AGENTS.md, and its
+// CLAUDE.md keeps what it says and gains a line loading AGENTS.md.
+func TestLessonsLoadedFromClaudeMD(t *testing.T) {
+	e := setupWith(t, map[string]string{"CLAUDE.md": "# Claude\n\nRun the tests.\n"})
+	e.built(t, 1)
+	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
+	e.claude.learn = []string{oneLesson}
+	e.poll(t)
+	if md := git(t, e.remote, "show", LessonsBranch+":AGENTS.md"); !strings.Contains(md, "- Check arithmetic helpers for integer overflow.") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); md != "# Claude\n\nRun the tests.\n\n@AGENTS.md" {
+		t.Fatalf("CLAUDE.md:\n%s", md)
 	}
 }
 

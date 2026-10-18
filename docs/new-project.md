@@ -35,6 +35,11 @@ These are recommended from day one too:
 2. **CI** that runs the same checks, such as `.github/workflows/ci.yml`.
 3. **One end-to-end smoke test** of the main flow, such as Playwright,
    Rails system specs or an HTTP-level API test.
+4. **One instructions file for every builder.** Put the repo's conventions
+   in `AGENTS.md`, which Codex reads, and make `CLAUDE.md` load it with a
+   line `@AGENTS.md`, since Claude Code reads only `CLAUDE.md`. A new repo
+   can start with a `CLAUDE.md` of just that line. The factory adds what it
+   learns from your edits to `AGENTS.md`.
 
 ## Per stack
 
@@ -85,9 +90,10 @@ payments or data loss as `risk: high`.
   assert nothing. "No tests" and "fails on main" are blockers.
 - **Don't let tests reach the internet.** Jobs run behind an allowlist, so
   tests that do will fail.
-- **Don't add agent instruction files the factory protects,** such as
-  `CLAUDE.md`, `AGENTS.md` or `.claude/`, unless you mean to steer every
-  future reviewer. The factory's builders can't edit them.
+- **Don't add more agent instruction files than `AGENTS.md` and the
+  `CLAUDE.md` that loads it,** such as `.claude/` or nested ones, unless you
+  mean to steer every future reviewer. The factory's builders can't edit
+  them, so keep them short and set them up yourself.
 
 ## Check your work
 
