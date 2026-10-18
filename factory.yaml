@@ -31,6 +31,10 @@ routing:
   # review.medium_risk: {harness: codex, model: gpt-6.1-sol, effort: medium}
   # Checks each blocking finding before it blocks; cheap, and never a builder's model.
   verify:            {harness: codex,  model: gpt-6-luna}
+  # The security pass on changes that touch auth, input handling, commands,
+  # SQL or dependencies: its own prompt, on another vendor's model than
+  # the reviewer's. Left out, it is the critic's route (implement.L).
+  security:          {harness: claude, model: opus}
   # Cheaper low-risk review: review: {harness: codex, model: gpt-6-luna}
   # Any entry may name a skill set: a folder under skills/ mounted read-only
   # as the worker's skills directory, e.g.
@@ -42,6 +46,13 @@ routing:
 #   paired_high_risk: false   # high risk: the reviewer and the critic read the change side by side
 #   incremental: true         # after round one, review only what changed since the last review
 #   context_bytes: 20000      # a re-review also gets the whole diff when it's this small, else a file list
+
+# The security pass; see docs/configuration.md#the-security-pass.
+# security:
+#   enabled: true             # its critical findings block whatever the reviewer says
+#   paths: [...]              # globs that start a pass; left out, the defaults (auth, crypto, SQL, lockfiles, ...)
+#   extra_paths: [internal/billing/]   # added to paths
+#   content: true             # added code that runs a command, builds SQL from strings, ... starts one too
 
 escalation:
   implement: [haiku, sonnet, opus]

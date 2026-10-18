@@ -240,7 +240,7 @@ func TestSettings(t *testing.T) {
 			rows = append(rows, s.Row)
 		}
 	}
-	if strings.Join(rows, ",") != "orchestrate,triage,implement.XS,implement.S,implement.M,implement.L,review,review.high_risk,verify" {
+	if strings.Join(rows, ",") != "orchestrate,triage,implement.XS,implement.S,implement.M,implement.L,review,review.high_risk,verify,security" {
 		t.Errorf("rows = %v", rows)
 	}
 	// What can run commands or open the network isn't offered.

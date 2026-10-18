@@ -979,6 +979,10 @@ type ReviewInput struct {
 	Changed   map[string][]string `json:"changed,omitempty"`
 	Templates map[string]string   `json:"templates,omitempty"`
 	Unchecked map[string]int      `json:"unchecked,omitempty"` // revert-relevant files past maxChanged
+	// WaitsOn is a harness the review waits for besides its own: its
+	// security pass's, held when the review was last claimed. The
+	// scheduler holds the review while that harness is held.
+	WaitsOn string `json:"waits_on,omitempty"`
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
@@ -1217,7 +1221,7 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runLearn(ctx, j)
 	case "groom":
 		err = p.runGroom(ctx, j)
-	case store.KindVerify, store.KindParallelCritic:
+	case store.KindVerify, store.KindParallelCritic, store.KindSecurity:
 		// Only ever run inside a review, which starts its own again.
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "runs only inside the review that started it")
 		return
@@ -1254,6 +1258,7 @@ type PromptData struct {
 	Fence           string         // a code fence the diff cannot close
 	Round           int            // the review round
 	Earlier         string         // a re-review's open and earlier findings, fenced
+	Security        string         // why the security pass reads the change, fenced
 	Since           string         // a re-review: the commit Diff starts from, the one last reviewed
 	Context         string         // a re-review: the whole change, when small
 	ContextFence    string         // a fence Context cannot close

@@ -40,6 +40,7 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 	}}
 	e.codex.reviews = []string{pass}
 	e.claude.reviews = []string{pass}
+	e.claude.security = []string{pass}
 
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
@@ -84,6 +85,10 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 	if l := e.gh.prLabels[it.PRNumber]; !hasLabel(l, "factory:risk-high") || hasLabel(l, "factory:risk-low") {
 		t.Fatalf("PR labels = %v", l)
 	}
+	// A high-risk feature gets the security pass, which is told why.
+	if sp := e.claude.prompts["security"]; len(sp) != 1 || !strings.Contains(sp[0], "it touches Math, a high-risk feature (add.go)") {
+		t.Fatalf("security prompts %q", sp)
+	}
 }
 
 // A failing feature check fails the gates, like any other check.
@@ -124,6 +129,7 @@ func TestFeatureCheckRedOnBase(t *testing.T) {
 	e.claude.builds = []func(string) error{goodBuild}
 	e.codex.reviews = []string{pass}
 	e.claude.reviews = []string{pass}
+	e.claude.security = []string{pass}
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -339,6 +345,7 @@ func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
 	e.addIssue(1)
 	e.claude.builds = []func(string) error{goodBuild}
 	e.codex.reviews = []string{pass}
+	e.claude.security = []string{pass} // it can't rule out a high-risk feature
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}

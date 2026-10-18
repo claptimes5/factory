@@ -73,6 +73,7 @@ func TestReviewerMustDifferFromBuilder(t *testing.T) {
 	claudeReview := func(model, tiers string) string {
 		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-6.1-sol}", "review: {harness: claude, model: "+model+"}", 1)
 		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}", "", 1)
+		y = strings.Replace(y, "security:          {harness: claude, model: opus}", "", 1)
 		y = strings.Replace(y, "implement.L:       {harness: claude, model: opus}", "implement.L:       {harness: claude, model: sonnet}", 1)
 		return strings.Replace(y, "implement: [haiku, sonnet, opus]", "implement: "+tiers, 1)
 	}

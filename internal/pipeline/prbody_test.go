@@ -266,7 +266,8 @@ func TestPRDescriptionFromTemplate(t *testing.T) {
 		return goodBuild(work)
 	}}
 	e.codex.reviews = []string{pass}
-	e.claude.reviews = []string{pass} // a migration makes it high risk: the critic reads it too
+	e.claude.reviews = []string{pass}  // a migration makes it high risk: the critic reads it too
+	e.claude.security = []string{pass} // and gets a security pass
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}

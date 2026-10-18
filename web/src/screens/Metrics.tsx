@@ -74,7 +74,8 @@ export function MetricsScreen() {
       </div>
       <p className="text-xs text-muted-foreground">
         Human time: items sat {r.awaiting_human_hours.toFixed(1)} h awaiting review in total ({r.awaiting_human_mean_hours.toFixed(1)} h on average).
-        Reviewer blocks: {r.review_blocks}. The verifier refuted {pct(r.verifier_refute_rate)} of the findings it checked.
+        Reviewer blocks: {r.review_blocks}. The verifier refuted {pct(r.verifier_refute_rate)} of the findings it checked. Security passes:{" "}
+        {r.security_passes}, {r.security_blocks} of them blocking.
       </p>
       {sp.estimates.compared > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="estimate-accuracy">

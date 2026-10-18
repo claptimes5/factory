@@ -28,6 +28,7 @@ change something by hand.
 - [PR descriptions](#pr-descriptions)
 - [Claude-only review](#claude-only-review)
 - [How review checks itself](#how-review-checks-itself)
+- [The security pass](#the-security-pass)
 
 The gates, the coverage floor, risk and the feature map are in
 [Quality](quality.md). The egress allowlist and the control room's address
@@ -351,7 +352,7 @@ get every member repo's instructions, each labeled with its repo.
 
 `routing` picks the harness, model and effort for each step: `triage`,
 `implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
-`review.high_risk`), `critic`, `verify`, `orchestrate`, `tune` and `learn`. Triage rates each issue
+`review.high_risk`), `critic`, `verify`, `security`, `orchestrate`, `tune` and `learn`. Triage rates each issue
 `XS`, `S`, `M` or `L`, and the item builds on the matching
 `implement.<size>` entry.
 
@@ -367,6 +368,8 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - Reviews run on GPT-6.1 Sol, and their blocking findings are checked by
   GPT-6 Luna (`routing.verify`, see
   [How review checks itself](#how-review-checks-itself)).
+- The [security pass](#the-security-pass) runs on Opus, so a change to
+  security-sensitive code is read by both vendors' strongest models.
 
 The daemon refuses a config where a reviewer, or the verifier, could run
 the same harness and model as the builder it reviews.
@@ -558,7 +561,7 @@ values below are this repo's.
 | `triage`, `review` | Dollars per triage or review job. |
 | `verify` | Dollars per verifier run, which checks a review's blocking findings (0.5 here; left out, `triage`'s). |
 | `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. |
-| `concurrent_jobs` | Jobs running at once (3). A paired critic (`review.paired_high_risk`) runs inside its review and isn't counted. |
+| `concurrent_jobs` | Jobs running at once (3). A paired critic (`review.paired_high_risk`) or a [security pass](#the-security-pass) runs inside its review and isn't counted. |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
@@ -966,6 +969,8 @@ routing:
   implement.L:       {harness: claude, model: sonnet}
   review:            {harness: claude, model: opus}
   # drop review.high_risk, or point it at opus (or fable) too
+  # drop security (it then runs on implement.L), or point it at a model
+  # the reviewer doesn't use
 escalation:
   implement: [haiku, sonnet]
 ```
@@ -1011,3 +1016,93 @@ cancels its review.
 
 See [Review findings](quality.md#review-findings) for what happens to each
 finding.
+
+## The security pass
+
+A change to code where a mistake is an exploit gets a review of its own,
+on `routing.security` with `prompts/security.md`, beside the reviewer.
+Its critical findings block whatever the reviewer decides (see
+[Security pass](quality.md#security-pass) for when it runs and what
+happens to its findings). It is on by default; the `security` block
+changes it:
+
+```yaml
+security:
+  enabled: true
+  paths: [...]                     # left out: the defaults below
+  extra_paths: [internal/billing/] # added to paths
+  content: true                    # risky added code starts a pass too
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | `false` turns the pass off: no change gets one. |
+| `paths` | the defaults below | Globs of files whose change starts a pass. Setting it replaces the defaults. |
+| `extra_paths` | none | Globs added to `paths`, to extend the defaults without repeating them. |
+| `content` | `true` | Code a change adds that runs a command, builds SQL from strings, evaluates code, deserializes an unsafe format, writes raw HTML or turns off TLS checks starts a pass too, in any file but tests and docs. |
+
+A glob ignores case. One with no `/` matches any one part of a path, a
+directory's name or the file's: `*auth*` catches `internal/auth/check.go`,
+`AuthController.php` and `authors.go` alike (a pass that finds nothing
+is cheaper than a miss). Any other is matched from the repo's root, part
+by part, where `*` stops at `/` and a part that is only `**` matches any
+number of parts (`app/**/keys.rb`). It matches what it names and
+everything under it, so `internal/billing` and `internal/billing/` both
+name the directory; a leading `/` or `./` changes nothing. `\`, empty,
+`.` and `..` parts, and `**` inside a part (`a**b`) are refused. Tests
+and docs (`.md`, `.rst`, `.adoc`) never start a pass. `paths: []` leaves
+only `content` and the feature map to start one. The defaults:
+
+- **Authentication, sessions and permissions:** `*auth*`, `*oidc*`,
+  `*saml*`, `jwt*`, `*_jwt*`, `*login*`, `*logout*`, `*signin*`,
+  `*signup*`, `*session*`, `*cookie*`, `*password*`, `*permission*`,
+  `*rbac*`, `acl`, `acl.*`, `*accesscontrol*`, `*access_control*`,
+  `*csrf*`, `*cors*`, `*middleware*`.
+- **Cryptography, keys and secrets:** `*crypt*`, `*cipher*`, `*hmac*`,
+  `tls`, `tls.*`, `cert`, `certs`, `cert.*`, `cert_*`, `cert-*`,
+  `*certificate*`, `*.pem`, `*.key`, `*.crt`, `*.p12`, `*.pfx`, `id_rsa*`,
+  `*secret*`, `*credential*`, `*token*`, `*apikey*`, `*api_key*`, `.env`,
+  `.env.*`, `*.env`, `.npmrc`, `.pypirc`.
+- **Untrusted input, files and outbound requests:** `*sanitiz*`,
+  `*upload*`, `*download*`, `*multipart*`, `*serializ*`, `*webhook*`,
+  `*redirect*`, `*proxy*`, `*unzip*`, `*untar*`, `*archive*`.
+- **Running commands:** `exec`, `exec.*`, `exec_*`, `exec-*`, `*exec`,
+  `*exec.*`, `*_exec_*`, `*shell*`, `*subprocess*`.
+- **SQL and migrations:** `*.sql`, `*sql*`, `migrations`, `migrate`,
+  `migrate.*`.
+- **CI:** `.github/workflows/`, `.gitlab-ci.yml`.
+- **Dependencies, images and infrastructure:** `go.mod`, `go.sum`,
+  `go.work`, `vendor`, `package.json`, `package-lock.json`,
+  `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`,
+  `bun.lockb`, `requirements*.txt`, `Pipfile`, `Pipfile.lock`,
+  `poetry.lock`, `pyproject.toml`, `uv.lock`, `setup.py`, `Gemfile`,
+  `Gemfile.lock`, `*.gemspec`, `Cargo.toml`, `Cargo.lock`,
+  `composer.json`, `composer.lock`, `pom.xml`, `build.gradle`,
+  `build.gradle.kts`, `gradle.lockfile`, `*.csproj`, `packages.lock.json`,
+  `mix.exs`, `mix.lock`, `Package.swift`, `Package.resolved`,
+  `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `Containerfile`,
+  `docker-compose*.y*ml`, `*.tf`.
+
+A change to a `high` feature in the [feature map](quality.md#feature-map)
+gets a pass whatever these say.
+
+`routing.security` should be strong, and differ from the reviewer: two
+reads by the same model share its blind spots. The daemon refuses one on
+the same harness and model as `review`, `review.medium_risk` or
+`review.high_risk`, or a config where the route it would fall back to
+is a reviewer's. Left out, it is the first of `routing.critic` (else the
+strongest Claude tier) and `implement.L`, `M`, `S` and `XS` that is
+neither a reviewer's model nor one that built the item, so the pass
+never reads code its own model wrote when another will do. Each pass is capped at `budgets.review`
+and `timeouts.review`. Like any routing entry, `routing.security` can
+name skills and instructions of its own (see
+[Skills and instructions for each step](#skills-and-instructions-for-each-step)).
+
+Each pass is a job of its own, kind `security`, that runs inside its
+review like the verifier. When its harness is paused, signed out or busy
+with a job that runs one at a time, the review goes back to the queue
+without using an attempt and isn't claimed again until that harness is
+free (up to five times). When it can't start for another reason (such as
+the daily budget), fails, or ends without a valid verdict, the review
+fails: it is retried once, then the item parks. The daemon won't start without
+`prompts/security.md` while the pass is on.

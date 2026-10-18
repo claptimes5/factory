@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"slices"
 	"sort"
@@ -88,7 +89,36 @@ const maxSignedOut = 2
 // again at the same attempt: the task didn't fail, so it uses no retry and
 // parks nothing. The harness holds its jobs until it can sign in.
 func (p *Pipeline) requeueSignedOut(ctx context.Context, j *store.Job, run agentRun) bool {
-	if run.res == nil || !run.res.SignedOut || j.ItemID == nil {
+	if run.res == nil || !run.res.SignedOut {
+		return false
+	}
+	return p.requeueSame(ctx, j, run, j.Input, run.res.Error, signedOutNote, maxSignedOut)
+}
+
+// heldNote marks a review ended because its security pass's harness was
+// held: signed out, at its usage limit, or busy with a job it can't share
+// a sign-in with.
+const heldNote = " (queued again for when the security pass's harness is free)"
+
+// maxHeld is how many times in a row a review is queued again for its
+// security pass's harness. The scheduler holds it while that harness is
+// held, so it takes a race to need a second; after that it fails as usual.
+const maxHeld = 5
+
+// requeueHeld ends review job j, whose security pass can't run on harness
+// h for why, and queues it again at the same attempt, waiting on h: the
+// scheduler holds it while h is held, as it holds h's own jobs.
+func (p *Pipeline) requeueHeld(ctx context.Context, j *store.Job, in ReviewInput, h, why string) bool {
+	in.WaitsOn = h
+	b, _ := json.Marshal(in)
+	return p.requeueSame(ctx, j, agentRun{}, string(b), "the security pass can't run: "+why, heldNote, maxHeld)
+}
+
+// requeueSame ends job j as cancelled with msg+note and queues it again at
+// the same attempt with input, unless it was already queued again for
+// note max times at this attempt.
+func (p *Pipeline) requeueSame(ctx context.Context, j *store.Job, run agentRun, input, msg, note string, max int) bool {
+	if j.ItemID == nil {
 		return false
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -99,24 +129,24 @@ func (p *Pipeline) requeueSignedOut(ctx context.Context, j *store.Job, run agent
 	}
 	n := 0
 	for _, o := range prev {
-		if o.ID != j.ID && o.Attempt == j.Attempt && o.State == state.Cancelled && strings.HasSuffix(o.Error, signedOutNote) {
+		if o.ID != j.ID && o.Attempt == j.Attempt && o.State == state.Cancelled && strings.HasSuffix(o.Error, note) {
 			n++
 		}
 	}
-	if n >= maxSignedOut {
+	if n >= max {
 		return false
 	}
 	// Queued first: if that fails, the job fails as usual instead of
 	// leaving its item with no job.
 	if _, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: j.ItemID, Kind: j.Kind, Harness: j.Harness, Model: j.Model, Effort: j.Effort,
 		Attempt: j.Attempt, Priority: j.Priority, BudgetUSD: j.BudgetUSD, Branch: j.Branch, Skillset: j.Skillset, CompareID: j.CompareID,
-		Input: j.Input, Route: j.Route, Fast: j.Fast}); err != nil {
-		p.warn(err, "requeue signed-out job")
+		Input: input, Route: j.Route, Fast: j.Fast}); err != nil {
+		p.warn(err, "requeue job")
 		return false
 	}
 	// Cancelled, not failed: it says nothing about the task, so it doesn't
 	// count toward "failed twice in a row".
-	p.finish(ctx, j, run, state.Cancelled, "", run.res.Error+signedOutNote)
+	p.finish(ctx, j, run, state.Cancelled, "", msg+note)
 	p.heldHarnesses(ctx) // says so now, not on the next pass
 	return true
 }

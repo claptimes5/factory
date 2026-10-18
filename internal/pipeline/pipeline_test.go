@@ -253,6 +253,7 @@ type fakeHarness struct {
 	// verifier fails, and its findings block as unverified.
 	verifies []string
 	critics  []string // successive verdicts of a paired critic
+	security []string // successive verdicts of the security pass
 	// implVerdict replaces the builder's usual verdict.
 	implVerdict string
 }
@@ -335,6 +336,11 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, fmt.Errorf("no scripted paired critic %d", n)
 		}
 		res.Final = h.critics[n]
+	case "security":
+		if n >= len(h.security) {
+			return nil, fmt.Errorf("no scripted security pass %d", n)
+		}
+		res.Final = h.security[n]
 	case "review", "critic":
 		h.images = append(h.images, req.Images)
 		if n >= len(h.reviews) {

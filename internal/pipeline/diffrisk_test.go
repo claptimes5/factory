@@ -38,6 +38,7 @@ func TestDiffRaisesRiskAndReroutesReview(t *testing.T) {
 	e.claude.builds = []func(string) error{buildWith(map[string]string{"db/migrations/0002_users.sql": "CREATE TABLE users (id int);\n"})}
 	e.codex.reviews = []string{pass}
 	e.claude.reviews = []string{pass}
+	e.claude.security = []string{pass} // a migration gets a security pass too
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +159,7 @@ func TestNeedsPersonKeepsAutoMergeOff(t *testing.T) {
 			e.addIssue(1)
 			e.claude.builds = []func(string) error{c.build}
 			e.codex.reviews = []string{pass}
+			e.claude.security = []string{pass} // go.mod gets a security pass
 			if err := e.p.Drain(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -262,6 +264,7 @@ func TestFixRoundRaisesRisk(t *testing.T) {
 	}}
 	e.codex.reviews = []string{block, pass}
 	e.claude.reviews = []string{pass}
+	e.claude.security = []string{pass} // the migration gets a security pass
 	e.claude.verifies = []string{`{"rulings":[{"id":"F1","ruling":"confirmed","reason":"yes"}]}`}
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
@@ -289,6 +292,7 @@ func TestDiffNamesStayInert(t *testing.T) {
 	e.claude.builds = []func(string) error{buildWith(map[string]string{evil: "package x\n"})}
 	e.codex.reviews = []string{pass}
 	e.claude.reviews = []string{pass}
+	e.claude.security = []string{pass} // so does a security pass
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}

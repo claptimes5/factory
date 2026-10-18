@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/claptimes5/factory/internal/config"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -592,6 +593,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "bad job input: "+err.Error())
 		return err
 	}
+	in.WaitsOn = "" // claimed: what it waited on is free, or checked again below
 	fail := func(run agentRun, st state.JobState, msg string) error {
 		if p.stopIfCancelled(ctx, j, it, run) {
 			return nil
@@ -669,6 +671,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
+	whole := diff // what decides the security pass, however long
 	diff = truncate(diff, 200_000)
 	// The control room's diff viewer shows the whole change the reviewer
 	// judged, which a re-review reads part of (see incremental).
@@ -676,6 +679,23 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	rr, err := p.round(ctx, j, it)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
+	}
+	// A change that needs a security pass gets one beside the reviewer,
+	// and each rules on its own open findings.
+	secWhy := p.securityWhy(ctx, j, parts, whole, rr)
+	revRound, secRound := rr, (*reviewRound)(nil)
+	var secRoute config.Route
+	if len(secWhy) > 0 {
+		revRound, secRound = splitRound(rr)
+		secRoute = p.Cfg.SecurityRoute(p.builtWith(ctx, it.ID, rr.triage)...)
+		// Its harness is held (signed out, at its usage limit, or busy):
+		// the review waits for it, queued again without using a retry.
+		if why := p.harnessHeld(ctx, j, secRoute.Harness); why != "" {
+			if p.requeueHeld(ctx, j, in, secRoute.Harness, why) {
+				return nil
+			}
+			return fail(agentRun{}, state.Failed, "the security pass can't run: "+why)
+		}
 	}
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary. In a re-review it also sees its open findings
@@ -686,7 +706,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		shots = p.reviewShots(in.ImplementJob, out, p.Runner.Paths(specFor(work, out)).Out)
 	}
 	data := PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff),
-		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(rr), Round: rr.n}
+		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(revRound), Round: rr.n}
 	if !ws {
 		p.incremental(ctx, it, own, rr, diff, &data)
 	}
@@ -698,19 +718,41 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	// A critic that can't run now isn't paired: it follows the reviewer,
 	// as it would without paired_high_risk (see afterReview).
 	var critic func(bool) pairedRun
+	taken := []string{j.Harness} // harnesses this review's agents hold
 	if p.paired(j, it) {
-		critic = p.startCritic(ctx, j, it, work, partRepos(parts), data)
+		if critic = p.startCritic(ctx, j, it, work, partRepos(parts), data, taken); critic != nil {
+			taken = append(taken, p.Cfg.CriticRoute().Harness)
+		}
+	}
+	// Fail closed: a change that needs a security pass doesn't pass
+	// without one. Started after the critic, it waits for the critic when
+	// they share a harness that runs one job at a time.
+	var sec func(bool) pairedRun
+	if len(secWhy) > 0 {
+		var why string
+		if sec, why = p.startSecurity(ctx, j, it, work, partRepos(parts), data, diff, secRound, secWhy, secRoute, taken); sec == nil {
+			if critic != nil {
+				critic(false)
+			}
+			return fail(agentRun{}, state.Failed, "the security pass couldn't start: "+why)
+		}
 	}
 	x := agentExtras{repo: p.members(it)[0]}
 	for _, s := range shots {
 		x.images = append(x.images, s.Path)
 	}
 	run := p.runAgentWith(ctx, j, work, out, prompt, schema, p.Cfg.Timeout("review"), x)
-	var cr pairedRun
-	if critic != nil {
+	var cr, sr pairedRun
+	if critic != nil || sec != nil {
 		_, _, bad := runFailure(run)
 		signedOut := run.res != nil && run.res.SignedOut
-		cr = critic(!bad && !signedOut && ctx.Err() == nil)
+		goOn := !bad && !signedOut && ctx.Err() == nil
+		if critic != nil {
+			cr = critic(goOn)
+		}
+		if sec != nil {
+			sr = sec(goOn)
+		}
 	}
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
@@ -718,11 +760,18 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
 	}
-	// The critic couldn't sign in: the review waits for it as it would for
-	// its own harness, queued again without using a retry.
-	if cr.run.res != nil && cr.run.res.SignedOut {
-		res := *cr.run.res
-		res.Error = "the paired critic: " + res.Error
+	// The critic or the security pass couldn't sign in: the review waits
+	// for it as it would for its own harness, queued again without using
+	// a retry.
+	for _, side := range []struct {
+		name string
+		r    pairedRun
+	}{{"the paired critic", cr}, {"the security pass", sr}} {
+		if side.r.run.res == nil || !side.r.run.res.SignedOut {
+			continue
+		}
+		res := *side.r.run.res
+		res.Error = side.name + ": " + res.Error
 		if run.res != nil {
 			res.TokensIn, res.TokensOut = run.res.TokensIn, run.res.TokensOut
 		}
@@ -750,12 +799,28 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		by["critic"] = reviewer{"critic", cr.job.Route, cr.job.Harness, cr.job.Model}
 		v, checkable = pair(v, cr.v)
 	}
+	if sec != nil {
+		switch {
+		case sr.skipped != "":
+			return fail(run, state.Failed, "the security pass didn't run: "+sr.skipped)
+		case sr.err != "" || sr.v == nil:
+			return fail(run, state.Failed, "the security pass: "+sr.err)
+		}
+		by[store.KindSecurity] = reviewer{store.KindSecurity, sr.job.Route, sr.job.Harness, sr.job.Model}
+		var ok bool
+		v, ok = withSecurity(v, sr.v, secRound.open, secWhy)
+		checkable = checkable && ok
+	}
 	changed, err := p.settle(ctx, j, it, v, rr)
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
 	if v.Decision != "questions" && p.Cfg.Reviews.VerifyOn() && checkable {
-		p.verifyFindings(ctx, j, it, v, work, diff, data)
+		var sr *config.Route
+		if sec != nil {
+			sr = &secRoute
+		}
+		p.verifyFindings(ctx, j, it, v, work, diff, data, sr)
 		if p.stopIfCancelled(ctx, j, it, run) {
 			return nil
 		}
@@ -965,7 +1030,8 @@ func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in R
 		return false
 	}
 	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob) &&
-		len(p.needsPerson(ctx, it.ID, in.ImplementJob)) == 0 && !p.breakerTripped(ctx, it.Repo)
+		len(p.needsPerson(ctx, it.ID, in.ImplementJob)) == 0 && !p.breakerTripped(ctx, it.Repo) &&
+		len(p.securityRefuted(ctx, it.ID)) == 0
 }
 
 // autoMerge hands a PR to the forge to merge once its checks pass, pinned

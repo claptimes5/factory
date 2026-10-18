@@ -41,6 +41,11 @@ type Report struct {
 	// reviewer-passed PRs a human changed before merging, or closed.
 	ReviewBlocks  int     `json:"review_blocks"`
 	ReviewEscapes float64 `json:"review_escape_rate"`
+	// SecurityPasses counts the security passes whose review finished;
+	// SecurityBlocks, the review rounds that blocked on one of their
+	// findings the verifier didn't refute.
+	SecurityPasses int `json:"security_passes"`
+	SecurityBlocks int `json:"security_blocks"`
 	// ReviewPrecision is the share of settled blocking findings that led
 	// to a fix: not refuted by the verifier, answered fixed by the builder,
 	// and not upheld by a later review. Precision is the same per reviewer.
@@ -285,8 +290,15 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 					firstReview = j
 				}
 				var v verdict.Review
-				if j.State == state.Succeeded && verdict.Parse([]byte(j.Verdict), &v) == nil && v.Blocks() {
+				ok := j.State == state.Succeeded && verdict.Parse([]byte(j.Verdict), &v) == nil
+				if ok && len(v.Security) > 0 { // a pass whose review finished
+					r.SecurityPasses++
+				}
+				if ok && v.Blocks() {
 					r.ReviewBlocks++
+					if blocksOnSecurity(&v) {
+						r.SecurityBlocks++
+					}
 				}
 			}
 		}
@@ -493,6 +505,17 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 		b.ParkReasons = b.ParkReasons[:8]
 	}
 	return r, b, nil
+}
+
+// blocksOnSecurity says whether a review blocks on a finding of its
+// security pass.
+func blocksOnSecurity(v *verdict.Review) bool {
+	for _, i := range v.Blocking() {
+		if v.BlocksOn(i) && v.Findings[i].By == store.KindSecurity {
+			return true
+		}
+	}
+	return false
 }
 
 // roundsToPass counts the review rounds of an item's latest run (since its

@@ -79,7 +79,7 @@ CREATE TABLE dependencies (
 CREATE TABLE jobs (                -- one agent run
   id            INTEGER PRIMARY KEY,
   item_id       INTEGER REFERENCES work_items(id),  -- NULL for orchestrator runs
-  kind          TEXT NOT NULL,     -- orchestrate|triage|implement|review|critic|verify|...
+  kind          TEXT NOT NULL,     -- orchestrate|triage|implement|review|critic|verify|security|...
   state         TEXT NOT NULL,     -- queued|running|succeeded|failed|cancelled|timed_out
   harness       TEXT NOT NULL,     -- claude|codex
   model         TEXT NOT NULL,
@@ -186,6 +186,7 @@ routing:
   review:            {harness: codex,  model: <strongest codex model>}
   review.high_risk:  {harness: codex,  model: <strongest codex model>, effort: high}
   verify:            {harness: claude, model: sonnet}
+  security:          {harness: claude, model: opus}
 
 escalation:
   implement: [sonnet, opus]   # after max_attempts_per_tier failures, move up one tier
@@ -267,6 +268,7 @@ A PR reaches a human only after deterministic gates pass and a different model, 
 - `high` risk items also get a Claude critic pass, so two independent reviewers see them (side by side with `review.paired_high_risk`). `medium` (raised by the feature map or the diff) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
 - **Risk from the diff.** Triage rates risk from the issue's text. After the gates pass and before review is routed, the daemon rates the change again, deterministically, from its diff: lines and files changed (`risk.*_lines`, `risk.*_files`), `risk.medium_paths`/`high_paths`, the feature-map entries it touches, migrations and auth code (high), new dependencies in Go, npm, Python, Ruby and Rust manifests and lockfiles, and deleted tests (medium). The item keeps the higher rating; nothing lowers it. Why it rose is recorded (`risk_raised`, and the rating as `diff_risk` on the build job) and shown in the PR, the dashboard and the notification.
 - **Changes that always need a person.** A change of a kind in `risk.needs_person` (default: migrations, new dependencies, auth code, deleted tests), or one whose diff couldn't be rated, never merges itself whatever its risk, and the PR and notification say why.
+- **A security pass that blocks.** A change whose files match `security.paths` (auth, sessions, crypto, input handling, commands, SQL and migrations, dependency manifests and lockfiles), that touches a `high` feature in the feature map, or whose added code runs a command, builds SQL from strings, evaluates code, deserializes unsafe formats, writes raw HTML or turns off TLS checks, also gets a security review: its own prompt (`prompts/security.md`) on `routing.security`, a different model from the reviewer, beside the reviewer at the same verified commit. Its findings join the reviewer's (ids, verifier, answers, rulings); its critical ones block whatever the reviewer decides and never go to the verifier, and a refuted one keeps the PR from merging itself. It fails closed: when its harness is held the review waits in the queue for it, and a pass that can't start otherwise, fails or gives no valid verdict fails the review, which parks after one retry.
 
 **4. Hidden scenarios.** A `scenarios/` folder outside the builder's checkout holds end-to-end checks (HTTP, CLI, or Playwright). The verify stage runs them; builders never see their contents, only pass/fail.
 

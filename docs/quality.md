@@ -31,9 +31,10 @@ The PR's Testing section lists every gate with its result and the end
 of each passing command's output, redacted (see
 [The PR description](using.md#the-pr-description)).
 
-Then the reviewer reads the issue, the diff and the gate results. Before
-a finding blocks, a second, cheaper model checks it (see
-[Review findings](#review-findings)). A block sends the findings back to
+Then the reviewer reads the issue, the diff and the gate results. A
+change to auth, input handling, commands, SQL or dependencies also gets a
+[security pass](#security-pass) beside it. Before a finding blocks, a
+second, cheaper model checks it (see [Review findings](#review-findings)). A block sends the findings back to
 the builder, for at most `max_review_rounds` fix rounds (2); a third block
 parks the item. A malformed review retries once, then parks, so a broken
 reviewer never consumes a fix round or passes code.
@@ -274,6 +275,76 @@ real runs, and are to be looked at again once the metrics have data:
   and deleted tests medium), and the four kinds that always need you.
   The metrics, and the dashboard's Spend screen, count how often the
   diff raised an item's risk.
+- The [security pass](#security-pass)'s default globs and risky-code
+  signals were picked by hand. Some will start passes that find nothing
+  (`*session*`, `*proxy*`, `pyproject.toml`), and some holes live in files
+  they don't name. `security_passes` against `security_blocks` says how
+  often a pass is worth its run.
+- A feature map that can't be read starts a security pass on every
+  change, since its high-risk features can't be ruled out.
+- A security finding the verifier refutes stops blocking. The PR says so
+  and won't merge itself, but a person has to read it.
+
+## Security pass
+
+A change that touches code where a mistake is an exploit gets a security
+review of its own, beside the reviewer's. It runs on `routing.security`
+(here Claude Opus, while Codex reviews), with its own prompt,
+[`prompts/security.md`](../prompts/security.md), which asks only for
+concrete, exploitable problems: injection, broken authentication or
+authorization, path traversal, leaked secrets, server-side request
+forgery, unsafe deserialization, weakened crypto or TLS, and risky
+dependencies. Style, tests and bugs with no security consequence are left
+to the reviewer.
+
+A change gets one when any of these holds:
+
+- **A changed file matches `security.paths`.** The defaults name
+  authentication, sessions and permissions, cryptography and secrets,
+  uploads, webhooks, serializers and redirects, running commands, SQL and
+  migrations, CI workflows, `.env` files and keys, and every common
+  dependency manifest and lockfile (see
+  [the security pass](configuration.md#the-security-pass)). Tests and
+  docs don't count.
+- **It touches a `high` feature** in the [feature map](#feature-map),
+  through its code.
+- **The code it adds does something risky:** runs a command
+  (`exec.Command`, `subprocess`, `child_process`), builds SQL by joining
+  or formatting strings rather than with placeholders, evaluates code,
+  deserializes an unsafe format (`pickle`, `yaml.load` without a safe
+  loader), writes raw HTML, or turns off TLS checks. Only added lines
+  count, outside tests and docs.
+- **An earlier pass's finding is still open,** which only a security pass
+  rules on.
+
+It reads the whole change at the commit the gates verified, with the
+reviewer's checkout, and starts beside the reviewer (after it, when both
+share a harness that runs one job at a time). Its findings join the
+reviewer's in one verdict and go through the same steps as theirs: an id,
+the verifier, the builder's answer, and the next round's ruling, which the
+security pass makes on its own findings and the reviewer on the rest.
+
+**It blocks whatever the reviewer says.** Its `critical` findings always
+block, and its `major` ones when it decides `block`, even when the
+reviewer passes the change or only asks questions (the questions are
+still asked). A `critical` security finding never goes to the verifier.
+A `major` one is checked on the security pass's own route, not the
+cheaper verifier's, and one a later round upholds isn't checked again.
+When a security finding is refuted, the PR body lists it and the item
+won't auto-merge.
+
+It runs on a model of its own: `routing.security`, or else the first of
+the critic's route and the implement routes that is neither a reviewer's
+model nor one that built the item. It fails closed. When its harness is
+paused, signed out or busy with another job, the review goes back to the
+queue and waits for it, without spending an attempt (up to five times).
+When the pass can't start for another reason, fails, or ends without a
+valid verdict, the review fails, is retried once, and parks the item. It
+never passes without it.
+
+Each pass is a job of its own, kind `security`, with its model, cost and
+log on record. The metrics count the passes and the rounds that blocked on
+one of their findings.
 
 ## Feature map
 
@@ -308,7 +379,8 @@ When a change touches a feature, through its code or its tests:
   its risk, the files that touch it and what proves it, plus any changed
   files the map doesn't cover.
 - **A feature's `risk` raises the item's.** A change to a `high` feature is
-  reviewed as high risk (with the critic), whatever triage said.
+  reviewed as high risk (with the critic), whatever triage said, and a
+  change to a `high` feature's code gets a [security pass](#security-pass).
 - **The builder is told the `high` features** and where they live before
   it starts. It's asked for a property-based test of any rule it changes
   in them, as it is for an issue triage rated high.
@@ -397,7 +469,8 @@ still get none.
 
 - cost per merged PR by complexity and by the model that landed it;
 - first-pass rate and escalation rate;
-- reviewer blocks;
+- reviewer blocks, and security passes with the rounds that blocked on
+  one of their findings;
 - review escapes: passed PRs you changed before merging, or closed;
 - reviewer precision: the share of blocking findings that led to a fix
   (not refuted by the verifier, answered `fixed` and not upheld by a
