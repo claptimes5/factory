@@ -109,3 +109,16 @@ func TestDiffGuard(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTest(t *testing.T) {
+	for p, want := range map[string]bool{
+		"a/b_test.go": true, "testdata/x.json": true, "spec/models/user_spec.rb": true, "test/models/user_test.rb": true,
+		"src/App.test.tsx": true, "src/__tests__/a.ts": true, "e2e/login.spec.ts": true, "tests/test_api.py": true,
+		"pkg/test_utils.py": true, "features/login.feature": true,
+		"main.go": false, "src/App.tsx": false, "app/models/user.rb": false, "lib/testing.rb": false, "contest.py": false,
+	} {
+		if IsTest(p) != want {
+			t.Errorf("IsTest(%s) = %v", p, !want)
+		}
+	}
+}

@@ -260,7 +260,12 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		setupImages(p, cfg)
 	}
 
-	p.say("\n== 6. Claude (writes the code)")
+	if client != nil {
+		p.say("\n== 6. How ready each repo is for the factory")
+		setupReadiness(ctx, p, cfg, client)
+	}
+
+	p.say("\n== 7. Claude (writes the code)")
 	p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
 	p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
 	for {
@@ -291,7 +296,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 
 	if usesHarness(cfg, "codex") {
-		p.say("\n== 7. OpenAI (reviews the code)")
+		p.say("\n== 8. OpenAI (reviews the code)")
 		p.say("factory.yaml has Codex review Claude's work. Paste an API key from")
 		p.say("https://platform.openai.com/api-keys. A ChatGPT plan isn't needed.")
 		p.say("No OpenAI account? Leave it empty and see \"Claude-only review\" in the README.")
@@ -305,7 +310,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 8. Phone notifications (optional)")
+	p.say("\n== 9. Phone notifications (optional)")
 	p.say("An ntfy topic URL (https://ntfy.sh/<topic>), or a Slack or Discord webhook URL.")
 	for {
 		// Webhook URLs work as passwords, so this is read like a key.

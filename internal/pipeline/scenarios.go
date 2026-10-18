@@ -123,3 +123,12 @@ func (p *Pipeline) Check(ctx context.Context, repo, dir, command string) (int, s
 	}
 	return p.gateExec(ctx, 0, dir, command, gateRun{repo: repo})
 }
+
+// Exec runs one command on a repo's export the way gates do. With install
+// set it runs as the install step: network on, dependency cache writable.
+func (p *Pipeline) Exec(ctx context.Context, repo, dir, command string, install bool) (int, string, error) {
+	if err := os.MkdirAll(p.jobDir(0), 0o755); err != nil {
+		return -1, "", err
+	}
+	return p.gateExec(ctx, 0, dir, command, gateRun{repo: repo, install: install})
+}

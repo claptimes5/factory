@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/claptimes5/factory/internal/readiness"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,8 @@ type fakeGitHub struct {
 	auth     []string
 	files    map[string]map[string]string // repo -> path -> contents
 	runCmd   func(io.Writer, string, ...string) error
+	report   *readiness.Report // what the readiness check finds; ready if nil
+	issues   []string          // titles of issues created
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +128,18 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.auth = append(f.auth, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
 	if repo, path, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/repos/"), "/contents/"); ok && f.files[repo] != nil {
 		fakeContents(w, f.files[repo], path)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/issues") && r.Method == "POST" {
+		var body struct{ Title string }
+		json.NewDecoder(r.Body).Decode(&body)
+		f.issues = append(f.issues, r.URL.Path+" "+body.Title)
+		json.NewEncoder(w).Encode(map[string]int{"number": 100 + len(f.issues)})
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("labels") == "factory:readiness" {
+		// One of the check's issues is already open.
+		json.NewEncoder(w).Encode([]map[string]any{{"number": 7, "title": "Start a feature map"}})
 		return
 	}
 	// Every repo under o looks like o/r.
@@ -174,6 +189,7 @@ func TestSetupWithSeveralRepos(t *testing.T) {
 		"o/api, https://github.com/o/web.git",
 		"3", "ghp_token123",
 		"y", // create labels on both
+		"",  // run the readiness check
 		"sk-ant-api03-abc",
 		"",
 		"",
@@ -287,6 +303,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 		"y", // o/api's checks
 		"y", // o/web's checks
 		"y", // build the images
+		"",  // run the readiness check
 		"sk-ant-api03-abc",
 		"",
 		"",
@@ -329,6 +346,35 @@ func TestWriteReposSkipsBlankLines(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "\nbase_branch: main") {
 		t.Fatalf("lost what follows the list:\n%s", b)
+	}
+}
+
+// Setup shows each repo's readiness and opens the issues that close its
+// gaps, skipping ones still open from an earlier run.
+func TestSetupFilesReadinessIssues(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, report: &readiness.Report{Branch: "main", SHA: "abc1234", Score: 59,
+		Findings: []readiness.Finding{
+			{Level: readiness.Blocker, Title: "`test` fails on main", Issue: &readiness.Issue{Title: "Make the test check pass on main", Body: "fix it"}},
+			{Level: readiness.Gap, Title: "No feature map", Issue: &readiness.Issue{Title: "Start a feature map", Body: "map it"}},
+		}}}
+	_, _, out := runSetup(t, f,
+		"o/r",
+		"3", "ghp_token123",
+		"n", // no labels
+		"",  // run the readiness check
+		"y", // open the issues
+		"y", // and queue them
+		"sk-ant-api03-abc",
+		"",
+		"",
+	)
+	if len(f.issues) != 1 || f.issues[0] != "/repos/o/r/issues Make the test check pass on main" {
+		t.Fatalf("issues: %v\n%s", f.issues, out)
+	}
+	for _, want := range []string{"o/r at main (abc1234): 59/100, not ready yet", "✗ `test` fails on main", "Every job would fail until the blockers are fixed", "Opened 1 issue(s) on o/r (1 already open)."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -390,6 +436,16 @@ func runSetup(t *testing.T, f *fakeGitHub, answers ...string) (cfgPath, envPath,
 	if f.runCmd != nil {
 		runCmd = f.runCmd
 	}
+	oldAssess := assess
+	assess = func(_ context.Context, _ *config.Config, _ *pipeline.Pipeline, repo string, _ io.Writer) (*readiness.Report, error) {
+		if f.report != nil {
+			r := *f.report
+			r.Repo = repo
+			return &r, nil
+		}
+		return &readiness.Report{Repo: repo, Branch: "main", Score: 100, Ready: true}, nil
+	}
+	t.Cleanup(func() { assess = oldAssess })
 	t.Cleanup(func() { githubAPI, githubWeb, runCmd = oldAPI, oldWeb, oldRun })
 	for _, k := range envKeys {
 		t.Setenv(k, "")
@@ -442,6 +498,7 @@ func TestSetupCreatesTheAppAndSavesEverything(t *testing.T) {
 		"1",              // 3. create a new app
 		"",               // the browser said it was created
 		"y",              // create labels
+		"",               // run the readiness check
 		"sk-ant-api03-abc",
 		"sk-openai-xyz",
 		"", // no notifications
@@ -463,7 +520,7 @@ func TestSetupCreatesTheAppAndSavesEverything(t *testing.T) {
 	if perms["contents"] != "write" || perms["checks"] != "read" || perms["workflows"] != nil {
 		t.Fatalf("manifest permissions: %v", f.manifest)
 	}
-	if len(f.created) != 5 {
+	if len(f.created) != len(pipeline.Labels("factory:ready"))-1 {
 		t.Fatalf("created labels %v; factory:ready already existed", f.created)
 	}
 	b, _ := os.ReadFile(cfgPath)
@@ -481,6 +538,7 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 		"o/r",
 		"3", "ghp_token123", // personal token
 		"n",                         // don't create labels
+		"n",                         // skip the readiness check
 		"sk-ant-oat01-subscription", // a subscription token goes in its own variable
 		"",                          // no OpenAI key
 		"https://example.com/hook",  // not a supported notifier

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -214,9 +215,27 @@ func protected(p string, list []string) bool {
 // binaryLines is what one changed binary file counts toward max_changed_lines.
 const binaryLines = 100
 
-// IsTest reports whether a path is test code or test data.
+// IsTest reports whether a path is test code or test data, in Go, Ruby,
+// JavaScript/TypeScript, Python or Rust.
 func IsTest(p string) bool {
-	return strings.HasSuffix(p, "_test.go") || strings.Contains(p, "/testdata/") || strings.HasPrefix(p, "testdata/")
+	p = filepath.ToSlash(p)
+	base := path.Base(p)
+	for _, dir := range []string{"testdata", "test", "tests", "spec", "__tests__", "e2e", "cypress", "features"} {
+		if strings.HasPrefix(p, dir+"/") || strings.Contains(p, "/"+dir+"/") {
+			return true
+		}
+	}
+	for _, suf := range []string{"_test.go", "_spec.rb", "_test.rb", "_test.py", "_test.rs"} {
+		if strings.HasSuffix(base, suf) {
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") {
+		return true
+	}
+	// foo.test.ts, foo.spec.jsx and the like.
+	parts := strings.Split(base, ".")
+	return len(parts) >= 3 && (parts[len(parts)-2] == "test" || parts[len(parts)-2] == "spec")
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
