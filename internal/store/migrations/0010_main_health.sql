@@ -21,6 +21,10 @@ CREATE TABLE health_issues (
   head_sha     TEXT NOT NULL,
   url          TEXT NOT NULL DEFAULT '',
   created_at   TEXT NOT NULL,
+  state        TEXT NOT NULL DEFAULT '',  -- the check's latest state
+  absent_since TEXT NOT NULL DEFAULT '',  -- since when it's missing from CI
+  muted_until  TEXT NOT NULL DEFAULT '',  -- a won't-fix close mutes it until then
+  refiles      INTEGER NOT NULL DEFAULT 0, -- filed again without passing between
   PRIMARY KEY (repo, check_name)
 );
 CREATE INDEX health_issues_issue ON health_issues(repo, issue_number);
