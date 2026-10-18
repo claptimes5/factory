@@ -266,6 +266,7 @@ func TestPRDescriptionFromTemplate(t *testing.T) {
 		return goodBuild(work)
 	}}
 	e.codex.reviews = []string{pass}
+	e.claude.reviews = []string{pass} // a migration makes it high risk: the critic reads it too
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +292,7 @@ func TestPRDescriptionFromTemplate(t *testing.T) {
 		"## Rollback plan\n\nOnce it's merged",
 		"git revert --no-edit -m 1",
 		"**It changes database migrations** (`migrations/0002_add.sql`). A revert takes the files out but doesn't undo the schema",
-		"## How to review\n\n**Low risk**",
+		"## How to review\n\n**High risk**: its diff adds or changes a migration",
 		"## Jobs",
 		humanFooter,
 	}

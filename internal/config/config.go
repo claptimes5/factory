@@ -362,6 +362,9 @@ type Config struct {
 	Previews Previews `yaml:"previews"`
 	// Reviews says how review checks its own findings. See Reviews.
 	Reviews Reviews `yaml:"review"`
+	// Risk says how a built change's diff raises its risk, and which
+	// kinds of change always wait for you. See Risk.
+	Risk Risk `yaml:"risk"`
 	// NoGuard turns off auto-merge's guard rails' polling and breaker: the
 	// revert watch and the strikes that trip it. eval and compare set it,
 	// since the base branch they'd read is the real repo's, not the run's.
@@ -571,6 +574,7 @@ func (c *Config) defaults() {
 	c.groomingDefaults()
 	c.previewDefaults()
 	c.reviewDefaults()
+	c.riskDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -870,6 +874,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkGrooming()...)
 	errs = append(errs, c.checkPreviews()...)
 	errs = append(errs, c.checkReview()...)
+	errs = append(errs, c.checkRisk()...)
 	switch c.PR.CheckOutput {
 	case "", CheckOutputPrivate, CheckOutputAlways, CheckOutputNever:
 	default:

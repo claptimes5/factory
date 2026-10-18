@@ -95,3 +95,34 @@ func TestRoundsToPassRefutedBlock(t *testing.T) {
 		t.Fatalf("rounds %d passed with only a block", n)
 	}
 }
+
+// Items whose diff raised their risk are counted once, however many
+// builds did.
+func TestRiskRaisedByDiff(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	rated := func(n int, raised ...bool) {
+		it, _, _ := st.UpsertItem(ctx, "o/r", n, "x")
+		for _, r := range raised {
+			data := `{"risk":"low","reasons":[]}`
+			if r {
+				data = `{"risk":"high","reasons":[],"raised":true}`
+			}
+			if err := st.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "diff_risk", Data: data}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rated(1, true, true)
+	rated(2, false)
+	rated(3, false, true)
+	rated(4)
+	r, err := Compute(ctx, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RiskRaisedByDiff != 2 {
+		t.Fatalf("raised by the diff = %d, want 2", r.RiskRaisedByDiff)
+	}
+}

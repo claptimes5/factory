@@ -1250,6 +1250,10 @@ export interface components {
             depends_on: number[];
             issue_body: string;
             spec: string;
+            /** @description Every reason the rating of the latest build's diff found, with the level it rates the change at, whether or not it raised the item's risk: "high: adds or changes a migration: `db/1.sql`" */
+            risk_reasons: string[];
+            /** @description Why the latest build waits for you whatever its risk (risk.needs_person); empty when nothing does */
+            needs_person: string[];
             estimate: components["schemas"]["Estimate"] | null;
         };
         Estimate: {
@@ -1479,6 +1483,8 @@ export interface components {
             /** @description Of those, how many main health saw a check go red on */
             broke_main: number;
             reverts_by_repo: components["schemas"]["RepoReverts"][];
+            /** @description Items whose built diff raised their risk above triage's */
+            risk_raised_by_diff: number;
             awaiting_human_hours: number;
             awaiting_human_mean_hours: number;
             weekly: components["schemas"]["Week"][];

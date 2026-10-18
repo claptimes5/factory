@@ -498,6 +498,9 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 	}
 	bp.sections[secIssue] = firstLine(top) + "\n" // "Closes #12", or a workspace's "Part of o/r#12"
 	bp.sections[secRisk] = p.reviewGuide(ctx, it, in.Features != "")
+	if in.ImplementJob != 0 {
+		bp.sections[secRisk] += "\n" + p.diffRiskSection(ctx, it, in.ImplementJob)
+	}
 	bp.sections[secTesting] = p.testingSection(ctx, repo, in, impl, o)
 	if in.Features != "" {
 		blast := "What this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features

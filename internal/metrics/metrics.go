@@ -61,6 +61,9 @@ type Report struct {
 	RevertRate       float64       `json:"revert_rate"`
 	BrokeMain        int           `json:"broke_main"`
 	RevertsByRepo    []RepoReverts `json:"reverts_by_repo"`
+	// RiskRaisedByDiff counts the items whose built diff raised their risk
+	// above triage's (and the feature map's), in any build.
+	RiskRaisedByDiff int `json:"risk_raised_by_diff"`
 	// AwaitingHours is the total and mean time items sat in awaiting_human.
 	AwaitingHours     float64 `json:"awaiting_human_hours"`
 	AwaitingMeanHours float64 `json:"awaiting_human_mean_hours"`
@@ -359,11 +362,15 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 				}
 			}
 		}
-		merged, closed, changed := false, false, false
+		merged, closed, changed, raised := false, false, false, false
 		mergedAt := it.UpdatedAt
 		var awaitSince time.Time
 		for _, e := range evs {
 			switch e.Type {
+			case "diff_risk":
+				var d struct{ Raised bool }
+				_ = json.Unmarshal([]byte(e.Data), &d)
+				raised = raised || d.Raised
 			case "pr_merged":
 				merged = true
 				mergedAt = e.At
@@ -391,6 +398,9 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 		if !awaitSince.IsZero() {
 			r.AwaitingHours += time.Since(awaitSince).Hours()
 			awaitingStays++
+		}
+		if raised {
+			r.RiskRaisedByDiff++
 		}
 		if merged || it.Stage == state.Done {
 			merged = true

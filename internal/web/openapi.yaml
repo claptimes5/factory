@@ -462,7 +462,7 @@ components:
         data: { type: string, description: JSON }
     ItemDetail:
       type: object
-      required: [item, jobs, events, depends_on, issue_body, spec, estimate]
+      required: [item, jobs, events, depends_on, issue_body, spec, estimate, risk_reasons, needs_person]
       properties:
         item: { $ref: "#/components/schemas/Item" }
         jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
@@ -470,6 +470,14 @@ components:
         depends_on: { type: array, items: { type: integer } }
         issue_body: { type: string }
         spec: { type: string }
+        risk_reasons:
+          type: array
+          description: 'Every reason the rating of the latest build''s diff found, with the level it rates the change at, whether or not it raised the item''s risk: "high: adds or changes a migration: `db/1.sql`"'
+          items: { type: string }
+        needs_person:
+          type: array
+          description: "Why the latest build waits for you whatever its risk (risk.needs_person); empty when nothing does"
+          items: { type: string }
         estimate:
           oneOf:
             - $ref: "#/components/schemas/Estimate"
@@ -681,7 +689,7 @@ components:
         precision: { type: number, description: "0..1, or -1 with no data" }
     Metrics:
       type: object
-      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, revert_window_days, revert_merged, reverted, revert_rate, broke_main, reverts_by_repo, awaiting_human_hours, awaiting_human_mean_hours, weekly]
+      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, revert_window_days, revert_merged, reverted, revert_rate, broke_main, reverts_by_repo, risk_raised_by_diff, awaiting_human_hours, awaiting_human_mean_hours, weekly]
       properties:
         items: { type: integer }
         merged: { type: integer }
@@ -704,6 +712,7 @@ components:
         revert_rate: { type: number, description: "reverted / revert_merged: 0..1, or -1 with no data" }
         broke_main: { type: integer, description: "Of those, how many main health saw a check go red on" }
         reverts_by_repo: { type: array, items: { $ref: "#/components/schemas/RepoReverts" } }
+        risk_raised_by_diff: { type: integer, description: "Items whose built diff raised their risk above triage's" }
         awaiting_human_hours: { type: number }
         awaiting_human_mean_hours: { type: number }
         weekly: { type: array, items: { $ref: "#/components/schemas/Week" } }

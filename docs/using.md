@@ -19,11 +19,11 @@ To reach it from another machine, or to put a password on it, see
 | **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with the question to answer. Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
 | **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
+| **Item** | The [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
-| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes and the [revert rate](#auto-merge-guard-rails), reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
+| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes and the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
@@ -109,7 +109,10 @@ Set `FACTORY_NOTIFY_URL` in `factory.env` to one of:
 
 You get a notification when an item parks, a PR is ready, an item waits
 for your OK on its [cost estimate](#cost-estimates), the daily budget is
-hit, or the job image is missing. With the orchestrator on, it sends a
+hit, or the job image is missing. A ready PR of a kind that always needs
+you ([a migration, a new dependency, auth code or a deleted
+test](quality.md#risk-from-the-diff)) says so at the end: "It needs you
+whatever its risk: it adds dependencies." With the orchestrator on, it sends a
 daily summary there too.
 
 The daemon also tells you when builds stop for

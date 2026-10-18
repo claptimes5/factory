@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/claptimes5/factory/internal/diffrisk"
 	"github.com/claptimes5/factory/internal/github"
 )
 
@@ -332,6 +333,15 @@ func (g *Git) Diff(ctx context.Context, repo, from, to string) (string, error) {
 	return g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--no-textconv", from, to)
 }
 
+// Patch is the patch between two commits as the diff's rating reads it:
+// renames not followed, and paths unquoted where git allows (a name with
+// a quote, a backslash or a control character is still C-quoted).
+func (g *Git) Patch(ctx context.Context, repo, from, to string) (string, error) {
+	var out strings.Builder // not trimmed: a path may end in a space
+	_, err := g.run(ctx, repo, &out, "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", from, to)
+	return out.String(), err
+}
+
 // DiffIn is Diff with every path under folder/, for a workspace's
 // combined diff.
 func (g *Git) DiffIn(ctx context.Context, repo, from, to, folder string) (string, error) {
@@ -395,6 +405,41 @@ func (g *Git) ChangedFiles(ctx context.Context, repo, from, to string) ([]string
 		if f != "" {
 			files = append(files, f)
 		}
+	}
+	return files, nil
+}
+
+// Changes lists the files changed between two commits with their status
+// and line counts. Renames aren't followed: one is a delete and an add.
+func (g *Git) Changes(ctx context.Context, repo, from, to string) ([]diffrisk.File, error) {
+	// -z: raw paths, never C-quoted; to a buffer, so no path is trimmed.
+	var st, ns strings.Builder
+	if _, err := g.run(ctx, repo, &st, "diff", "--no-ext-diff", "--no-renames", "--name-status", "-z", from, to); err != nil {
+		return nil, err
+	}
+	if _, err := g.run(ctx, repo, &ns, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", from, to); err != nil {
+		return nil, err
+	}
+	var files []diffrisk.File
+	byPath := map[string]int{}
+	f := strings.Split(strings.TrimSuffix(st.String(), "\x00"), "\x00")
+	for i := 0; i+1 < len(f); i += 2 {
+		byPath[f[i+1]] = len(files)
+		files = append(files, diffrisk.File{Path: f[i+1], Status: f[i][:1]})
+	}
+	for _, rec := range strings.Split(ns.String(), "\x00") {
+		added, rest, _ := strings.Cut(rec, "\t")
+		deleted, path, ok := strings.Cut(rest, "\t")
+		i, known := byPath[path]
+		if !ok || !known {
+			continue
+		}
+		if added == "-" {
+			files[i].Binary = true
+			continue
+		}
+		files[i].Added, _ = strconv.Atoi(added)
+		files[i].Deleted, _ = strconv.Atoi(deleted)
 	}
 	return files, nil
 }

@@ -60,7 +60,7 @@ CREATE TABLE work_items (          -- one per GitHub issue
   title         TEXT NOT NULL,
   stage         TEXT NOT NULL,     -- triage|spec|ready|implementing|reviewing|awaiting_human|done|parked|blocked
   complexity    TEXT,              -- S|M|L (set by triage)
-  risk          TEXT,              -- low|high
+  risk          TEXT,              -- low|medium|high (triage, then raised by the feature map and the diff)
   priority      INTEGER DEFAULT 0,
   parent_id     INTEGER REFERENCES work_items(id),  -- epic decomposition
   branch        TEXT,
@@ -264,7 +264,9 @@ A PR reaches a human only after deterministic gates pass and a different model, 
 - **Tracked to its end.** Every finding gets an id that holds across rounds. The builder answers each blocking one (`fixed`, `wrong`, `out_of_scope`); the next review sees the answers and rules on each (`earlier`), and an upheld finding blocks again. Findings and outcomes live in `review_findings`.
 - **Re-review what changed.** From round two, a reviewer reads the diff since the commit it last reviewed, with its open findings, and the whole change as context only when small.
 - At most two fix-and-review rounds. A third block parks the item for a human.
-- `high` risk items also get a Claude critic pass, so two independent reviewers see them (side by side with `review.paired_high_risk`). `medium` (raised by the feature map) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
+- `high` risk items also get a Claude critic pass, so two independent reviewers see them (side by side with `review.paired_high_risk`). `medium` (raised by the feature map or the diff) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
+- **Risk from the diff.** Triage rates risk from the issue's text. After the gates pass and before review is routed, the daemon rates the change again, deterministically, from its diff: lines and files changed (`risk.*_lines`, `risk.*_files`), `risk.medium_paths`/`high_paths`, the feature-map entries it touches, migrations and auth code (high), new dependencies in Go, npm, Python, Ruby and Rust manifests and lockfiles, and deleted tests (medium). The item keeps the higher rating; nothing lowers it. Why it rose is recorded (`risk_raised`, and the rating as `diff_risk` on the build job) and shown in the PR, the dashboard and the notification.
+- **Changes that always need a person.** A change of a kind in `risk.needs_person` (default: migrations, new dependencies, auth code, deleted tests), or one whose diff couldn't be rated, never merges itself whatever its risk, and the PR and notification say why.
 
 **4. Hidden scenarios.** A `scenarios/` folder outside the builder's checkout holds end-to-end checks (HTTP, CLI, or Playwright). The verify stage runs them; builders never see their contents, only pass/fail.
 
@@ -379,6 +381,7 @@ The number that matters is cost per merged PR; everything else explains it.
 - Reviewer value: review escapes (passed PRs a human changed or closed), and reviewer precision: the share of blocking findings that led to a fix, per reviewer route and model.
 - Rounds to pass: review rounds per item that passed review.
 - Human time proxy: hours items sat in `awaiting_human`.
+- Raised by the diff: items whose built diff raised their risk above triage's.
 - Revert rate: share of factory PRs merged in the last 30 days that a later commit or PR reverted on the base branch.
 
 **Auto-merge guard rails.** Where auto-merge is turned on (a departure from v1's human-only merge; see docs/status.md), three rules hold:

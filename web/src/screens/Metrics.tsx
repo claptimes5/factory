@@ -29,6 +29,7 @@ export function MetricsScreen() {
           value={pct(r.revert_rate)}
           hint={`Factory PRs merged in the last ${r.revert_window_days} days that a later commit or PR reverted: ${r.reverted} of ${r.revert_merged}`}
         />
+        <Stat label="Raised by the diff" value={String(r.risk_raised_by_diff)} hint="Items whose built diff raised their risk above triage's" />
         <Stat label="Spent this week" value={money(sp.week_usd)} />
         <Stat label="Merged / items" value={`${r.merged} / ${r.items}`} />
       </div>

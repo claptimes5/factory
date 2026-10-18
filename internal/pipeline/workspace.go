@@ -339,8 +339,8 @@ func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is 
 	}
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk change ready for review across %d repos: %s %s. Merge in order: %s",
-		capitalize(riskOrLow(it.Risk)), len(prs), p.ref(it.Repo, it.IssueNumber), SafeText(is.Title, 100), strings.Join(urls, " then ")))
+	p.notify(ctx, fmt.Sprintf("%s-risk change ready for review across %d repos: %s %s. Merge in order: %s.%s",
+		capitalize(riskOrLow(it.Risk)), len(prs), p.ref(it.Repo, it.IssueNumber), SafeText(is.Title, 100), strings.Join(urls, " then "), p.needsPersonNote(ctx, it.ID, in.ImplementJob)))
 	return nil
 }
 

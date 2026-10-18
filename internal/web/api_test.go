@@ -620,3 +620,23 @@ func TestAPIPreview(t *testing.T) {
 		}
 	}
 }
+
+// The item view shows the latest build's rating from its diff, and none
+// from a build before the latest triage.
+func TestItemDiffRisk(t *testing.T) {
+	t.Parallel()
+	id := func(n int64) *int64 { return &n }
+	jobs := []*store.Job{{ID: 1, Kind: "triage"}, {ID: 2, Kind: "implement"}, {ID: 3, Kind: "implement"}}
+	evs := []store.Event{
+		{Type: "diff_risk", JobID: id(2), Data: `{"risk":"medium","reasons":[{"kind":"lines","risk":"medium","what":"changes 200 lines"}]}`},
+		{Type: "diff_risk", JobID: id(3), Data: `{"risk":"high","reasons":[{"kind":"migrations","risk":"high","what":"adds or changes a migration","items":[{"file":"m/1.sql"}],"needs_person":true}]}`},
+	}
+	reasons, person := diffRisk(jobs, evs)
+	if !reflect.DeepEqual(reasons, []string{"high: adds or changes a migration: `m/1.sql`"}) || !reflect.DeepEqual(person, []string{"adds or changes a migration: `m/1.sql`"}) {
+		t.Fatalf("reasons %q, needs a person %q", reasons, person)
+	}
+	jobs = append(jobs, &store.Job{ID: 4, Kind: "triage"})
+	if reasons, person := diffRisk(jobs, evs); len(reasons) != 0 || len(person) != 0 || reasons == nil || person == nil {
+		t.Fatalf("after a new triage: %q %q", reasons, person)
+	}
+}

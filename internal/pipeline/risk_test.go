@@ -45,4 +45,11 @@ func TestRiskWhy(t *testing.T) {
 	if got, want := e.p.riskWhy(ctx, it), "it touches Auth, a high-risk feature in the feature map"; got != want {
 		t.Fatalf("legacy event: riskWhy = %q, want %q", got, want)
 	}
+	// Raised by the diff, after the feature map: the diff's reasons say why.
+	diff := job("implement")
+	raise(diff, `{"feature":"Billing","from":"low","to":"medium"}`, "low -> medium: touches Billing")
+	raise(diff, `{"from":"medium","to":"high","reasons":["adds or changes a migration: `+"`m/1.sql`"+`","changes auth code: `+"`auth.go`"+`"]}`, "medium -> high from the diff")
+	if got, want := e.p.riskWhy(ctx, it), "its diff adds or changes a migration: `m/1.sql` and changes auth code: `auth.go`"; got != want {
+		t.Fatalf("raised by the diff: riskWhy = %q, want %q", got, want)
+	}
 }
