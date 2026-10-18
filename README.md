@@ -90,6 +90,7 @@ See [How ready a repo is](docs/quality.md#how-ready-a-repo-is).
 | Review PRs labeled `factory:awaiting-you` and merge the good ones | Tells you how closely to read each one (`factory:risk-low`, `-medium`, `-high`) |
 | Read why an item parked (it leaves a comment), fix or answer it, then add `factory:retry` | Sends it back through triage |
 | Glance at the dashboard's **Floor** or your phone | Notifies you when something parks, a PR is ready or the budget runs out |
+| Turn on [`main_health`](docs/using.md#keeping-main-green) | Files a fix first in the queue when a check goes red or flaky on your default branch, and closes it once the check passes |
 
 Only someone with write access to the repo can start work, so outsiders can
 file issues and you choose which ones to build. See
@@ -100,8 +101,8 @@ file issues and you choose which ones to build. See
 | Guide | What's in it |
 | --- | --- |
 | [Setup](docs/setup.md) | Dependencies, what setup asks, running as a service, upgrades, manual setup with a GitHub App, WSL2 |
-| [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, `factory pull`, `eval` and `compare` |
-| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, Claude-only review |
+| [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, keeping main green, `factory pull`, `eval` and `compare` |
+| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, main health, Claude-only review |
 | [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, the feature map, readiness, hidden scenarios, metrics, the replay set |
 | [Security](docs/security.md) | Who can start work, how jobs are isolated, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |

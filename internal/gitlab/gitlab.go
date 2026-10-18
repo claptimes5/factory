@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -302,7 +304,20 @@ func (c *Client) UpdatePRBody(ctx context.Context, n int, body string) error {
 
 // CheckRuns lists the CI jobs on a commit as GitHub-style checks.
 func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error) {
+	return c.statuses(ctx, sha, false)
+}
+
+// CheckHistory lists every run of every job on a commit, retries
+// included, oldest first by ID.
+func (c *Client) CheckHistory(ctx context.Context, sha string) ([]github.CheckRun, error) {
+	out, err := c.statuses(ctx, sha, true)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, err
+}
+
+func (c *Client) statuses(ctx context.Context, sha string, all bool) ([]github.CheckRun, error) {
 	type status struct {
+		ID           int64  `json:"id"`
 		Name         string `json:"name"`
 		Status       string `json:"status"`
 		TargetURL    string `json:"target_url"`
@@ -312,6 +327,9 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, 
 	for page := 1; page <= 10; page++ {
 		var batch []status
 		q := url.Values{"per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		if all {
+			q.Set("all", "true")
+		}
 		if err := c.do(ctx, "GET", c.project()+"/repository/commits/"+url.PathEscape(sha)+"/statuses?"+q.Encode(), nil, &batch); err != nil {
 			return nil, err
 		}
@@ -322,7 +340,7 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, 
 	}
 	out := make([]github.CheckRun, 0, len(st))
 	for _, s := range st {
-		cr := github.CheckRun{Name: s.Name, URL: s.TargetURL, Status: "completed"}
+		cr := github.CheckRun{ID: s.ID, Name: s.Name, URL: s.TargetURL, Status: "completed"}
 		switch s.Status {
 		case "success":
 			cr.Conclusion = "success"
@@ -345,6 +363,43 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, 
 		out = append(out, cr)
 	}
 	return out, nil
+}
+
+// CheckLog is the end of a CI job's log, where the failure usually is. A
+// status no job posted (an external CI's) has none: "".
+func (c *Client) CheckLog(ctx context.Context, run github.CheckRun) (string, error) {
+	b, err := c.raw(ctx, "GET", fmt.Sprintf("%s/jobs/%d/trace", c.project(), run.ID), nil)
+	if github.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return cleanTrace(string(b)), nil
+}
+
+var (
+	ansi    = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+	section = regexp.MustCompile(`section_(start|end):[0-9]+:[A-Za-z0-9_.-]+(\[[^\]]*\])?\r?`)
+)
+
+// cleanTrace drops a job log's colors and section markers, and keeps the
+// last line written over each carriage return.
+func cleanTrace(s string) string {
+	s = section.ReplaceAllString(ansi.ReplaceAllString(s, ""), "")
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if j := strings.LastIndex(strings.TrimRight(l, "\r"), "\r"); j >= 0 {
+			l = l[j+1:]
+		}
+		lines[i] = strings.TrimRight(l, "\r")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// CloseIssue closes an issue.
+func (c *Client) CloseIssue(ctx context.Context, n int) error {
+	return c.do(ctx, "PUT", fmt.Sprintf("%s/issues/%d", c.project(), n), map[string]any{"state_event": "close"}, nil)
 }
 
 // DefaultBranch returns the project's default branch.

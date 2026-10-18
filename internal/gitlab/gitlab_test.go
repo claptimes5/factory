@@ -214,3 +214,41 @@ func TestAutoMerge(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckHistory(t *testing.T) {
+	var closed string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch p := r.URL.EscapedPath(); {
+		case strings.HasSuffix(p, "/repository/commits/abc/statuses"):
+			if r.URL.Query().Get("all") != "true" {
+				t.Errorf("all = %q, want true (retries)", r.URL.Query().Get("all"))
+			}
+			w.Write([]byte(`[{"id":12,"name":"test","status":"success"},{"id":11,"name":"test","status":"failed"},{"id":13,"name":"ext","status":"failed"}]`))
+		case strings.HasSuffix(p, "/jobs/11/trace"):
+			w.Write([]byte("section_start:1:step_script\r\x1b[0;31mFAIL\x1b[0m TestX\nprogress 10%\rprogress 100%\n"))
+		case strings.HasSuffix(p, "/issues/4") && r.Method == "PUT":
+			b, _ := io.ReadAll(r.Body)
+			closed = string(b)
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	c := &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	runs, err := c.CheckHistory(ctx, "abc")
+	if err != nil || len(runs) != 3 || runs[0].ID != 11 || runs[0].Conclusion != "failure" || runs[1].Conclusion != "success" {
+		t.Fatalf("runs %+v %v", runs, err)
+	}
+	if log, err := c.CheckLog(ctx, runs[0]); err != nil || log != "FAIL TestX\nprogress 100%\n" {
+		t.Fatalf("log %q %v", log, err)
+	}
+	// An external CI's status has no job log.
+	if log, err := c.CheckLog(ctx, runs[2]); err != nil || log != "" {
+		t.Fatalf("external log %q %v", log, err)
+	}
+	if err := c.CloseIssue(ctx, 4); err != nil || closed != `{"state_event":"close"}` {
+		t.Fatalf("close %q %v", closed, err)
+	}
+}

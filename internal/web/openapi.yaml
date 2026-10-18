@@ -252,8 +252,12 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health]
       properties:
+        main_health:
+          type: array
+          description: Each repo's base branch CI, as main health last read it; empty while it's off
+          items: { $ref: "#/components/schemas/MainHealth" }
         disk_low: { type: string, description: "Why no job is starting for lack of disk; empty when there's room" }
         signed_in: { type: boolean, description: "The control room asks for a password (so the app can sign out)" }
         repo: { type: string, description: "the first repo; see repos" }
@@ -265,6 +269,26 @@ components:
         running: { type: integer }
         queued: { type: integer }
         version: { type: string }
+    MainHealth:
+      type: object
+      required: [repo, branch, state, sha, detail, checks]
+      properties:
+        repo: { type: string }
+        branch: { type: string }
+        state: { type: string, enum: [green, red, flaky, pending, no_ci, unreadable] }
+        sha: { type: string, description: the branch head it read }
+        detail: { type: string, description: "the red, flaky or pending checks, or why CI can't be read" }
+        checks:
+          type: array
+          description: The red and flaky checks it tracks, with the issue filed for each
+          items:
+            type: object
+            required: [check, kind, issue, issue_url]
+            properties:
+              check: { type: string }
+              kind: { type: string, enum: [red, flaky] }
+              issue: { type: integer, description: 0 until filed (the day's cap was reached) }
+              issue_url: { type: string }
     Item:
       type: object
       required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note]

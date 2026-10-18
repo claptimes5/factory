@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -313,6 +314,11 @@ type CheckRun struct {
 	Status     string `json:"status"`     // queued|in_progress|completed
 	Conclusion string `json:"conclusion"` // success|failure|neutral|cancelled|skipped|timed_out|action_required
 	URL        string `json:"html_url"`
+	// ID orders a check's runs: a rerun has a higher one.
+	ID int64 `json:"id"`
+	// Output is what the check said about itself (GitHub's title and
+	// summary), when CheckHistory lists it. It is CI output: untrusted.
+	Output string `json:"-"`
 }
 
 // CheckRuns lists the CI checks on a commit.
@@ -322,6 +328,48 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) 
 	}
 	err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", c.Repo, url.PathEscape(sha)), nil, &out)
 	return out.CheckRuns, err
+}
+
+// CheckHistory lists every run of every check on a commit, reruns
+// included, oldest first by ID.
+func (c *Client) CheckHistory(ctx context.Context, sha string) ([]CheckRun, error) {
+	var out []CheckRun
+	for page := 1; page <= 5; page++ {
+		var r struct {
+			CheckRuns []struct {
+				CheckRun
+				Output struct {
+					Title   string `json:"title"`
+					Summary string `json:"summary"`
+				} `json:"output"`
+			} `json:"check_runs"`
+		}
+		q := url.Values{"filter": {"all"}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?%s", c.Repo, url.PathEscape(sha), q.Encode()), nil, &r); err != nil {
+			return nil, err
+		}
+		for _, cr := range r.CheckRuns {
+			run := cr.CheckRun
+			run.Output = strings.TrimSpace(strings.TrimSpace(cr.Output.Title) + "\n" + strings.TrimSpace(cr.Output.Summary))
+			out = append(out, run)
+		}
+		if len(r.CheckRuns) < 100 {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// CheckLog is the start of what a failed check said: on GitHub, the
+// output CheckHistory already read, so no further call.
+func (c *Client) CheckLog(_ context.Context, run CheckRun) (string, error) {
+	return run.Output, nil
+}
+
+// CloseIssue closes an issue as completed.
+func (c *Client) CloseIssue(ctx context.Context, n int) error {
+	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "completed"}, nil)
 }
 
 // CreatePR opens a pull request.

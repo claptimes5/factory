@@ -174,6 +174,7 @@ export function Layout() {
           )}
         </div>
       </header>
+      {o && <MainHealth o={o} />}
       {o?.disk_low && (
         <div role="alert" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm text-warning md:px-6">
           <div className="mx-auto max-w-[1680px]">{o.disk_low}</div>
@@ -268,5 +269,42 @@ function Count({ n, className }: { n: number; className?: string }) {
     <span className={cn("flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-fill px-1 text-[11px] font-bold text-warning-ink", className)}>
       {n}
     </span>
+  );
+}
+
+/** A line per repo whose base branch is red or flaky, with the fix issue. */
+function MainHealth({ o }: { o: Overview }) {
+  const bad = o.main_health.filter((h) => h.state === "red" || h.state === "flaky");
+  if (bad.length === 0) return null;
+  return (
+    <section aria-label="Main health" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm md:px-6">
+      <ul className="mx-auto max-w-[1680px] space-y-1">
+        {bad.map((h) => (
+          <li key={h.repo} className="min-w-0 break-words">
+            <span className="font-medium text-destructive">
+              {o.repos.length > 1 ? `${repoName(h.repo)} ` : ""}
+              {h.branch} is {h.state === "red" ? "red" : "flaky"}
+            </span>
+            {": "}
+            {h.checks.length === 0
+              ? h.detail
+              : h.checks.map((c, i) => (
+                  <span key={c.check}>
+                    {i > 0 && ", "}
+                    <span className="font-mono">{c.check}</span>
+                    {c.kind === "flaky" && h.state === "red" ? " (flaky)" : ""}{" "}
+                    {c.issue > 0 ? (
+                      <a href={c.issue_url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                        #{c.issue}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">(not filed yet)</span>
+                    )}
+                  </span>
+                ))}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

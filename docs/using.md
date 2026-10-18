@@ -27,6 +27,10 @@ To reach it from another machine, or to put a password on it, see
 | **Inbox** | PRs ready for review, parked items and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
+When a repo's base branch is red or flaky (see
+[Keeping main green](#keeping-main-green)), a line under the header says so
+on every screen, with a link to the fix issue.
+
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
 are a tap away. A tablet gets two columns.
@@ -107,7 +111,9 @@ daily summary there too.
 The daemon also tells you when builds stop for
 [low disk space](configuration.md#disk-space) and start again, and when you
 merge a factory PR only after changing it (see
-[Failures become cases](quality.md#failures-become-cases)).
+[Failures become cases](quality.md#failures-become-cases)). With
+[main health](#keeping-main-green) on, it tells you once each time a check
+goes red or flaky on a base branch and once when it's green again.
 
 The dashboard's Inbox can also show browser notifications, but only while
 a dashboard tab is open.
@@ -125,7 +131,7 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage, queue depth, today's spend, recent jobs |
+| `factory status` | Items by stage, queue depth, today's spend, each repo's base branch CI (with main health on), recent jobs |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
 | `factory migrate` | Apply database migrations (a backup is written first) |
@@ -287,6 +293,74 @@ wrong one.
 Its prompt is `prompts/tune.md`, and it runs on `routing.tune` (see
 [Configuration](configuration.md#tuning)). It runs whether or not the
 orchestrator is on.
+
+## Keeping main green
+
+With `main_health.enabled` (see [Configuration](configuration.md#main-health)),
+the daemon reads CI on each repo's base branch every `main_health.every`
+(10 minutes). When a check goes red or flakes there, it files an issue for
+the fix and builds it before anything else.
+
+**What it reads.** The checks on the branch's latest commit: GitHub's
+check runs (GitHub Actions and apps that use the Checks API), or GitLab's
+pipeline jobs. For each check, the latest run with a result counts:
+
+- **Red:** it failed or timed out.
+- **Flaky:** it failed, then passed when it ran again on the same commit.
+  That's the only flake signal it uses: a check that fails on one commit
+  and passes on the next may just have been fixed.
+- A check still running counts as nothing, whatever it said before, and so
+  does one that was cancelled or skipped. A failure GitLab allows
+  (`allow_failure`) counts as passing.
+
+**What it files.** One open issue per repo and check, titled
+`Main is red: <check>` or `Flaky on main: <check>` and labeled
+`factory:main-health`. It names the commit, links the failing run and
+quotes the end of its output: on GitHub, what the check reported; on
+GitLab, the end of the job's log. That output is fenced and marked as
+untrusted, since a change's author can steer what CI prints, and the issue
+is what the builder reads. Before filing, the factory looks for an open
+issue it filed for the same check, so a lost database doesn't file twice.
+
+**First in the queue.** The fix's item gets priority 100. Items start at
+0 and the orchestrator's and tuning runs at 10, so its triage, build and
+review jobs are claimed first, unless the orchestrator raised something
+higher with `set_priority`. It still goes through triage, the gates,
+review and the usual merge rules.
+
+**Approval.** The factory wrote the issue, so by default it files it with
+`factory:ready` and starts at once, approved as the factory, as the
+orchestrator's issues are. The CI output in it is data, not the task: the
+task is the factory's own text above it. With
+`main_health.require_approval: true`, it files the issue without
+`factory:ready` and you're told; it starts once someone with write access
+adds the label, and still goes first. Either way, if the issue's text
+changes after approval, the item parks as any would.
+
+**When it's green again.** Once the check passes on the branch's latest
+commit, the factory comments on its issue and closes it, as long as the
+issue is still open and still labeled `factory:main-health`. An issue you
+took the label off is left alone. A build for it that hasn't opened a PR
+yet is parked, since there's nothing left to fix. A red check that passes
+on a rerun of the same commit is flaky, not fixed: its issue stays open for
+the flake, with a comment saying so. A flaky check's issue isn't closed
+when the check passes, since passing proves nothing about a flake. It's
+done when its fix merges, or when you close it.
+
+**Not looping.**
+
+- One issue per check at a time.
+- If the issue closes as done (its fix merged, say) and a later commit is
+  still red, that's a new failure, and it's filed again. Closed as not
+  planned on GitHub, it isn't filed again until the check passes.
+- At most `main_health.daily_issue_cap` (3) issues per repo per UTC day.
+  Past that you're told, and the issue is filed the next day if the check
+  is still failing.
+- A repo whose CI the factory can't read (no permission, no branch) or
+  that has no checks at all gets no issues, and you're told once.
+
+`factory status` shows each repo's state; so does the dashboard while a
+repo is red or flaky.
 
 ## Working on the dashboard
 

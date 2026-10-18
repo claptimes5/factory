@@ -518,6 +518,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if s := codexSignIn(cfg); s != "" {
 		fmt.Fprintf(w, "codex sign-in (by this shell's settings):\t%s\n", s)
 	}
+	for _, l := range mainHealthLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
@@ -529,6 +532,54 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// mainHealthLines are status's lines on each repo's base branch CI, as
+// main health last read it; none while it's off and never ran.
+func mainHealthLines(ctx context.Context, st *store.Store, cfg *config.Config) []string {
+	hs, _ := st.RepoHealths(ctx)
+	if !cfg.MainHealth.Enabled && len(hs) == 0 {
+		return nil
+	}
+	by := map[string]store.RepoHealth{}
+	for _, h := range hs {
+		by[strings.ToLower(h.Repo)] = h
+	}
+	issues, _ := st.HealthIssues(ctx, "")
+	var out []string
+	for _, repo := range cfg.RepoNames() {
+		h, ok := by[strings.ToLower(repo)]
+		if !ok {
+			out = append(out, fmt.Sprintf("main %s:\tnot read yet", repo))
+			continue
+		}
+		line := fmt.Sprintf("main %s:\t%s on %s", repo, strings.ReplaceAll(h.State, "_", " "), h.Branch)
+		if h.HeadSHA != "" {
+			line += " at " + h.HeadSHA[:min(7, len(h.HeadSHA))]
+		}
+		var checks []string
+		for _, is := range issues {
+			if !strings.EqualFold(is.Repo, repo) {
+				continue
+			}
+			c := is.Check + " (" + is.Kind + ", not filed yet)"
+			if is.IssueNumber > 0 {
+				c = fmt.Sprintf("%s (%s, %s)", is.Check, is.Kind, issueRef(cfg, repo, is.IssueNumber))
+			}
+			checks = append(checks, c)
+		}
+		switch {
+		case len(checks) > 0:
+			line += ": " + strings.Join(checks, ", ")
+		case h.Detail != "":
+			line += ": " + h.Detail
+		}
+		if !cfg.MainHealth.Enabled {
+			line += " (main_health is off)"
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // parseIssue reads an issue as 12, #12 or owner/name#12. A bare number

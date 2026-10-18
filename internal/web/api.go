@@ -101,6 +101,26 @@ type APIOverview struct {
 	// SignedIn is true when the control room asks for a password, so the
 	// app offers to sign out.
 	SignedIn bool `json:"signed_in"`
+	// MainHealth is each repo's base branch CI, as main health last read it.
+	MainHealth []APIMainHealth `json:"main_health"`
+}
+
+// APIMainHealth is one repo's base branch CI.
+type APIMainHealth struct {
+	Repo   string           `json:"repo"`
+	Branch string           `json:"branch"`
+	State  string           `json:"state"` // green, red, flaky, pending, no_ci or unreadable
+	SHA    string           `json:"sha"`
+	Detail string           `json:"detail"`
+	Checks []APIHealthCheck `json:"checks"`
+}
+
+// APIHealthCheck is a red or flaky check and the issue filed for it.
+type APIHealthCheck struct {
+	Check    string `json:"check"`
+	Kind     string `json:"kind"`
+	Issue    int    `json:"issue"` // 0 until filed
+	IssueURL string `json:"issue_url"`
 }
 
 // APIJob is one job.
@@ -462,7 +482,28 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
-		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != ""})
+		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != "",
+		MainHealth: s.mainHealth(ctx)})
+}
+
+func (s *Server) mainHealth(ctx context.Context) []APIMainHealth {
+	out := []APIMainHealth{}
+	hs, _ := s.Store.RepoHealths(ctx)
+	issues, _ := s.Store.HealthIssues(ctx, "")
+	for _, h := range hs {
+		m := APIMainHealth{Repo: h.Repo, Branch: h.Branch, State: h.State, SHA: h.HeadSHA, Detail: h.Detail, Checks: []APIHealthCheck{}}
+		for _, is := range issues {
+			if is.Repo == h.Repo {
+				c := APIHealthCheck{Check: is.Check, Kind: is.Kind, Issue: is.IssueNumber}
+				if is.IssueNumber > 0 {
+					c.IssueURL = s.issueURL(is.Repo, is.IssueNumber)
+				}
+				m.Checks = append(m.Checks, c)
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {

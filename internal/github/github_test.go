@@ -149,3 +149,34 @@ func TestAppTokenWithoutChecksPermission(t *testing.T) {
 		t.Fatalf("requests = %v", asked)
 	}
 }
+
+func TestCheckHistoryListsReruns(t *testing.T) {
+	var closed map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/o/r/commits/abc/check-runs":
+			if r.URL.Query().Get("filter") != "all" {
+				t.Errorf("filter = %q, want all (reruns)", r.URL.Query().Get("filter"))
+			}
+			w.Write([]byte(`{"check_runs":[
+				{"id":9,"name":"test","status":"completed","conclusion":"success","html_url":"https://ci/9","output":{"title":"ok","summary":""}},
+				{"id":5,"name":"test","status":"completed","conclusion":"failure","html_url":"https://ci/5","output":{"title":"1 failed","summary":"TestX timed out"}}]}`))
+		case r.Method == "PATCH" && r.URL.Path == "/repos/o/r/issues/4":
+			json.NewDecoder(r.Body).Decode(&closed)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	runs, err := c.CheckHistory(context.Background(), "abc")
+	if err != nil || len(runs) != 2 || runs[0].ID != 5 || runs[0].Conclusion != "failure" || runs[1].ID != 9 {
+		t.Fatalf("runs = %+v %v", runs, err)
+	}
+	if log, _ := c.CheckLog(context.Background(), runs[0]); log != "1 failed\nTestX timed out" {
+		t.Fatalf("log = %q", log)
+	}
+	if err := c.CloseIssue(context.Background(), 4); err != nil || closed["state"] != "closed" {
+		t.Fatalf("close: %v %v", closed, err)
+	}
+}
