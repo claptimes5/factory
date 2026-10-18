@@ -391,7 +391,11 @@ effort: a missing session starts fresh.
 
 **Pricing.** Claude Code reports its own cost. Codex reports only tokens,
 which the daemon prices from `pricing`, cached input included. Keep those
-prices current when OpenAI changes them.
+prices current when OpenAI changes them. On a
+[ChatGPT plan](setup.md#codex-on-a-chatgpt-plan), Codex jobs record their
+tokens and cost $0, so they don't count against the budgets; the plan's
+usage limits hold them instead. Claude Code on a subscription still
+reports a dollar figure, and that counts.
 
 ## Auto-merge
 
@@ -470,9 +474,10 @@ run and `orchestrator.daily_budget` per day, which don't count against the
 build budget. `factory compare` arms split what's left of today's budget.
 
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
-five-hour and a weekly usage window. The factory records the latest
+five-hour and a weekly usage window, and so does Codex on a
+[ChatGPT plan](setup.md#codex-on-a-chatgpt-plan). The factory records the latest
 reading each run reports, and `factory status`, the dashboard's
-**Metrics** page and the orchestrator show how much is used and when it
+**Spend** page and the orchestrator show how much is used and when it
 resets. When the five-hour or weekly window reaches `pause_at_usage`, that
 harness's jobs wait in the queue until it resets, instead of failing and
 using up retries. The other harness keeps working, and you're notified
@@ -488,8 +493,7 @@ Claude Code reports these readings in its output, but this isn't in its
 documentation, so a reading may be missing. Codex writes them only to its
 session file, which the factory copies out inside the job container (the
 Docker runner only, and the job image needs `sh`). Codex only has windows
-when it's signed in to a ChatGPT plan, and the factory runs it with an API
-key, so for now there are no Codex readings to pause on.
+on a ChatGPT plan; on an API key there are no Codex readings to pause on.
 
 Set a spend alert on both API accounts as well. Spend from a job killed
 mid-run is not recorded (the CLIs report cost only at the end), so the

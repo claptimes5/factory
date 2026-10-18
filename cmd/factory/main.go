@@ -4,6 +4,7 @@
 //	factory serve      run the daemon
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
+//	factory codex-login sign Codex in to a ChatGPT plan
 //	factory migrate    apply database migrations and exit
 //	factory backup F   write a consistent copy of the database to F
 package main
@@ -73,7 +74,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -105,6 +106,9 @@ func run(args []string) error {
 	if fs.Arg(0) == "setup" {
 		// Setup waits on the terminal, so Ctrl-C ends it at once (see newPrompter).
 		return setup(context.Background(), *cfgPath, cfg, *envPath, newPrompter())
+	}
+	if fs.Arg(0) == "codex-login" {
+		return codexLogin(cfg, *envPath, newPrompter())
 	}
 	if fs.Arg(0) == "images" {
 		// Build the job images: the missing ones, or all with --rebuild.
@@ -272,6 +276,14 @@ func secrets() map[string]map[string]string {
 	if v, ok := codex["OPENAI_API_KEY"]; ok && codex["CODEX_API_KEY"] == "" {
 		codex["CODEX_API_KEY"] = v
 	}
+	// On a ChatGPT plan no API key reaches Codex: codex exec would use it
+	// instead of the plan.
+	switch mode, _ := codexAuth(); mode {
+	case codexAccessToken:
+		codex = pick("CODEX_ACCESS_TOKEN")
+	case codexChatGPT:
+		codex = map[string]string{}
+	}
 	return map[string]map[string]string{
 		"claude": pick("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
 		"codex":  codex,
@@ -326,6 +338,9 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
 		cfg.Orchestrator.On = false
 	}
+	if _, err := codexAuth(); err != nil {
+		return nil, err
+	}
 	r, err := newRunner(cfg, daemonOwner(cfg))
 	if err != nil {
 		return nil, err
@@ -346,7 +361,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		Runner: r,
 		Harnesses: map[string]harness.Harness{
 			"claude": harness.NewClaude(r),
-			"codex":  harness.NewCodex(r),
+			"codex":  newCodex(cfg, r),
 		},
 		Secrets: secrets(),
 		Log:     slog.Default(),
@@ -498,6 +513,11 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if limits, _ := st.Limits(ctx); len(limits) > 0 {
 		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
 	}
+	// From this command's own settings, which are the daemon's unless its
+	// environment overrides factory.env.
+	if s := codexSignIn(cfg); s != "" {
+		fmt.Fprintf(w, "codex sign-in (by this shell's settings):\t%s\n", s)
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
@@ -562,6 +582,9 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	if len(args) > 0 && args[0] == "capture" {
 		return runCapture(ctx, cfg, args[1:])
 	}
+	if _, err := codexAuth(); err != nil {
+		return err // as build checks it for the daemon
+	}
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	candidate := fs.String("config", "", "candidate factory.yaml (routing, prompts, skills) to evaluate; default the main config")
 	set := fs.String("set", "evals", "directory of replay cases")
@@ -609,7 +632,7 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	defer os.RemoveAll(work)
 	rep, err := eval.Run(ctx, eval.Options{
 		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, TokensFor: tokensFor, WorkDir: work, Parallel: *parallel,
-		Harnesses: map[string]harness.Harness{"claude": harness.NewClaude(r), "codex": harness.NewCodex(r)},
+		Harnesses: map[string]harness.Harness{"claude": harness.NewClaude(r), "codex": newCodex(cfg, r)},
 	}, cases)
 	if err != nil {
 		return err

@@ -214,7 +214,7 @@ func TestSetupWithSeveralRepos(t *testing.T) {
 		"y", // create labels on both
 		"",  // run the readiness check
 		"sk-ant-api03-abc",
-		"",
+		"", "", // Codex on an API key, but none
 		"",
 	)
 	cfg, err := config.Load(cfgPath)
@@ -328,7 +328,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 		"y", // build the images
 		"",  // run the readiness check
 		"sk-ant-api03-abc",
-		"",
+		"", "", // Codex on an API key, but none
 		"",
 	)
 	cfg, err := config.Load(cfgPath)
@@ -390,7 +390,7 @@ func TestSetupFilesReadinessIssues(t *testing.T) {
 		"y", // open the issues
 		"y", // and queue them
 		"sk-ant-api03-abc",
-		"",
+		"", "", // Codex on an API key, but none
 		"",
 	)
 	// While the repo has blockers, only they are queued.
@@ -531,6 +531,7 @@ func TestSetupCreatesTheAppAndSavesEverything(t *testing.T) {
 		"y",              // create labels
 		"",               // run the readiness check
 		"sk-ant-api03-abc",
+		"", // Codex on an API key
 		"sk-openai-xyz",
 		"", // no notifications
 	)
@@ -571,8 +572,8 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 		"n",                         // don't create labels
 		"n",                         // skip the readiness check
 		"sk-ant-oat01-subscription", // a subscription token goes in its own variable
-		"",                          // no OpenAI key
-		"https://example.com/hook",  // not a supported notifier
+		"", "",                      // an API key for Codex, but none
+		"https://example.com/hook", // not a supported notifier
 		"https://ntfy.sh/my-topic",
 	)
 	vals, _ := readEnvFile(envPath)

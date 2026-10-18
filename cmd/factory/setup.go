@@ -28,7 +28,8 @@ import (
 // envKeys are the settings `factory setup` asks for, in file order.
 var envKeys = []string{
 	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
-	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_NOTIFY_URL",
+	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_CODEX_AUTH", "CODEX_ACCESS_TOKEN",
+	"FACTORY_NOTIFY_URL",
 }
 
 // prompter asks questions on a terminal, or reads answers line by line
@@ -318,14 +319,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 
 	if usesHarness(cfg, "codex") {
 		p.say("\n== 8. OpenAI (reviews the code)")
-		p.say("factory.yaml has Codex review Claude's work. Paste an API key from")
-		p.say("https://platform.openai.com/api-keys. A ChatGPT plan isn't needed.")
-		p.say("No OpenAI account? Leave it empty and see docs/configuration.md#claude-only-review.")
-		vals["OPENAI_API_KEY"] = p.secret("OpenAI API key", firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"]))
-		vals["CODEX_API_KEY"] = ""
-		if vals["OPENAI_API_KEY"] == "" {
-			p.say("Without it, reviews will fail until you add one or switch to Claude-only review.")
-		}
+		setupCodex(p, cfg, vals)
 		if err := save(); err != nil {
 			return err
 		}
@@ -351,6 +345,61 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	p.say("Start the factory with:\n\n    ./factory serve\n")
 	p.say("Then open http://%s/app/ and label an issue on %s with %s.", cfg.Web.Listen, strings.Join(cfg.RepoNames(), " or "), cfg.Intake.Label)
 	return nil
+}
+
+// setupCodex asks how Codex signs in: an API key, a ChatGPT plan, or a
+// Business or Enterprise access token.
+func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
+	p.say("factory.yaml has Codex review Claude's work. Codex can sign in with:")
+	p.say("  1. An OpenAI API key, billed per use. OpenAI recommends this for automation.")
+	p.say("  2. A ChatGPT plan (Plus, Pro, Business or Enterprise), using the plan's limits.")
+	p.say("  3. A Codex access token from a ChatGPT Business or Enterprise workspace.")
+	p.say("No OpenAI account? Choose 1, leave the key empty, and see")
+	p.say("docs/configuration.md#claude-only-review.")
+	def := "1"
+	switch {
+	case vals["CODEX_ACCESS_TOKEN"] != "":
+		def = "3"
+	case vals["FACTORY_CODEX_AUTH"] == codexChatGPT:
+		def = "2"
+	}
+	for {
+		switch p.ask("API key or ChatGPT plan? 1, 2 or 3", def) {
+		case "1":
+			p.say("Paste an API key from https://platform.openai.com/api-keys.")
+			vals["OPENAI_API_KEY"] = p.secret("OpenAI API key", firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"]))
+			vals["CODEX_API_KEY"], vals["FACTORY_CODEX_AUTH"], vals["CODEX_ACCESS_TOKEN"] = "", "", ""
+			if vals["OPENAI_API_KEY"] == "" {
+				p.say("Without it, reviews will fail until you add one or switch to Claude-only review.")
+			}
+			return
+		case "2":
+			p.say("On a ChatGPT plan:")
+			p.say("  - Don't use it for public repos, where anyone can put text in front of Codex.")
+			p.say("  - Codex runs one job at a time, since two jobs can't share one sign-in.")
+			p.say("  - Codex refreshes the sign-in about every 8 days, and the factory keeps the")
+			p.say("    new one. If it stops working, run `./factory codex-login` again.")
+			p.say("  - Jobs cost $0 in the factory's budget; the plan's 5-hour and weekly limits")
+			p.say("    show in `./factory status` and on the dashboard's Spend page, and Codex")
+			p.say("    jobs wait when one is nearly used up.")
+			vals["FACTORY_CODEX_AUTH"] = codexChatGPT
+			vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"], vals["CODEX_ACCESS_TOKEN"] = "", "", ""
+			if !signInCodex(p, cfg) {
+				p.say("Codex jobs wait until you sign in with: ./factory codex-login")
+			}
+			return
+		case "3":
+			p.say("See https://learn.chatgpt.com/codex/enterprise/access-tokens for how to make")
+			p.say("one. When it expires, make a new one and run setup again.")
+			vals["CODEX_ACCESS_TOKEN"] = p.secret("Codex access token", vals["CODEX_ACCESS_TOKEN"])
+			vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"], vals["FACTORY_CODEX_AUTH"] = "", "", ""
+			if vals["CODEX_ACCESS_TOKEN"] == "" {
+				p.say("Without it, reviews will fail until you add one.")
+			}
+			return
+		}
+		p.say("Answer 1, 2 or 3.")
+	}
 }
 
 // clientFor makes the client for one repo on its host (GitHub or GitLab)

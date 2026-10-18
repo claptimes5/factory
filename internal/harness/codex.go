@@ -3,9 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
@@ -21,11 +19,18 @@ func NewCodex(r runner.Runner) Harness {
 	return &cliHarness{name: "codex", a: codexAdapter{}, runner: r}
 }
 
-type codexAdapter struct{}
+type codexAdapter struct {
+	plan *codexPlan // nil with an API key
+}
 
-func (codexAdapter) skillsPath(p runner.Paths) string { return path.Join(p.Home, ".codex", "skills") }
+func (a codexAdapter) skillsPath(p runner.Paths) string {
+	if a.plan.withFile() {
+		return path.Join(a.plan.home(p), "skills")
+	}
+	return path.Join(p.Home, ".codex", "skills")
+}
 
-func (codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
+func (a codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.Model == "" {
 		return nil, fmt.Errorf("codex: model is required")
 	}
@@ -55,7 +60,8 @@ const codexLimitsFile = "codex-limits.json"
 
 // limitsAfter reads the usage-limit windows the wrapper saved.
 func (codexAdapter) limitsAfter(outDir string, res *Result) {
-	b, err := os.ReadFile(filepath.Join(outDir, codexLimitsFile))
+	// The job could have put anything there.
+	b, err := readJobFile(outDir, codexLimitsFile)
 	if err != nil {
 		return
 	}

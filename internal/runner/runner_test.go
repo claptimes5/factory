@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,5 +41,21 @@ func TestLocalRunStreamsAndTimesOut(t *testing.T) {
 	_, err = Local{}.Run(context.Background(), Spec{Workdir: dir, Cmd: []string{"sleep", "5"}, Timeout: 50 * time.Millisecond}, &out)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("want timeout, got %v", err)
+	}
+}
+
+func TestRunnersCopyStderrOnAFailedRun(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'error: 401 Unauthorized' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]Runner{"docker": &Docker{Bin: bin}, "local": Local{}} {
+		var stderr bytes.Buffer
+		s := Spec{Name: "j", Image: "img", Workdir: t.TempDir(), OutDir: t.TempDir(), Stderr: &stderr,
+			Cmd: []string{"sh", "-c", "echo 'error: 401 Unauthorized' >&2; exit 1"}}
+		code, err := r.Run(context.Background(), s, io.Discard)
+		if err != nil || code != 1 || !strings.Contains(stderr.String(), "401 Unauthorized") {
+			t.Fatalf("%s: code %d %v, stderr %q", name, code, err, stderr.String())
+		}
 	}
 }

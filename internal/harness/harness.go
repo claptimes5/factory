@@ -79,6 +79,12 @@ type Result struct {
 	ExitCode     int
 	SessionID    string // the CLI's session, for a later Resume
 	Limits       []Limit
+	// SignedOut is set when the CLI couldn't sign in (Codex on a ChatGPT
+	// plan): the run failed through no fault of the task.
+	SignedOut bool
+	// Redact are secrets the run held besides its env (a ChatGPT
+	// sign-in's tokens), to keep out of its log.
+	Redact []string
 }
 
 // setLimit replaces the reading for l's window.
@@ -116,6 +122,27 @@ type cliHarness struct {
 
 func (h *cliHarness) Name() string { return h.name }
 
+func (h *cliHarness) OneAtATime() bool {
+	g, ok := h.a.(Gated)
+	return ok && g.OneAtATime()
+}
+
+func (h *cliHarness) Unavailable() string {
+	if g, ok := h.a.(Gated); ok {
+		return g.Unavailable()
+	}
+	return ""
+}
+
+// Recover cleans up after runs a crash cut short, where the CLI keeps
+// files outside the job (Codex's ChatGPT sign-in).
+func (h *cliHarness) Recover() error {
+	if r, ok := h.a.(interface{ Recover() error }); ok {
+		return r.Recover()
+	}
+	return nil
+}
+
 func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Event) (*Result, error) {
 	if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
 		return nil, err
@@ -145,6 +172,15 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 		return nil, err
 	}
 	spec.Cmd = cmd
+	after := func(*Result) {}
+	var redact []string
+	if pa, ok := h.a.(interface {
+		prepare(ctx context.Context, req RunRequest, p runner.Paths, spec *runner.Spec) (func(*Result), []string, error)
+	}); ok {
+		if after, redact, err = pa.prepare(ctx, req, paths, &spec); err != nil {
+			return nil, err
+		}
+	}
 	pr, pw := io.Pipe()
 	spec.Stdin = stringsReader(req.Prompt)
 
@@ -167,7 +203,8 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 			if len(line) == 0 {
 				continue
 			}
-			emit(Event{Kind: "raw", Payload: append(json.RawMessage(nil), line...)})
+			raw := json.RawMessage(scrub(string(line), redact))
+			emit(Event{Kind: "raw", Payload: raw})
 			h.a.parse(line, res, emit)
 		}
 		_, _ = io.Copy(io.Discard, pr)
@@ -181,6 +218,7 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	}); ok && req.CaptureLimits {
 		la.limitsAfter(req.OutDir, res)
 	}
+	after(res)
 	if runErr != nil {
 		return res, runErr
 	}

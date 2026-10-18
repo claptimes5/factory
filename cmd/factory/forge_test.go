@@ -65,7 +65,7 @@ func TestSetupWithGitLab(t *testing.T) {
 		"y", // create labels on both
 		"",  // run the readiness check
 		"sk-ant-api03-abc",
-		"",
+		"", "", // Codex on an API key, but none
 		"",
 	)
 	cfg, err := config.Load(cfgPath)

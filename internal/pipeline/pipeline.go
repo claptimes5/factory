@@ -130,6 +130,7 @@ type Pipeline struct {
 	lastPoll   time.Time
 	budgetHalt string            // day the daily cap halted dequeuing, to notify once
 	limitHalt  map[string]string // harness -> the window that paused it, to notify once
+	signInHalt map[string]string // harness -> why it can't sign in, to notify once
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
@@ -243,6 +244,7 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 	if d, ok := p.Runner.(*runner.Docker); ok {
 		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
 	}
+	p.recoverSignIns()
 	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool { return false })
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
@@ -429,7 +431,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.pausedHarnesses(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.heldHarnesses(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -447,7 +449,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.pausedHarnesses(ctx))
+		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.heldHarnesses(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -456,7 +458,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobSkipping(ctx, except, p.pausedHarnesses(ctx))
+	return p.Store.ClaimJobSkipping(ctx, except, p.heldHarnesses(ctx))
 }
 
 // pausedHarnesses are the harnesses whose subscription window is used up
@@ -964,6 +966,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	}
 	close(events)
 	<-done
+	p.scrubLog(logPath, res)
 	p.recordLimits(ctx, j.Harness, res)
 	run := agentRun{res: res, err: err}
 	if res != nil && res.SessionID != "" {
