@@ -213,6 +213,7 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
       | Pull requests | Read and write | opening and updating draft PRs |
       | Checks | Read-only | the CI panel in the dashboard |
       | Dependabot alerts | Read-only | [`sources.dependabot`](configuration.md#sources), if you turn it on |
+      | Actions | Read-only | [main health](configuration.md#main-health), to tell workflows apart when two have a job of the same name |
 
       Leave **Workflows** at *No access*, so the factory can never edit its
       own CI. An app made without *Checks* still works, but the dashboard's
