@@ -15,7 +15,7 @@ web:
 runner:
   kind: docker                # docker | local (local runs CLIs on the host; dev only)
   image: factory-job:latest   # built from deploy/job-image
-  network: ""                 # set to an egress-allowlisted Docker network
+  network: ""                 # the egress proxy's way out; jobs reach only runner.egress hosts
   cpus: "2"
   memory: 4g
 

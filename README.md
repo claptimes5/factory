@@ -761,6 +761,43 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **The review is pinned to the verified commit.** If the branch moved after
   the gates ran, the item parks.
 
+### Network: the egress allowlist
+
+With the docker runner, jobs can reach only the hosts on an allowlist. A
+builder that reads a prompt injection in an issue or a dependency then
+has nowhere to send the keys it holds.
+
+- **Jobs sit on a network with no way out** (`factory-egress`, internal,
+  with its gateway off the host). They can't resolve outside names, reach
+  an address, or reach the host's ports. Their HTTP(S) goes through the
+  egress proxy (`factory-egress-proxy`). That proxy is this binary, run in
+  a locked-down container on that network and on the usual one.
+- **The proxy forwards only to listed host names,** on ports 443 and 80.
+  It never forwards to IP addresses or to names that resolve to private,
+  loopback or link-local addresses. That rules out the cloud metadata
+  service and your LAN.
+- **The built-in list** covers the Claude and OpenAI APIs and their
+  sign-in, GitHub, gitlab.com, and the Go, npm, PyPI, RubyGems, crates.io
+  and Maven registries. None of them accepts an upload without
+  credentials the job doesn't have. Each repo's own self-hosted GitLab is
+  added for you.
+- **Tests and hidden scenarios that run with no network** still get none.
+
+```yaml
+runner:
+  egress:
+    allow: [registry.example.com, "*.cdn.example.com", "git.example.com:8443"]
+    private: [mirror.corp.example]   # on your LAN
+    # no_defaults: true              # only the hosts above
+    # mode: open                     # Docker's usual network: the whole internet
+```
+
+When a job hits a host that isn't listed, it gets a 403 that names the
+setting to change. `docker logs factory-egress-proxy` lists every refusal.
+The allowlist needs Docker 28 or later on a Linux host (WSL counts). On
+anything else, the factory won't start until you set `mode: open`.
+Changing the list restarts the proxy before the next job.
+
 ## Where this differs from SPEC.md
 
 - **The daemon pushes, not the builder** (see Isolation).

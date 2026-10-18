@@ -9,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"context"
 	"encoding/json"
 	"flag"
@@ -57,6 +58,10 @@ func run(args []string) error {
 	// is no config or database: it only joins stdio to the daemon's socket.
 	if len(args) == 2 && args[0] == "mcp-bridge" {
 		return mcp.Bridge(args[1], os.Stdin, os.Stdout)
+	}
+	// The egress proxy runs in its own container, also without either.
+	if len(args) > 0 && args[0] == "egress-proxy" {
+		return egressProxy(args[1:])
 	}
 	fs := flag.NewFlagSet("factory", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FACTORY_CONFIG", "factory.yaml"), "path to factory.yaml")
@@ -227,11 +232,24 @@ func secrets() map[string]map[string]string {
 	}
 }
 
-func newRunner(cfg *config.Config) runner.Runner {
-	if cfg.Runner.Kind == "docker" {
-		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
+func newRunner(cfg *config.Config) (runner.Runner, error) {
+	if cfg.Runner.Kind != "docker" {
+		return runner.Local{}, nil
 	}
-	return runner.Local{}
+	d := &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
+	if cfg.EgressAllowlist() {
+		if runtime.GOOS != "linux" {
+			// The proxy's container runs this binary.
+			return nil, errors.New("the egress allowlist needs a Linux host (WSL counts); set runner.egress.mode: open to run jobs with open network access")
+		}
+		bin, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		allow, private := cfg.EgressRules()
+		d.Egress = &runner.Egress{Allow: allow, Private: private, Image: cfg.Runner.Image, Binary: bin}
+	}
+	return d, nil
 }
 
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
@@ -249,7 +267,10 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
 		cfg.Orchestrator.On = false
 	}
-	r := newRunner(cfg)
+	r, err := newRunner(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &pipeline.Pipeline{
 		Cfg:   cfg,
 		Store: st,
@@ -495,7 +516,10 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 		}
 		return t
 	}
-	r := newRunner(cfg)
+	r, err := newRunner(cfg)
+	if err != nil {
+		return err
+	}
 	work, err := os.MkdirTemp(cfg.Path(cfg.DataDir), "eval-")
 	if err != nil {
 		return err
