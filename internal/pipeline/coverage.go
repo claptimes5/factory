@@ -110,6 +110,10 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 		return r
 	}
 	defer os.RemoveAll(baseDir)
+	if _, err := p.copyFilesInto(ctx, pt.repo, baseDir); err != nil {
+		r.Status, r.Detail = gates.Fail, err.Error()
+		return r
+	}
 	// The base's own failures aren't the change's: a package the base
 	// can't measure has no floor to hold the change to.
 	if g.Install != "" {

@@ -105,6 +105,9 @@ type Workspace struct {
 	BaseSHA string // tip of the base branch when the job started
 	Start   string // HEAD of the job's branch before the agent ran
 	Existed bool   // the job's branch already existed on the remote
+	// Placed are the files.from files copied into Work, which Ingest
+	// never commits.
+	Placed []string
 }
 
 // Prepare clones the remote into dir/repo and checks out branch (created
@@ -181,6 +184,17 @@ func (g *Git) Ingest(ctx context.Context, ws *Workspace, msg string) (sha string
 	gd := []string{"--git-dir=" + filepath.Join(ws.Repo, ".git"), "--work-tree=" + ws.Work}
 	if _, err := g.run(ctx, ws.Repo, nil, append(gd, "add", "-A", "--", ".")...); err != nil {
 		return "", false, err
+	}
+	// info/exclude keeps them out of add -A, but a builder's .gitignore
+	// can override it, so take them back out by name.
+	if len(ws.Placed) > 0 {
+		args := append(gd, "rm", "--cached", "--quiet", "--ignore-unmatch", "--")
+		for _, f := range ws.Placed {
+			args = append(args, ":(literal)"+f)
+		}
+		if _, err := g.run(ctx, ws.Repo, nil, args...); err != nil {
+			return "", false, err
+		}
 	}
 	if _, err := g.run(ctx, ws.Repo, nil, append(gd, "diff", "--no-ext-diff", "--cached", "--quiet")...); err == nil {
 		return ws.Start, false, nil

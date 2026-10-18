@@ -370,6 +370,10 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.R
 	if err != nil {
 		return nil, nil, err
 	}
+	// After the snapshot: they aren't the commit's, so a check may change them.
+	if _, err := p.copyFilesInto(ctx, repo, gateDir); err != nil {
+		return nil, nil, err
+	}
 	if g.Install != "" {
 		r := gates.Result{Gate: "install", Status: gates.Pass}
 		code, out, err := p.gateExec(ctx, jobID, gateDir, g.Install, gateRun{repo: repo, install: true})
@@ -460,6 +464,10 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, pt *part, command
 		if err := p.git(pt.repo).Show(ctx, repo, head, f, filepath.Join(dir, f)); err != nil {
 			continue
 		}
+	}
+	if _, err := p.copyFilesInto(ctx, pt.repo, dir); err != nil {
+		r.Status, r.Detail = gates.Fail, err.Error()
+		return r
 	}
 	var pkgs []string
 	for k := range pkgSet {

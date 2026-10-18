@@ -84,6 +84,9 @@ func (p *Pipeline) prepareParts(ctx context.Context, dir string, it *store.WorkI
 		if err != nil {
 			return nil, err
 		}
+		if err := p.placeBuilderFiles(ctx, it.Repo, ws); err != nil {
+			return nil, err
+		}
 		return []*part{{repo: it.Repo, ws: ws}}, nil
 	}
 	var parts []*part
@@ -95,6 +98,9 @@ func (p *Pipeline) prepareParts(ctx context.Context, dir string, it *store.WorkI
 		}
 		ws, err := p.git(m).PrepareAt(ctx, filepath.Join(dir, "repos", f), work, p.repoConf(m).BaseBranch, branch(m), fresh)
 		if err != nil {
+			return nil, fmt.Errorf("%s: %w", m, err)
+		}
+		if err := p.placeBuilderFiles(ctx, m, ws); err != nil {
 			return nil, fmt.Errorf("%s: %w", m, err)
 		}
 		parts = append(parts, &part{repo: m, folder: f, ws: ws})
@@ -400,4 +406,23 @@ func (p *Pipeline) closeOutWorkspace(ctx context.Context, it *store.WorkItem, pr
 		p.notify(ctx, fmt.Sprintf("The PRs for %s were merged with your changes. If they fixed something the factory got wrong, it's worth a replay case.", p.ref(it.Repo, it.IssueNumber)))
 	}
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+}
+
+// placeBuilderFiles copies a repo's files into the builder's checkout, if
+// it has one, and keeps them out of both clones' git status.
+func (p *Pipeline) placeBuilderFiles(ctx context.Context, repo string, ws *Workspace) error {
+	if ws.Work == "" {
+		return nil
+	}
+	placed, err := p.copyFilesInto(ctx, repo, ws.Work)
+	if err != nil {
+		return err
+	}
+	ws.Placed = placed
+	for _, d := range []string{ws.Repo, ws.Work} {
+		if err := excludeFiles(d, placed); err != nil {
+			return err
+		}
+	}
+	return nil
 }
