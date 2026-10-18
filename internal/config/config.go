@@ -239,6 +239,9 @@ type Config struct {
 type Price struct {
 	InputPerMTok  float64 `yaml:"input_per_mtok"`
 	OutputPerMTok float64 `yaml:"output_per_mtok"`
+	// CachedPerMTok prices input read from the prompt cache; 0 prices it
+	// as other input.
+	CachedPerMTok float64 `yaml:"cached_input_per_mtok"`
 }
 
 // Duration parses Go duration strings such as "10m".
@@ -836,7 +839,7 @@ func sameModel(harness, a, b string) bool {
 		return true
 	}
 	if harness == "claude" {
-		for _, f := range []string{"opus", "sonnet", "haiku"} {
+		for _, f := range []string{"fable", "opus", "sonnet", "haiku"} {
 			if strings.Contains(a, f) && strings.Contains(b, f) {
 				return true
 			}
@@ -878,8 +881,14 @@ func (c *Config) Timeout(stage string) time.Duration {
 	return 30 * time.Minute
 }
 
-// CostOf prices token usage for models that do not report dollars.
-func (c *Config) CostOf(model string, in, out int64) float64 {
+// CostOf prices token usage for models that do not report dollars. in
+// includes cached, the input read from the prompt cache.
+func (c *Config) CostOf(model string, in, cached, out int64) float64 {
 	p := c.Pricing[model]
-	return float64(in)/1e6*p.InputPerMTok + float64(out)/1e6*p.OutputPerMTok
+	cachedPrice := p.CachedPerMTok
+	if cachedPrice == 0 {
+		cachedPrice = p.InputPerMTok
+	}
+	cached = min(max(cached, 0), in)
+	return float64(in-cached)/1e6*p.InputPerMTok + float64(cached)/1e6*cachedPrice + float64(out)/1e6*p.OutputPerMTok
 }

@@ -213,7 +213,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		return err
 	}
 	review := `{"decision":"pass","findings":[{"severity":"minor","file":"parser/parser.go","line":42,"claim":"The bounds check repeats the loop condition.","evidence":"for i <= len(toks) already guards it"},{"severity":"major","file":"parser/parser_test.go","line":12,"claim":"The test only covers ASCII input.","evidence":"No case with a multi-byte final token"}],"challenged_assumptions":["Inputs are always UTF-8"]}`
-	rev, err := job(101, "review", "gpt-5", state.Succeeded, 0.61, review)
+	rev, err := job(101, "review", "gpt-6.1-sol", state.Succeeded, 0.61, review)
 	if err != nil {
 		return err
 	}
@@ -276,13 +276,13 @@ new file mode 100644
 	if err := st.SetGateResults(ctx, opus, []store.GateResult{{Gate: "build", Status: "pass"}, {Gate: "test", Status: "pass"}, {Gate: "lint", Status: "pass"}, {Gate: "proves_fix", Status: "pass"}, {Gate: "diff_guard", Status: "pass"}}); err != nil {
 		return err
 	}
-	if _, err := job(103, "review", "gpt-5", state.Running, 0, ""); err != nil {
+	if _, err := job(103, "review", "gpt-6.1-sol", state.Running, 0, ""); err != nil {
 		return err
 	}
 	if _, err := job(107, "implement", "sonnet", state.Succeeded, 2.2, ""); err != nil {
 		return err
 	}
-	if _, err := job(107, "review", "gpt-5", state.Succeeded, 0.5, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
+	if _, err := job(107, "review", "gpt-6.1-sol", state.Succeeded, 0.5, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
 		return err
 	}
 	// 109 spans the acme workspace: an API change and the page that shows it.
@@ -296,7 +296,7 @@ new file mode 100644
 	if err := st.SetGateResults(ctx, ws, []store.GateResult{{Gate: "api: test", Status: "pass"}, {Gate: "api: diff_guard", Status: "pass"}, {Gate: "web: build", Status: "pass"}, {Gate: "web: test", Status: "pass"}, {Gate: "web: diff_guard", Status: "pass"}}); err != nil {
 		return err
 	}
-	if _, err := job(109, "review", "gpt-5", state.Succeeded, 0.8, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
+	if _, err := job(109, "review", "gpt-6.1-sol", state.Succeeded, 0.8, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
 		return err
 	}
 	wsPR, wsBranch := 92, "factory/web-109"

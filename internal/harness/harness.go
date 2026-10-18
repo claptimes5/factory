@@ -57,11 +57,14 @@ type Result struct {
 	CostKnown bool // false when the CLI reports tokens only
 	TokensIn  int64
 	TokensOut int64
-	Turns     int
-	IsError   bool
-	Error     string
-	ExitCode  int
-	SessionID string // the CLI's session, for a later Resume
+	// TokensCached is the part of TokensIn read from the prompt cache,
+	// which is priced lower.
+	TokensCached int64
+	Turns        int
+	IsError      bool
+	Error        string
+	ExitCode     int
+	SessionID    string // the CLI's session, for a later Resume
 }
 
 // Harness runs one agent CLI.

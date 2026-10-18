@@ -79,7 +79,8 @@ func (codexAdapter) parse(line []byte, res *Result, emit func(Event)) {
 		}
 	case "turn.completed":
 		if l.Usage != nil {
-			res.TokensIn += l.Usage.InputTokens
+			res.TokensIn += l.Usage.InputTokens // cached included
+			res.TokensCached += l.Usage.CachedInputTokens
 			res.TokensOut += l.Usage.OutputTokens
 		}
 		res.Turns++

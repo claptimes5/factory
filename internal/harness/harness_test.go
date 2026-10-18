@@ -106,7 +106,7 @@ func TestCodexParsesFinalAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Final, `"decision":"pass"`) || res.TokensIn != 1000 || res.TokensOut != 300 || res.CostKnown {
+	if !strings.Contains(res.Final, `"decision":"pass"`) || res.TokensIn != 1000 || res.TokensCached != 200 || res.TokensOut != 300 || res.CostKnown {
 		t.Fatalf("res = %+v", res)
 	}
 	cmd := strings.Join(fr.spec.Cmd, " ")
