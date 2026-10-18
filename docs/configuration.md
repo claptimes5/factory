@@ -24,6 +24,7 @@ change something by hand.
 - [Learning from your edits](#learning-from-your-edits)
 - [Backlog grooming](#backlog-grooming)
 - [PR previews](#pr-previews)
+- [PR descriptions](#pr-descriptions)
 - [Claude-only review](#claude-only-review)
 - [How review checks itself](#how-review-checks-itself)
 
@@ -872,6 +873,29 @@ branch in its settings.
 A page with a long scroll is cut at 4000 pixels. Previews aren't
 supported for a repo in a [workspace](#workspaces-one-change-across-repos)
 yet.
+
+## PR descriptions
+
+What goes in a PR's description is in
+[The PR description](using.md#the-pr-description). One setting decides
+whether its Testing section quotes the end of each passing check's output:
+
+```yaml
+pr:
+  check_output: private   # private (the default), always or never
+```
+
+- `private` quotes it only on a repo the forge reports as private: its
+  `visibility` must be `private` on GitHub and on GitLab (an internal repo
+  or project counts as public). The factory trusts each answer for five
+  minutes; if it can't tell, the repo counts as public.
+- `always` quotes it on every repo. The output is redacted, but redaction
+  only knows the secrets it's told about, so use this for public repos
+  only if their checks print nothing private.
+- `never` quotes no output anywhere.
+
+Each check's pass or fail, and what the test-proves-fix check and the
+coverage floor found, show either way.
 
 ## Claude-only review
 

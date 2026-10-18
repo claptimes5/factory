@@ -310,3 +310,26 @@ func TestTailBuffer(t *testing.T) {
 		t.Fatalf("%q", b.bytes())
 	}
 }
+
+func TestPrivate(t *testing.T) {
+	vis := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/projects/team%2Fweb" {
+			w.WriteHeader(404)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"visibility": vis})
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	for v, want := range map[string]bool{"private": true, "internal": false, "public": false} {
+		vis = v
+		if got, err := c.Private(context.Background()); got != want || err != nil {
+			t.Errorf("%s: %v %v", v, got, err)
+		}
+	}
+	vis = ""
+	if got, err := c.Private(context.Background()); got || err == nil {
+		t.Fatalf("no visibility: %v %v", got, err)
+	}
+}

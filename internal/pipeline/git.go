@@ -356,6 +356,32 @@ func (g *Git) FileAt(ctx context.Context, repo, sha, path string) (string, bool,
 	return b.String(), true, nil
 }
 
+// errTooBig is a file FileAtMost won't read.
+var errTooBig = errors.New("file too big")
+
+// FileAtMost is FileAt for a regular file of at most max bytes: a bigger
+// one is errTooBig, unread, and a link or a folder isn't there.
+func (g *Git) FileAtMost(ctx context.Context, repo, sha, path string, max int64) (string, bool, error) {
+	// "<mode> blob <object> <size>\t<path>"
+	ls, err := g.run(ctx, repo, nil, "ls-tree", "-l", sha, "--", path)
+	if err != nil {
+		return "", false, err
+	}
+	meta, _, _ := strings.Cut(ls, "\t")
+	f := strings.Fields(meta)
+	if len(f) != 4 || f[1] != "blob" || (f[0] != "100644" && f[0] != "100755") {
+		return "", false, nil
+	}
+	if size, err := strconv.ParseInt(f[3], 10, 64); err != nil || size > max {
+		return "", true, errTooBig
+	}
+	var b strings.Builder
+	if _, err := g.run(ctx, repo, &b, "cat-file", "blob", f[2]); err != nil {
+		return "", false, err
+	}
+	return b.String(), true, nil
+}
+
 // ChangedFiles lists paths changed between two commits.
 func (g *Git) ChangedFiles(ctx context.Context, repo, from, to string) ([]string, error) {
 	// -z: raw paths, never C-quoted (a quoted name matches no feature).

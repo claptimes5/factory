@@ -550,6 +550,25 @@ func (c *Client) CloseIssue(ctx context.Context, n int) error {
 	return c.do(ctx, "PUT", fmt.Sprintf("%s/issues/%d", c.project(), n), map[string]any{"state_event": "close"}, nil)
 }
 
+// Private says whether the project is private. Internal projects are
+// readable by every account on the instance, so they aren't; a reply
+// without a visibility is an error, so the caller assumes public.
+func (c *Client) Private(ctx context.Context) (bool, error) {
+	var r struct {
+		Visibility string `json:"visibility"`
+	}
+	if err := c.do(ctx, "GET", c.project(), nil, &r); err != nil {
+		return false, err
+	}
+	switch r.Visibility {
+	case "private":
+		return true, nil
+	case "internal", "public":
+		return false, nil
+	}
+	return false, fmt.Errorf("gitlab: %s: no visibility in the reply", c.Project)
+}
+
 // DefaultBranch returns the project's default branch.
 func (c *Client) DefaultBranch(ctx context.Context) (string, error) {
 	var r struct {

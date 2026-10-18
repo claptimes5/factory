@@ -788,6 +788,86 @@ sub-issues waiting it makes no calls.
 `factory status` shows each repo's last run, what it read and flagged, and
 the proposals still open. Its prompt is `prompts/groom.md`.
 
+## The PR description
+
+Each draft PR the factory opens says what it closes and then, in this
+order:
+
+- **Summary**: the builder's own summary of the change, in a code block.
+- **How to review**: the change's risk, why it has it, and how much of
+  your attention it needs (see
+  [Review scaled by risk](quality.md#review-scaled-by-risk)).
+- **Testing**: what ran on the verified commit. The gates' verdict line,
+  every check by name with pass or fail, what the
+  [test-proves-fix](quality.md#test-proves-fix) check and the
+  [coverage floor](quality.md#coverage-floor) found, the tests the builder
+  says it added, and, folded away in a `<details>` block, the last 20
+  lines of each passing command's output. Hidden scenarios show only
+  pass or fail.
+- **Blast radius**, when the repo has a [feature map](quality.md#feature-map).
+- **Reviewer notes**: findings that didn't block (see
+  [Review findings](quality.md#review-findings)).
+- **How to revert**: the forge's Revert button, or the commands to revert
+  the merge by hand, plus a step for each kind of change a revert doesn't
+  undo on its own. Database migrations (a `migrations/` or `migration/`
+  folder, Rails' `db/migrate/`, Alembic's `alembic/versions/`,
+  Liquibase's `db/changelog/`, Flyway's `V1__name.sql`): the revert takes
+  the files out but not the schema, so roll the migration back first.
+  Configuration (`.env*`, YAML, TOML, INI and the like, or anything under
+  `config/`, `deploy/`, `k8s/`, `helm/` or `terraform/`): redeploy or
+  restart whatever picked up the new values. Dependencies (`go.mod`,
+  `package.json`, lock files and the like): do a clean install afterwards.
+- **Jobs**, with their models and cost, and the reviewer's verdict.
+
+**The repo's PR template sets the layout.** When the base branch has
+`.github/pull_request_template.md` (or `.github/PULL_REQUEST_TEMPLATE.md`,
+`PULL_REQUEST_TEMPLATE.md`, `pull_request_template.md`,
+`docs/pull_request_template.md`, `docs/PULL_REQUEST_TEMPLATE.md`), or on
+GitLab `.gitlab/merge_request_templates/Default.md`, the description uses
+its headings, in its order, and fills each one it has a section for:
+Summary, Description, What or Why get the summary; Test plan, Testing or
+How has this been tested get Testing; Risk, Impact or Reviewers get How to
+review and the blast radius; Revert, Rollback or Roll back get How to
+revert. A heading it has nothing for (Type of change, Checklist,
+Screenshots) says _n/a_, and its sections no heading asked for follow the
+template's. Only the template's headings are kept, not its text or
+checkboxes, and its HTML comments are taken out first. A template over
+64 KB, or over 8 KB without its comments, or one with no `#` headings, is
+ignored and the factory's own layout is used.
+
+**What's quoted can't act.** The builder's summary and the checks' output
+are in code blocks they can't close, so they can't add headings, close
+the `<details>`, or hide text. `#12`, issue links and `@name` in them are
+spaced out, so merging closes no other issue and nobody is mentioned.
+
+**Output is redacted whole, then cut.** The gates keep the last 256 KB of
+a passing command's output, in whole lines; the factory redacts all of it
+before it keeps the last lines, so a secret is never left in part. Taken
+out, as `[REDACTED]`: the model keys, the values of the repo's `env`,
+its services' `env` and its
+[`files`](configuration.md#files-a-repo-doesnt-commit) (read through links
+as they're copied), each line of a multi-line value such as a PEM key, and
+the long words in those files. A value counts from six characters when
+it's a model key or set under a name like `*_TOKEN`, `*_SECRET`, `*_KEY`,
+`*_PASSWORD` or `*_AUTH`; any other from twelve, or eight if it mixes
+cases, digits and symbols, so `HOST=localhost` doesn't blank every line
+that names localhost. So are common token shapes (GitHub, GitLab, OpenAI,
+Stripe, Slack and Google API keys, AWS keys, JWTs). Any line that sets an
+environment variable or names a token, secret, password, key, credential
+or authorization is left out whole. If one of the repo's `files` can't be
+read in full (over 8 MB, or more than 2000 of them), no output is quoted
+for that repo at all.
+
+**Only where it's private, by default.** [`pr.check_output`](configuration.md#pr-descriptions)
+quotes the output only on a repo the forge reports as private; on any
+other the Testing section still lists each check's pass or fail. In a
+workspace, each PR quotes only its own repo's checks.
+
+**It fits the forge.** GitHub takes at most 65,536 characters; the factory
+keeps to 60,000. A description over that drops the checks' output first,
+then the reviewer's verdict and notes, then the blast radius and job tables (the
+dashboard has them all), and only then is cut.
+
 ## Screenshots on the PR
 
 With a repo's [`preview`](configuration.md#pr-previews) set, each build of

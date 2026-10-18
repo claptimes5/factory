@@ -301,7 +301,7 @@ func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is 
 	}
 	rows := make([]store.RepoPR, len(prs))
 	for i, o := range prs {
-		body, err := p.prBody(ctx, it, in, p.linkedTop(it, prs, i), false)
+		body, err := p.prBody(ctx, it, o.repo, in, p.linkedTop(it, prs, i), false)
 		if err != nil {
 			return err
 		}

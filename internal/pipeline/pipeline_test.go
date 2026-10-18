@@ -38,10 +38,21 @@ type fakeGH struct {
 	outsiders    map[string]bool
 	editedAfter  map[int]bool // the issue changed after it was labeled
 
+	private      bool // what Private reports
+	privateErr   error
+	privateAsked int
+
 	autoMerged    map[int]string // PR -> the head it may merge at
 	failAutoMerge error
 	cancelled     []int
 	failCancel    error
+}
+
+func (f *fakeGH) Private(context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.privateAsked++
+	return f.private, f.privateErr
 }
 
 func (f *fakeGH) CancelAutoMerge(_ context.Context, n int) error {

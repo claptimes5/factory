@@ -31,6 +31,8 @@ var (
 	_ pipeline.HealthForge = (*gitlab.Client)(nil)
 	_ pipeline.Previewer   = (*github.Client)(nil)
 	_ pipeline.Previewer   = (*gitlab.Client)(nil)
+	_ pipeline.RepoPrivacy = (*github.Client)(nil)
+	_ pipeline.RepoPrivacy = (*gitlab.Client)(nil)
 )
 
 // gitlabAPI overrides the GitLab API base for every host; tests set it.

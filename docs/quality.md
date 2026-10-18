@@ -27,6 +27,10 @@ Each repo can override the gates (see
 Set `proves_fix: none`, `coverage: none` or `scenarios_dir: none` to turn
 one off for a repo.
 
+The PR's Testing section lists every gate with its result and the end
+of each passing command's output, redacted (see
+[The PR description](using.md#the-pr-description)).
+
 Then the reviewer reads the issue, the diff and the gate results. Before
 a finding blocks, a second, cheaper model checks it (see
 [Review findings](#review-findings)). A block sends the findings back to

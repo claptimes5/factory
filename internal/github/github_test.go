@@ -313,3 +313,36 @@ func TestIssueAuthorAndNotPlanned(t *testing.T) {
 		t.Fatalf("close as duplicate %v %v", closed, err)
 	}
 }
+
+func TestPrivate(t *testing.T) {
+	reply := map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r" {
+			w.WriteHeader(404)
+			return
+		}
+		json.NewEncoder(w).Encode(reply)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	for _, tc := range []struct {
+		reply   map[string]any
+		private bool
+		err     bool
+	}{
+		{map[string]any{"private": true, "visibility": "private"}, true, false},
+		{map[string]any{"private": true, "visibility": "internal"}, false, false}, // an enterprise's: not private
+		{map[string]any{"private": false, "visibility": "public"}, false, false},
+		{map[string]any{"private": true}, false, true}, // no visibility: unknown
+	} {
+		reply = tc.reply
+		got, err := c.Private(context.Background())
+		if got != tc.private || (err != nil) != tc.err {
+			t.Errorf("%v: %v %v", tc.reply, got, err)
+		}
+	}
+	c.Repo = "o/gone"
+	if got, err := c.Private(context.Background()); got || err == nil {
+		t.Fatalf("missing repo: %v %v", got, err)
+	}
+}

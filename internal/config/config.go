@@ -366,6 +366,8 @@ type Config struct {
 	// revert watch and the strikes that trip it. eval and compare set it,
 	// since the base branch they'd read is the real repo's, not the run's.
 	NoGuard bool `yaml:"-"`
+	// PR shapes the factory's PR descriptions. See PR.
+	PR PR `yaml:"pr,omitempty"`
 
 	Budgets struct {
 		PerJob map[string]float64 `yaml:"per_job"`
@@ -868,6 +870,11 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkGrooming()...)
 	errs = append(errs, c.checkPreviews()...)
 	errs = append(errs, c.checkReview()...)
+	switch c.PR.CheckOutput {
+	case "", CheckOutputPrivate, CheckOutputAlways, CheckOutputNever:
+	default:
+		bad("pr.check_output must be private, always or never")
+	}
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}
@@ -1376,4 +1383,32 @@ func (c *Config) CostOf(model string, in, cached, out int64) float64 {
 	}
 	cached = min(max(cached, 0), in)
 	return float64(in-cached)/1e6*p.InputPerMTok + float64(cached)/1e6*cachedPrice + float64(out)/1e6*p.OutputPerMTok
+}
+
+// PR shapes the factory's PR descriptions.
+type PR struct {
+	// CheckOutput says when the Testing section quotes the end of each
+	// passing check's output (redacted): private (the default) only on a
+	// repo the forge reports as private, always, or never. Each check's
+	// pass or fail is always shown.
+	CheckOutput string `yaml:"check_output,omitempty"`
+}
+
+// The values of pr.check_output.
+const (
+	CheckOutputPrivate = "private"
+	CheckOutputAlways  = "always"
+	CheckOutputNever   = "never"
+)
+
+// ShowOutput says whether a PR quotes the checks' output, given whether
+// its repo is private (false when the forge didn't say).
+func (p PR) ShowOutput(private bool) bool {
+	switch p.CheckOutput {
+	case CheckOutputAlways:
+		return true
+	case CheckOutputNever:
+		return false
+	}
+	return private
 }

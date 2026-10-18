@@ -26,7 +26,17 @@ type Result struct {
 	Gate   string
 	Status string
 	Detail string
+	// Output is the end of a passing command's output, for the PR's
+	// Testing section. It is never stored: it can quote secrets, so the
+	// pipeline redacts it before it goes anywhere.
+	Output string
 }
+
+// OutputTail is how much of a passing command's output Run keeps: far
+// more than a PR shows, so the pipeline can redact it whole before it
+// cuts it down. A cut drops the partial first line, so no secret on it
+// is kept in part.
+const OutputTail = 256 << 10
 
 // Exec runs a shell command in the checkout and returns its exit code and
 // combined output. The pipeline backs this with the job container.
@@ -53,18 +63,18 @@ func Run(ctx context.Context, required []string, commands map[string]string, exe
 		cmd := strings.TrimSpace(commands[g])
 		if cmd == "" {
 			if req[g] {
-				out = append(out, Result{g, Misconfigured, "required gate has no command in factory.yaml"})
+				out = append(out, Result{Gate: g, Status: Misconfigured, Detail: "required gate has no command in factory.yaml"})
 			}
 			continue
 		}
 		code, output, err := exec(ctx, cmd)
 		switch {
 		case err != nil:
-			out = append(out, Result{g, Fail, "could not run: " + err.Error()})
+			out = append(out, Result{Gate: g, Status: Fail, Detail: "could not run: " + err.Error()})
 		case code != 0:
-			out = append(out, Result{g, Fail, fmt.Sprintf("exit %d\n%s", code, tail(output, 4000))})
+			out = append(out, Result{Gate: g, Status: Fail, Detail: fmt.Sprintf("exit %d\n%s", code, tail(output, 4000))})
 		default:
-			out = append(out, Result{g, Pass, ""})
+			out = append(out, Result{Gate: g, Status: Pass, Output: TailLines(output, OutputTail)})
 		}
 	}
 	return out
@@ -113,7 +123,7 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 	// newline or a non-ASCII letter can't slip past the protected paths.
 	status, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", base, head)
 	if err != nil {
-		return Result{"diff_guard", Fail, err.Error()}
+		return Result{Gate: "diff_guard", Status: Fail, Detail: err.Error()}
 	}
 	fields := strings.Split(strings.TrimSuffix(status, "\x00"), "\x00")
 	for i := 0; i < len(fields); {
@@ -139,7 +149,7 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 
 	raw, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--raw", "--no-renames", base, head)
 	if err != nil {
-		return Result{"diff_guard", Fail, err.Error()}
+		return Result{Gate: "diff_guard", Status: Fail, Detail: err.Error()}
 	}
 	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 		// :oldmode newmode oldsha newsha status\tpath
@@ -150,7 +160,7 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 
 	numstat, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--numstat", base, head)
 	if err != nil {
-		return Result{"diff_guard", Fail, err.Error()}
+		return Result{Gate: "diff_guard", Status: Fail, Detail: err.Error()}
 	}
 	total := 0
 	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
@@ -172,7 +182,7 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 
 	patch, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "-U0", base, head, "--", "*.go")
 	if err != nil {
-		return Result{"diff_guard", Fail, err.Error()}
+		return Result{Gate: "diff_guard", Status: Fail, Detail: err.Error()}
 	}
 	file := ""
 	for _, line := range strings.Split(patch, "\n") {
@@ -192,9 +202,9 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 	}
 
 	if len(problems) > 0 {
-		return Result{"diff_guard", Fail, strings.Join(dedupe(problems), "\n")}
+		return Result{Gate: "diff_guard", Status: Fail, Detail: strings.Join(dedupe(problems), "\n")}
 	}
-	return Result{"diff_guard", Pass, ""}
+	return Result{Gate: "diff_guard", Status: Pass, Detail: ""}
 }
 
 // protected matches a path against the protected list: "dir/" protects a
@@ -290,6 +300,23 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "…" + s[len(s)-n:]
+}
+
+// TailLines keeps at most the last n bytes of s, in whole lines: when it
+// cuts, the partial line at the cut goes too, and "…" marks the cut.
+func TailLines(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := len(s) - n
+	if s[cut-1] == '\n' { // the cut is at a line's start: nothing partial
+		return "…\n" + s[cut:]
+	}
+	s = s[cut:]
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return "…\n" + s[i+1:]
+	}
+	return "…"
 }
 
 func contains(ss []string, s string) bool {

@@ -628,6 +628,26 @@ func escapePath(p string) string {
 	return strings.Join(parts, "/")
 }
 
+// Private says whether the repository is private. An internal repo (an
+// enterprise's, readable by all its members) reports private: true, so
+// only visibility "private" counts; a reply without a visibility is an
+// error, and the caller assumes public.
+func (c *Client) Private(ctx context.Context) (bool, error) {
+	var r struct {
+		Visibility string `json:"visibility"`
+	}
+	if err := c.do(ctx, "GET", "/repos/"+c.Repo, nil, &r); err != nil {
+		return false, err
+	}
+	switch r.Visibility {
+	case "private":
+		return true, nil
+	case "internal", "public":
+		return false, nil
+	}
+	return false, fmt.Errorf("github: %s: no visibility in the reply", c.Repo)
+}
+
 // DefaultBranch returns the repository's default branch.
 func (c *Client) DefaultBranch(ctx context.Context) (string, error) {
 	var r struct {

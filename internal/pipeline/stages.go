@@ -314,6 +314,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(run, state.Failed, "builder made no changes")
 	}
 	var results []gates.Result
+	var checks []CheckRun
 	var blasts []partBlast
 	for _, pt := range touched {
 		rs, blast, err := p.verify(ctx, j.ID, pt)
@@ -324,6 +325,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 			rs[i].Gate = pt.gate(rs[i].Gate)
 		}
 		results = append(results, rs...)
+		checks = append(checks, p.checkRuns(ctx, pt.repo, rs)...)
 		blasts = append(blasts, partBlast{pt.folder, blast})
 	}
 	p.warn(p.Store.SetGateResults(ctx, j.ID, toStore(results)), "SetGateResults")
@@ -371,7 +373,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", line); err != nil {
 		return err
 	}
-	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: primary.head, Heads: heads, Gates: line + "\n\n" + gateTable(results), Features: blastMD})
+	rin := ReviewInput{ImplementJob: j.ID, Head: primary.head, Heads: heads, Gates: line + "\n\n" + gateTable(results), Features: blastMD, Checks: checks}
+	p.prFacts(ctx, touched, &rin)
+	return p.enqueueReview(ctx, it, "review", 1, rin)
 }
 
 // verify runs the deterministic checks on one repo's commit under test:
@@ -640,6 +644,17 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	own := homePart(parts, it.Repo)
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", own.ws.Start), "SetJobRuntime")
+	if in.Changed == nil {
+		// Queued without them (after a restart): read here, so the PR
+		// still gets its revert notes and the repo's template.
+		var at []*part
+		for _, pt := range parts {
+			if _, ok := headOf(in.Heads, pt.repo); !ws || ok {
+				at = append(at, pt)
+			}
+		}
+		p.prFacts(ctx, at, &in)
+	}
 	var diff string
 	if ws {
 		diff, err = p.combinedDiff(ctx, parts)
@@ -828,7 +843,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return p.openWorkspacePRs(ctx, it, is, in)
 	}
 	auto := p.autoMergeWanted(ctx, it, in)
-	body, err := p.prBody(ctx, it, in, fmt.Sprintf("Closes #%d", it.IssueNumber), auto)
+	body, err := p.prBody(ctx, it, it.Repo, in, fmt.Sprintf("Closes #%d", it.IssueNumber), auto)
 	if err != nil {
 		return err
 	}
@@ -859,7 +874,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 			return nil
 		}
 		// The body promised a merge that won't happen.
-		p.warn(p.gh(it.Repo).UpdatePRBody(ctx, pr.Number, strings.Replace(body, autoFooter, humanFooter, 1)), "UpdatePRBody")
+		p.warn(p.gh(it.Repo).UpdatePRBody(ctx, pr.Number, humanBody(body)), "UpdatePRBody")
 	}
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
@@ -867,62 +882,6 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
 	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return nil
-}
-
-// prBody is a PR's description: top (what it closes, and in a workspace
-// the linked PRs), then the evidence.
-func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInput, top string, auto bool) (string, error) {
-	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
-	if err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	verified := fmt.Sprintf("Verified commit `%s`.", short(in.Head))
-	if len(in.Heads) > 0 {
-		var cs []string
-		for _, h := range in.Heads {
-			cs = append(cs, fmt.Sprintf("%s `%s`", h.Repo, short(h.SHA)))
-		}
-		verified = "Verified commits: " + strings.Join(cs, ", ") + "."
-	}
-	fmt.Fprintf(&b, "%s\n\nBuilt by the factory. Complexity **%s**, risk **%s**. %s\n\n", strings.TrimRight(top, "\n"), it.Complexity, riskOrLow(it.Risk), verified)
-	b.WriteString("## How to review\n\n" + p.reviewGuide(ctx, it, in.Features != "") + "\n")
-	b.WriteString("## Gates\n\n" + in.Gates + "\n")
-	if in.Features != "" {
-		b.WriteString("## Blast radius\n\nWhat this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features + "\n")
-	}
-	if notes := p.passNotes(jobs); notes != "" {
-		b.WriteString("## Reviewer notes\n\nFindings that didn't block: minor ones, problems the change didn't introduce, and ones a second model checked and refuted.\n\n" + notes + "\n")
-	}
-	var total float64
-	b.WriteString("## Jobs\n\n| Job | Kind | Harness | Model | Skills | Attempt | State | Cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
-	for i := len(jobs) - 1; i >= 0; i-- {
-		j := jobs[i]
-		total += j.CostUSD
-		sk := j.Skillset
-		if sk == "" {
-			sk = "-"
-		}
-		fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | %d | %s | $%.2f |\n", j.ID, j.Kind, j.Harness, j.ModelLabel(), sk, j.Attempt, j.State, j.CostUSD)
-	}
-	fmt.Fprintf(&b, "\n**Total cost:** $%.2f\n\n", total)
-	for _, j := range jobs {
-		if (j.Kind == "review" || j.Kind == "critic") && j.State == state.Succeeded {
-			var pretty any
-			if json.Unmarshal([]byte(j.Verdict), &pretty) != nil {
-				continue
-			}
-			pv, _ := json.MarshalIndent(pretty, "", "  ")
-			fmt.Fprintf(&b, "<details><summary>%s verdict (job %d, %s)</summary>\n\n```json\n%s\n```\n</details>\n\n", j.Kind, j.ID, j.Model, pv)
-			break
-		}
-	}
-	if auto {
-		b.WriteString(autoFooter)
-	} else {
-		b.WriteString(humanFooter)
-	}
-	return b.String(), nil
 }
 
 // passNotes are the non-blocking findings of the reviews that passed the
@@ -968,6 +927,17 @@ func partRepos(parts []*part) []string {
 		out = append(out, pt.repo)
 	}
 	return out
+}
+
+// humanBody is a description that promised auto-merge, with the footer
+// saying a human merges instead. Only the last copy is the footer: quoted
+// text above could hold the same words.
+func humanBody(body string) string {
+	i := strings.LastIndex(body, autoFooter)
+	if i < 0 {
+		return body
+	}
+	return body[:i] + humanFooter + body[i+len(autoFooter):]
 }
 
 const (
