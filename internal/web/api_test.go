@@ -227,6 +227,13 @@ func TestAPIReads(t *testing.T) {
 		t.Errorf("activity:\n%s", got)
 	}
 
+	getJSON(t, base+"/api/v1/activity?repo=other/repo", &act)
+	for _, e := range act.Entries {
+		if e.Ref != "" {
+			t.Fatalf("another repo's feed has %+v", e)
+		}
+	}
+
 	var n APINotifications
 	getJSON(t, base+"/api/v1/notifications", &n)
 	kinds := map[string]bool{}
@@ -469,7 +476,47 @@ func TestLiveActivity(t *testing.T) {
 	if a := liveActivity(log); a != "running npm test" {
 		t.Fatalf("codex: %q", a)
 	}
+	// A tool result bigger than the first window read doesn't hide the call before it.
+	big := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + strings.Repeat("x", 200<<10) + `"}]}}`
+	write(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test -v ./..."}}]}}`, big)
+	if a := liveActivity(log); a != "running go test -v ./..." {
+		t.Fatalf("after a big line: %q", a)
+	}
+	if got := trim("ééé", 3); got != "é…" {
+		t.Fatalf("trim cut a character: %q", got)
+	}
 	if a := liveActivity(filepath.Join(t.TempDir(), "none")); a != "" {
 		t.Fatalf("no log: %q", a)
+	}
+}
+
+// A card shows the latest attempt's gates, not an earlier attempt's.
+func TestCardGatesFollowTheLatestAttempt(t *testing.T) {
+	base, st, _, _ := apiSetup(t)
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/r", 3, "Retry it")
+	first, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 2})
+	st.ClaimJob(ctx)
+	st.SetGateResults(ctx, first, []store.GateResult{{Gate: "test", Status: "fail"}, {Gate: "lint", Status: "pass"}})
+	st.FinishJob(ctx, first, store.Result{State: state.Failed})
+	second, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "opus", BudgetUSD: 2, Attempt: 2})
+	st.ClaimJob(ctx)
+	st.FinishJob(ctx, second, store.Result{State: state.TimedOut})
+	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
+	var b APIBoard
+	getJSON(t, base+"/api/v1/board", &b)
+	found := false
+	for _, col := range b.Columns {
+		for _, c := range col.Cards {
+			if c.ID == it.ID {
+				found = true
+				if c.Attempt != 2 || c.GatesTotal != 0 {
+					t.Fatalf("card = %+v", c)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no card for the item")
 	}
 }

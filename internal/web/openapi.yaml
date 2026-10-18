@@ -106,6 +106,12 @@ paths:
   /activity:
     get:
       summary: What happened lately, said for people, newest first
+      parameters:
+        - name: repo
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only this repo's items (owner/name), plus lines about no item
       responses:
         "200":
           description: OK
@@ -213,7 +219,7 @@ components:
             activity: { type: string, description: "What the running job is doing now, from its log: editing parser/parser.go" }
             attempt: { type: integer, description: The latest implement attempt, 0 before the first }
             gates_passed: { type: integer }
-            gates_total: { type: integer, description: Gates the latest implement attempt ran, 0 before any }
+            gates_total: { type: integer, description: "Gates the latest implement attempt ran: 0 before any, if it never reached them, or once the item is done" }
     Column:
       type: object
       required: [stage, cards]

@@ -432,7 +432,10 @@ export interface paths {
         /** What happened lately, said for people, newest first */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Only this repo's items (owner/name), plus lines about no item */
+                    repo?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -707,7 +710,7 @@ export interface components {
             /** @description The latest implement attempt */
             attempt: number;
             gates_passed: number;
-            /** @description Gates the latest implement attempt ran */
+            /** @description Gates the latest implement attempt ran: 0 before any, if it never reached them, or once the item is done */
             gates_total: number;
         };
         Column: {

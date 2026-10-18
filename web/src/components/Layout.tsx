@@ -97,8 +97,12 @@ export function Layout() {
 
           {/* Repos, the main screens and search: a row of their own until a laptop has room. */}
           <div className="order-last flex w-full min-w-0 items-center gap-2 max-md:hidden lg:order-none lg:w-auto lg:flex-1">
-            {repos.length > 1 && <RepoChips repos={repos} repo={repo} />}
-            <nav aria-label="Main" className="flex gap-1">
+            {repos.length > 1 && (
+              <div className="min-w-0 shrink overflow-x-auto">
+                <RepoChips repos={repos} repo={repo} />
+              </div>
+            )}
+            <nav aria-label="Main" className="flex shrink-0 gap-1">
               {links.map((l) => (
                 <NavLink
                   key={l.to}
@@ -114,7 +118,7 @@ export function Layout() {
             </nav>
             <button
               onClick={() => setPalette(true)}
-              className="ml-auto flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg border bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/50 lg:h-9 lg:max-w-96"
+              className="ml-auto flex h-10 min-w-40 flex-1 cursor-pointer items-center gap-2.5 rounded-lg border bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/50 lg:h-9 lg:max-w-96"
             >
               <Search className="size-4 shrink-0" aria-hidden />
               <span className="flex-1 truncate">Jump to an issue or screen</span>

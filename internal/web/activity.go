@@ -34,30 +34,38 @@ type APIActivity struct {
 
 func (s *Server) apiActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	evs, err := s.Store.RecentEvents(ctx, 300)
+	repo := r.URL.Query().Get("repo")
+	evs, err := s.Store.RecentEvents(ctx, 500)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := APIActivity{Entries: []APIActivityEntry{}}
+	// Looked up once each; a miss is remembered as nil.
 	items := map[int64]*store.WorkItem{}
 	jobs := map[int64]*store.Job{}
 	for _, e := range evs {
 		var it *store.WorkItem
 		if e.ItemID != nil {
-			if it = items[*e.ItemID]; it == nil {
-				if it, err = s.Store.GetItem(ctx, *e.ItemID); err != nil {
-					continue
-				}
+			var seen bool
+			if it, seen = items[*e.ItemID]; !seen {
+				it, _ = s.Store.GetItem(ctx, *e.ItemID)
 				items[*e.ItemID] = it
 			}
+			if it == nil {
+				continue
+			}
+		}
+		// A repo's feed keeps its own items and the factory-wide lines.
+		if repo != "" && it != nil && it.Repo != repo {
+			continue
 		}
 		var j *store.Job
 		if e.JobID != nil {
-			if j = jobs[*e.JobID]; j == nil {
-				if j, _ = s.Store.GetJob(ctx, *e.JobID); j != nil {
-					jobs[*e.JobID] = j
-				}
+			var seen bool
+			if j, seen = jobs[*e.JobID]; !seen {
+				j, _ = s.Store.GetJob(ctx, *e.JobID)
+				jobs[*e.JobID] = j
 			}
 		}
 		text, tone := describe(e, it, j)
@@ -161,30 +169,37 @@ func withReason(what, reason string) string {
 
 // liveActivity is what a running job is doing, from the tail of its log:
 // "editing parser/parser.go", "running go test ./...". "" when the log
-// says nothing yet.
+// says nothing yet. It reads back from the end in growing windows, since
+// one line (a long test run's output) can be bigger than a window.
 func liveActivity(logPath string) string {
 	f, err := os.Open(logPath)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
-	const tail = 64 << 10
-	if st, err := f.Stat(); err == nil && st.Size() > tail {
-		if _, err := f.Seek(-tail, io.SeekEnd); err != nil {
-			return ""
-		}
-	}
-	b, err := io.ReadAll(io.LimitReader(f, tail))
+	st, err := f.Stat()
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(b), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if a := lineActivity(lines[i]); a != "" {
-			return a
+	for tail := int64(64 << 10); ; tail *= 4 {
+		start := max(0, st.Size()-tail)
+		b := make([]byte, st.Size()-start)
+		if _, err := f.ReadAt(b, start); err != nil && err != io.EOF {
+			return ""
+		}
+		lines := strings.Split(string(b), "\n")
+		if start > 0 {
+			lines = lines[1:] // the first is cut
+		}
+		for i := len(lines) - 1; i >= 0; i-- {
+			if a := lineActivity(lines[i]); a != "" {
+				return a
+			}
+		}
+		if start == 0 || tail >= 4<<20 {
+			return ""
 		}
 	}
-	return ""
 }
 
 func lineActivity(line string) string {
@@ -254,24 +269,23 @@ func shortPath(p string) string {
 	return file
 }
 
-// cardProgress fills a card's live job and its latest gate results.
+// cardProgress fills a card's live job and how the latest implement
+// attempt's gates went (none, if that attempt never reached them).
 func (s *Server) cardProgress(ctx context.Context, c *APICard, jobs []*store.Job) {
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := jobs[i]
 		if j.Kind != "implement" {
 			continue
 		}
-		if c.Attempt == 0 {
-			c.Attempt = j.Attempt
-		}
-		gs, err := s.Store.GateResults(ctx, j.ID)
-		if err != nil || len(gs) == 0 {
-			continue
-		}
-		for _, g := range gs {
-			c.GatesTotal++
-			if g.Status == "pass" {
-				c.GatesPassed++
+		c.Attempt = j.Attempt
+		// A done item's gates are history; the board skips the lookup.
+		if c.Stage != string(state.Done) {
+			gs, _ := s.Store.GateResults(ctx, j.ID)
+			for _, g := range gs {
+				c.GatesTotal++
+				if g.Status == "pass" {
+					c.GatesPassed++
+				}
 			}
 		}
 		break

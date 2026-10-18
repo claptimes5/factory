@@ -10,7 +10,7 @@ type Entry = { key: string; label: string; hint: string; go: () => void };
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const navigate = useNavigate();
-  const { data } = useBoard();
+  const { data } = useBoard({ enabled: open });
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
 
@@ -59,6 +59,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   }, [data, q, navigate, onClose]);
 
   const pick = Math.min(sel, Math.max(0, entries.length - 1));
+  const active = entries[pick]?.key;
+  useEffect(() => {
+    if (active) document.getElementById(`pal-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -84,6 +88,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         <Search className="size-4 text-muted-foreground" aria-hidden />
         <input
           autoFocus
+          role="combobox"
+          aria-expanded="true"
+          aria-autocomplete="list"
           aria-label="Jump to an item or screen"
           aria-controls="palette-list"
           aria-activedescendant={entries[pick] ? `pal-${entries[pick].key}` : undefined}

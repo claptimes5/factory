@@ -14,7 +14,10 @@ const quiet = new Set(["epic", "spec", "blocked"]);
 const live = new Set(["implementing", "reviewing"]);
 
 export function BoardScreen() {
-  const { data, error, isLoading } = useBoard();
+  // While something runs, its card's activity line and clock move: refresh often.
+  const { data, error, isLoading } = useBoard({
+    refetchInterval: (q) => (q.state.data?.columns.some((c) => c.cards.some((k) => k.live)) ? 10_000 : 30_000),
+  });
   const repos = useOverview().data?.repos ?? [];
   const repo = useRepo(repos);
   const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
@@ -66,7 +69,7 @@ export function BoardScreen() {
             <FloorCard key={c.id} card={c} showStage />
           ))}
           {moving.length === 0 && <p className="text-sm text-muted-foreground">Nothing is building or in review.</p>}
-          <div className="flex gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {[...waiting, "done"].map((s) => {
               const n = (s === "done" ? done : (cols.get(s) ?? [])).length;
               return (
@@ -75,7 +78,7 @@ export function BoardScreen() {
                   aria-expanded={open === s}
                   onClick={() => setOpen(open === s ? "" : s)}
                   className={cn(
-                    "flex h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-[13px]",
+                    "flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-[13px]",
                     open === s && "border-foreground",
                   )}
                 >
@@ -167,7 +170,7 @@ function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; 
     <article
       data-testid="card"
       className={cn(
-        "relative flex flex-col gap-2.5 rounded-[10px] border bg-card p-3.5 transition-colors focus-within:border-primary hover:border-primary/60",
+        "relative flex flex-col gap-2.5 rounded-[10px] border bg-card p-3.5 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary/60",
         c.live && "border-live-border bg-live-bg",
         c.stage === "blocked" && "border-destructive/50",
       )}
@@ -232,7 +235,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
   return (
     <article
       data-testid="card"
-      className="relative flex flex-col gap-3 rounded-xl border border-warning-border bg-warning-bg p-4 transition-colors focus-within:border-warning hover:border-warning"
+      className="relative flex flex-col gap-3 rounded-xl border border-warning-border bg-warning-bg p-4 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-warning"
     >
       <div className="flex items-center gap-2.5">
         <span className="font-mono text-xs font-medium text-warning">{shortRef(c.ref)}</span>

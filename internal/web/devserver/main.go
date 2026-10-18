@@ -106,6 +106,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		state.Reviewing:     {state.Ready, state.Implementing, state.Reviewing},
 		state.AwaitingHuman: {state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman},
 		state.Parked:        {state.Parked},
+		state.Blocked:       {state.Blocked},
 		state.Done:          {state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Done},
 	}
 	items := []struct {
@@ -122,6 +123,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/web", 105, "Typo in the CLI help for --dry-run", state.Ready, "S"},
 		{"acme/api", 106, "Flaky TestCacheEviction on CI", state.Triage, ""},
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
+		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -142,6 +144,9 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			reason := "seeded"
 			if to == state.Parked {
 				reason = "Should anchors merge across files, or only within one? The issue does not say."
+			}
+			if to == state.Blocked {
+				reason = "Waits on #102, which changes the same client."
 			}
 			if err := st.SetStage(ctx, it.ID, to, "daemon", reason); err != nil {
 				return err

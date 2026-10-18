@@ -42,6 +42,8 @@ test("the floor puts what needs you first, with live work and repo chips", async
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
     await page.getByRole("button", { name: /Triage/ }).click();
     await expect(board.getByRole("region", { name: "Triage" })).toContainText("Flaky TestCacheEviction");
+  } else {
+    await expect(board.getByRole("region", { name: "Blocked" })).toContainText("Waits on #102");
   }
 });
 

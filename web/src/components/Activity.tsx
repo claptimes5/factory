@@ -21,10 +21,10 @@ function clock(at: string) {
 
 /** What happened lately, newest first; repo narrows it to one repo's items. */
 export function ActivityFeed({ repo, limit = 50, className }: { repo?: string; limit?: number; className?: string }) {
-  const { data, error, isLoading } = useActivity();
+  const { data, error, isLoading } = useActivity(repo);
   if (isLoading) return <Loading what="Loading activity" />;
   if (error) return <ErrorBox error={error} />;
-  const entries = data!.entries.filter((e) => !repo || !e.ref || e.ref.startsWith(repo + "#")).slice(0, limit);
+  const entries = data!.entries.slice(0, limit);
   if (entries.length === 0) return <Empty>Nothing has happened yet.</Empty>;
   return (
     <ol data-testid="activity" className={cn("flex flex-col gap-3.5 text-sm leading-snug", className)}>
