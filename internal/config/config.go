@@ -316,12 +316,12 @@ func SplitRepo(host, name string) (string, string) {
 		name = strings.TrimPrefix(name, scheme)
 	}
 	name = strings.TrimSuffix(strings.TrimSuffix(name, "/"), ".git")
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(host), "https://"), "http://"), "/"))
 	if first, rest, ok := strings.Cut(name, "/"); ok && strings.Contains(first, ".") && (host == "" || strings.EqualFold(first, host)) {
 		// A dotted first segment is a host, unless host: names another
 		// one: then it's a group like my.team.
-		host, name = first, rest
+		host, name = strings.ToLower(first), rest
 	}
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://"), "/"))
 	if host == "" || host == "github.com" || host == "www.github.com" {
 		return "", name
 	}
@@ -507,6 +507,10 @@ func (c *Config) RepoConf(name string) (Repo, bool) {
 
 // Primary is the first repo: the one commands use when you name none.
 func (c *Config) Primary() Repo { return c.resolve(c.Repos[0]) }
+
+// Resolve fills a repo's unset settings from the top level, as RepoConf
+// does for listed repos.
+func (c *Config) Resolve(r Repo) Repo { return c.resolve(r) }
 
 func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {

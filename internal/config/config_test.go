@@ -194,8 +194,16 @@ func TestGitLabRepos(t *testing.T) {
 		t.Fatalf("protected: %v", pp)
 	}
 	// A dotted group under an explicit host, and a host with a port.
-	if h, n := SplitRepo("git.example.com", "my.team/proj"); h != "git.example.com" || n != "git.example.com/my.team/proj" {
-		t.Fatalf("dotted group: %s %s", h, n)
+	for _, c := range [][4]string{
+		{"git.example.com", "my.team/proj", "git.example.com", "git.example.com/my.team/proj"},
+		{"https://gitlab.com", "gitlab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+		{"gitlab.com/", "gitlab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+		{"http://git.x.io:8443", "git.x.io:8443/g/p", "git.x.io:8443", "git.x.io:8443/g/p"},
+		{"", "GitLab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+	} {
+		if h, n := SplitRepo(c[0], c[1]); h != c[2] || n != c[3] {
+			t.Errorf("SplitRepo(%q, %q) = %s %s", c[0], c[1], h, n)
+		}
 	}
 	c2, err := Parse([]byte("repos:\n  - {name: \"git.example.com:8443/g/p\", image_from: ruby:3.4-bookworm}\n" + base))
 	if err != nil {

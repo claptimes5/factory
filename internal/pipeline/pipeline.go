@@ -162,7 +162,10 @@ func (p *Pipeline) repoConf(repo string) config.Repo {
 	if r, ok := p.Cfg.RepoConf(repo); ok {
 		return r
 	}
-	return config.Repo{Name: repo, BaseBranch: p.Cfg.BaseBranch, Gates: &p.Cfg.Gates, Image: p.Cfg.Runner.Image, Env: p.Cfg.Env}
+	// Resolved like a listed repo, so a GitLab one keeps its host and the
+	// diff guard's GitLab paths.
+	host, name := config.SplitRepo("", repo)
+	return p.Cfg.Resolve(config.Repo{Name: name, Host: host})
 }
 
 // ref names an issue for people: #12 with one repo, owner/name#12 with several.
