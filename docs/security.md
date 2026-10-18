@@ -67,10 +67,17 @@ Nothing the builder writes is trusted:
   or a copy of the plan's sign-in.
 - **The ChatGPT sign-in** (`data/codex/auth.json`, mode 0600) is copied
   into each Codex job's own `CODEX_HOME`, under the job's output
-  directory, never the checkout, so a builder can't commit it. The daemon
-  saves back a copy Codex refreshed and deletes the job's copy when the
-  run ends. The agent in that job can read it, as it can read an API key,
-  so don't use a ChatGPT plan on public repos.
+  directory, never the checkout, so a builder can't commit it. When the
+  run ends, the daemon saves back a copy Codex refreshed and deletes the
+  job's copy. If the daemon stops mid-run, the copy stays on disk under
+  `data/jobs/` until the daemon starts again, which saves it back the same
+  way and deletes it. A refreshed copy is saved only if it's a sign-in to
+  the same account and the factory's copy hasn't changed since the job
+  started. The daemon reads only small regular files from that directory,
+  never through a link, so a job can't point it at another file. The
+  sign-in's tokens are taken out of the job's log. The agent in that job
+  can read the sign-in, as it can read an API key, so don't use a ChatGPT
+  plan on public repos.
 
 ## Network: the egress allowlist
 

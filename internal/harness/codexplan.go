@@ -1,19 +1,13 @@
 package harness
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
-	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -35,15 +29,15 @@ type Gated interface {
 // CODEX_ACCESS_TOKEN (Business and Enterprise plans). Either way, plan
 // usage costs no dollars, so runs report $0.
 func NewCodexPlan(r runner.Runner, authFile string) Harness {
-	return &cliHarness{name: "codex", a: codexAdapter{plan: &codexPlan{file: authFile}}, runner: r}
+	return &cliHarness{name: "codex", a: codexAdapter{plan: &codexPlan{file: authFile, gate: make(chan struct{}, 1)}}, runner: r}
 }
 
 // codexPlan is a ChatGPT sign-in shared by every run of the harness.
 type codexPlan struct {
-	file string // the daemon's auth.json; "" for CODEX_ACCESS_TOKEN
+	file string        // the daemon's auth.json; "" for CODEX_ACCESS_TOKEN
+	gate chan struct{} // one run at a time with the file, in this process
 
-	mu  sync.Mutex // one run at a time with the file
-	out sync.Mutex // guards outAt
+	out sync.Mutex // guards outAt and outSet
 	// outAt is the sign-in's digest when Codex last couldn't sign in with
 	// it, so its jobs wait until a new sign-in replaces it.
 	outAt  string
@@ -51,8 +45,7 @@ type codexPlan struct {
 }
 
 const (
-	codexHomeDir    = "codex-home" // CODEX_HOME, under the job's out directory
-	codexStderrFile = "stderr"
+	codexHomeDir = "codex-home" // CODEX_HOME, under the job's out directory
 	// codexConfig makes Codex keep its sign-in in auth.json, where the
 	// daemon can read a refreshed copy back, and sign in only with it.
 	codexConfig = "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n"
@@ -102,22 +95,23 @@ func (c *codexPlan) signedOut(sum string) {
 	c.out.Unlock()
 }
 
-func fileSum(name string) (string, error) {
-	b, err := os.ReadFile(name)
-	if err != nil {
-		return "", err
+// Recover finishes the runs a crash cut short: it keeps a sign-in one of
+// them refreshed and deletes their copies.
+func (a codexAdapter) Recover() error {
+	if !a.plan.withFile() {
+		return nil
 	}
-	h := sha256.Sum256(b)
-	return string(h[:]), nil
+	return recoverRuns(a.plan.file)
 }
 
 // prepare gives a run its own CODEX_HOME with a copy of the sign-in, and
 // returns what to do once it ends: save a refreshed sign-in, and notice
-// one Codex couldn't use.
-func (a codexAdapter) prepare(ctx context.Context, req RunRequest, p runner.Paths, spec *runner.Spec) (func(*Result), error) {
+// one Codex couldn't use. Codex's stderr is kept by the runner, outside
+// anything the job can write.
+func (a codexAdapter) prepare(ctx context.Context, req RunRequest, p runner.Paths, spec *runner.Spec) (func(*Result), []string, error) {
 	c := a.plan
 	if c == nil {
-		return func(*Result) {}, nil
+		return func(*Result) {}, nil, nil
 	}
 	env := map[string]string{}
 	for k, v := range spec.Env {
@@ -127,28 +121,31 @@ func (a codexAdapter) prepare(ctx context.Context, req RunRequest, p runner.Path
 		delete(env, k) // codex exec would pick an API key over the plan
 	}
 	spec.Env = env
+	stderr := &tailBuffer{max: maxJobFile}
+	spec.Stderr = stderr
 	if c.file == "" {
 		return func(res *Result) {
-			if signInFailed(res, "") {
+			if signInFailed(res, stderr.String()) {
 				c.signedOut("")
 			}
 			planCost(res)
-		}, nil
+		}, nil, nil
 	}
-	c.mu.Lock()
-	unlock, err := lockFile(ctx, c.file+".lock")
+	release, err := c.acquire(ctx)
 	if err != nil {
-		c.mu.Unlock()
-		return nil, err
+		return nil, nil, err
 	}
-	release := func() { unlock(); c.mu.Unlock() }
 	auth, err := os.ReadFile(c.file)
 	if err != nil {
 		release()
-		return nil, fmt.Errorf("codex: no ChatGPT sign-in: run `factory codex-login` (%w)", err)
+		return nil, nil, fmt.Errorf("codex: no ChatGPT sign-in: run `factory codex-login` (%w)", err)
 	}
+	e := runEntry{Out: req.OutDir, Was: digest(auth)}
 	dir := filepath.Join(req.OutDir, codexHomeDir)
-	err = os.RemoveAll(dir)
+	end, err := startRun(c.file, e)
+	if err == nil {
+		err = os.RemoveAll(dir)
+	}
 	if err == nil {
 		err = os.MkdirAll(dir, 0o700)
 	}
@@ -164,26 +161,91 @@ func (a codexAdapter) prepare(ctx context.Context, req RunRequest, p runner.Path
 	}
 	if err != nil {
 		_ = os.RemoveAll(dir)
+		if end != nil {
+			end()
+		}
 		release()
-		return nil, err
+		return nil, nil, err
 	}
 	env["CODEX_HOME"] = c.home(p)
-	sum := sha256.Sum256(auth)
+	redact := authSecrets(auth)
 	return func(res *Result) {
 		defer release()
-		// The copy, Codex's sessions and its stderr go with the job's
-		// CODEX_HOME: nothing of the sign-in outlives the run.
-		defer func() { _ = os.RemoveAll(dir) }()
-		stderr, _ := os.ReadFile(filepath.Join(dir, codexStderrFile))
-		if b, err := os.ReadFile(filepath.Join(dir, "auth.json")); err == nil && !bytes.Equal(b, auth) && ValidAuth(b) {
-			if err := writeAtomic(c.file, b); err != nil && res != nil && !res.IsError {
-				res.IsError, res.Error = true, "codex: saving its refreshed sign-in: "+err.Error()
+		defer end()
+		// The copy, Codex's sessions and anything else in the job's
+		// CODEX_HOME go when the run ends.
+		got, saved, err := finishRun(c.file, e, auth)
+		if err != nil && res != nil && !res.IsError {
+			res.IsError, res.Error = true, "codex: saving its refreshed sign-in: "+err.Error()
+		}
+		if res != nil {
+			res.Redact = append(redact, authSecrets(got)...)
+		}
+		if signInFailed(res, stderr.String()) {
+			// Wait for a sign-in other than the one that failed: the one
+			// it started with, or the one it saved while failing.
+			if saved {
+				c.signedOut(digest(got))
+			} else {
+				c.signedOut(e.Was)
 			}
-		} else if signInFailed(res, string(stderr)) {
-			c.signedOut(string(sum[:]))
+		}
+		if res != nil {
+			res.Error = scrub(res.Error, res.Redact)
 		}
 		planCost(res)
-	}, nil
+	}, redact, nil
+}
+
+// acquire waits, until ctx ends, to be the only run with the sign-in: in
+// this process, and across processes (a `factory eval` or `factory
+// compare` beside the daemon), since two runs refreshing it at once would
+// sign both out.
+func (c *codexPlan) acquire(ctx context.Context) (func(), error) {
+	select {
+	case c.gate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	unlock, err := lockFile(ctx, c.file+".run")
+	if err != nil {
+		<-c.gate
+		return nil, err
+	}
+	return func() { unlock(); <-c.gate }, nil
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	b   []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > t.max {
+		t.b = append([]byte(nil), t.b[len(t.b)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.b)
+}
+
+// scrub replaces each secret in s.
+func scrub(s string, secrets []string) string {
+	for _, v := range secrets {
+		if len(v) >= 8 {
+			s = strings.ReplaceAll(s, v, "[REDACTED]")
+		}
+	}
+	return s
 }
 
 // planCost prices a plan run at nothing: it uses the plan's limits, not
@@ -233,76 +295,4 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
-}
-
-// ValidAuth reports whether b is an auth.json with ChatGPT tokens in it,
-// so a half-written or emptied file never replaces a working one.
-func ValidAuth(b []byte) bool {
-	var a struct {
-		Tokens map[string]any `json:"tokens"`
-	}
-	return json.Unmarshal(b, &a) == nil && a.Tokens["refresh_token"] != nil
-}
-
-// SaveAuth replaces name with b atomically, readable only by its owner.
-func SaveAuth(name string, b []byte) error {
-	if !ValidAuth(b) {
-		return errors.New("not a ChatGPT sign-in (no refresh token in it)")
-	}
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
-		return err
-	}
-	return writeAtomic(name, b)
-}
-
-// writeAtomic replaces name with b through a temporary file in the same
-// directory, mode 0600.
-func writeAtomic(name string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(name), ".auth-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), name)
-}
-
-// lockFile takes an exclusive lock on name, so a `factory eval` or
-// `factory compare` running beside the daemon can't refresh the sign-in
-// at the same time as it.
-func lockFile(ctx context.Context, name string) (func(), error) {
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			f.Close()
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			f.Close()
-			return nil, ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
 }

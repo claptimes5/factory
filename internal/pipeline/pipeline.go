@@ -244,6 +244,7 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 	if d, ok := p.Runner.(*runner.Docker); ok {
 		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
 	}
+	p.recoverSignIns()
 	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool { return false })
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
@@ -965,6 +966,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	}
 	close(events)
 	<-done
+	p.scrubLog(logPath, res)
 	p.recordLimits(ctx, j.Harness, res)
 	run := agentRun{res: res, err: err}
 	if res != nil && res.SessionID != "" {

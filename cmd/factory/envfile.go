@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -49,17 +51,14 @@ func writeEnvFile(path, header string, order []string, vals map[string]string) e
 	var b strings.Builder
 	b.WriteString(header)
 	for _, k := range order {
-		v := vals[k]
-		if v == "" {
+		if vals[k] == "" {
 			continue
 		}
-		if strings.ContainsAny(v, "\r\n") {
-			return fmt.Errorf("%s: value has a line break", k)
+		l, err := envLine(k, vals[k])
+		if err != nil {
+			return err
 		}
-		if strings.ContainsAny(v, " \t\"'\\#;$`") {
-			v = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
-		}
-		fmt.Fprintf(&b, "%s=%s\n", k, v)
+		b.WriteString(l + "\n")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -81,6 +80,101 @@ func writeEnvFile(path, header string, order []string, vals map[string]string) e
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// envLine is one NAME=value line, quoted where it must be.
+func envLine(k, v string) (string, error) {
+	if strings.ContainsAny(v, "\r\n") {
+		return "", fmt.Errorf("%s: value has a line break", k)
+	}
+	if strings.ContainsAny(v, " \t\"'\\#;$`") {
+		v = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
+	}
+	return k + "=" + v, nil
+}
+
+// updateEnvFile sets keys in the settings file and comments out the
+// drop keys that have a value, keeping every other line, comments
+// included. A linked file is written through to the file it points at,
+// keeping its mode. It returns the keys it commented out.
+func updateEnvFile(path string, set map[string]string, drop []string) ([]string, error) {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p // replace the file a link points at, not the link
+	}
+	mode := os.FileMode(0o600)
+	b, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if st, err := os.Stat(path); err == nil {
+			mode = st.Mode().Perm()
+		}
+	case !os.IsNotExist(err):
+		return nil, err
+	}
+	var out, off []string
+	done := map[string]bool{}
+	text := strings.TrimSuffix(string(b), "\n")
+	for _, line := range strings.Split(text, "\n") {
+		if text == "" {
+			break
+		}
+		t := strings.TrimSpace(line)
+		k, v, ok := strings.Cut(t, "=")
+		k = strings.TrimSpace(k)
+		switch {
+		case t == "" || t[0] == '#' || t[0] == ';' || !ok:
+		case set[k] != "":
+			if done[k] {
+				continue // a second value would win over the new one
+			}
+			done[k] = true
+			l, err := envLine(k, set[k])
+			if err != nil {
+				return nil, err
+			}
+			line = l
+		case slices.Contains(drop, k) && strings.TrimSpace(v) != "":
+			line = "# " + line
+			if !slices.Contains(off, k) {
+				off = append(off, k)
+			}
+		}
+		out = append(out, line)
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !done[k] && set[k] != "" {
+			l, err := envLine(k, set[k])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, l)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".factory-env-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if _, err := tmp.WriteString(strings.Join(out, "\n") + "\n"); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	return off, os.Rename(tmp.Name(), path)
 }
 
 // loadEnvFile sets each variable from the file that the environment does

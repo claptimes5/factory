@@ -8,8 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
-	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -111,31 +110,23 @@ func codexLogin(cfg *config.Config, envPath string, p *prompter) (err error) {
 	if err != nil {
 		return err
 	}
-	if vals["FACTORY_CODEX_AUTH"] != codexChatGPT || vals["CODEX_ACCESS_TOKEN"] != "" {
-		vals["FACTORY_CODEX_AUTH"], vals["CODEX_ACCESS_TOKEN"] = codexChatGPT, ""
-		vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"] = "", ""
-		if err := writeEnvKeeping(envPath, vals); err != nil {
-			return err
-		}
-		p.say("Set FACTORY_CODEX_AUTH=chatgpt in %s. Restart the factory to use it.", envPath)
-	} else {
+	if vals["FACTORY_CODEX_AUTH"] == codexChatGPT && vals["CODEX_ACCESS_TOKEN"] == "" {
 		p.say("A running factory picks up the new sign-in for its next Codex job.")
+		return nil
 	}
+	// The keys Codex would use instead of the plan are commented out, not
+	// deleted, so switching back is an edit.
+	off, err := updateEnvFile(envPath, map[string]string{"FACTORY_CODEX_AUTH": codexChatGPT},
+		[]string{"CODEX_ACCESS_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"})
+	if err != nil {
+		return err
+	}
+	p.say("Set FACTORY_CODEX_AUTH=chatgpt in %s.", envPath)
+	if len(off) > 0 {
+		p.say("Commented out %s there: on a ChatGPT plan Codex doesn't use them.", strings.Join(off, ", "))
+	}
+	p.say("Restart the factory to use the plan.")
 	return nil
-}
-
-// writeEnvKeeping writes the settings file with every key it has, the
-// ones setup asks for first.
-func writeEnvKeeping(path string, vals map[string]string) error {
-	order := slices.Clone(envKeys)
-	var extra []string
-	for k := range vals {
-		if !slices.Contains(order, k) {
-			extra = append(extra, k)
-		}
-	}
-	sort.Strings(extra)
-	return writeEnvFile(path, "# Written by `factory setup`. Values set in the environment override these.\n", append(order, extra...), vals)
 }
 
 // signInCodex gets a ChatGPT sign-in for Codex and saves it as the

@@ -513,8 +513,10 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if limits, _ := st.Limits(ctx); len(limits) > 0 {
 		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
 	}
+	// From this command's own settings, which are the daemon's unless its
+	// environment overrides factory.env.
 	if s := codexSignIn(cfg); s != "" {
-		fmt.Fprintf(w, "codex:\t%s\n", s)
+		fmt.Fprintf(w, "codex sign-in (by this shell's settings):\t%s\n", s)
 	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
@@ -579,6 +581,9 @@ func trunc(s string, n int) string {
 func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	if len(args) > 0 && args[0] == "capture" {
 		return runCapture(ctx, cfg, args[1:])
+	}
+	if _, err := codexAuth(); err != nil {
+		return err // as build checks it for the daemon
 	}
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	candidate := fs.String("config", "", "candidate factory.yaml (routing, prompts, skills) to evaluate; default the main config")

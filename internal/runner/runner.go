@@ -37,7 +37,9 @@ type Spec struct {
 	Env      map[string]string
 	Cmd      []string
 	Stdin    io.Reader
-	Timeout  time.Duration
+	// Stderr, when set, gets a copy of the process's stderr.
+	Stderr  io.Writer
+	Timeout time.Duration
 	// NoNetwork runs without any network (hidden scenarios, so code under
 	// test cannot send them anywhere).
 	NoNetwork bool
@@ -203,7 +205,7 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	cmd.Stdin = s.Stdin
 	cmd.Stdout = stdout
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderrTo(&stderr, s.Stderr)
 	if err := cmd.Start(); err != nil {
 		if s.Services != "" {
 			remove()
@@ -393,7 +395,7 @@ func (Local) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 	cmd.Stdin = s.Stdin
 	cmd.Stdout = stdout
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderrTo(&stderr, s.Stderr)
 	err := cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return -1, ErrTimeout
@@ -404,6 +406,15 @@ func (Local) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 func (Local) Alive(context.Context, string) bool { return false }
 func (Local) Kill(context.Context, string) error { return nil }
 func (Local) KillAll(context.Context) error      { return nil }
+
+// stderrTo sends stderr to the runner's own buffer and, when set, the
+// caller's writer.
+func stderrTo(buf *bytes.Buffer, w io.Writer) io.Writer {
+	if w == nil {
+		return buf
+	}
+	return io.MultiWriter(buf, w)
+}
 
 func withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if d <= 0 {

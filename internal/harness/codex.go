@@ -3,9 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
@@ -48,23 +46,12 @@ func (a codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) 
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", req.Effort))
 	}
 	args = append(args, "-")
-	run := ""
-	if a.plan.withFile() {
-		// A sign-in Codex couldn't refresh shows only on stderr; keep it
-		// in the job's CODEX_HOME to tell that failure apart.
-		run = `codex "$@" 2>"$CODEX_HOME/` + codexStderrFile + `"; s=$?; `
-	}
 	if req.CaptureLimits {
 		// Codex writes its usage-limit windows only to its session file:
 		// keep the last reading, and Codex's exit code.
-		if run == "" {
-			run = `codex "$@"; s=$?; `
-		}
-		run += `f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1); ` +
-			`if [ -n "$f" ]; then grep -E '"rate_limits": ?\{' "$f" | tail -n 1 > ` + path.Join(p.Out, codexLimitsFile) + `; fi; `
-	}
-	if run != "" {
-		args = append([]string{"sh", "-c", run + "exit $s", "sh"}, args[1:]...)
+		script := `codex "$@"; s=$?; f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1); ` +
+			`if [ -n "$f" ]; then grep -E '"rate_limits": ?\{' "$f" | tail -n 1 > ` + path.Join(p.Out, codexLimitsFile) + `; fi; exit $s`
+		args = append([]string{"sh", "-c", script, "sh"}, args[1:]...)
 	}
 	return args, nil
 }
@@ -73,7 +60,8 @@ const codexLimitsFile = "codex-limits.json"
 
 // limitsAfter reads the usage-limit windows the wrapper saved.
 func (codexAdapter) limitsAfter(outDir string, res *Result) {
-	b, err := os.ReadFile(filepath.Join(outDir, codexLimitsFile))
+	// The job could have put anything there.
+	b, err := readJobFile(outDir, codexLimitsFile)
 	if err != nil {
 		return
 	}

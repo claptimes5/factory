@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -135,8 +136,14 @@ func TestCodexLoginCopiesThisMachinesSignIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envPath := filepath.Join(t.TempDir(), "factory.env")
-	if err := os.WriteFile(envPath, []byte("OPENAI_API_KEY=sk-x\nFACTORY_WEB_PASSWORD=long-enough-pw\n"), 0o600); err != nil {
+	// factory.env is a link to the real file, which has comments.
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.env")
+	if err := os.WriteFile(real, []byte("# my notes\nOPENAI_API_KEY=sk-x\nFACTORY_WEB_PASSWORD=long-enough-pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(dir, "factory.env")
+	if err := os.Symlink(real, envPath); err != nil {
 		t.Fatal(err)
 	}
 	var b strings.Builder
@@ -150,9 +157,15 @@ func TestCodexLoginCopiesThisMachinesSignIn(t *testing.T) {
 	if got, _ := os.ReadFile(codexAuthFile(cfg)); string(got) != testAuth {
 		t.Fatalf("saved %s", got)
 	}
-	vals, _ := readEnvFile(envPath)
-	if vals["FACTORY_CODEX_AUTH"] != "chatgpt" || vals["OPENAI_API_KEY"] != "" || vals["FACTORY_WEB_PASSWORD"] != "long-enough-pw" {
-		t.Fatalf("env %v", vals)
+	if st, err := os.Lstat(envPath); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("factory.env is no longer a link: %v", err)
+	}
+	got, _ := os.ReadFile(real)
+	if want := "# my notes\n# OPENAI_API_KEY=sk-x\nFACTORY_WEB_PASSWORD=long-enough-pw\nFACTORY_CODEX_AUTH=chatgpt\n"; string(got) != want {
+		t.Fatalf("factory.env = %q, want %q", got, want)
+	}
+	if !strings.Contains(b.String(), "Commented out OPENAI_API_KEY") {
+		t.Fatalf("didn't say what it commented out:\n%s", b.String())
 	}
 	if !strings.Contains(b.String(), "codex login") {
 		t.Fatalf("no advice to sign this machine in again:\n%s", b.String())
@@ -175,5 +188,17 @@ func TestCodexLoginRefusesAFileWithNoSignIn(t *testing.T) {
 	}
 	if _, err := os.Stat(codexAuthFile(cfg)); !os.IsNotExist(err) {
 		t.Fatalf("auth file: %v", err)
+	}
+}
+
+func TestEvalRefusesABadCodexAuth(t *testing.T) {
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+	t.Setenv("FACTORY_CODEX_AUTH", "plan")
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runEval(context.Background(), cfg, []string{"-set", t.TempDir()}); err == nil || !strings.Contains(err.Error(), "FACTORY_CODEX_AUTH") {
+		t.Fatalf("eval ran with a bad FACTORY_CODEX_AUTH: %v", err)
 	}
 }

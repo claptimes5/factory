@@ -91,7 +91,8 @@ not dollars. Choose it in `./factory setup`, or run:
 ```
 
 This signs Codex in with a device code: it runs `codex login --device-auth`
-in the job image, and you open the link it shows and enter the code. If
+in the job image, and you open the link it shows and enter the code. Run it
+as the user the daemon runs as, so the daemon can read the file it saves. If
 Codex on this machine is already signed in, it offers to copy that sign-in
 instead. If you copy it, run `codex login` here again afterward, so this
 machine and the factory don't share one sign-in. If Codex says device code
@@ -99,8 +100,9 @@ sign-in is off, turn it on in ChatGPT's security settings (or ask your
 workspace admin).
 
 The sign-in is saved in `data/codex/auth.json`, readable only by you, and
-`factory.env` gets `FACTORY_CODEX_AUTH=chatgpt`. Restart the factory after
-switching. Each Codex job gets its own copy of the sign-in. Codex refreshes
+`factory.env` gets `FACTORY_CODEX_AUTH=chatgpt`. Any `OPENAI_API_KEY`,
+`CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` there is commented out, and it says
+which. Restart the factory after switching. Each Codex job gets its own copy of the sign-in. Codex refreshes
 it about every 8 days, and the factory saves the new one back.
 
 Know the trade-offs before you choose it:
@@ -111,13 +113,18 @@ Know the trade-offs before you choose it:
   there, and the job holds your ChatGPT sign-in.
 - **Codex runs one job at a time.** Two jobs refreshing one sign-in at once
   would break it, so the others wait in the queue. Claude jobs aren't
-  affected.
+  affected. This holds across processes too: a `factory eval` or `factory
+  compare` with Codex waits while the daemon runs a Codex job, and the
+  other way round.
 - **If the sign-in stops working,** for example because it was used on
   another machine, the job goes back in the queue without using a retry,
   Codex jobs wait, and you're notified once. Run `./factory codex-login`
-  again; the running factory picks it up.
+  again; the running factory picks it up. A job is queued again this way
+  at most twice; after that it fails as usual.
 
-`./factory status` shows the sign-in and when it was last refreshed. The
+`./factory status` shows the sign-in and when it was last refreshed. It
+goes by its own settings (`factory.env` and its environment), which are the
+daemon's unless the daemon's environment sets other values. The
 plan's 5-hour and weekly usage show there and on the dashboard's **Spend**
 page, and Codex jobs wait when one is nearly used up (see
 [Subscription usage limits](configuration.md#budgets)).
