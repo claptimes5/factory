@@ -274,34 +274,59 @@ Every later config is then measured against the miss.
 The factory learns from the work you correct. It watches two things:
 
 - **Your edits.** When you push to a factory PR and then merge it, the
-  factory keeps the diff between its last push and what you merged (up to
-  20 KB, in whole hunks).
+  factory keeps what your own commits changed after its last push (up to
+  20 KB, in whole hunks). What an "Update branch" merge or a rebase brought
+  in from the base branch isn't counted, nor the factory's own commits
+  rebased.
 - **Repeat findings.** Each critical or major finding in a review or critic
-  verdict that blocked a build is kept, with its file and claim.
+  verdict that blocked a build is kept, with its file and claim, once per
+  item however often the review is retried.
 
 Once a day per repo, a read-only learn job runs if there's something new: at
 least one edit of yours, or `learning.min_findings` alike findings (in
 files of the same folder and type, or with claims in the same words) from
-two or more items. It reads them with the repo's current `AGENTS.md` and
-`CLAUDE.md`, and proposes up to three lines: general rules a builder would
-follow next time, not one fix restated. It may propose none. A lone finding
-waits, for up to 30 days, for one like it.
+two or more items. One runs at a time. It reads them with the repo's current
+`AGENTS.md` and `CLAUDE.md`, and proposes up to three lines: general rules a
+builder would follow next time, not one fix restated. It may propose none. A
+lone finding waits, for up to 30 days, for one like it. It reads your five
+newest edits and ten findings per group at most; older ones are set aside.
 
-The lines go to `AGENTS.md`, which builders read before they start, under a
-`## Lessons from the factory` section. The daemon, not the agent, makes the
-change: on the `factory/lessons` branch, in a draft PR labeled
-`factory:awaiting-you`. The PR lists each line with why it was proposed and
-links to the issues and PRs it came from. While it's open, new lines are
-added to it. A line already in `AGENTS.md` or in the PR, or one you
-declined, is skipped. You get a notification each time it opens or grows.
+The lines go under a `## Lessons from the factory` section of the file your
+builders read:
 
-Read the lines before you merge: they steer every later build. Edit or drop
-any on the branch. The PR never merges itself, whatever `auto_merge` says,
-and no build ever runs on its branch.
+- `AGENTS.md`, which Codex reads. If it's a symlink to another file tracked
+  in the repo (often `CLAUDE.md`), the lines go in that file. A symlink out
+  of the repo, or to anything but a plain tracked file, is refused.
+- `CLAUDE.md` instead when Claude builds (Claude Code reads `CLAUDE.md`,
+  not `AGENTS.md`) and your `CLAUDE.md` doesn't load `AGENTS.md` with an
+  `@AGENTS.md` line, or when it's the only one of the two.
+- With neither, a new `AGENTS.md`, and when Claude builds, a new
+  `CLAUDE.md` of `@AGENTS.md` so Claude reads it too. The same goes when
+  there's an `AGENTS.md` and no `CLAUDE.md`.
+
+The daemon, not the agent, makes the change: on the `factory/lessons`
+branch, in a draft PR labeled `factory:awaiting-you`. If that branch has
+commits of someone else's and no open PR, the factory doesn't push over
+them: it uses `factory/lessons-2`, and so on. The PR lists each line with
+why it was proposed (as quoted text, so nothing in it links, closes or
+mentions) and links to the issues and PRs it came from. While it's open,
+new lines are added to it. A line already in the file or in the PR, or one
+you declined, is skipped, and a line with HTML, an `@`, a link or an image
+is refused. You get a notification each time it opens or grows.
+
+If the factory can't write the file (a symlink out of the repo, say), it
+finds out before the agent runs, tells you once, and sets aside what it had
+to learn from rather than trying again each day.
+
+Read the lines before you merge: they steer every later build. Drop any you
+don't want on the branch. If you reword one, the factory counts the
+original as declined and doesn't track your version. The PR never merges
+itself, whatever `auto_merge` says, and no build ever runs on its branch.
 
 To turn a line down, take it out of the PR's branch, or close the PR without
-merging it to turn them all down. The factory remembers declined lines and
-never proposes them again; the next lessons start a fresh PR.
+merging it to turn them all down, or delete it from the file after you
+merge. The factory remembers declined lines and never proposes them again;
+the next lessons start a fresh PR.
 
 To turn it off, set `learning: {enabled: false}` (see
 [Configuration](configuration.md#learning-from-your-edits)).

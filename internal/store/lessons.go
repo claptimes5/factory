@@ -21,7 +21,9 @@ type Signal struct {
 	Claim       string
 	Severity    string
 	Evidence    string
-	Diff        string // a human edit's changes
+	Diff        string // a human edit's changes; "" until the learn job reads them
+	FromSHA     string // a human edit: the factory's last push
+	HeadSHA     string // and the head the PR merged at
 	CreatedAt   string
 	LearnJob    int64 // the learn job that used it; 0 while unused
 }
@@ -32,18 +34,26 @@ const (
 	SignalFinding   = "finding"
 )
 
-// AddSignal records a signal. The same one recorded again (a rerun job, a
-// second poll) is ignored.
+// AddSignal records a signal. The same one recorded again (a retried
+// review job, a second poll) is ignored. The repo is kept lowercased.
 func (s *Store) AddSignal(ctx context.Context, sig Signal) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO lesson_signals(repo, kind, item_id, issue_number, job_id, pr_number, file, claim, severity, evidence, diff, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-			sig.Repo, sig.Kind, sig.ItemID, sig.IssueNumber, sig.JobID, sig.PRNumber, sig.File, sig.Claim, sig.Severity, sig.Evidence, sig.Diff, Now())
+		_, err := tx.Exec(`INSERT INTO lesson_signals(repo, kind, item_id, issue_number, job_id, pr_number, file, claim, severity, evidence, diff, from_sha, head_sha, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			strings.ToLower(sig.Repo), sig.Kind, sig.ItemID, sig.IssueNumber, sig.JobID, sig.PRNumber, sig.File, sig.Claim, sig.Severity, sig.Evidence, sig.Diff, sig.FromSHA, sig.HeadSHA, Now())
 		return err
 	})
 }
 
-const signalCols = `id, repo, kind, COALESCE(item_id,0), issue_number, job_id, pr_number, file, claim, severity, evidence, diff, created_at, COALESCE(learn_job,0)`
+// SetSignalDiff saves the changes of a human edit, once read.
+func (s *Store) SetSignalDiff(ctx context.Context, id int64, diff string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE lesson_signals SET diff = ? WHERE id = ?`, diff, id)
+		return err
+	})
+}
+
+const signalCols = `id, repo, kind, COALESCE(item_id,0), issue_number, job_id, pr_number, file, claim, severity, evidence, diff, from_sha, head_sha, created_at, COALESCE(learn_job,0)`
 
 func (s *Store) signals(ctx context.Context, q string, args ...any) ([]Signal, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT `+signalCols+` FROM lesson_signals `+q, args...)
@@ -54,7 +64,7 @@ func (s *Store) signals(ctx context.Context, q string, args ...any) ([]Signal, e
 	var out []Signal
 	for rows.Next() {
 		var g Signal
-		if err := rows.Scan(&g.ID, &g.Repo, &g.Kind, &g.ItemID, &g.IssueNumber, &g.JobID, &g.PRNumber, &g.File, &g.Claim, &g.Severity, &g.Evidence, &g.Diff, &g.CreatedAt, &g.LearnJob); err != nil {
+		if err := rows.Scan(&g.ID, &g.Repo, &g.Kind, &g.ItemID, &g.IssueNumber, &g.JobID, &g.PRNumber, &g.File, &g.Claim, &g.Severity, &g.Evidence, &g.Diff, &g.FromSHA, &g.HeadSHA, &g.CreatedAt, &g.LearnJob); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -65,8 +75,12 @@ func (s *Store) signals(ctx context.Context, q string, args ...any) ([]Signal, e
 // UnusedSignals lists a repo's signals no learn job has used, recorded at
 // or after since (TimeFormat; "" for all), oldest first.
 func (s *Store) UnusedSignals(ctx context.Context, repo, since string) ([]Signal, error) {
-	return s.signals(ctx, `WHERE repo = ? COLLATE NOCASE AND learn_job IS NULL AND created_at >= ? ORDER BY id`, repo, since)
+	return s.signals(ctx, unusedSignals, strings.ToLower(repo), since)
 }
+
+// unusedSignals matches lesson_signals_unused: the repo is stored
+// lowercased, so no COLLATE, which the index couldn't serve.
+const unusedSignals = `WHERE repo = ? AND learn_job IS NULL AND created_at >= ? ORDER BY id`
 
 // SignalsByID returns the signals with these ids, oldest first.
 func (s *Store) SignalsByID(ctx context.Context, ids []int64) ([]Signal, error) {
@@ -92,7 +106,7 @@ func (s *Store) UseSignals(ctx context.Context, ids []int64, learnJob int64) err
 	})
 }
 
-// Lesson is a line the factory proposed for a repo's AGENTS.md.
+// Lesson is a line the factory proposed for a repo's AGENTS.md or CLAUDE.md.
 type Lesson struct {
 	ID        int64
 	Repo      string
@@ -112,10 +126,12 @@ const (
 )
 
 // AddLesson records a proposed line. One already known by its norm keeps
-// what it has.
+// its status; a proposed one moves to the PR that proposes it now (it is
+// recorded before its PR is opened, with PR 0, and again after).
 func (s *Store) AddLesson(ctx context.Context, l Lesson) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO lessons(repo, line, norm, pr_number, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		_, err := tx.Exec(`INSERT INTO lessons(repo, line, norm, pr_number, created_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (repo, norm) DO UPDATE SET pr_number = excluded.pr_number, line = excluded.line WHERE lessons.status = 'proposed'`,
 			strings.ToLower(l.Repo), l.Line, l.Norm, l.PRNumber, Now())
 		return err
 	})

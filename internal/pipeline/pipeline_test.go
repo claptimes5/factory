@@ -180,7 +180,7 @@ func (f *fakeGH) CreatePR(_ context.Context, title, body, head, base string, dra
 		return nil, fmt.Errorf("github: HTTP 502")
 	}
 	f.nextPR++
-	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", State: "open", Draft: draft, Body: body}
+	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", Title: title, State: "open", Draft: draft, Body: body}
 	f.prs[head] = pr
 	f.comments[pr.Number] = append(f.comments[pr.Number], "BODY:"+body)
 	f.bodies[pr.Number] = body

@@ -67,7 +67,7 @@ func (p *Pipeline) branchFor(it *store.WorkItem) string {
 		// issue 12's.
 		return fmt.Sprintf("factory/%s-%d", config.ShortName(it.Repo), it.IssueNumber)
 	}
-	if it.Branch != "" && it.Branch != LessonsBranch { // that one is the daemon's own PR, never built on
+	if it.Branch != "" && !isLessonsBranch(it.Branch) { // that one is the daemon's own PR, never built on
 		return it.Branch
 	}
 	return fmt.Sprintf("factory/issue-%d", it.IssueNumber)

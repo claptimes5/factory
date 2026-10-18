@@ -410,8 +410,9 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	}
 	// One orchestrator at a time: its tools act on the whole queue. One
 	// tuning run at a time, too: each reads the file the last proposed for.
+	// And one learn job: two for a repo would push over each other's lines.
 	var except []string
-	for _, kind := range []string{"orchestrate", "tune"} {
+	for _, kind := range []string{"orchestrate", "tune", "learn"} {
 		if n, err := p.Store.CountJobs(ctx, state.Running, kind); err != nil {
 			return nil, err
 		} else if n > 0 {

@@ -3,6 +3,7 @@ package verdict
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -34,6 +35,8 @@ func (l *Learn) Validate() error {
 	for n, s := range l.Lessons {
 		if strings.TrimSpace(s.Line) == "" {
 			errs = append(errs, fmt.Errorf("lessons[%d].line is empty", n))
+		} else if why := unsafeLine(s.Line); why != "" {
+			errs = append(errs, fmt.Errorf("lessons[%d].line %s", n, why))
 		}
 		if strings.TrimSpace(s.Why) == "" {
 			errs = append(errs, fmt.Errorf("lessons[%d].why is empty", n))
@@ -43,6 +46,26 @@ func (l *Learn) Validate() error {
 		errs = append(errs, errors.New("no lessons needs a skip_reason"))
 	}
 	return errors.Join(errs...)
+}
+
+// mdLink is a markdown link or image, inline ([x](y)) or by reference
+// ([x][y], or a [y]: definition).
+var mdLink = regexp.MustCompile(`\]\s*[(\[]|^\s*\[[^\]]*\]:`)
+
+// unsafeLine says why a line can't go into an instructions file builders
+// read, or "": HTML (a comment hides text from the PR's reviewer), an
+// @mention or @import (Claude Code reads @path as a file to load), or a
+// link or image.
+func unsafeLine(l string) string {
+	switch {
+	case strings.Contains(l, "<"):
+		return "has a <, which could be HTML"
+	case strings.Contains(l, "@"):
+		return "has an @, which could mention someone or import a file"
+	case mdLink.MatchString(l):
+		return "has a markdown link or image"
+	}
+	return ""
 }
 
 func init() {

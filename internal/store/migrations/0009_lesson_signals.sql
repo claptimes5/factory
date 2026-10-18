@@ -3,7 +3,7 @@
 -- critics. A learn job reads the unused ones of a repo and marks them used.
 CREATE TABLE lesson_signals (
   id           INTEGER PRIMARY KEY,
-  repo         TEXT NOT NULL,
+  repo         TEXT NOT NULL,              -- lowercased
   kind         TEXT NOT NULL,              -- human_edit | finding
   item_id      INTEGER REFERENCES work_items(id),
   issue_number INTEGER NOT NULL DEFAULT 0,
@@ -13,12 +13,14 @@ CREATE TABLE lesson_signals (
   claim        TEXT NOT NULL DEFAULT '',
   severity     TEXT NOT NULL DEFAULT '',
   evidence     TEXT NOT NULL DEFAULT '',
-  diff         TEXT NOT NULL DEFAULT '',   -- a human edit's changes, capped
+  diff         TEXT NOT NULL DEFAULT '',   -- a human edit's changes, capped; '' until the learn job reads them
+  from_sha     TEXT NOT NULL DEFAULT '',   -- a human edit: the factory's last push
+  head_sha     TEXT NOT NULL DEFAULT '',   -- and the head the PR merged at
   created_at   TEXT NOT NULL,
   learn_job    INTEGER                     -- the learn job that used it
 );
--- A rerun job or a second poll records nothing twice.
-CREATE UNIQUE INDEX lesson_signals_once ON lesson_signals(kind, item_id, job_id, pr_number, file, claim);
+-- A retried review job or a second poll records nothing twice.
+CREATE UNIQUE INDEX lesson_signals_once ON lesson_signals(kind, item_id, pr_number, file, claim);
 CREATE INDEX lesson_signals_unused ON lesson_signals(repo, learn_job);
 
 -- Every line the factory proposed for a repo's AGENTS.md, and what became

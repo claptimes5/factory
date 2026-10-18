@@ -3,8 +3,11 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,14 +23,21 @@ import (
 // The learn loop: what a human changed in a factory PR before merging it,
 // and blocking findings that repeat across items, become signals. Once a
 // day per repo, when there's enough to go on, a read-only learn job turns
-// them into lines for the repo's AGENTS.md, and the daemon proposes those
-// in a draft PR of its own on LessonsBranch. That PR is no item's, so it
-// never auto-merges and no builder ever runs on its branch.
+// them into lines for the instructions file the repo's builders read
+// (AGENTS.md, or CLAUDE.md; see lessonsTarget), and the daemon proposes
+// those in a draft PR of its own on LessonsBranch. That PR is no item's,
+// so it never auto-merges and no builder ever runs on its branch.
 
-// LessonsBranch is the branch of the lessons PR.
+// LessonsBranch is the branch of the lessons PR. When it has commits the
+// factory didn't make and no open PR, the PR goes on LessonsBranch-2, -3...
 const LessonsBranch = "factory/lessons"
 
-// lessonsHeading is the AGENTS.md section the lessons go under.
+// isLessonsBranch says whether a branch is one of the lessons PR's.
+func isLessonsBranch(b string) bool {
+	return b == LessonsBranch || strings.HasPrefix(b, LessonsBranch+"-")
+}
+
+// lessonsHeading is the section the lessons go under.
 const lessonsHeading = "## Lessons from the factory"
 
 // Limits that keep a learn job's input small.
@@ -36,6 +46,7 @@ const (
 	maxEdits      = 5                   // human edits per learn job
 	maxGroups     = 10                  // finding groups per learn job
 	maxGroupSize  = 10                  // findings per group
+	maxWhy        = 500                 // bytes of a lesson's why, in the PR
 	signalHorizon = 30 * 24 * time.Hour // older unused signals are left out
 )
 
@@ -43,73 +54,93 @@ const (
 var learnDay = store.Today
 
 // LearnInput is carried by a learn job: its repo and the signals it reads.
+// Trimmed are the ones the caps left out, set aside with the rest so they
+// don't start a job on old news the next day.
 type LearnInput struct {
 	Repo    string  `json:"repo"`
 	Signals []int64 `json:"signals"`
+	Trimmed []int64 `json:"trimmed,omitempty"`
 }
 
 // --- signals ---
 
-// recordHumanEdit saves what a human pushed to a factory PR after the
-// factory's last push (from), up to the head it merged at. Without the
-// diff there's nothing to learn from, so a failure records nothing.
+// recordHumanEdit notes that a human pushed to a factory PR after the
+// factory's last push (from), up to the head it merged at. It runs under
+// the intake lock, so it only records the two commits: the learn job reads
+// the diff, and tries again the next day if it can't.
 func (p *Pipeline) recordHumanEdit(ctx context.Context, it *store.WorkItem, pr *github.PR, from string) {
 	if !p.Cfg.Learning.On() || from == "" || pr.Head.SHA == "" || from == pr.Head.SHA {
 		return
 	}
-	diff, err := p.humanDiff(ctx, it.Repo, pr, from)
-	if err != nil {
-		p.log().Warn("lessons: human edit", "pr", pr.Number, "err", err)
-		return
-	}
-	if strings.TrimSpace(diff) == "" {
-		return
-	}
 	p.warn(p.Store.AddSignal(ctx, store.Signal{Repo: it.Repo, Kind: store.SignalHumanEdit, ItemID: it.ID, IssueNumber: it.IssueNumber,
-		PRNumber: pr.Number, Diff: diff}), "AddSignal")
+		PRNumber: pr.Number, FromSHA: from, HeadSHA: pr.Head.SHA}), "AddSignal")
 }
 
-// humanDiff is the patch from the factory's head to a merged PR's head,
-// read from a bare clone that is deleted after.
-func (p *Pipeline) humanDiff(ctx context.Context, repo string, pr *github.PR, from string) (string, error) {
-	root := p.Cfg.Path(p.Cfg.DataDir)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	dir, err := os.MkdirTemp(root, "lessons-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(dir)
+// humanDiff is what the human changed on a merged PR after the factory's
+// last push: the patches of their own commits, in the checkout ws. Not a
+// diff of the two heads, which would hold whatever an "Update branch"
+// merge or a rebase brought in from base, and not the factory's own
+// commits rebased.
+func (p *Pipeline) humanDiff(ctx context.Context, repo string, ws *Workspace, s store.Signal) (string, error) {
 	g := p.git(repo)
-	bare := filepath.Join(dir, "repo.git")
-	if err := g.CloneBare(ctx, bare); err != nil {
-		return "", err
-	}
 	// The branch may be gone after the merge; the PR's own ref isn't.
-	ref := fmt.Sprintf("refs/pull/%d/head", pr.Number)
+	ref := fmt.Sprintf("refs/pull/%d/head", s.PRNumber)
 	if p.repoConf(repo).GitLab() {
-		ref = fmt.Sprintf("refs/merge-requests/%d/head", pr.Number)
+		ref = fmt.Sprintf("refs/merge-requests/%d/head", s.PRNumber)
 	}
-	for _, sha := range []string{pr.Head.SHA, from} {
-		if g.hasCommit(ctx, bare, sha) {
+	for _, sha := range []string{s.HeadSHA, s.FromSHA} {
+		if g.hasCommit(ctx, ws.Repo, sha) {
 			continue
 		}
-		got, err := g.FetchRef(ctx, bare, ref)
+		got, err := g.FetchRef(ctx, ws.Repo, ref)
 		if err != nil || got != sha {
-			if _, err := g.FetchRef(ctx, bare, sha); err != nil {
+			if _, err := g.FetchRef(ctx, ws.Repo, sha); err != nil {
 				return "", err
 			}
 		}
-		if !g.hasCommit(ctx, bare, sha) {
+		if !g.hasCommit(ctx, ws.Repo, sha) {
 			return "", fmt.Errorf("commit %s isn't on the remote", short(sha))
 		}
 	}
-	diff, err := g.Diff(ctx, bare, from, pr.Head.SHA)
+	before, err := g.baseBefore(ctx, ws.Repo, "refs/remotes/origin/"+p.repoConf(repo).BaseBranch, s.HeadSHA)
 	if err != nil {
 		return "", err
 	}
-	return capDiff(diff, maxEditDiff), nil
+	// Commits on head and not on from, less what base had before the
+	// merge, less those with a twin on from (the factory's, rebased).
+	args := []string{"log", "-p", "--reverse", "--no-merges", "--right-only", "--cherry-pick", "--format=",
+		"--no-ext-diff", "--no-textconv", s.FromSHA + "..." + s.HeadSHA}
+	if before != "" {
+		args = append(args, "^"+before)
+	}
+	var b strings.Builder
+	if _, err := g.run(ctx, ws.Repo, &b, append(args, "--")...); err != nil {
+		return "", err
+	}
+	return capDiff(b.String(), maxEditDiff), nil
+}
+
+// baseBefore is base as it was before head merged into it: the first
+// parent of the merge commit on base's mainline, or base itself when no
+// commit there has head (a squash or a rebase merge). It is "" when head
+// was fast-forwarded onto base, which leaves nothing apart to tell by.
+func (g *Git) baseBefore(ctx context.Context, repo, base, head string) (string, error) {
+	if !g.IsAncestor(ctx, repo, head, base) {
+		return base, nil
+	}
+	out, err := g.run(ctx, repo, nil, "rev-list", "--first-parent", "--ancestry-path", "--reverse", head+".."+base)
+	if err != nil {
+		return "", err
+	}
+	first, _, _ := strings.Cut(out, "\n")
+	if first == "" {
+		return "", nil
+	}
+	parent, err := g.run(ctx, repo, nil, "rev-parse", first+"^1")
+	if err != nil || parent == head {
+		return "", err
+	}
+	return parent, nil
 }
 
 // hasCommit reports whether sha is a commit in repo.
@@ -193,7 +224,8 @@ func (p *Pipeline) recordFindings(ctx context.Context, j *store.Job, it *store.W
 // --- when to learn ---
 
 // learnTriggers queues a learn job for each repo with something to learn
-// from, at most once a day per repo.
+// from, at most once a day per repo, and never while one for the repo is
+// queued or running: two would push over each other's lines.
 func (p *Pipeline) learnTriggers(ctx context.Context) {
 	if !p.Cfg.Learning.On() {
 		return
@@ -213,29 +245,35 @@ func (p *Pipeline) learnTriggers(ctx context.Context) {
 			p.warn(err, "UnusedSignals")
 			continue
 		}
-		var ids []int64
-		for _, s := range learnable(sigs, p.Cfg.Learning.MinFindings) {
-			ids = append(ids, s.ID)
-		}
-		if len(ids) == 0 {
+		use, trimmed := learnable(sigs, p.Cfg.Learning.MinFindings)
+		if len(use) == 0 {
 			continue
 		}
-		b, _ := json.Marshal(LearnInput{Repo: repo, Signals: ids})
+		in := LearnInput{Repo: repo}
+		for _, s := range use {
+			in.Signals = append(in.Signals, s.ID)
+		}
+		for _, s := range trimmed {
+			in.Trimmed = append(in.Trimmed, s.ID)
+		}
+		b, _ := json.Marshal(in)
 		fast := r.FastFor(r.Harness, r.Model)
-		if _, err := p.Store.EnqueueJob(ctx, store.Job{Kind: "learn", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: fast,
-			Skillset: r.Skills, Route: "learn", Priority: -1, BudgetUSD: p.Cfg.FastBudget(p.Cfg.LearnBudget(), fast), Input: string(b)}); err != nil {
+		_, queued, err := p.Store.EnqueueSoleFor(ctx, store.Job{Kind: "learn", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: fast,
+			Skillset: r.Skills, Route: "learn", Priority: -1, BudgetUSD: p.Cfg.FastBudget(p.Cfg.LearnBudget(), fast), Input: string(b)}, repo)
+		if err != nil || !queued {
 			p.warn(err, "enqueue learn")
 			continue
 		}
-		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "learn_queued", Reason: key, Data: fmt.Sprintf(`{"signals":%d}`, len(ids))}), "AddEvent")
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "learn_queued", Reason: key, Data: fmt.Sprintf(`{"signals":%d}`, len(in.Signals))}), "AddEvent")
 	}
 }
 
 // learnable picks the signals worth a learn job: every human edit, and
 // each group of alike findings with at least min of them from two or more
 // items. With neither there's nothing to learn yet. Findings left out wait
-// for one like them.
-func learnable(sigs []store.Signal, min int) []store.Signal {
+// for one like them. trimmed are the older edits and findings of a picked
+// group past the caps: the job sets them aside with the rest.
+func learnable(sigs []store.Signal, min int) (use, trimmed []store.Signal) {
 	var edits, findings []store.Signal
 	for _, s := range sigs {
 		switch s.Kind {
@@ -246,9 +284,10 @@ func learnable(sigs []store.Signal, min int) []store.Signal {
 		}
 	}
 	if len(edits) > maxEdits {
+		trimmed = append(trimmed, edits[:len(edits)-maxEdits]...)
 		edits = edits[len(edits)-maxEdits:] // the newest
 	}
-	out := edits
+	use = edits
 	n := 0
 	for _, g := range groupFindings(findings) {
 		items := map[int64]bool{}
@@ -260,11 +299,15 @@ func learnable(sigs []store.Signal, min int) []store.Signal {
 		}
 		n++
 		if len(g) > maxGroupSize {
+			trimmed = append(trimmed, g[:len(g)-maxGroupSize]...)
 			g = g[len(g)-maxGroupSize:]
 		}
-		out = append(out, g...)
+		use = append(use, g...)
 	}
-	return out
+	if len(use) == 0 {
+		return nil, nil
+	}
+	return use, trimmed
 }
 
 // groupFindings puts findings that may be the same mistake together: in
@@ -375,14 +418,24 @@ type learnGroup struct {
 // learnPrompt is what prompts/learn.md can reference.
 type learnPrompt struct {
 	Repo     string
-	AgentsMD string   // the base branch's AGENTS.md, or ""
-	ClaudeMD string   // the base branch's CLAUDE.md, or ""
-	Proposed []string // lines in the open lessons PR not on the base yet
-	Declined []string // lines a human turned down: never again
+	File     string      // where the lines go, such as AGENTS.md
+	Current  string      // File on the base branch, or ""
+	Others   []learnFile // the other instruction files builders read
+	Proposed []string    // lines in the open lessons PR not on the base yet
+	Declined []string    // lines a human turned down: never again
 	Edits    []learnEdit
 	Groups   []learnGroup
 	Fence    string // a code fence none of the above can close
 }
+
+type learnFile struct{ Name, Text string }
+
+// refusal is why the factory won't write a repo's lessons, found before
+// the agent runs, that a later run would meet again: such as a symlink out
+// of the repo. The job's signals are set aside rather than retried daily.
+type refusal struct{ msg string }
+
+func (r refusal) Error() string { return r.msg }
 
 func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 	dir := p.jobDir(j.ID)
@@ -410,20 +463,66 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
-	agents, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, "AGENTS.md")
+	// Everything that could refuse the lines is checked before the agent
+	// is paid for.
+	plan, err := p.lessonsPlan(ctx, in.Repo, ws)
+	if err == nil {
+		err = checkWritable(ws.Repo, plan)
+	}
+	if r := (refusal{}); errors.As(err, &r) {
+		p.refuseLearn(ctx, j, in, r)
+		return nil
+	} else if err != nil {
+		return fail(agentRun{}, state.Failed, err.Error())
+	}
+	// The diffs of human edits are read here, not at merge time. One that
+	// can't be read now stays unused for the next run.
+	var use []int64
+	var kept []store.Signal
+	for _, s := range sigs {
+		if s.Kind == store.SignalHumanEdit && s.Diff == "" && s.FromSHA != "" {
+			diff, err := p.humanDiff(ctx, in.Repo, ws, s)
+			if err != nil {
+				p.log().Warn("lessons: human edit", "pr", s.PRNumber, "err", err)
+				continue
+			}
+			use = append(use, s.ID)
+			if strings.TrimSpace(diff) == "" {
+				continue // only base's changes, or the factory's own
+			}
+			p.warn(p.Store.SetSignalDiff(ctx, s.ID, diff), "SetSignalDiff")
+			s.Diff = diff
+		} else {
+			use = append(use, s.ID)
+		}
+		kept = append(kept, s)
+	}
+	if len(kept) == 0 {
+		p.finish(ctx, j, agentRun{}, state.Succeeded, `{"lessons":[],"skip_reason":"nothing left to learn from"}`, "")
+		p.warn(p.Store.UseSignals(ctx, append(use, in.Trimmed...), j.ID), "UseSignals")
+		return nil
+	}
+	base, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, plan.File)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	claude, _, _ := g.FileAt(ctx, ws.Repo, ws.BaseSHA, "CLAUDE.md")
-	data := learnPrompt{Repo: in.Repo, AgentsMD: truncate(agents, 30_000), ClaudeMD: truncate(claude, 30_000)}
-	if pr, _ := p.gh(in.Repo).FindPR(ctx, LessonsBranch); pr != nil {
-		if branch, ok, _ := g.FileAt(ctx, ws.Repo, "refs/remotes/origin/"+LessonsBranch, "AGENTS.md"); ok {
-			data.Proposed = newLines(agents, branch)
+	data := learnPrompt{Repo: in.Repo, File: plan.File, Current: truncate(base, 30_000)}
+	all := base
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if f, err := instructionsFile(ctx, g, ws.Repo, ws.BaseSHA, name); err == nil && f != "" && f != plan.File {
+			text, _, _ := g.FileAt(ctx, ws.Repo, ws.BaseSHA, f)
+			data.Others = append(data.Others, learnFile{Name: f, Text: truncate(text, 30_000)})
+			all += "\n" + text
 		}
 	}
-	data.Declined = p.settleLessons(ctx, in.Repo, ws, agents)
+	if plan.Open != nil {
+		if branch, ok, _ := g.FileAt(ctx, ws.Repo, "refs/remotes/origin/"+plan.Branch, plan.File); ok {
+			data.Proposed = newLines(base, branch)
+		}
+	}
+	data.Declined = p.settleLessons(ctx, in.Repo, ws, plan, all)
 	var findings []store.Signal
-	for _, s := range sigs {
+	for _, s := range kept {
 		switch s.Kind {
 		case store.SignalHumanEdit:
 			data.Edits = append(data.Edits, learnEdit{Ref: p.ref(in.Repo, s.IssueNumber), PR: s.PRNumber, Diff: s.Diff})
@@ -438,17 +537,23 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		}
 		data.Groups = append(data.Groups, lg)
 	}
-	var all strings.Builder
-	all.WriteString(data.AgentsMD + data.ClaudeMD)
+	var text strings.Builder
+	text.WriteString(data.Current)
+	for _, o := range data.Others {
+		text.WriteString(o.Text)
+	}
+	for _, l := range append(append([]string{}, data.Proposed...), data.Declined...) {
+		text.WriteString(l)
+	}
 	for _, e := range data.Edits {
-		all.WriteString(e.Diff)
+		text.WriteString(e.Diff)
 	}
 	for _, grp := range data.Groups {
 		for _, f := range grp.Findings {
-			all.WriteString(f.File + f.Claim + f.Evidence)
+			text.WriteString(f.File + f.Claim + f.Evidence)
 		}
 	}
-	data.Fence = fence(all.String())
+	data.Fence = fence(text.String())
 	prompt, err := p.renderStep(j, "learn", []string{in.Repo}, data)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
@@ -465,20 +570,213 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 	if err := verdict.Parse([]byte(run.final), &v); err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
-	if err := p.proposeLessons(ctx, j, in.Repo, v.Lessons, sigs); err != nil {
+	if err := p.proposeLessons(ctx, j, in.Repo, plan, v.Lessons, kept); err != nil {
 		return fail(run, state.Failed, "lessons PR: "+err.Error())
 	}
 	norm, _ := json.Marshal(v)
 	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
-	p.warn(p.Store.UseSignals(ctx, in.Signals, j.ID), "UseSignals")
+	p.warn(p.Store.UseSignals(ctx, append(use, in.Trimmed...), j.ID), "UseSignals")
 	return nil
 }
 
+// refuseLearn ends a learn job the factory can't act on: its signals are
+// set aside, and you hear why once, not every day it happens again.
+func (p *Pipeline) refuseLearn(ctx context.Context, j *store.Job, in LearnInput, r refusal) {
+	p.finish(ctx, j, agentRun{}, state.Failed, "", r.msg)
+	p.warn(p.Store.UseSignals(ctx, append(append([]int64{}, in.Signals...), in.Trimmed...), j.ID), "UseSignals")
+	key := strings.ToLower(in.Repo) + ": " + r.msg
+	if seen, err := p.Store.HasEvent(ctx, "learn_refused", key); err != nil || seen {
+		return
+	}
+	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", JobID: &j.ID, Type: "learn_refused", Reason: key}), "AddEvent")
+	p.notify(ctx, fmt.Sprintf("Lessons for %s can't be proposed: %s. What the factory had to learn from is set aside; once that's fixed, new edits and findings start again.", in.Repo, r.msg))
+}
+
+// lessonsPlan is where a repo's lessons go: the file and the PR's branch.
+type lessonsPlan struct {
+	File   string     // the instructions file, such as AGENTS.md
+	Import bool       // and a new CLAUDE.md of "@AGENTS.md", so Claude reads it too
+	Branch string     // LessonsBranch, or one with a suffix
+	Open   *github.PR // the open lessons PR on Branch, or nil
+}
+
+// lessonsPlan finds the branch and file for a repo's lessons in the
+// checkout ws: the file on the open PR's branch, or on base.
+func (p *Pipeline) lessonsPlan(ctx context.Context, repo string, ws *Workspace) (*lessonsPlan, error) {
+	g := p.git(repo)
+	branch, open, err := lessonsBranch(ctx, g, p.gh(repo), ws)
+	if err != nil {
+		return nil, err
+	}
+	rev := ws.BaseSHA
+	if open != nil {
+		rev = "refs/remotes/origin/" + branch
+	}
+	file, imp, err := lessonsTarget(ctx, g, ws.Repo, rev, p.claudeBuilds())
+	if err != nil {
+		return nil, err
+	}
+	return &lessonsPlan{File: file, Import: imp, Branch: branch, Open: open}, nil
+}
+
+// lessonsBranch is the branch for the lessons PR: the one with the open
+// PR, or else the first that is missing or has only the factory's commits
+// past base, which a force push would lose nothing of.
+func lessonsBranch(ctx context.Context, g *Git, gh GitHub, ws *Workspace) (string, *github.PR, error) {
+	for n := 1; n <= 20; n++ {
+		branch := LessonsBranch
+		if n > 1 {
+			branch = fmt.Sprintf("%s-%d", LessonsBranch, n)
+		}
+		pr, err := gh.FindPR(ctx, branch)
+		if err != nil {
+			return "", nil, err
+		}
+		if pr != nil && pr.State == "open" && !pr.Merged {
+			return branch, pr, nil
+		}
+		if !g.HasBranch(ctx, ws.Repo, branch) {
+			return branch, nil, nil
+		}
+		if mine, err := g.onlyMine(ctx, ws.Repo, ws.BaseSHA, "refs/remotes/origin/"+branch); err != nil || mine {
+			return branch, nil, err
+		}
+	}
+	return "", nil, refusal{fmt.Sprintf("every %s branch has commits of someone else's", LessonsBranch)}
+}
+
+// claudeBuilds says whether any build runs on Claude Code, which reads
+// CLAUDE.md and not AGENTS.md.
+func (p *Pipeline) claudeBuilds() bool {
+	for k, r := range p.Cfg.Routing {
+		if strings.HasPrefix(k, "implement") && r.Harness == "claude" {
+			return true
+		}
+	}
+	return false
+}
+
+// importsAgents finds a CLAUDE.md line that loads AGENTS.md into Claude.
+var importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md(\s|$)`)
+
+// lessonsTarget is the file at rev that lessons go in: the one builders
+// read. AGENTS.md (Codex's), or the tracked file it links to; but
+// CLAUDE.md when Claude builds and CLAUDE.md doesn't load AGENTS.md, or
+// when it's the only one. With neither, a new AGENTS.md, and with imp set
+// a new CLAUDE.md loading it, so Claude builders read it too.
+func lessonsTarget(ctx context.Context, g *Git, repo, rev string, claude bool) (file string, imp bool, err error) {
+	agents, err := instructionsFile(ctx, g, repo, rev, "AGENTS.md")
+	if err != nil {
+		return "", false, err
+	}
+	cl, err := instructionsFile(ctx, g, repo, rev, "CLAUDE.md")
+	if err != nil {
+		return "", false, err
+	}
+	switch {
+	case agents != "" && cl != "":
+		if agents == cl || !claude {
+			return agents, false, nil
+		}
+		md, _, err := g.FileAt(ctx, repo, rev, cl)
+		if err != nil {
+			return "", false, err
+		}
+		if importsAgents.MatchString(md) {
+			return agents, false, nil
+		}
+		return cl, false, nil
+	case cl != "":
+		return cl, false, nil
+	case agents != "":
+		return agents, claude, nil
+	}
+	return "AGENTS.md", claude, nil
+}
+
+// instructionsFile is the tracked plain file that name is at rev: name
+// itself, or the file a symlink there points to inside the repo. It is ""
+// when name isn't there, and a refusal when it is anything else.
+func instructionsFile(ctx context.Context, g *Git, repo, rev, name string) (string, error) {
+	mode, err := g.Mode(ctx, repo, rev, name)
+	if err != nil {
+		return "", err
+	}
+	plain := func(m string) bool { return m == "100644" || m == "100755" }
+	switch {
+	case mode == "":
+		return "", nil
+	case plain(mode):
+		return name, nil
+	case mode != "120000":
+		return "", refusal{fmt.Sprintf("%s isn't a regular file (mode %s), so the factory won't write to it", name, mode)}
+	}
+	link, _, err := g.FileAt(ctx, repo, rev, name)
+	if err != nil {
+		return "", err
+	}
+	link = strings.TrimRight(link, "\n")
+	target := path.Clean(path.Join(path.Dir(name), link))
+	if path.IsAbs(link) || target == "." || target == ".." || strings.HasPrefix(target, "../") {
+		return "", refusal{fmt.Sprintf("%s is a symlink out of the repo (to %s), so the factory won't write through it", name, oneLine(link))}
+	}
+	if m, err := g.Mode(ctx, repo, rev, target); err != nil {
+		return "", err
+	} else if !plain(m) {
+		return "", refusal{fmt.Sprintf("%s is a symlink to %s, which isn't a plain file tracked in the repo, so the factory won't write through it", name, oneLine(link))}
+	}
+	return target, nil
+}
+
+// checkWritable checks the checkout at repo for what git can't tell: on
+// a case-insensitive disk, an agents.md symlink is what AGENTS.md opens.
+func checkWritable(repo string, plan *lessonsPlan) error {
+	root, err := os.OpenRoot(repo)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	files := []string{plan.File}
+	if plan.Import {
+		files = append(files, "CLAUDE.md")
+	}
+	for _, f := range files {
+		if _, err := root.Lstat(f); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err := plainFile(root, f); err != nil {
+			return refusal{err.Error()}
+		}
+	}
+	return nil
+}
+
+// writePlain writes rel under root, over a plain file or as a new one,
+// never through a symlink.
+func writePlain(root *os.Root, rel string, b []byte) error {
+	flag := os.O_WRONLY | os.O_TRUNC
+	if _, err := root.Lstat(rel); errors.Is(err, fs.ErrNotExist) {
+		flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	} else if err := plainFile(root, rel); err != nil {
+		return err
+	}
+	f, err := root.OpenFile(rel, flag, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // settleLessons records what became of the lines the factory proposed:
-// merged, or declined when their PR closed unmerged, or when a human took
-// them out of the PR before merging it. It returns every declined line.
-// base is AGENTS.md on the base branch of the checkout ws.
-func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace, base string) []string {
+// merged, or declined when their PR closed unmerged, when a human took
+// them out of the PR before merging it, or out of the file after. It
+// returns every declined line. base is the base branch's instruction
+// files, in the checkout ws.
+func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace, plan *lessonsPlan, base string) []string {
 	ls, err := p.Store.Lessons(ctx, repo)
 	if err != nil {
 		p.warn(err, "Lessons")
@@ -492,43 +790,42 @@ func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace
 		}
 		return false
 	}
-	open, _ := p.gh(repo).FindPR(ctx, LessonsBranch)
-	if open != nil && (open.State != "open" || open.Merged) {
-		open = nil
-	}
+	open := plan.Open
 	branch, onBranch := "", false
 	if open != nil {
-		branch, onBranch, _ = p.git(repo).FileAt(ctx, ws.Repo, "refs/remotes/origin/"+LessonsBranch, "AGENTS.md")
+		branch, onBranch, _ = p.git(repo).FileAt(ctx, ws.Repo, "refs/remotes/origin/"+plan.Branch, plan.File)
 	}
 	prs := map[int]*github.PR{}
 	var declined []string
 	for _, l := range ls {
-		if l.Status == store.LessonProposed {
-			status := ""
-			if open != nil && l.PRNumber == open.Number {
-				if onBranch && !has(branch, l.Norm) && !has(base, l.Norm) {
-					status = store.LessonDeclined // taken out of the open PR
-				}
-			} else {
-				pr, ok := prs[l.PRNumber]
-				if !ok {
-					if pr, err = p.gh(repo).GetPR(ctx, l.PRNumber); err != nil {
-						pr = nil
-					}
-					prs[l.PRNumber] = pr
-				}
-				switch {
-				case pr == nil:
-				case pr.Merged && has(base, l.Norm):
-					status = store.LessonMerged
-				case pr.Merged || pr.State == "closed":
-					status = store.LessonDeclined // closed, or merged without it
-				}
+		status := ""
+		switch {
+		case l.Status == store.LessonMerged && !has(base, l.Norm):
+			status = store.LessonDeclined // taken out after it merged
+		case l.Status != store.LessonProposed:
+		case open != nil && l.PRNumber == open.Number:
+			if onBranch && !has(branch, l.Norm) && !has(base, l.Norm) {
+				status = store.LessonDeclined // taken out of the open PR
 			}
-			if status != "" {
-				p.warn(p.Store.DecideLesson(ctx, l.ID, status), "DecideLesson")
-				l.Status = status
+		default:
+			pr, ok := prs[l.PRNumber]
+			if !ok {
+				if pr, err = p.gh(repo).GetPR(ctx, l.PRNumber); err != nil {
+					pr = nil
+				}
+				prs[l.PRNumber] = pr
 			}
+			switch {
+			case pr == nil:
+			case pr.Merged && has(base, l.Norm):
+				status = store.LessonMerged
+			case pr.Merged || pr.State == "closed":
+				status = store.LessonDeclined // closed, or merged without it
+			}
+		}
+		if status != "" {
+			p.warn(p.Store.DecideLesson(ctx, l.ID, status), "DecideLesson")
+			l.Status = status
 		}
 		if l.Status == store.LessonDeclined {
 			declined = append(declined, l.Line)
@@ -542,38 +839,33 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // --- the lessons PR ---
 
-// proposeLessons adds the lessons not already in AGENTS.md, on the base
+// proposeLessons adds the lessons not already in the file, on the base
 // branch or in the open lessons PR, to that PR, opening it if there is
 // none. It never merges: the PR waits for a human, whatever auto_merge
-// says.
-func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string, lessons []verdict.Lesson, sigs []store.Signal) error {
+// says. want is the plan the job checked before its agent ran.
+func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string, want *lessonsPlan, lessons []verdict.Lesson, sigs []store.Signal) error {
 	if len(lessons) == 0 {
 		return nil
 	}
 	rc := p.repoConf(repo)
 	g, gh := p.git(repo), p.gh(repo)
-	open, err := gh.FindPR(ctx, LessonsBranch)
-	if err != nil {
-		return err
-	}
-	if open != nil && (open.State != "open" || open.Merged) {
-		open = nil
-	}
 	// With no open PR, a branch left by a closed one starts over from base.
-	ws, err := g.PrepareAt(ctx, filepath.Join(p.jobDir(j.ID), "lessons", "repo"), "", rc.BaseBranch, LessonsBranch, open == nil)
+	ws, err := g.PrepareAt(ctx, filepath.Join(p.jobDir(j.ID), "lessons", "repo"), "", rc.BaseBranch, want.Branch, want.Open == nil)
 	if err != nil {
 		return err
 	}
-	if mode, err := g.Mode(ctx, ws.Repo, "HEAD", "AGENTS.md"); err != nil {
-		return err
-	} else if mode != "" && mode != "100644" && mode != "100755" {
-		return fmt.Errorf("AGENTS.md isn't a regular file (mode %s), so the factory won't write to it", mode)
-	}
-	base, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, "AGENTS.md")
+	plan, err := p.lessonsPlan(ctx, repo, ws)
 	if err != nil {
 		return err
 	}
-	cur, _, err := g.FileAt(ctx, ws.Repo, "HEAD", "AGENTS.md")
+	if plan.Branch != want.Branch || (plan.Open == nil) != (want.Open == nil) {
+		return fmt.Errorf("the lessons PR changed while the job ran")
+	}
+	base, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, plan.File)
+	if err != nil {
+		return err
+	}
+	cur, _, err := g.FileAt(ctx, ws.Repo, "HEAD", plan.File)
 	if err != nil {
 		return err
 	}
@@ -586,8 +878,8 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		return err
 	}
 	for _, l := range known {
-		if l.Status == store.LessonDeclined {
-			seen[l.Norm] = true
+		if l.Status != store.LessonProposed {
+			seen[l.Norm] = true // declined, or merged once: settled
 		}
 	}
 	var add []verdict.Lesson
@@ -605,43 +897,70 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	for _, l := range add {
 		lines = append(lines, l.Line)
 	}
-	if err := os.WriteFile(filepath.Join(ws.Repo, "AGENTS.md"), []byte(appendLessons(cur, lines)), 0o644); err != nil {
-		return err
-	}
-	sha, err := g.commitFile(ctx, ws.Repo, "AGENTS.md", fmt.Sprintf("factory: %d %s for AGENTS.md\n\nLearned by job %d.", len(add), plural(len(add), "lesson", "lessons"), j.ID))
+	root, err := os.OpenRoot(ws.Repo)
 	if err != nil {
 		return err
 	}
-	if err := g.Push(ctx, ws.Repo, sha, LessonsBranch, open == nil); err != nil {
+	defer func() { _ = root.Close() }()
+	if err := writePlain(root, plan.File, []byte(appendLessons(cur, lines))); err != nil {
+		return err
+	}
+	paths := []string{plan.File}
+	if plan.Import {
+		if err := writePlain(root, "CLAUDE.md", []byte("@AGENTS.md\n")); err != nil {
+			return err
+		}
+		paths = append(paths, "CLAUDE.md")
+	}
+	what := fmt.Sprintf("%d %s for %s", len(add), plural(len(add), "lesson", "lessons"), plan.File)
+	sha, err := g.commitFiles(ctx, ws.Repo, fmt.Sprintf("factory: %s\n\nLearned by job %d.", what, j.ID), paths...)
+	if err != nil {
+		return err
+	}
+	if err := g.Push(ctx, ws.Repo, sha, plan.Branch, plan.Open == nil); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
+	// Recorded before the PR, so a line pushed is a line tracked; a new
+	// PR's number is filled in once it's open.
+	record := func(n int) error {
+		for _, l := range lines {
+			if err := p.Store.AddLesson(ctx, store.Lesson{Repo: repo, Line: l, Norm: normLine(l), PRNumber: n}); err != nil {
+				return fmt.Errorf("record lessons: %w", err)
+			}
+		}
+		return nil
+	}
+	pr := plan.Open
+	n := 0
+	if pr != nil {
+		n = pr.Number
+	}
+	if err := record(n); err != nil {
+		return err
+	}
 	entries := p.lessonEntries(repo, add, sigs)
-	pr, verb := open, "Added"
-	if open == nil {
-		verb = "Opened"
-		pr, err = gh.CreatePR(ctx, "Lessons from the factory for AGENTS.md", lessonsIntro+entries+"\n"+lessonsFooter, LessonsBranch, rc.BaseBranch, true)
-		if err != nil {
+	if pr == nil {
+		if pr, err = gh.CreatePR(ctx, "Lessons from the factory for "+plan.File, lessonsIntro(plan.File)+entries+"\n"+lessonsFooter, plan.Branch, rc.BaseBranch, true); err != nil {
+			return err
+		}
+		if err := record(pr.Number); err != nil {
 			return err
 		}
 	} else {
-		body := open.Body
+		body := pr.Body
 		if i := strings.Index(body, lessonsFooter); i >= 0 {
 			body = body[:i] + entries + "\n" + body[i:]
 		} else {
 			body = strings.TrimRight(body, "\n") + "\n\n" + entries
 		}
-		if err := gh.UpdatePRBody(ctx, open.Number, body); err != nil {
+		if err := gh.UpdatePRBody(ctx, pr.Number, body); err != nil {
 			return err
 		}
 	}
-	for _, l := range lines {
-		p.warn(p.Store.AddLesson(ctx, store.Lesson{Repo: repo, Line: l, Norm: normLine(l), PRNumber: pr.Number}), "AddLesson")
-	}
 	p.warn(gh.LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
-	b, _ := json.Marshal(map[string]any{"lines": lines})
+	b, _ := json.Marshal(map[string]any{"file": plan.File, "lines": lines})
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", JobID: &j.ID, Type: "lessons_pr", Reason: fmt.Sprintf("%s PR #%d", repo, pr.Number), Data: string(b)}), "AddEvent")
-	what := fmt.Sprintf("%d %s for AGENTS.md", len(add), plural(len(add), "lesson", "lessons"))
-	if verb == "Opened" {
+	if plan.Open == nil {
 		p.notify(ctx, fmt.Sprintf("Opened a lessons PR with %s: %s %s", what, p.ref(repo, pr.Number), pr.URL))
 	} else {
 		p.notify(ctx, fmt.Sprintf("Added %s to the lessons PR: %s %s", what, p.ref(repo, pr.Number), pr.URL))
@@ -649,15 +968,19 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	return nil
 }
 
-const (
-	lessonsIntro = "The factory learned these from the changes you made to its PRs before merging them, and from findings its reviewers repeated. " +
-		"Each is a line for `AGENTS.md`, which builders read before they start.\n\n" +
-		"Edit or drop any of them on this branch before you merge. New lessons are added here until you merge or close it.\n\n## Lessons\n\n"
-	lessonsFooter = "_Merge is always human. This PR never merges itself._\n"
-)
+// lessonsIntro opens the lessons PR's description.
+func lessonsIntro(file string) string {
+	return "The factory learned these from the changes you made to its PRs before merging them, and from findings its reviewers repeated. " +
+		"Each is a line for `" + file + "`, which the factory's builders read before they start.\n\n" +
+		"Drop any you don't want from this branch before you merge. If you reword one, the factory counts the original as declined and doesn't track your version. " +
+		"New lessons are added here until you merge or close it.\n\n## Lessons\n\n"
+}
 
-// lessonEntries lists lessons for the PR body: each line, why, and links
-// to the issues and PRs it came from.
+const lessonsFooter = "_Merge is always human. This PR never merges itself._\n"
+
+// lessonEntries lists lessons for the PR body: each line and why, fenced
+// since the model wrote them (a "fixed #12" there must close nothing),
+// and links to the issues and PRs it came from.
 func (p *Pipeline) lessonEntries(repo string, ls []verdict.Lesson, sigs []store.Signal) string {
 	rc := p.repoConf(repo)
 	issues, prs := map[int]bool{}, map[int]bool{}
@@ -669,7 +992,7 @@ func (p *Pipeline) lessonEntries(repo string, ls []verdict.Lesson, sigs []store.
 	}
 	var b strings.Builder
 	for _, l := range ls {
-		fmt.Fprintf(&b, "- **%s**\n  %s", l.Line, oneLine(l.Why))
+		b.WriteString(fenced(l.Line + "\n\nWhy: " + truncate(oneLine(l.Why), maxWhy)))
 		var links []string
 		for _, e := range l.Evidence {
 			switch kind, n := evidenceRef(e); {
@@ -680,7 +1003,7 @@ func (p *Pipeline) lessonEntries(repo string, ls []verdict.Lesson, sigs []store.
 			}
 		}
 		if len(links) > 0 {
-			b.WriteString(" (" + strings.Join(links, ", ") + ")")
+			b.WriteString("From " + strings.Join(links, ", ") + ".\n")
 		}
 		b.WriteString("\n")
 	}
@@ -790,10 +1113,10 @@ func appendLessons(md string, lines []string) string {
 	return strings.Join(out, "\n") + "\n"
 }
 
-// commitFile commits one changed file in the daemon's own repository and
+// commitFiles commits changed files in the daemon's own repository and
 // returns the new HEAD.
-func (g *Git) commitFile(ctx context.Context, repo, path, msg string) (string, error) {
-	if _, err := g.run(ctx, repo, nil, "add", "--", path); err != nil {
+func (g *Git) commitFiles(ctx context.Context, repo, msg string, paths ...string) (string, error) {
+	if _, err := g.run(ctx, repo, nil, append([]string{"add", "--"}, paths...)...); err != nil {
 		return "", err
 	}
 	if _, err := g.run(ctx, repo, nil, "commit", "--quiet", "--no-verify", "-m", msg); err != nil {

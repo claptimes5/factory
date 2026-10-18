@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/verdict"
 )
 
 const (
@@ -99,12 +102,17 @@ func TestHumanEditBecomesALessonsPR(t *testing.T) {
 	if want := "## Style\n\nUse gofmt.\n\n## Lessons from the factory\n\n- Check arithmetic helpers for integer overflow."; !strings.HasSuffix(md, want) {
 		t.Fatalf("AGENTS.md:\n%s", md)
 	}
+	// Claude builds here and reads CLAUDE.md, so the PR adds one that loads AGENTS.md.
+	if got := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); got != "@AGENTS.md" {
+		t.Fatalf("CLAUDE.md = %q", got)
+	}
 	pr := e.gh.prs[LessonsBranch]
-	if pr == nil || !pr.Draft || !hasLabel(e.gh.prLabels[pr.Number], LabelAwaitingYou) {
+	if pr == nil || !pr.Draft || !hasLabel(e.gh.prLabels[pr.Number], LabelAwaitingYou) || pr.Title != "Lessons from the factory for AGENTS.md" {
 		t.Fatalf("lessons PR = %+v, labels %v", pr, e.gh.prLabels)
 	}
 	body := e.gh.bodies[pr.Number]
-	for _, want := range []string{"- **Check arithmetic helpers for integer overflow.**", "[#1](https://github.com/o/r/issues/1)", "[PR 101](https://github.com/o/r/pull/101)", lessonsFooter} {
+	for _, want := range []string{"```text\nCheck arithmetic helpers for integer overflow.\n\nWhy: You added an overflow check by hand in PR #101 for #1.\n```\n",
+		"From [#1](https://github.com/o/r/issues/1), [PR 101](https://github.com/o/r/pull/101).", lessonsFooter} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
@@ -139,7 +147,7 @@ func TestHumanEditBecomesALessonsPR(t *testing.T) {
 		t.Fatalf("AGENTS.md:\n%s", md)
 	}
 	body = e.gh.bodies[pr.Number]
-	if !strings.Contains(body, "- **Document every exported function.**") || strings.Index(body, "Document every") > strings.Index(body, lessonsFooter) ||
+	if !strings.Contains(body, "```text\nDocument every exported function.") || strings.Index(body, "Document every") > strings.Index(body, lessonsFooter) ||
 		strings.Count(body, "integer overflow") != 1 {
 		t.Fatalf("body:\n%s", body)
 	}
@@ -262,14 +270,14 @@ func TestGroupFindings(t *testing.T) {
 	if len(gs) != 2 || len(gs[0]) != 3 || len(gs[1]) != 1 {
 		t.Fatalf("groups = %+v", gs)
 	}
-	if got := learnable(sigs, 2); len(got) != 3 {
+	if got, _ := learnable(sigs, 2); len(got) != 3 {
 		t.Fatalf("learnable = %+v", got)
 	}
-	if got := learnable(sigs, 4); len(got) != 0 {
+	if got, _ := learnable(sigs, 4); len(got) != 0 {
 		t.Fatalf("min 4: %+v", got)
 	}
 	// One item's findings alone are no repeat.
-	if got := learnable([]store.Signal{f(1, "a.go", "x"), f(1, "b.go", "y")}, 2); len(got) != 0 {
+	if got, _ := learnable([]store.Signal{f(1, "a.go", "x"), f(1, "b.go", "y")}, 2); len(got) != 0 {
 		t.Fatalf("one item: %+v", got)
 	}
 }
@@ -316,7 +324,8 @@ func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
 	e.humanPush(t, LessonsBranch, "AGENTS.md", md+"\n")
 
 	edit(2, lesson("document exported functions", "Run go vet."))
-	if p := e.claude.prompts["learn"][1]; !strings.Contains(p, "## Lines a human declined") || !strings.Contains(p, "- Document exported functions.") {
+	if p := e.claude.prompts["learn"][1]; !strings.Contains(p, "## Lines a human declined") || !strings.Contains(p, "again.\n\n```\n- Document exported functions.\n```") ||
+		!strings.Contains(p, "open lessons PR\n\n```\n- Check for overflow.\n```") {
 		t.Fatalf("learn prompt:\n%s", p)
 	}
 	if md := e.lessonsMD(t); !strings.HasSuffix(md, "- Check for overflow.\n- Run go vet.") || strings.Contains(strings.ToLower(md), "document") {
@@ -324,14 +333,16 @@ func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
 	}
 
 	// You close the PR without merging: its lines are declined too, and the
-	// next lessons start a fresh PR from base.
+	// next lessons start a fresh PR from base. Your commit on the old
+	// branch isn't pushed over: the new PR has a branch of its own.
 	e.gh.prs[LessonsBranch].State = "closed"
+	before := git(t, e.remote, "rev-parse", LessonsBranch)
 	edit(3, lesson("CHECK FOR OVERFLOW", "Name tests after behavior."))
-	pr := e.gh.prs[LessonsBranch]
-	if pr.Number == first || pr.State != "open" {
+	pr := e.gh.prs[LessonsBranch+"-2"]
+	if pr == nil || pr.Number == first || pr.State != "open" || git(t, e.remote, "rev-parse", LessonsBranch) != before {
 		t.Fatalf("lessons PR = %+v", pr)
 	}
-	if md := e.lessonsMD(t); !strings.HasSuffix(md, "## Lessons from the factory\n\n- Name tests after behavior.") || strings.Contains(md, "overflow") || strings.Contains(md, "vet") {
+	if md := git(t, e.remote, "show", LessonsBranch+"-2:AGENTS.md"); !strings.HasSuffix(md, "## Lessons from the factory\n\n- Name tests after behavior.") || strings.Contains(md, "overflow") || strings.Contains(md, "vet") {
 		t.Fatalf("AGENTS.md:\n%s", md)
 	}
 	ls, _ := e.p.Store.Lessons(ctx, "o/r")
@@ -342,5 +353,401 @@ func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
 	want := map[string]string{"Check for overflow.": "declined", "Document exported functions.": "declined", "Run go vet.": "declined", "Name tests after behavior.": "proposed"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("lessons = %v", got)
+	}
+}
+
+// clone checks out branch of the remote, as a person would, with a name
+// git commits under.
+func (e *env) clone(t *testing.T, branch string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "human")
+	git(t, filepath.Dir(dir), "clone", "-q", "-b", branch, e.remote, dir)
+	return dir
+}
+
+// edit is one human edit signal with its diff already read.
+func (e *env) editSignal(t *testing.T, it *store.WorkItem, pr int) {
+	t.Helper()
+	if err := e.p.Store.AddSignal(context.Background(), store.Signal{Repo: "o/r", Kind: store.SignalHumanEdit, ItemID: it.ID, IssueNumber: it.IssueNumber,
+		PRNumber: pr, Diff: fmt.Sprintf("+edit %d\n", pr)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A repo has one learn job queued or running at a time: a second would
+// push over the first's lines.
+func TestOneLearnJobAtATime(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	it := e.built(t, 1)
+	e.editSignal(t, it, 201)
+	e.p.learnTriggers(ctx)
+	forgetDay(t, e)
+	e.editSignal(t, it, 202)
+	e.p.learnTriggers(ctx)
+	if jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{Kind: "learn"}); len(jobs) != 1 {
+		t.Fatalf("learn jobs = %+v", jobs)
+	}
+	if _, err := e.p.Store.EnqueueJob(ctx, store.Job{Kind: "learn", Harness: "claude", Model: "sonnet", BudgetUSD: 1, Input: `{"repo":"o/other"}`}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := e.p.claimNext(ctx)
+	if err != nil || j == nil || j.Kind != "learn" {
+		t.Fatalf("first = %+v, %v", j, err)
+	}
+	if j, err := e.p.claimNext(ctx); err != nil || j != nil {
+		t.Fatalf("a second learn job ran alongside: %+v, %v", j, err)
+	}
+}
+
+// pushSymlink commits a symlink to the remote's main.
+func (e *env) pushSymlink(t *testing.T, name, target string) {
+	t.Helper()
+	dir := e.clone(t, "main")
+	if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "-qm", "link "+name)
+	git(t, dir, "push", "-q", "origin", "main")
+}
+
+// An AGENTS.md the factory won't write through is found before the agent
+// runs: no agent is paid for, the signals are set aside, and you hear it
+// once, not every day.
+func TestRefusedLessonsCostNothing(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.pushSymlink(t, "AGENTS.md", "../outside.md")
+	var notes []string
+	e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
+	for n := 1; n <= 2; n++ {
+		e.built(t, n)
+		branch := fmt.Sprintf("factory/issue-%d", n)
+		e.merge(branch, e.humanPush(t, branch, "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
+		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.poll(t)
+	}
+	t.Cleanup(func() { learnDay = store.Today })
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{Kind: "learn"})
+	if len(jobs) != 2 || jobs[0].State != state.Failed || !strings.Contains(jobs[0].Error, "symlink out of the repo") {
+		t.Fatalf("learn jobs = %+v", jobs)
+	}
+	if e.claude.calls["learn"] != 0 {
+		t.Fatalf("the agent ran %d times", e.claude.calls["learn"])
+	}
+	if sigs, _ := e.p.Store.UnusedSignals(ctx, "o/r", ""); len(sigs) != 0 {
+		t.Fatalf("unused = %+v", sigs)
+	}
+	told := 0
+	for _, n := range notes {
+		if strings.Contains(n, "Lessons for o/r can't be proposed") {
+			told++
+		}
+	}
+	if told != 1 {
+		t.Fatalf("told %d times: %q", told, notes)
+	}
+}
+
+// Lessons go to the file builders read: AGENTS.md or what it links to in
+// the repo, CLAUDE.md for Claude unless it loads AGENTS.md, and a new
+// AGENTS.md (with a CLAUDE.md loading it, for Claude) when there's none.
+func TestLessonsTarget(t *testing.T) {
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		files  map[string]string // a value of "-> x" is a symlink to x
+		claude bool
+		file   string
+		imp    bool
+		refuse string
+	}{
+		"agents, claude":           {map[string]string{"AGENTS.md": "a"}, true, "AGENTS.md", true, ""},
+		"agents, codex":            {map[string]string{"AGENTS.md": "a"}, false, "AGENTS.md", false, ""},
+		"claude only":              {map[string]string{"CLAUDE.md": "c"}, false, "CLAUDE.md", false, ""},
+		"both, claude":             {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
+		"both, codex":              {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "c"}, false, "AGENTS.md", false, ""},
+		"claude loads agents":      {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "# C\n\n@AGENTS.md\n"}, true, "AGENTS.md", false, ""},
+		"agents links to claude":   {map[string]string{"AGENTS.md": "-> CLAUDE.md", "CLAUDE.md": "c"}, true, "CLAUDE.md", false, ""},
+		"claude links to agents":   {map[string]string{"CLAUDE.md": "-> AGENTS.md", "AGENTS.md": "a"}, true, "AGENTS.md", false, ""},
+		"agents links in the repo": {map[string]string{"AGENTS.md": "-> docs/agents.md", "docs/agents.md": "a"}, false, "docs/agents.md", false, ""},
+		"neither, claude":          {nil, true, "AGENTS.md", true, ""},
+		"neither, codex":           {nil, false, "AGENTS.md", false, ""},
+		"link out":                 {map[string]string{"AGENTS.md": "-> ../x.md"}, true, "", false, "symlink out of the repo"},
+		"link absolute":            {map[string]string{"AGENTS.md": "-> /etc/passwd"}, true, "", false, "symlink out of the repo"},
+		"link to nothing":          {map[string]string{"AGENTS.md": "-> gone.md"}, true, "", false, "isn't a plain file tracked"},
+		"link to a folder":         {map[string]string{"AGENTS.md": "-> docs", "docs/x.md": "x"}, true, "", false, "isn't a plain file tracked"},
+		"claude links out":         {map[string]string{"AGENTS.md": "a", "CLAUDE.md": "-> ../../c"}, true, "", false, "symlink out of the repo"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			git(t, dir, "init", "-q", "-b", "main")
+			writeFile(dir, "go.mod", "module x\n")
+			for f, body := range c.files {
+				if target, ok := strings.CutPrefix(body, "-> "); ok {
+					os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755)
+					if err := os.Symlink(target, filepath.Join(dir, f)); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					writeFile(dir, f, body)
+				}
+			}
+			git(t, dir, "add", "-A")
+			git(t, dir, "commit", "-qm", "x")
+			file, imp, err := lessonsTarget(ctx, &Git{}, dir, "HEAD", c.claude)
+			if c.refuse != "" {
+				if r := (refusal{}); !errors.As(err, &r) || !strings.Contains(err.Error(), c.refuse) {
+					t.Fatalf("err = %v, want a refusal with %q", err, c.refuse)
+				}
+				return
+			}
+			if err != nil || file != c.file || imp != c.imp {
+				t.Fatalf("= %s %t %v, want %s %t", file, imp, err, c.file, c.imp)
+			}
+		})
+	}
+}
+
+// A repo whose AGENTS.md links to its CLAUDE.md gets its lessons in
+// CLAUDE.md, where Claude builders read them, with the link kept.
+func TestLessonsFollowTheLink(t *testing.T) {
+	e := setupWith(t, map[string]string{"CLAUDE.md": "# Claude\n\nRun the tests.\n"})
+	e.pushSymlink(t, "AGENTS.md", "CLAUDE.md")
+	e.built(t, 1)
+	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
+	e.claude.learn = []string{oneLesson}
+	e.poll(t)
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); !strings.HasSuffix(md, "## Lessons from the factory\n\n- Check arithmetic helpers for integer overflow.") {
+		t.Fatalf("CLAUDE.md:\n%s", md)
+	}
+	if mode := git(t, e.remote, "ls-tree", LessonsBranch, "AGENTS.md"); !strings.HasPrefix(mode, "120000 ") {
+		t.Fatalf("AGENTS.md is no longer a link: %s", mode)
+	}
+	if pr := e.gh.prs[LessonsBranch]; pr == nil || pr.Title != "Lessons from the factory for CLAUDE.md" {
+		t.Fatalf("lessons PR = %+v", pr)
+	}
+	if p := e.claude.prompts["learn"][0]; !strings.Contains(p, "read the repository's `CLAUDE.md`") || strings.Count(p, "Run the tests.") != 1 {
+		t.Fatalf("learn prompt:\n%s", p)
+	}
+}
+
+// The file is written through an os.Root, never through a symlink, which
+// on a case-insensitive disk could stand in for AGENTS.md unseen by git.
+func TestWritePlain(t *testing.T) {
+	dir, outside := t.TempDir(), filepath.Join(t.TempDir(), "outside.md")
+	writeFile(filepath.Dir(outside), "outside.md", "keep\n")
+	if err := os.Symlink(outside, filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(dir, "CLAUDE.md", "old\n")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := writePlain(root, "AGENTS.md", []byte("x\n")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("through a symlink: %v", err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep\n" {
+		t.Fatalf("outside = %q", b)
+	}
+	if err := checkWritable(dir, &lessonsPlan{File: "AGENTS.md"}); err == nil {
+		t.Fatal("checkWritable passed a symlink")
+	}
+	for _, f := range []string{"CLAUDE.md", "NEW.md"} {
+		if err := writePlain(root, f, []byte("new\n")); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "new\n" {
+			t.Fatalf("%s = %q", f, b)
+		}
+	}
+}
+
+// Model text in the PR body is fenced, so a "fixed #12" or an @mention in
+// it acts on nothing, and a long why is cut.
+func TestLessonEntriesAreFenced(t *testing.T) {
+	e := setup(t)
+	why := "You fixed #12 by hand, cc @bob. " + strings.Repeat("More. ", 300)
+	got := e.p.lessonEntries("o/r", []verdict.Lesson{{Line: "Check for overflow.", Why: why, Evidence: []string{"#1"}}}, []store.Signal{{IssueNumber: 1}})
+	if !strings.HasPrefix(got, "```text\nCheck for overflow.\n\nWhy: You fixed #12 by hand, cc @bob. More.") || !strings.Contains(got, "\n```\nFrom [#1](https://github.com/o/r/issues/1).\n") {
+		t.Fatalf("entries:\n%s", got)
+	}
+	if len(got) > maxWhy+200 {
+		t.Fatalf("why not cut: %d bytes", len(got))
+	}
+}
+
+// What a human changed is their own commits: not what an "Update branch"
+// merge or a rebase brought in from base, nor the factory's work rebased.
+func TestHumanDiffIsTheHumansOwn(t *testing.T) {
+	for _, how := range []string{"update branch", "rebase"} {
+		t.Run(how, func(t *testing.T) {
+			ctx := context.Background()
+			e := setup(t)
+			e.built(t, 1)
+			// Base moves on.
+			main := e.clone(t, "main")
+			writeFile(main, "base.go", "package fixture\n\n// Base change.\n")
+			git(t, main, "add", "-A")
+			git(t, main, "commit", "-qm", "base change")
+			git(t, main, "push", "-q", "origin", "main")
+			dir := e.clone(t, "factory/issue-1")
+			if how == "rebase" {
+				git(t, dir, "rebase", "-q", "origin/main")
+			} else {
+				git(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-edit", "origin/main")
+			}
+			writeFile(dir, "fix.go", "package fixture\n\n// Human fix.\n")
+			git(t, dir, "add", "-A")
+			git(t, dir, "commit", "-qm", "human fix")
+			git(t, dir, "push", "-q", "-f", "origin", "factory/issue-1")
+			head := git(t, dir, "rev-parse", "HEAD")
+			if how == "update branch" {
+				// Merged with a merge commit, and base moves on again.
+				git(t, main, "pull", "-q", "--no-rebase", "origin", "main")
+				git(t, main, "fetch", "-q", "origin", "factory/issue-1")
+				git(t, main, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "--no-edit", head)
+				writeFile(main, "later.go", "package fixture\n\n// Later change.\n")
+				git(t, main, "add", "-A")
+				git(t, main, "commit", "-qm", "later")
+				git(t, main, "push", "-q", "origin", "main")
+			}
+			e.merge("factory/issue-1", head)
+			e.claude.learn = []string{`{"lessons":[],"skip_reason":"one-off"}`}
+			e.poll(t)
+			sigs, _ := e.p.Store.SignalsByID(ctx, []int64{1})
+			if len(sigs) != 1 || !strings.Contains(sigs[0].Diff, "+// Human fix.") || strings.Contains(sigs[0].Diff, "Base change") ||
+				strings.Contains(sigs[0].Diff, "Later change") || strings.Contains(sigs[0].Diff, "func Add") || sigs[0].LearnJob == 0 {
+				t.Fatalf("signal = %+v", sigs)
+			}
+		})
+	}
+}
+
+// A merge records only the two commits; the learn job reads the diff, and
+// one it can't read now waits for the next run rather than being lost.
+func TestHumanEditIsReadLater(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.built(t, 1)
+	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
+	learn := e.p.Cfg.Routing["learn"]
+	delete(e.p.Cfg.Routing, "learn")
+	e.poll(t)
+	sigs, _ := e.p.Store.UnusedSignals(ctx, "o/r", "")
+	if len(sigs) != 1 || sigs[0].FromSHA == "" || sigs[0].HeadSHA != e.gh.prs["factory/issue-1"].Head.SHA || sigs[0].Diff != "" {
+		t.Fatalf("signals = %+v", sigs)
+	}
+	// The head is gone from the remote: no diff, no agent, and it waits.
+	it := e.item(t, 1)
+	if err := e.p.Store.AddSignal(ctx, store.Signal{Repo: "o/r", Kind: store.SignalHumanEdit, ItemID: it.ID, PRNumber: 999, FromSHA: sigs[0].FromSHA,
+		HeadSHA: strings.Repeat("ab", 20)}); err != nil {
+		t.Fatal(err)
+	}
+	e.p.Cfg.Routing["learn"] = learn
+	e.claude.learn = []string{`{"lessons":[],"skip_reason":"one-off"}`}
+	e.poll(t)
+	if e.claude.calls["learn"] != 1 || !strings.Contains(e.claude.prompts["learn"][0], "+// Add adds, checked.") {
+		t.Fatalf("learn calls %d", e.claude.calls["learn"])
+	}
+	left, _ := e.p.Store.UnusedSignals(ctx, "o/r", "")
+	if len(left) != 1 || left[0].PRNumber != 999 {
+		t.Fatalf("unused = %+v", left)
+	}
+}
+
+// Signals the caps leave out are set aside with the rest, so they don't
+// start a job on old news the next day.
+func TestTrimmedSignalsAreUsed(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	it := e.built(t, 1)
+	for pr := 201; pr < 201+maxEdits+2; pr++ {
+		e.editSignal(t, it, pr)
+	}
+	e.claude.learn = []string{`{"lessons":[],"skip_reason":"one-off"}`}
+	e.poll(t)
+	if p := e.claude.prompts["learn"][0]; strings.Contains(p, "+edit 201") || !strings.Contains(p, "+edit 207") {
+		t.Fatalf("learn prompt:\n%s", p)
+	}
+	if left, _ := e.p.Store.UnusedSignals(ctx, "o/r", ""); len(left) != 0 {
+		t.Fatalf("unused = %+v", left)
+	}
+	var fs []store.Signal
+	for i := range maxGroupSize + 2 {
+		fs = append(fs, store.Signal{ID: int64(i), Kind: store.SignalFinding, ItemID: int64(i % 2), File: "a/x.go", Claim: "c"})
+	}
+	use, trimmed := learnable(fs, 2)
+	if len(use) != maxGroupSize || len(trimmed) != 2 || trimmed[0].ID != 0 {
+		t.Fatalf("use %d, trimmed %+v", len(use), trimmed)
+	}
+}
+
+// Lines are recorded once pushed, before the PR: a PR that fails to open
+// leaves them tracked.
+func TestLessonsRecordedBeforeThePR(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.built(t, 1)
+	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
+	e.claude.learn = []string{oneLesson}
+	e.gh.failCreatePR = 1
+	e.poll(t)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{Kind: "learn"})
+	if len(jobs) != 1 || jobs[0].State != state.Failed {
+		t.Fatalf("learn jobs = %+v", jobs)
+	}
+	ls, _ := e.p.Store.Lessons(ctx, "o/r")
+	if len(ls) != 1 || ls[0].PRNumber != 0 || ls[0].Status != store.LessonProposed {
+		t.Fatalf("lessons = %+v", ls)
+	}
+}
+
+// A merged line a human later deletes from the file counts as declined:
+// the factory doesn't put it back.
+func TestDeletedLessonIsDeclined(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n\nRun the tests.\n"})
+	lesson := func(line string) string {
+		return fmt.Sprintf(`{"lessons":[{"line":%q,"why":"seen in #1","evidence":["#1"]}],"skip_reason":""}`, line)
+	}
+	edit := func(n int, learn string) {
+		t.Helper()
+		e.built(t, n)
+		branch := fmt.Sprintf("factory/issue-%d", n)
+		e.merge(branch, e.humanPush(t, branch, "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
+		e.claude.learn = append(e.claude.learn, learn)
+		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.poll(t)
+	}
+	t.Cleanup(func() { learnDay = store.Today })
+	edit(1, lesson("Check for overflow."))
+	// You merge the lessons PR, then later take the line out.
+	main := e.clone(t, "main")
+	git(t, main, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "--no-edit", "origin/"+LessonsBranch)
+	git(t, main, "push", "-q", "origin", "main")
+	e.gh.prs[LessonsBranch].Merged, e.gh.prs[LessonsBranch].State = true, "closed"
+	edit(2, lesson("Run go vet."))
+	md := git(t, e.remote, "show", "main:AGENTS.md")
+	e.humanPush(t, "main", "AGENTS.md", strings.Replace(md, "\n- Check for overflow.", "", 1)+"\n")
+	// And close the next PR, so the one after starts from base again.
+	e.gh.prs[LessonsBranch].State = "closed"
+	before := git(t, e.remote, "rev-parse", LessonsBranch)
+	edit(3, lesson("Check for overflow."))
+	if p := e.claude.prompts["learn"][2]; !strings.Contains(p, "## Lines a human declined") || !strings.Contains(p, "- Check for overflow.") {
+		t.Fatalf("learn prompt:\n%s", p)
+	}
+	ls, _ := e.p.Store.Lessons(ctx, "o/r")
+	got := map[string]string{}
+	for _, l := range ls {
+		got[l.Line] = l.Status
+	}
+	if got["Check for overflow."] != store.LessonDeclined || got["Run go vet."] != store.LessonDeclined {
+		t.Fatalf("lessons = %v", got)
+	}
+	if git(t, e.remote, "rev-parse", LessonsBranch) != before || e.gh.prs[LessonsBranch].State != "closed" {
+		t.Fatal("the deleted line was proposed again")
 	}
 }
