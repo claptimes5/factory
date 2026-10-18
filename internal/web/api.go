@@ -439,6 +439,9 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/settings", s.apiSaveSettings)
 	mux.HandleFunc("POST /api/v1/settings/restart", s.apiRestart)
 	mux.HandleFunc("POST /api/v1/settings/restart/cancel", s.apiCancelRestart)
+	mux.HandleFunc("GET /api/v1/settings/tuning", s.apiTuning)
+	mux.HandleFunc("POST /api/v1/settings/tuning/{id}/apply", s.apiApplyTuning)
+	mux.HandleFunc("POST /api/v1/settings/tuning/{id}/dismiss", s.apiDismissTuning)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { apiErr(w, http.StatusNotFound, "no such endpoint") })
 }
 

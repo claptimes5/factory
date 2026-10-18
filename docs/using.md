@@ -25,7 +25,7 @@ To reach it from another machine, or to put a password on it, see
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, daily spend against the cap, and cost by size and model. |
 | **Inbox** | PRs ready for review, parked items and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
-| **Settings** | Budgets, models, escalation, auto-merge, the orchestrator and intake, saved to `factory.yaml`. See below. |
+| **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
@@ -42,8 +42,9 @@ The Settings screen changes part of `factory.yaml` for you:
   entry in the file.
 - **Escalation**: the model tiers, attempts per tier and review rounds.
 - **Auto-merge**: the top-level `up_to`, `max_size` and `method`.
-- **Orchestrator** and **Intake**: whether the orchestrator runs, its
-  budgets, how often it runs, and how often intake polls.
+- **Orchestrator**, **Tuning** and **Intake**: whether the orchestrator
+  runs, its budgets and how often it runs; how often [tuning](#tuning)
+  runs and the fewest builds it needs; and how often intake polls.
 
 An empty box means the key is left out of the file, so its default
 applies; the box shows that default. Gate commands, repos, the runner,
@@ -124,6 +125,7 @@ the command name to use other files.
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |
+| `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
@@ -225,6 +227,57 @@ An epic becomes an item in stage `epic` that is never built, even if it
 also carries `factory:ready`. It is done when all its children are. Items
 whose dependencies are not done wait in `blocked` and start when the last
 one merges.
+
+## Tuning
+
+Every `tuning.every` (720h by default, about a month), the factory reads
+its own metrics and proposes changes to its settings. You decide whether
+any of them happen.
+
+**What it reads.** The metrics for the period since the last tuning run,
+and for the period before it, so it sees trends: first-pass and
+escalation rates, review escapes and cost per merged PR, each by size and
+by the model a build started on, plus the most common park reasons. It
+also gets the current value of every setting it may change.
+
+**What it may change.** Only what the Settings screen can: budgets,
+models, escalation, auto-merge, the orchestrator and intake. Never gate
+commands, repos, the runner or the network, and never its own `tuning`
+settings. The daemon applies each proposed change to a copy of
+`factory.yaml` and keeps it only if the whole file still loads. It drops
+the rest and says why. It never writes `factory.yaml` itself.
+
+**What else it proposes.** Ideas for prompts and skills, in plain prose,
+for you to make by hand.
+
+**Where proposals show up.**
+
+- A notification with the summary.
+- A **Tuning proposal** card at the top of the Settings screen: the
+  summary, each change with the numbers behind it, the ideas, what was
+  dropped, and the diff. **Apply** saves the changes like the form does,
+  to the file as it is now, so edits you made since stay. Then restart to
+  apply them. **Dismiss** drops it. A new proposal replaces one you
+  haven't acted on.
+- With `tuning.repo` set, a draft PR on that repo with the change to
+  `tuning.path`, labeled `factory:awaiting-you`. The factory never merges
+  it. Applying the proposal on the Settings screen is fine too; close the
+  PR afterwards.
+
+**Thin data.** A run is skipped, and you're told, when fewer than
+`tuning.min_items` (10) items were built since the last run. The next one
+comes a cadence later, over the longer period. The tuner is also told to
+propose nothing when the numbers are thin. `factory tune` runs one now
+regardless.
+
+**Check model changes first.** Before you apply a change to a model, run
+[`factory eval`](#measuring-a-change-eval-and-compare) with the candidate
+config. A change that lowers the pass rate or raises cost per pass is the
+wrong one.
+
+Its prompt is `prompts/tune.md`, and it runs on `routing.tune` (see
+[Configuration](configuration.md#tuning)). It runs whether or not the
+orchestrator is on.
 
 ## Working on the dashboard
 

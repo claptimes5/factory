@@ -73,7 +73,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -184,11 +184,22 @@ func run(args []string) error {
 		return runCompare(ctx, cfg, st, fs.Args()[1:])
 	case "eval":
 		return runEval(ctx, cfg, fs.Args()[1:])
+	case "tune":
+		// Queued for the daemon, which runs it on its next pass, however
+		// few items were built: you asked for it.
+		p := &pipeline.Pipeline{Cfg: cfg, Store: st}
+		id, err := p.Tune(ctx, "factory tune", true)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("queued tuning run (job %d); its proposal shows on the dashboard's Settings screen\n", id)
+		return nil
 	case "serve", "run-once":
 		p, err := build(cfg, st)
 		if err != nil {
 			return err
 		}
+		p.ConfigPath, _ = filepath.Abs(*cfgPath)
 		if cmd == "serve" {
 			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
 				return err

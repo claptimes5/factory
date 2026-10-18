@@ -217,6 +217,7 @@ type fakeHarness struct {
 	prompts map[string][]string
 	plant   string // a verdict file written where a planted hook could write it
 	orch    func(req harness.RunRequest) (string, error)
+	tune    func(req harness.RunRequest) (string, error)
 	resumes []string            // Resume of each implement call
 	noSess  bool                // fail any resumed run, as if the session were gone
 	nets    map[string][]string // Services of each call, by stage
@@ -259,6 +260,15 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, errors.New("no scripted orchestrator")
 		}
 		final, err := h.orch(req)
+		if err != nil {
+			return nil, err
+		}
+		res.Final = final
+	case "tune":
+		if h.tune == nil {
+			return nil, errors.New("no scripted tuning run")
+		}
+		final, err := h.tune(req)
 		if err != nil {
 			return nil, err
 		}

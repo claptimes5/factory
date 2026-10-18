@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -92,6 +93,9 @@ func main() {
 	}
 	jobs := filepath.Join(dir, "jobs")
 	if err := seed(context.Background(), st, jobs); err != nil {
+		log.Fatal(err)
+	}
+	if err := seedTuning(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
 	s := &web.Server{
@@ -357,6 +361,32 @@ new file mode 100644
 		}
 	}
 	return nil
+}
+
+// seedTuning adds a pending tuning proposal for the Settings screen.
+func seedTuning(ctx context.Context, st *store.Store) error {
+	changes := []store.ProposedChange{
+		{Path: []string{"budgets", "concurrent_jobs"}, Value: 4.0, Why: "Jobs waited in the queue on 11 of 30 days (up from 4), while spend stayed under $18 of the $25 cap."},
+		{Path: []string{"routing", "implement.S", "effort"}, Value: "high", Why: "implement.S passed first time on 9 of 17 builds (0.53, down from 0.71); check it with factory eval first."},
+	}
+	edits := make([]config.Change, len(changes))
+	for i, c := range changes {
+		edits[i] = config.Change{Path: c.Path, Value: c.Value}
+	}
+	out, err := config.Edit([]byte(sampleConfig), edits)
+	if err != nil {
+		return err
+	}
+	from := time.Now().UTC().AddDate(0, 0, -30).Format(store.TimeFormat)
+	_, err = st.AddProposal(ctx, store.Proposal{
+		Summary: "First-pass rate on S builds fell from 0.71 to 0.53 while cost per merged PR held at $1.90. Jobs often waited for a free slot.",
+		Changes: changes,
+		Dropped: []store.ProposedChange{{Path: []string{"gates", "commands", "test"}, Value: "go test -short ./...", Why: "Tests take 6 minutes.", Reason: "gates.commands.test isn't a setting tuning may change"}},
+		Ideas:   []string{"3 of 5 parks asked which package a change belongs in: tell triage to name the package in its summary."},
+		Diff:    config.UnifiedDiff("factory.yaml", []byte(sampleConfig), out), PRURL: "https://github.com/acme/api/pull/120",
+		PeriodFrom: from, PeriodTo: store.Now(),
+	})
+	return err
 }
 
 func ptr(v int64) *int64 { return &v }

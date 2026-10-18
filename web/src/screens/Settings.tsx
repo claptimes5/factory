@@ -1,7 +1,18 @@
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Lock, RotateCw, Save } from "lucide-react";
-import { act, APIError, saveSettings, useSettings, type Setting, type Settings, type SettingValue } from "@/api/client";
+import { Check, ExternalLink, Lock, RotateCw, Save, Sparkles, X } from "lucide-react";
+import {
+  act,
+  APIError,
+  applyTuning,
+  saveSettings,
+  useSettings,
+  useTuning,
+  type Setting,
+  type Settings,
+  type SettingValue,
+  type TuningChange,
+} from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -99,6 +110,14 @@ function SettingsForm({ s }: { s: Settings }) {
           <span>{s.reason}</span>
         </div>
       )}
+      <TuningCard
+        s={s}
+        ro={ro}
+        onApplied={(next) => {
+          qc.setQueryData(["settings"], next);
+          setSaved(true);
+        }}
+      />
       {s.restart_pending ? (
         <Notice>
           <span className="min-w-0 flex-1">
@@ -279,5 +298,142 @@ function Input({ f, d, set, ro, label }: { f: Setting; d: Draft; set: (f: Settin
       autoCapitalize="off"
       autoComplete="off"
     />
+  );
+}
+
+const dotted = (c: TuningChange) => c.path.join(".");
+
+/** The tuning loop's proposal, when one waits: what it would change and why, applied through the same save as the form. */
+function TuningCard({ s, ro, onApplied }: { s: Settings; ro: boolean; onApplied: (next: Settings) => void }) {
+  const qc = useQueryClient();
+  const { data } = useTuning();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const p = data?.proposal;
+  if (!p) return null;
+  const apply = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      onApplied(await applyTuning(p.id, s.version));
+      void qc.invalidateQueries({ queryKey: ["tuning"] });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      if (e instanceof APIError && e.status === 409) void qc.invalidateQueries({ queryKey: ["settings"] });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dismiss = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await act(`/settings/tuning/${p.id}/dismiss`);
+      if (!r.ok) setErr(r.message);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      void qc.invalidateQueries({ queryKey: ["tuning"] });
+    }
+  };
+  return (
+    <Card role="region" aria-label="Tuning proposal" className="border-primary/50">
+      <CardHeader className="flex-col items-start gap-0.5">
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-4 text-primary" aria-hidden /> Tuning proposal
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          From the metrics for {p.period_from.slice(0, 10)} to {p.period_to.slice(0, 10)}. Nothing changes until you apply it.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        <p className="whitespace-pre-wrap">{p.summary}</p>
+        {p.changes.length > 0 ? (
+          <ul className="space-y-2" aria-label="Proposed changes">
+            {p.changes.map((c) => (
+              <li key={dotted(c)} className="rounded-md border p-2.5">
+                <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-sm">
+                  <span className="break-all">{dotted(c)}</span>
+                  <span className="text-muted-foreground">→</span>
+                  <span className="font-medium break-all">{c.value == null ? "default" : show(c.value)}</span>
+                </div>
+                <p className="mt-1 text-muted-foreground">{c.why}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-muted-foreground">No setting changes.</p>
+        )}
+        {p.ideas.length > 0 && (
+          <section aria-label="Ideas">
+            <h3 className="text-xs font-medium text-muted-foreground">Ideas for prompts and skills</h3>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {p.ideas.map((idea, i) => (
+                <li key={i}>{idea}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {p.dropped.length > 0 && (
+          <details>
+            <summary className="cursor-pointer text-muted-foreground">
+              {p.dropped.length} dropped {p.dropped.length === 1 ? "change" : "changes"}
+            </summary>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {p.dropped.map((c, i) => (
+                <li key={i}>
+                  <span className="font-mono break-all">{dotted(c)}</span>: {c.reason}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {p.diff && (
+          <details open>
+            <summary className="cursor-pointer text-muted-foreground">Diff of factory.yaml</summary>
+            <pre aria-label="Diff" className="mt-1 max-h-72 overflow-auto rounded bg-muted p-2 font-mono text-xs">
+              {p.diff.trimEnd().split("\n").map((l, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "whitespace-pre-wrap break-all",
+                    l.startsWith("+") && !l.startsWith("+++") && "bg-success/12",
+                    l.startsWith("-") && !l.startsWith("---") && "bg-destructive/12",
+                    l.startsWith("@@") && "text-muted-foreground",
+                  )}
+                >
+                  {l || "\u00a0"}
+                </div>
+              ))}
+            </pre>
+          </details>
+        )}
+        {p.pr_url && (
+          <p>
+            <a href={p.pr_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+              Draft PR with these changes <ExternalLink className="size-3.5" aria-hidden />
+            </a>{" "}
+            <span className="text-muted-foreground">Applying it here is fine too; close the PR afterwards.</span>
+          </p>
+        )}
+        {!ro && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={apply} disabled={busy || p.changes.length === 0}>
+              <Check /> Apply
+            </Button>
+            <Button variant="outline" onClick={dismiss} disabled={busy}>
+              <X /> Dismiss
+            </Button>
+            <span className="text-xs text-muted-foreground">Check model changes with factory eval first.</span>
+          </div>
+        )}
+        {err && (
+          <p role="alert" className="text-sm break-words text-destructive">
+            {err}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

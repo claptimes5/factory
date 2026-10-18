@@ -19,6 +19,7 @@ change something by hand.
 - [Models and escalation](#models-and-escalation)
 - [Auto-merge](#auto-merge)
 - [Budgets](#budgets)
+- [Tuning](#tuning)
 - [Claude-only review](#claude-only-review)
 
 The gates, the coverage floor, risk and the feature map are in
@@ -343,7 +344,7 @@ get every member repo's instructions, each labeled with its repo.
 
 `routing` picks the harness, model and effort for each step: `triage`,
 `implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
-`review.high_risk`), `critic` and `orchestrate`. Triage rates each issue
+`review.high_risk`), `critic`, `orchestrate` and `tune`. Triage rates each issue
 `XS`, `S`, `M` or `L`, and the item builds on the matching
 `implement.<size>` entry.
 
@@ -492,6 +493,35 @@ key, so for now there are no Codex readings to pause on.
 Set a spend alert on both API accounts as well. Spend from a job killed
 mid-run is not recorded (the CLIs report cost only at the end), so the
 daily cap can undercount after a crash.
+
+## Tuning
+
+The [tuning loop](using.md#tuning) proposes changes to the settings from
+the metrics, on a cadence. Its settings, with their defaults:
+
+```yaml
+tuning:
+  every: 720h                 # how often; 0 or none turns it off
+  min_items: 10               # skip a run with fewer builds since the last
+  budget: 3                   # dollars per run; default orchestrator.run_budget
+  repo: you/infra             # optional: also open a draft PR there
+  path: deploy/factory.yaml   # where this file lives in that repo; default factory.yaml
+```
+
+| Key | What it does |
+| --- | --- |
+| `every` | The cadence. The clock starts the first time the daemon runs with tuning on, and survives restarts. |
+| `min_items` | A run with fewer items built since the last one is skipped, and you're told. `factory tune` ignores it. |
+| `budget` | The dollar cap for one run. Its spend counts toward `orchestrator.daily_budget`, not the build budget, but a run isn't held back by it. |
+| `repo`, `path` | Where this `factory.yaml` lives in one of the factory's repos. With `repo` set, each proposal with changes opens a draft PR there on `factory/tuning-<date>`, made to that copy of the file. |
+
+The run uses `routing.tune`, which defaults to the `orchestrate` route.
+Unlike the orchestrator it has no tools, so it can run on Codex too:
+
+```yaml
+routing:
+  tune: {harness: claude, model: opus, effort: high}
+```
 
 ## Claude-only review
 

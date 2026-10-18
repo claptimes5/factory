@@ -39,7 +39,7 @@ type OrchestrateInput struct {
 func (p *Pipeline) Orchestrate(ctx context.Context, reason string, summary bool) error {
 	p.orchMu.Lock()
 	defer p.orchMu.Unlock()
-	spent, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	spent, err := p.orchSpend(ctx)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		return nil // the next trigger starts a fresh run; nothing to retry
 	}
 	// The cap is checked again here: runs queued before it was hit wait.
-	if spent, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate"); err != nil || spent >= p.Cfg.Orchestrator.DailyBudget {
+	if spent, err := p.orchSpend(ctx); err != nil || spent >= p.Cfg.Orchestrator.DailyBudget {
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "orchestration budget spent for today")
 		return err
 	}
@@ -372,7 +372,7 @@ func (p *Pipeline) statusText(ctx context.Context) (string, error) {
 	q, _ := p.Store.CountJobs(ctx, state.Queued, "")
 	r, _ := p.Store.CountJobs(ctx, state.Running, "")
 	spent, _ := p.buildSpend(ctx)
-	orch, _ := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	orch, _ := p.orchSpend(ctx)
 	out := fmt.Sprintf("items: %s\njobs: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (orchestration $%.2f of $%.2f)\nawaiting human: %d of max %d",
 		strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.Orchestrator.DailyBudget,
 		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax)

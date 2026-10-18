@@ -33,6 +33,9 @@ type Setting struct {
 	// Min and Max bound a number: the config accepts values, such as no
 	// jobs at once, that would quietly stop the factory. Max 0 is none.
 	Min, Max float64
+	// Off says a duration of 0 (or none) turns the thing off, so it is
+	// allowed below the 10s every other duration needs.
+	Off bool
 }
 
 // SettingGroup is one card of the Settings screen.
@@ -101,6 +104,10 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			num("orchestrator.daily_budget", "Daily cap", "Dollars a day for orchestration, apart from building.", 15),
 			integer("orchestrator.daily_issue_cap", "Issues a day", "How many issues it may open a day.", 10),
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
+		}},
+		{Name: "Tuning", Help: "How often the factory reads its metrics and proposes changes to these settings.", Settings: []Setting{
+			{Path: []string{"tuning", "every"}, Label: "Every", Help: "How often it proposes changes, such as 720h; 0 turns it off.", Kind: "duration", Default: "720h", Off: true},
+			integer("tuning.min_items", "Fewest builds", "It skips a run when fewer items were built since the last one.", 10),
 		}},
 		{Name: "Intake", Help: "How the factory finds labeled issues.", Settings: []Setting{
 			{Path: []string{"intake", "poll_interval"}, Label: "Poll every", Help: "How often it looks for labeled issues, such as 60s.", Kind: "duration", Default: "60s"},
@@ -255,6 +262,7 @@ func (s Setting) Coerce(v any) (any, error) {
 		return nil, nil
 	case s.Kind == "select" && !slices.Contains(s.Options, str):
 		return nil, fmt.Errorf("%s must be one of %s", name, strings.Join(slices.DeleteFunc(slices.Clone(s.Options), func(o string) bool { return o == "" }), ", "))
+	case s.Kind == "duration" && s.Off && (str == "none" || str == "0"):
 	case s.Kind == "duration":
 		d, err := time.ParseDuration(str)
 		if err != nil {

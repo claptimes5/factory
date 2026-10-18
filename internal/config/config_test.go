@@ -4,10 +4,12 @@ import (
 	"gopkg.in/yaml.v3"
 	"maps"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func load(t *testing.T) *Config {
@@ -496,5 +498,51 @@ func TestFastMode(t *testing.T) {
 	c.Routing["review"] = rv
 	if err := c.Validate(); err == nil {
 		t.Fatal("fast on a codex reviewer accepted")
+	}
+}
+
+func TestTuning(t *testing.T) {
+	c := load(t)
+	if tu := c.Tuning; tu.Every != 720*time.Hour || tu.MinItems != 10 || tu.Budget != c.Orchestrator.RunBudget || tu.Path != "factory.yaml" || tu.Repo != "" {
+		t.Fatalf("defaults = %+v", tu)
+	}
+	if r := c.Routing["tune"]; !reflect.DeepEqual(r, c.Routing["orchestrate"]) {
+		t.Fatalf("routing.tune = %+v, want the orchestrate route", r)
+	}
+	b, _ := os.ReadFile("../../factory.yaml")
+	with := func(block string) (*Config, error) { return Parse([]byte(string(b) + "\ntuning: " + block + "\n")) }
+	for block, every := range map[string]time.Duration{"{every: 0}": 0, "{every: none}": 0, "{every: 168h}": 168 * time.Hour} {
+		c, err := with(block)
+		if err != nil || c.Tuning.Every != every {
+			t.Errorf("%s: every = %v, %v", block, c.Tuning.Every, err)
+		}
+	}
+	c, err := with("{repo: claptimes5/factory, path: deploy/factory.yaml, min_items: 3, budget: 1.5}")
+	if err != nil || c.Tuning.Repo != "claptimes5/factory" || c.Tuning.MinItems != 3 || c.Tuning.Budget != 1.5 {
+		t.Fatalf("tuning = %+v, %v", c.Tuning, err)
+	}
+	for block, want := range map[string]string{
+		"{every: monthly}":    "tuning.every must be a duration",
+		"{every: -1h}":        "tuning.every must be a duration",
+		"{min_items: -1}":     "tuning.min_items",
+		"{budget: -2}":        "tuning.budget",
+		"{repo: o/elsewhere}": "tuning.repo o/elsewhere isn't in repos",
+		"{path: ../x.yaml}":   "tuning.path",
+	} {
+		if _, err := with(block); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", block, err, want)
+		}
+	}
+}
+
+func TestUnifiedDiff(t *testing.T) {
+	a := []byte("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n")
+	b := []byte("a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n")
+	want := "--- a/f.yaml\n+++ b/f.yaml\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n d\n e\n@@ -9,3 +9,4 @@\n i\n j\n k\n+l\n"
+	if got := UnifiedDiff("f.yaml", a, b); got != want {
+		t.Fatalf("diff:\n%s\nwant:\n%s", got, want)
+	}
+	if UnifiedDiff("f", a, a) != "" {
+		t.Fatal("no change, no diff")
 	}
 }
