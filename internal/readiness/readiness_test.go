@@ -294,3 +294,22 @@ func TestClaudeLoadsAgents(t *testing.T) {
 		})
 	}
 }
+
+func TestImportsAgents(t *testing.T) {
+	for md, want := range map[string]bool{
+		"@AGENTS.md":                        true,
+		"# Rules\n\nSee @AGENTS.md.\n":      true,
+		"Read @./AGENTS.md, then start.":    true,
+		"```\n@AGENTS.md\n```\n":            false,
+		"~~~md\n@AGENTS.md\n~~~\n":          false,
+		"Write `@AGENTS.md` to import it.":  false,
+		"<!-- @AGENTS.md -->":               false,
+		"```\nexample\n```\n\n@AGENTS.md\n": true,
+		"mail me@AGENTS.md":                 false,
+		"@AGENTS.mdx":                       false,
+	} {
+		if got := ImportsAgents(md); got != want {
+			t.Errorf("%q: %t, want %t", md, got, want)
+		}
+	}
+}

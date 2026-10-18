@@ -299,7 +299,9 @@ plain tracked file, is refused. With no `AGENTS.md`, the PR makes one.
 Claude Code reads `CLAUDE.md`, not `AGENTS.md`. So when Claude builds and
 your `CLAUDE.md` doesn't load `AGENTS.md`, the same PR adds an `@AGENTS.md`
 line at its end (or makes a `CLAUDE.md` of just that line), so one file
-steers both. Set this up when you add a repo, and the readiness check
+steers both. An import inside a code block or comment doesn't count, as it
+doesn't for Claude. Take the line out and the next lessons PR adds it
+again; to keep Claude off `AGENTS.md`, route builds to Codex. Set this up when you add a repo, and the readiness check
 reports it as a gap until you do (see
 [Starting a new project](new-project.md)).
 

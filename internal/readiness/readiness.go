@@ -285,27 +285,40 @@ func Assess(ctx context.Context, in Input) *Report {
 // loadsAgents says whether Claude, reading CLAUDE.md in dir, reads
 // AGENTS.md too: it imports it, or one links to the other.
 func loadsAgents(dir string) bool {
-	cl, agents := filepath.Join(dir, "CLAUDE.md"), filepath.Join(dir, "AGENTS.md")
-	if a, err := os.Stat(agents); err == nil {
-		if c, err := os.Stat(cl); err == nil && os.SameFile(a, c) {
-			return true
-		}
-	}
-	// A CLAUDE.md that links to another file in the repo is read there.
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return false
 	}
-	p, err := filepath.EvalSymlinks(cl)
-	if err != nil || !strings.HasPrefix(p, root+string(filepath.Separator)) {
+	// Either may link to another file, but only one in the repo.
+	inRepo := func(name string) string {
+		p, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+		if err != nil || !strings.HasPrefix(p, root+string(filepath.Separator)) {
+			return ""
+		}
+		return p
+	}
+	p := inRepo("CLAUDE.md")
+	if p == "" {
 		return false
 	}
+	if p == inRepo("AGENTS.md") {
+		return true
+	}
 	b, err := readCapped(p)
-	return err == nil && importsAgents.Match(b)
+	return err == nil && ImportsAgents(string(b))
 }
 
-// importsAgents finds a CLAUDE.md line that loads AGENTS.md into Claude.
-var importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md(\s|$)`)
+// ImportsAgents says whether a CLAUDE.md loads AGENTS.md into Claude with
+// an @AGENTS.md import. Claude Code skips imports in code, so fenced
+// blocks, code spans and HTML comments don't count.
+func ImportsAgents(md string) bool {
+	return importsAgents.MatchString(notCode.ReplaceAllString(md, " "))
+}
+
+var (
+	importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md([\s.,;:)]|$)`)
+	notCode       = regexp.MustCompile("(?ms)^[ \t]*(```|~~~).*?^[ \t]*(```|~~~)[ \t]*$|`[^`\n]*`|<!--.*?-->")
+)
 
 // finish scores the report.
 func (r *Report) finish() *Report {

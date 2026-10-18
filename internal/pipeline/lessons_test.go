@@ -550,6 +550,63 @@ func TestLessonsLoadedFromClaudeMD(t *testing.T) {
 	}
 }
 
+// learnFrom has a human edit item n's PR, then runs the day's learn job
+// with the scripted lessons.
+func (e *env) learnFrom(t *testing.T, n int, lessons ...string) {
+	t.Helper()
+	var ls []string
+	for _, l := range lessons {
+		ls = append(ls, fmt.Sprintf(`{"line":%q,"why":"seen in #1","evidence":["#1"]}`, l))
+	}
+	e.built(t, n)
+	e.merge(fmt.Sprintf("factory/issue-%d", n), e.humanPush(t, fmt.Sprintf("factory/issue-%d", n), "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
+	e.claude.learn = append(e.claude.learn, `{"lessons":[`+strings.Join(ls, ",")+`],"skip_reason":""}`)
+	learnDay = func() string { return fmt.Sprintf("day %d", n) }
+	t.Cleanup(func() { learnDay = store.Today })
+	e.poll(t)
+}
+
+// A lessons PR opened before lessons moved to AGENTS.md has its lines in
+// CLAUDE.md: they stay proposed, not declined, and aren't proposed again.
+// The PR says why it changes CLAUDE.md, and adds the import once.
+func TestLessonsInClaudeMDOnAnOpenPRStayProposed(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
+	e.learnFrom(t, 1, "Check for overflow.")
+	if pr := e.gh.prs[LessonsBranch]; pr == nil || !strings.Contains(pr.Body, "adds an `@AGENTS.md` line to `CLAUDE.md`") {
+		t.Fatalf("lessons PR = %+v", pr)
+	}
+	// The line moves to CLAUDE.md, as the old code put it.
+	e.humanPush(t, LessonsBranch, "AGENTS.md", "# Agents\n")
+	e.humanPush(t, LessonsBranch, "CLAUDE.md", "# Claude\n\n@AGENTS.md\n\n## Lessons from the factory\n\n- Check for overflow.\n")
+	e.learnFrom(t, 2, "Check for overflow.", "Run go vet.")
+	ls, _ := e.p.Store.Lessons(ctx, "o/r")
+	for _, l := range ls {
+		if l.Status != store.LessonProposed {
+			t.Errorf("%s is %s", l.Line, l.Status)
+		}
+	}
+	if md := e.lessonsMD(t); strings.Contains(md, "overflow") || !strings.Contains(md, "- Run go vet.") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); strings.Count(md, "@AGENTS.md") != 1 {
+		t.Fatalf("CLAUDE.md:\n%s", md)
+	}
+}
+
+// An import added on base since the lessons PR opened isn't added again
+// on the PR's branch.
+func TestLessonsImportAddedOnBaseIsNotRepeated(t *testing.T) {
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
+	e.learnFrom(t, 1, "Check for overflow.")
+	e.humanPush(t, LessonsBranch, "CLAUDE.md", "# Claude\n")
+	e.humanPush(t, "main", "CLAUDE.md", "# Claude\n\n@AGENTS.md\n")
+	e.learnFrom(t, 2, "Run go vet.")
+	if md := git(t, e.remote, "show", LessonsBranch+":CLAUDE.md"); md != "# Claude" {
+		t.Fatalf("CLAUDE.md on the branch:\n%s", md)
+	}
+}
+
 // The file is written through an os.Root, never through a symlink, which
 // on a case-insensitive disk could stand in for AGENTS.md unseen by git.
 func TestWritePlain(t *testing.T) {

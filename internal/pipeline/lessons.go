@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/verdict"
@@ -516,8 +517,8 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		}
 	}
 	if plan.Open != nil {
-		if branch, ok, _ := g.FileAt(ctx, ws.Repo, "refs/remotes/origin/"+plan.Branch, plan.File); ok {
-			data.Proposed = newLines(base, branch)
+		if branch, ok := instructionsText(ctx, g, ws.Repo, "refs/remotes/origin/"+plan.Branch); ok {
+			data.Proposed = newLines(all, branch)
 		}
 	}
 	data.Declined = p.settleLessons(ctx, in.Repo, ws, plan, all)
@@ -616,6 +617,12 @@ func (p *Pipeline) lessonsPlan(ctx context.Context, repo string, ws *Workspace) 
 	if err != nil {
 		return nil, err
 	}
+	if imp != "" && rev != ws.BaseSHA {
+		// Someone may have added the import on base since the PR opened.
+		if _, onBase, err := lessonsTarget(ctx, g, ws.Repo, ws.BaseSHA, true); err == nil && onBase == "" {
+			imp = ""
+		}
+	}
 	return &lessonsPlan{File: file, Import: imp, Branch: branch, Open: open}, nil
 }
 
@@ -656,8 +663,25 @@ func (p *Pipeline) ClaudeBuilds() bool {
 	return false
 }
 
-// importsAgents finds a CLAUDE.md line that loads AGENTS.md into Claude.
-var importsAgents = regexp.MustCompile(`(?m)(^|\s)@(\./)?AGENTS\.md(\s|$)`)
+// instructionsText is AGENTS.md and CLAUDE.md at rev, as one text, and
+// whether either is there.
+func instructionsText(ctx context.Context, g *Git, repo, rev string) (string, bool) {
+	var b strings.Builder
+	found := false
+	seen := map[string]bool{}
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		f, err := instructionsFile(ctx, g, repo, rev, name)
+		if err != nil || f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		if text, ok, _ := g.FileAt(ctx, repo, rev, f); ok {
+			found = true
+			b.WriteString(text + "\n")
+		}
+	}
+	return b.String(), found
+}
 
 // lessonsTarget is the file at rev that lessons go in: AGENTS.md, or the
 // tracked file it links to, new when there's none. Claude Code reads
@@ -688,7 +712,7 @@ func lessonsTarget(ctx context.Context, g *Git, repo, rev string, claude bool) (
 	if err != nil {
 		return "", "", err
 	}
-	if importsAgents.MatchString(md) {
+	if readiness.ImportsAgents(md) {
 		return file, "", nil
 	}
 	return file, cl, nil
@@ -801,7 +825,9 @@ func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace
 	open := plan.Open
 	branch, onBranch := "", false
 	if open != nil {
-		branch, onBranch, _ = p.git(repo).FileAt(ctx, ws.Repo, "refs/remotes/origin/"+plan.Branch, plan.File)
+		// Both files: a PR opened before lessons moved to AGENTS.md
+		// has them in CLAUDE.md.
+		branch, onBranch = instructionsText(ctx, p.git(repo), ws.Repo, "refs/remotes/origin/"+plan.Branch)
 	}
 	prs := map[int]*github.PR{}
 	var declined []string
@@ -877,8 +903,9 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	if err != nil {
 		return err
 	}
+	others, _ := instructionsText(ctx, g, ws.Repo, "HEAD")
 	seen := map[string]bool{}
-	for _, l := range strings.Split(base+"\n"+cur, "\n") {
+	for _, l := range strings.Split(base+"\n"+cur+"\n"+others, "\n") {
 		seen[normLine(l)] = true
 	}
 	known, err := p.Store.Lessons(ctx, repo)
@@ -925,7 +952,11 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		paths = append(paths, plan.Import)
 	}
 	what := fmt.Sprintf("%d %s for %s", len(add), plural(len(add), "lesson", "lessons"), plan.File)
-	sha, err := g.commitFiles(ctx, ws.Repo, fmt.Sprintf("factory: %s\n\nLearned by job %d.", what, j.ID), paths...)
+	msg := fmt.Sprintf("factory: %s\n\nLearned by job %d.", what, j.ID)
+	if plan.Import != "" {
+		msg += "\n\n" + importNote(plan.Import)
+	}
+	sha, err := g.commitFiles(ctx, ws.Repo, msg, paths...)
 	if err != nil {
 		return err
 	}
@@ -952,7 +983,7 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	}
 	entries := p.lessonEntries(repo, add, sigs)
 	if pr == nil {
-		if pr, err = gh.CreatePR(ctx, "Lessons from the factory for "+plan.File, lessonsIntro(plan.File)+entries+"\n"+lessonsFooter, plan.Branch, rc.BaseBranch, true); err != nil {
+		if pr, err = gh.CreatePR(ctx, "Lessons from the factory for "+plan.File, lessonsIntro(plan.File, plan.Import)+entries+"\n"+lessonsFooter, plan.Branch, rc.BaseBranch, true); err != nil {
 			return err
 		}
 		if err := record(pr.Number); err != nil {
@@ -981,11 +1012,20 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 }
 
 // lessonsIntro opens the lessons PR's description.
-func lessonsIntro(file string) string {
+func lessonsIntro(file, imp string) string {
+	note := ""
+	if imp != "" {
+		note = importNote(imp) + "\n\n"
+	}
 	return "The factory learned these from the changes you made to its PRs before merging them, and from findings its reviewers repeated. " +
 		"Each is a line for `" + file + "`, which the factory's builders read before they start.\n\n" +
 		"Drop any you don't want from this branch before you merge. If you reword one, the factory counts the original as declined and doesn't track your version. " +
-		"New lessons are added here until you merge or close it.\n\n## Lessons\n\n"
+		"New lessons are added here until you merge or close it.\n\n" + note + "## Lessons\n\n"
+}
+
+// importNote says why a lessons PR also changes CLAUDE.md.
+func importNote(imp string) string {
+	return "It also adds an `@AGENTS.md` line to `" + imp + "`, so Claude builders, which read only CLAUDE.md, read AGENTS.md too."
 }
 
 const lessonsFooter = "_Merge is always human. This PR never merges itself._\n"
@@ -1068,7 +1108,7 @@ func newLines(before, after string) []string {
 	}
 	var out []string
 	for _, l := range strings.Split(after, "\n") {
-		if k := normLine(l); k != "" && !had[k] && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+		if k := normLine(l); k != "" && !had[k] && !strings.HasPrefix(strings.TrimSpace(l), "#") && !readiness.ImportsAgents(l) {
 			out = append(out, cleanLine(l))
 		}
 	}
