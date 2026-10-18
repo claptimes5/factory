@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,7 +44,12 @@ type Gates struct {
 
 // Repo is one repository the factory works on.
 type Repo struct {
-	Name       string `yaml:"name,omitempty"` // owner/name
+	// Name is owner/name on GitHub. On GitLab it starts with the host:
+	// gitlab.com/group/project, or gitlab.example.com/group/sub/project.
+	Name string `yaml:"name,omitempty"`
+	// Host is the GitLab host, taken from Name; empty for GitHub. Writing
+	// host: with a bare group/project name works too.
+	Host       string `yaml:"host,omitempty"`
 	BaseBranch string `yaml:"base_branch,omitempty"`
 	// Image is the job image for this repo's agents and gates; default
 	// runner.image. ImageFrom is the base `factory images` builds it on
@@ -87,6 +93,7 @@ func (r Repo) MarshalYAML() (any, error) {
 		return r.Name, nil
 	}
 	type plain Repo
+	r.Host = "" // it's in the name
 	return plain(r), nil
 }
 
@@ -294,10 +301,64 @@ func (c *Config) defaults() {
 	}
 	for i := range c.Repos {
 		r := &c.Repos[i]
-		r.Name = strings.TrimSuffix(strings.TrimPrefix(r.Name, "https://github.com/"), ".git")
-		r.Name = strings.TrimPrefix(r.Name, "github.com/")
+		r.Host, r.Name = SplitRepo(r.Host, r.Name)
 		// Unset base_branch and gates follow the top level (see RepoConf).
 	}
+}
+
+// SplitRepo reads a repo as written in the config or typed in setup
+// ("owner/name", "github.com/owner/name", "https://gitlab.com/group/project.git",
+// or a bare path with host set) into its GitLab host ("" for GitHub) and
+// its name as the factory knows it: owner/name, or host/path on GitLab.
+func SplitRepo(host, name string) (string, string) {
+	name = strings.TrimSpace(name)
+	for _, scheme := range []string{"https://", "http://"} {
+		name = strings.TrimPrefix(name, scheme)
+	}
+	name = strings.TrimSuffix(strings.TrimSuffix(name, "/"), ".git")
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(host), "https://"), "http://"), "/"))
+	if first, rest, ok := strings.Cut(name, "/"); ok && strings.Contains(first, ".") && (host == "" || strings.EqualFold(first, host)) {
+		// A dotted first segment is a host, unless host: names another
+		// one: then it's a group like my.team.
+		host, name = strings.ToLower(first), rest
+	}
+	if host == "" || host == "github.com" || host == "www.github.com" {
+		return "", name
+	}
+	return host, host + "/" + name
+}
+
+// GitLab reports whether the repo is on GitLab.
+func (r Repo) GitLab() bool { return r.Host != "" }
+
+// Path is the repo's path on its host: owner/name, or group/project.
+func (r Repo) Path() string { return strings.TrimPrefix(r.Name, r.Host+"/") }
+
+// WebURL is the repo's page.
+func (r Repo) WebURL() string {
+	if r.GitLab() {
+		return "https://" + r.Name
+	}
+	return "https://github.com/" + r.Name
+}
+
+// CloneURL is the repo's HTTPS git remote.
+func (r Repo) CloneURL() string { return r.WebURL() + ".git" }
+
+// IssueURL is the page of issue n.
+func (r Repo) IssueURL(n int) string {
+	if r.GitLab() {
+		return fmt.Sprintf("%s/-/issues/%d", r.WebURL(), n)
+	}
+	return fmt.Sprintf("%s/issues/%d", r.WebURL(), n)
+}
+
+// PRURL is the page of pull request (on GitLab, merge request) n.
+func (r Repo) PRURL(n int) string {
+	if r.GitLab() {
+		return fmt.Sprintf("%s/-/merge_requests/%d", r.WebURL(), n)
+	}
+	return fmt.Sprintf("%s/pull/%d", r.WebURL(), n)
 }
 
 var reservedEnv = map[string]bool{"HOME": true, "PATH": true, "USER": true}
@@ -309,7 +370,7 @@ var harnesses = map[string]bool{"claude": true, "codex": true}
 func (c *Config) Validate() error {
 	var errs []error
 	bad := func(f string, a ...any) { errs = append(errs, fmt.Errorf(f, a...)) }
-	if c.SingleRepo != "" && (len(c.Repos) != 1 || c.Repos[0].Name != strings.TrimSuffix(strings.TrimPrefix(c.SingleRepo, "https://github.com/"), ".git")) {
+	if _, single := SplitRepo("", c.SingleRepo); c.SingleRepo != "" && (len(c.Repos) != 1 || c.Repos[0].Name != single) {
 		bad("use repo: for one repository or repos: for several, not both")
 	}
 	if len(c.Repos) == 0 {
@@ -317,7 +378,10 @@ func (c *Config) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, r := range c.Repos {
-		if o, n, ok := strings.Cut(r.Name, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+		switch o, n, ok := strings.Cut(r.Path(), "/"); {
+		case r.GitLab() && (!ok || o == "" || n == "" || strings.Contains(r.Name, "//")):
+			bad("repo %s must be %s/group/project", r.Name, r.Host)
+		case !r.GitLab() && (!ok || o == "" || n == "" || strings.Contains(n, "/")):
 			bad("repo %q must be owner/name", r.Name)
 		}
 		if seen[strings.ToLower(r.Name)] {
@@ -444,12 +508,16 @@ func (c *Config) RepoConf(name string) (Repo, bool) {
 // Primary is the first repo: the one commands use when you name none.
 func (c *Config) Primary() Repo { return c.resolve(c.Repos[0]) }
 
+// Resolve fills a repo's unset settings from the top level, as RepoConf
+// does for listed repos.
+func (c *Config) Resolve(r Repo) Repo { return c.resolve(r) }
+
 func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {
 		r.BaseBranch = c.BaseBranch
 	}
 	if r.Image == "" && r.ImageFrom != "" {
-		r.Image = "factory-job-" + strings.ToLower(strings.ReplaceAll(r.Name, "/", "__")) + ":latest"
+		r.Image = "factory-job-" + strings.ToLower(strings.NewReplacer("/", "__", ":", "-").Replace(r.Name)) + ":latest"
 	}
 	if r.Image == "" {
 		r.Image = c.Runner.Image
@@ -463,6 +531,18 @@ func (c *Config) resolve(r Repo) Repo {
 	}
 	r.Env = env
 	r.Gates = mergeGates(c.Gates, r.Gates)
+	if r.GitLab() {
+		// A pushed branch runs its own .gitlab-ci.yml with the project's
+		// runners and CI variables, and a GitLab token, unlike GitHub's,
+		// can push pipeline changes. So builders never may.
+		pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
+		for _, p := range []string{".gitlab-ci.yml", ".gitlab/"} {
+			if !slices.Contains(pp, p) {
+				pp = append(pp, p)
+			}
+		}
+		r.Gates.DiffGuard.ProtectedPaths = pp
+	}
 	return r
 }
 

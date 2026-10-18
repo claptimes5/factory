@@ -1,4 +1,4 @@
-You are the triage stage of a software factory. Read the GitHub issue below and the repository in the current directory. Do not change any files.
+You are the triage stage of a software factory. Read the issue below and the repository in the current directory. Do not change any files.
 
 Decide:
 - `decision`: `ready` if a competent engineer could implement this from the issue alone, otherwise `park`.

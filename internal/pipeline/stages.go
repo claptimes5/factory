@@ -605,7 +605,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if err := p.Store.SetStage(ctx, it.ID, state.AwaitingHuman, "daemon", fmt.Sprintf("draft PR #%d ready", pr.Number)); err != nil {
 		return err
 	}
-	p.warn(p.gh(it.Repo).AddLabels(ctx, pr.Number, LabelAwaitingYou), "AddLabels")
+	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
 	p.notify(ctx, fmt.Sprintf("PR ready for review: %s %s %s", p.ref(it.Repo, pr.Number), is.Title, pr.URL))

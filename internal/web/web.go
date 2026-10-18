@@ -42,9 +42,13 @@ type Actions interface {
 
 // Server serves the control room.
 type Server struct {
-	Store    *store.Store
-	Actions  Actions
-	Repos    []string // owner/name of each repo the factory works on
+	Store   *store.Store
+	Actions Actions
+	Repos   []string // owner/name of each repo the factory works on
+	// IssueURL and PRURL link to an issue or pull (merge) request on its
+	// repo's host; they default to GitHub's.
+	IssueURL func(repo string, n int) string
+	PRURL    func(repo string, n int) string
 	DailyCap float64
 	AwaitCap int
 	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
@@ -97,7 +101,9 @@ func (s *Server) Handler() (http.Handler, error) {
 			return time.Since(t).Round(time.Second).String() + " ago"
 		},
 		// ref names an issue: #12, or owner/name#12 when there are several repos.
-		"ref": func(repo string, n int) string { return s.ref(repo, n) },
+		"ref":      func(repo string, n int) string { return s.ref(repo, n) },
+		"issueURL": s.issueURL,
+		"prURL":    s.prURL,
 		"pretty": func(raw string) string {
 			var v any
 			if json.Unmarshal([]byte(raw), &v) != nil {
@@ -644,4 +650,18 @@ func TTYDAttach(st *store.Store, host string) func(ctx context.Context, jobID in
 		time.Sleep(300 * time.Millisecond)
 		return fmt.Sprintf("http://%s/", net.JoinHostPort(host, strconv.Itoa(port))), nil
 	}
+}
+
+func (s *Server) issueURL(repo string, n int) string {
+	if s.IssueURL != nil {
+		return s.IssueURL(repo, n)
+	}
+	return fmt.Sprintf("https://github.com/%s/issues/%d", repo, n)
+}
+
+func (s *Server) prURL(repo string, n int) string {
+	if s.PRURL != nil {
+		return s.PRURL(repo, n)
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
 }

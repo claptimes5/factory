@@ -84,5 +84,5 @@ gates:
     max_changed_lines: 400
     # The factory's own controls, and files that steer agents that later
     # read the checkout (the reviewer and critic).
-    protected_paths: [".github/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
+    protected_paths: [".github/", ".gitlab-ci.yml", ".gitlab/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
                       ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json"]

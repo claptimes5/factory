@@ -4,6 +4,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -162,6 +163,58 @@ func TestRepoImagesAndEnvAreChecked(t *testing.T) {
 		_, err := Parse([]byte(c.repos + base))
 		if (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+}
+
+func TestGitLabRepos(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	c, err := Parse([]byte("repos:\n  - o/api\n  - https://gitlab.com/team/web.git\n  - {name: platform/infra/deploy, host: git.example.com}\n  - github.com/o/cli\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.RepoNames(), ","); got != "o/api,gitlab.com/team/web,git.example.com/platform/infra/deploy,o/cli" {
+		t.Fatalf("names %s", got)
+	}
+	web, _ := c.RepoConf("GitLab.com/team/web")
+	if !web.GitLab() || web.Host != "gitlab.com" || web.Path() != "team/web" || web.CloneURL() != "https://gitlab.com/team/web.git" ||
+		web.IssueURL(3) != "https://gitlab.com/team/web/-/issues/3" || web.PRURL(4) != "https://gitlab.com/team/web/-/merge_requests/4" {
+		t.Fatalf("%+v", web)
+	}
+	api, _ := c.RepoConf("o/api")
+	if api.GitLab() || api.Path() != "o/api" || api.PRURL(4) != "https://github.com/o/api/pull/4" {
+		t.Fatalf("%+v", api)
+	}
+	deploy, _ := c.RepoConf("git.example.com/platform/infra/deploy")
+	if out, _ := yaml.Marshal(deploy); strings.TrimSpace(string(out)) == "" || strings.Contains(string(out), "host:") {
+		t.Fatalf("marshal: %s", out)
+	}
+	if pp := web.Gates.DiffGuard.ProtectedPaths; !slices.Contains(pp, ".gitlab-ci.yml") || !slices.Contains(pp, ".gitlab/") {
+		t.Fatalf("protected: %v", pp)
+	}
+	// A dotted group under an explicit host, and a host with a port.
+	for _, c := range [][4]string{
+		{"git.example.com", "my.team/proj", "git.example.com", "git.example.com/my.team/proj"},
+		{"https://gitlab.com", "gitlab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+		{"gitlab.com/", "gitlab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+		{"http://git.x.io:8443", "git.x.io:8443/g/p", "git.x.io:8443", "git.x.io:8443/g/p"},
+		{"", "GitLab.com/g/p", "gitlab.com", "gitlab.com/g/p"},
+	} {
+		if h, n := SplitRepo(c[0], c[1]); h != c[2] || n != c[3] {
+			t.Errorf("SplitRepo(%q, %q) = %s %s", c[0], c[1], h, n)
+		}
+	}
+	c2, err := Parse([]byte("repos:\n  - {name: \"git.example.com:8443/g/p\", image_from: ruby:3.4-bookworm}\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := c2.Primary(); r.Image != "factory-job-git.example.com-8443__g__p:latest" {
+		t.Fatalf("image %s", r.Image)
+	}
+	for _, bad := range []string{"gitlab.com/onlyone", "o/a/b"} {
+		if _, err := Parse([]byte("repos: [" + bad + "]\n" + base)); err == nil {
+			t.Errorf("%s: want an error", bad)
 		}
 	}
 }

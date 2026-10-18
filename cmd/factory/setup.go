@@ -27,7 +27,7 @@ import (
 
 // envKeys are the settings `factory setup` asks for, in file order.
 var envKeys = []string{
-	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "GITHUB_TOKEN",
+	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
 	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_NOTIFY_URL",
 }
 
@@ -186,9 +186,10 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	p.say("as you finish it; Ctrl-C stops, and running setup again starts from your answers.")
 
 	p.say("\n== 1. Repositories")
-	p.say("The factory can work on several repos, each on its own. List them separated by commas.")
+	p.say("The factory can work on several repos, each on its own. List them separated by commas:")
+	p.say("owner/name for GitHub, and the project's URL for GitLab (https://gitlab.com/group/project).")
 	for {
-		names, err := parseRepoList(p.ask("GitHub repositories (owner/name)", strings.Join(cfg.RepoNames(), ", ")))
+		names, err := parseRepoList(p.ask("Repositories", strings.Join(cfg.RepoNames(), ", ")))
 		if err != nil {
 			p.say("%v", err)
 			continue
@@ -214,21 +215,35 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 3. GitHub access")
-	client, err := setupGitHub(ctx, p, cfg, vals, filepath.Dir(envPath))
-	if err != nil {
-		return err
+	var ghClient, glClient clientFor
+	if len(githubRepos(cfg)) > 0 {
+		p.say("\n== 3. GitHub access")
+		if ghClient, err = setupGitHub(ctx, p, cfg, vals, filepath.Dir(envPath)); err != nil {
+			return err
+		}
+		if err := save(); err != nil {
+			return err
+		}
 	}
-	if err := save(); err != nil {
-		return err
+	if len(gitlabRepos(cfg)) > 0 {
+		header := "\n== 3. GitLab access"
+		if ghClient != nil || len(githubRepos(cfg)) > 0 {
+			header = "\n== 3b. GitLab access"
+		}
+		p.say("%s", header)
+		glClient = setupGitLab(ctx, p, cfg, vals)
+		if err := save(); err != nil {
+			return err
+		}
 	}
+	client := bothHosts(cfg, ghClient, glClient)
 	if client != nil {
 		checkBaseBranches(ctx, p, cfgPath, cfg, client)
 		labels := pipeline.Labels(cfg.Intake.Label)
 		p.say("\nThe factory uses %d labels on each repo, such as %s.", len(labels), labels[0].Name)
 		if p.yes("Create the ones that are missing? Existing labels are left as they are.", true) {
 			for _, repo := range cfg.RepoNames() {
-				gh, err := client(repo)
+				gh, _, err := client(repo)
 				if err != nil {
 					p.say("%s: %v", repo, err)
 					continue
@@ -338,8 +353,94 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	return nil
 }
 
-// clientFor makes a GitHub client for one repo with the saved credentials.
-type clientFor func(repo string) (*github.Client, error)
+// clientFor makes the client for one repo on its host (GitHub or GitLab)
+// with the saved credentials, and returns the token git uses.
+type clientFor func(repo string) (forge, github.TokenSource, error)
+
+// githubRepos and gitlabRepos split the configured repos by host.
+func githubRepos(cfg *config.Config) (out []string) {
+	for _, r := range cfg.Repos {
+		if !r.GitLab() {
+			out = append(out, r.Name)
+		}
+	}
+	return out
+}
+
+func gitlabRepos(cfg *config.Config) (out []string) {
+	for _, r := range cfg.Repos {
+		if r.GitLab() {
+			out = append(out, r.Name)
+		}
+	}
+	return out
+}
+
+// bothHosts sends each repo to the client for its host. Either may be nil
+// when that host's access isn't set up; it returns nil when both are.
+func bothHosts(cfg *config.Config, gh, gl clientFor) clientFor {
+	if gh == nil && gl == nil {
+		return nil
+	}
+	return func(repo string) (forge, github.TokenSource, error) {
+		rc, _ := cfg.RepoConf(repo)
+		c, host := gh, "GitHub"
+		if rc.GitLab() {
+			c, host = gl, "GitLab"
+		}
+		if c == nil {
+			return nil, nil, fmt.Errorf("%s access isn't set up; run setup again", host)
+		}
+		return c(repo)
+	}
+}
+
+// setupGitLab asks for a GitLab token and checks that it reaches every
+// GitLab repo. It returns nil if you chose to skip the check.
+func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[string]string) clientFor {
+	repos := gitlabRepos(cfg)
+	hosts := map[string]bool{}
+	for _, r := range repos {
+		rc, _ := cfg.RepoConf(r)
+		hosts[rc.Host] = true
+	}
+	p.say("The factory acts on GitLab with an access token. A project access token")
+	p.say("limits it to one project; with several, a group access token or a personal")
+	p.say("token for a bot account does. Give it the api and write_repository scopes and")
+	p.say("the Developer role (Maintainer if the base branch is protected from Developers).")
+	for h := range hosts {
+		p.say("  On %s: the project's Settings > Access tokens, or https://%s/-/user_settings/personal_access_tokens", h, h)
+	}
+	client := clientFor(func(repo string) (forge, github.TokenSource, error) {
+		ts := github.StaticToken(vals["GITLAB_TOKEN"])
+		return newForge(cfg, repo, ts), ts, nil
+	})
+	for {
+		vals["GITLAB_TOKEN"] = p.secret("GitLab token", vals["GITLAB_TOKEN"])
+		var failed []string
+		for _, repo := range repos {
+			p.say("Checking access to %s ...", repo)
+			if err := checkRepo(ctx, client, cfg, repo); err != nil {
+				failed = append(failed, repo)
+				p.say("That didn't work: %v", err)
+				if strings.Contains(err.Error(), "401") {
+					p.say("GitLab didn't accept the token. Check it was copied whole and hasn't expired.")
+				} else if strings.Contains(err.Error(), "404") {
+					p.say("The token can't see %s. A project token only reaches its own project; check the path too.", repo)
+				}
+				continue
+			}
+			p.say("OK: the factory can reach %s.", repo)
+		}
+		if len(failed) == 0 {
+			return client
+		}
+		if !p.yes("Try again?", true) {
+			p.say("Saving what you entered; run `factory setup` again to fix it.")
+			return nil
+		}
+	}
+}
 
 // setupGitHub connects to GitHub one of three ways and checks that it can
 // read every repo. It returns nil if you chose to skip the check.
@@ -353,7 +454,7 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 		}
 		return "1"
 	}
-	repos := cfg.RepoNames()
+	repos := githubRepos(cfg)
 	list := strings.Join(repos, ", ")
 	p.say("The factory acts on GitHub through a GitHub App limited to %s.", list)
 	p.say("  1. Create a new app for me (recommended; takes about a minute in the browser)")
@@ -406,8 +507,8 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			vals["GITHUB_TOKEN"] = p.secret("Token", vals["GITHUB_TOKEN"])
 			vals["FACTORY_GITHUB_APP_ID"], vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["FACTORY_GITHUB_APP_KEY"] = "", "", ""
 			tok := github.StaticToken(vals["GITHUB_TOKEN"])
-			client = func(repo string) (*github.Client, error) {
-				return &github.Client{Repo: repo, Tokens: tok, BaseURL: githubAPI}, nil
+			client = func(repo string) (forge, github.TokenSource, error) {
+				return &github.Client{Repo: repo, Tokens: tok, BaseURL: githubAPI}, tok, nil
 			}
 		default:
 			continue
@@ -446,7 +547,7 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 // checkRepo reads a repo's base branch, or failing that the repo itself:
 // the branch may just be named differently.
 func checkRepo(ctx context.Context, client clientFor, cfg *config.Config, repo string) error {
-	gh, err := client(repo)
+	gh, _, err := client(repo)
 	if err != nil {
 		return err
 	}
@@ -485,13 +586,13 @@ func installations(ctx context.Context, app *github.AppTokens, repos []string) (
 // appClients makes clients that act as the saved app. The saved
 // installation is the first repo's owner's; others are looked up.
 func appClients(vals map[string]string) clientFor {
-	return func(repo string) (*github.Client, error) {
+	return func(repo string) (forge, github.TokenSource, error) {
 		key, err := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: &github.AppTokens{
-			AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, Repo: repo, BaseURL: githubAPI}}, nil
+		ts := &github.AppTokens{AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, Repo: repo, BaseURL: githubAPI}
+		return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: ts}, ts, nil
 	}
 }
 
@@ -544,7 +645,7 @@ func setupImages(p *prompter, cfg *config.Config) bool {
 func checkBaseBranches(ctx context.Context, p *prompter, cfgPath string, cfg *config.Config, client clientFor) {
 	for _, name := range cfg.RepoNames() {
 		r, _ := cfg.RepoConf(name)
-		gh, err := client(r.Name)
+		gh, _, err := client(r.Name)
 		if err != nil {
 			continue
 		}
@@ -567,15 +668,22 @@ func checkBaseBranches(ctx context.Context, p *prompter, cfgPath string, cfg *co
 	}
 }
 
-// parseRepoList reads "owner/a, https://github.com/owner/b" into names.
+// parseRepoList reads "owner/a, https://github.com/owner/b,
+// https://gitlab.com/group/c" into names.
 func parseRepoList(in string) ([]string, error) {
 	var names []string
 	seen := map[string]bool{}
 	for _, f := range strings.FieldsFunc(in, func(r rune) bool { return r == ',' || r == ' ' }) {
-		f = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(f, "https://"), "github.com/"), ".git")
-		if o, n, ok := strings.Cut(f, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+		host, name := config.SplitRepo("", f)
+		path := strings.TrimPrefix(name, host+"/")
+		if host != "" {
+			if o, n, ok := strings.Cut(path, "/"); !ok || o == "" || n == "" || strings.Contains(path, "//") {
+				return nil, fmt.Errorf("write %q as %s/group/project", f, host)
+			}
+		} else if o, n, ok := strings.Cut(name, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
 			return nil, fmt.Errorf("write %q as owner/name, for example octocat/hello-world", f)
 		}
+		f = name
 		if !seen[strings.ToLower(f)] {
 			seen[strings.ToLower(f)] = true
 			names = append(names, f)

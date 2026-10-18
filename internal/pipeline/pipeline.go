@@ -59,11 +59,13 @@ func Labels(intake string) []Label {
 // again doesn't file them twice.
 const LabelReadiness = "factory:readiness"
 
-// GitHub is the subset of the GitHub client the pipeline uses.
+// GitHub is the subset of the GitHub client the pipeline uses. The GitLab
+// client has the same methods, with merge requests for pull requests.
 type GitHub interface {
 	ListIssues(ctx context.Context, label string) ([]github.Issue, error)
 	GetIssue(ctx context.Context, n int) (*github.Issue, error)
 	AddLabels(ctx context.Context, n int, labels ...string) error
+	LabelPR(ctx context.Context, n int, labels ...string) error
 	RemoveLabel(ctx context.Context, n int, label string) error
 	Comment(ctx context.Context, n int, body string) error
 	FindPR(ctx context.Context, branch string) (*github.PR, error)
@@ -160,7 +162,10 @@ func (p *Pipeline) repoConf(repo string) config.Repo {
 	if r, ok := p.Cfg.RepoConf(repo); ok {
 		return r
 	}
-	return config.Repo{Name: repo, BaseBranch: p.Cfg.BaseBranch, Gates: &p.Cfg.Gates, Image: p.Cfg.Runner.Image, Env: p.Cfg.Env}
+	// Resolved like a listed repo, so a GitLab one keeps its host and the
+	// diff guard's GitLab paths.
+	host, name := config.SplitRepo("", repo)
+	return p.Cfg.Resolve(config.Repo{Name: name, Host: host})
 }
 
 // ref names an issue for people: #12 with one repo, owner/name#12 with several.

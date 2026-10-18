@@ -90,10 +90,14 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("github: HTTP %d: %s", e.Status, e.Body) }
 
+// StatusCode is the response's HTTP status.
+func (e *HTTPError) StatusCode() int { return e.Status }
+
 // IsNotFound reports whether err is a 404.
 func IsNotFound(err error) bool {
-	var he *HTTPError
-	return errors.As(err, &he) && he.Status == 404
+	// Any client's error that carries its HTTP status (GitLab's too).
+	var sc interface{ StatusCode() int }
+	return errors.As(err, &sc) && sc.StatusCode() == 404
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
@@ -213,6 +217,11 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 // AddLabels adds labels to an issue or PR.
 func (c *Client) AddLabels(ctx context.Context, n int, labels ...string) error {
 	return c.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/labels", c.Repo, n), map[string]any{"labels": labels}, nil)
+}
+
+// LabelPR adds labels to a pull request.
+func (c *Client) LabelPR(ctx context.Context, n int, labels ...string) error {
+	return c.AddLabels(ctx, n, labels...)
 }
 
 // RemoveLabel removes a label; a label that is not there is not an error.

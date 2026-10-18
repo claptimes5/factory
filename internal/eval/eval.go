@@ -238,14 +238,20 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 
 // freeze makes a private bare remote whose base branch is the case's base.
 func freeze(ctx context.Context, o Options, c Case, repo string, onGitHub bool, remote, base string) error {
-	src, tokens := c.Repo, o.Tokens
+	src, tokens, user := c.Repo, o.Tokens, ""
 	if onGitHub {
-		src = "https://github.com/" + repo + ".git"
+		// On its host: GitHub, or GitLab for a host/group/project name.
+		host, name := config.SplitRepo("", repo)
+		r := config.Repo{Name: name, Host: host}
+		src = r.CloneURL()
+		if r.GitLab() {
+			user = "oauth2"
+		}
 		if o.TokensFor != nil {
 			tokens = o.TokensFor(repo)
 		}
 	}
-	g := &pipeline.Git{RemoteURL: src, Tokens: tokens, AskPassDir: filepath.Dir(remote)}
+	g := &pipeline.Git{RemoteURL: src, Tokens: tokens, AskPassDir: filepath.Dir(remote), User: user}
 	if err := g.CloneBare(ctx, remote); err != nil {
 		return err
 	}
