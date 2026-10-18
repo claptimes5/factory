@@ -161,6 +161,11 @@ export function Layout() {
           )}
         </div>
       </header>
+      {o?.disk_low && (
+        <div role="alert" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm text-warning md:px-6">
+          <div className="mx-auto max-w-[1680px]">{o.disk_low}</div>
+        </div>
+      )}
       <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 pb-28 md:px-6 md:pb-8">
         <Outlet />
       </main>

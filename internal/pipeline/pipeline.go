@@ -127,6 +127,11 @@ type Pipeline struct {
 	act    sync.Mutex
 	orchMu sync.Mutex // guards coalescing of orchestrator requests
 
+	diskMu   sync.Mutex
+	diskAt   time.Time // when the free space was last measured
+	diskMsg  string    // why there isn't room to start a job, or ""
+	diskHalt bool      // the low disk was announced
+
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
@@ -271,6 +276,9 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	}
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
+		if errors.Is(err, ErrDiskLow) && async {
+			return nil // said once already; the next tick looks again
+		}
 		if err == nil && j == nil && !claimed && p.Cfg.Orchestrator.On {
 			p.drainedTrigger(ctx)
 			j, err = p.claimNext(ctx) // it may have queued an orchestrator run
@@ -317,6 +325,20 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 		return nil, err
 	} else if n > 0 {
 		except = append(except, "orchestrate")
+	}
+	if msg := p.diskLow(ctx); msg != "" {
+		if !p.diskHalt {
+			p.diskHalt = true
+			p.notify(ctx, msg)
+		}
+		// The orchestrator writes next to nothing; builds wait.
+		if j, err := p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...); j != nil || err != nil {
+			return j, err
+		}
+		return nil, ErrDiskLow
+	} else if p.diskHalt {
+		p.diskHalt = false
+		p.notify(ctx, "There's room on disk again; jobs are starting.")
 	}
 	spent, err := p.buildSpend(ctx)
 	if err != nil {

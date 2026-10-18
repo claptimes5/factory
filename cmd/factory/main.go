@@ -323,6 +323,7 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 	srv := &web.Server{Store: st, Actions: p, Repos: cfg.RepoNames(), DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
+	srv.DiskLow = p.DiskLow
 	// A repo since dropped from the config still links to its host.
 	links := func(repo string) config.Repo {
 		h, n := config.SplitRepo("", repo)

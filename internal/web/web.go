@@ -51,6 +51,8 @@ type Server struct {
 	IssueURL func(repo string, n int) string
 	PRURL    func(repo string, n int) string
 	DailyCap float64
+	// DiskLow says why jobs aren't starting for lack of disk (may be nil).
+	DiskLow  func() string
 	AwaitCap int
 	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
 	// CompareDir holds `factory compare` reports, one directory per run.
@@ -669,4 +671,11 @@ func (s *Server) prURL(repo string, n int) string {
 		return s.PRURL(repo, n)
 	}
 	return fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
+}
+
+func (s *Server) diskLow() string {
+	if s.DiskLow == nil {
+		return ""
+	}
+	return s.DiskLow()
 }

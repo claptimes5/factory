@@ -657,6 +657,33 @@ no services, the readiness check says so. It suggests the services to add,
 read from the repo's `docker-compose.yml` or `config/database.yml`,
 instead of filing an issue for a builder, who can't edit factory.yaml.
 
+### Disk space
+
+Each job checks out the repo, installs its dependencies and runs in a
+container. A full disk fails jobs halfway, usually during install, where it
+looks like the builder's fault. So while jobs are waiting, the daemon checks
+free space at most once a minute and starts no build while any of these has
+less than `budgets.min_free_disk_gb` (default 10; a negative value turns the
+check off):
+
+- The data directory.
+- Where Docker stores containers. For an engine on this machine, that's
+  its data root. Docker Desktop keeps its disk in its own VM, and a remote
+  engine (`DOCKER_HOST` or a docker context) is on another machine, so for
+  those the daemon asks a short-lived container, using a job image already
+  on the machine; it never pulls one.
+- Under WSL, the Windows drive holding WSL's and Docker Desktop's virtual
+  disks (`runner.wsl_drive`, default `/mnt/c`). Inside WSL, `df` shows the
+  virtual disk's full size, not what's left on the drive under it.
+
+You're told once when builds stop, and again when they start. To keep a
+disk hovering at the limit from stopping and starting them over and over,
+they start again only at the limit plus 10% (at least 2 GB). If Docker
+can't be measured while builds are stopped, they stay stopped. The control
+room shows a banner meanwhile. `factory run-once`, `eval` and `compare`
+fail with "low on disk" rather than report jobs that never ran. The
+orchestrator still runs, since it writes next to nothing.
+
 ### Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the
