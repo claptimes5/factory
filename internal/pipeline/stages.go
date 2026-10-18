@@ -229,6 +229,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if data.Members == nil {
 		data.Install, data.Checks = p.repoConf(it.Repo).Gates.Install, p.requiredChecks(it.Repo)
 	}
+	for _, pt := range parts {
+		data.Coverage = data.Coverage || p.repoConf(pt.repo).Gates.Coverage != ""
+	}
 	prompt, err := p.render("implement", data)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
@@ -385,6 +388,9 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.R
 	})...)
 	if g.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, pt, g.ProvesFix))
+	}
+	if g.Coverage != "" && gates.Passed(results) {
+		results = append(results, p.coverage(ctx, jobID, pt, gateDir, snap))
 	}
 	// The checks of the features the change touches, then the scenarios:
 	// slow end-to-end checks, run only on code that passes everything else.

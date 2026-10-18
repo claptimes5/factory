@@ -929,6 +929,7 @@ type PromptData struct {
 	OutDir          string
 	Install         string   // the repo's install command, if any
 	Checks          []string // the repo's required gate commands
+	Coverage        bool     // a coverage floor holds the change
 	Findings        string
 	PreviousFailure string
 	Gates           string

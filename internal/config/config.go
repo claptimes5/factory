@@ -37,6 +37,13 @@ type Gates struct {
 	// ProvesFix runs the changed tests against the base code; it must
 	// fail. {pkgs} is replaced by the packages holding changed tests.
 	ProvesFix string `yaml:"proves_fix,omitempty"`
+	// Coverage runs, with coverage, the tests of the packages whose code
+	// the change touches, on the base and on the change; a package may
+	// not end up less covered. {pkgs} is replaced by those packages. It
+	// reads Go's "coverage: N% of statements" lines, or "name N%".
+	Coverage string `yaml:"coverage,omitempty"`
+	// CoverageSlack is how many points a package may drop (default 0).
+	CoverageSlack float64 `yaml:"coverage_slack,omitempty"`
 	// ScenariosDir holds the hidden end-to-end scenarios. It must be
 	// outside the target repository so builders never see it.
 	ScenariosDir string `yaml:"scenarios_dir,omitempty"`
@@ -69,8 +76,8 @@ type Repo struct {
 	Services map[string]Service `yaml:"services,omitempty"`
 	// Gates overrides the top-level gates field by field: what it leaves
 	// out (the diff guard's protected paths, say) is inherited, and its
-	// commands replace the top level's. install, proves_fix or scenarios_dir "none"
-	// turns one off.
+	// commands replace the top level's. install, proves_fix, coverage or
+	// scenarios_dir "none" turns one off.
 	Gates *Gates `yaml:"gates,omitempty"`
 }
 
@@ -78,13 +85,15 @@ type Repo struct {
 // empty list (no checks) and a missing one (inherit) differ.
 func (g Gates) MarshalYAML() (any, error) {
 	out := struct {
-		Install      string            `yaml:"install,omitempty"`
-		Required     *[]string         `yaml:"required,omitempty"`
-		Commands     map[string]string `yaml:"commands,omitempty"`
-		ProvesFix    string            `yaml:"proves_fix,omitempty"`
-		ScenariosDir string            `yaml:"scenarios_dir,omitempty"`
-		DiffGuard    any               `yaml:"diff_guard,omitempty"`
-	}{Install: g.Install, Commands: g.Commands, ProvesFix: g.ProvesFix, ScenariosDir: g.ScenariosDir}
+		Install       string            `yaml:"install,omitempty"`
+		Required      *[]string         `yaml:"required,omitempty"`
+		Commands      map[string]string `yaml:"commands,omitempty"`
+		ProvesFix     string            `yaml:"proves_fix,omitempty"`
+		Coverage      string            `yaml:"coverage,omitempty"`
+		CoverageSlack float64           `yaml:"coverage_slack,omitempty"`
+		ScenariosDir  string            `yaml:"scenarios_dir,omitempty"`
+		DiffGuard     any               `yaml:"diff_guard,omitempty"`
+	}{Install: g.Install, Commands: g.Commands, ProvesFix: g.ProvesFix, Coverage: g.Coverage, CoverageSlack: g.CoverageSlack, ScenariosDir: g.ScenariosDir}
 	if g.Required != nil {
 		out.Required = &g.Required
 	}
@@ -762,13 +771,19 @@ func mergeGates(top Gates, own *Gates) *Gates {
 	if g.ProvesFix == "" {
 		g.ProvesFix = top.ProvesFix
 	}
+	if g.Coverage == "" {
+		g.Coverage = top.Coverage
+	}
+	if g.CoverageSlack == 0 {
+		g.CoverageSlack = top.CoverageSlack
+	}
 	if g.ScenariosDir == "" {
 		g.ScenariosDir = top.ScenariosDir
 	}
 	if g.Install == "" {
 		g.Install = top.Install
 	}
-	for _, s := range []*string{&g.ProvesFix, &g.ScenariosDir, &g.Install} {
+	for _, s := range []*string{&g.ProvesFix, &g.Coverage, &g.ScenariosDir, &g.Install} {
 		if *s == "none" {
 			*s = ""
 		}

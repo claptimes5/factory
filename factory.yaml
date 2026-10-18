@@ -83,6 +83,9 @@ gates:
   # Revert the code, keep the changed tests: they must fail. {pkgs} becomes
   # the packages holding changed tests. Empty disables the check.
   proves_fix: go test -count=1 {pkgs}
+  # Coverage floor: the packages whose code a change touches can't end up
+  # less covered than on the base. {pkgs} becomes those packages.
+  coverage: go test -count=1 -cover {pkgs}
   # Hidden end-to-end scenarios, kept outside the repo so builders never see them.
   # scenarios_dir: /etc/factory/scenarios
   diff_guard:
