@@ -22,18 +22,19 @@ runner:
 routing:
   orchestrate:       {harness: claude, model: opus}
   triage:            {harness: claude, model: haiku}
-  implement.S:       {harness: claude, model: sonnet}
+  implement.S:       {harness: claude, model: haiku}   # escalates to sonnet on a miss
   implement.M:       {harness: claude, model: sonnet}
   implement.L:       {harness: claude, model: opus}
-  review:            {harness: codex,  model: gpt-5-codex}
-  review.high_risk:  {harness: codex,  model: gpt-5-codex, effort: high}
-  # review.medium_risk: {harness: codex, model: gpt-5-codex, effort: medium}
+  review:            {harness: codex,  model: gpt-6.1-sol}
+  review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}
+  # review.medium_risk: {harness: codex, model: gpt-6.1-sol, effort: medium}
+  # Cheaper low-risk review: review: {harness: codex, model: gpt-6-luna}
   # Any entry may name a skill set: a folder under skills/ mounted read-only
   # as the worker's skills directory, e.g.
   #   implement.M: {harness: claude, model: sonnet, skills: baseline}
 
 escalation:
-  implement: [sonnet, opus]
+  implement: [haiku, sonnet, opus]
   max_attempts_per_tier: 2
   max_review_rounds: 2
 
@@ -62,8 +63,11 @@ budgets:
   awaiting_human_max: 5
 
 # Codex does not report dollar cost, so the daemon prices its token usage.
+# Prices are USD per million tokens (October 2026); cached input is what the
+# prompt cache serves, which agentic runs mostly read.
 pricing:
-  gpt-5-codex: {input_per_mtok: 1.25, output_per_mtok: 10}
+  gpt-6.1-sol: {input_per_mtok: 2, cached_input_per_mtok: 0.10, output_per_mtok: 10}
+  gpt-6-luna:  {input_per_mtok: 0.10, cached_input_per_mtok: 0.01, output_per_mtok: 0.50}
 
 # Deterministic gates, run by the daemon in the job container after the
 # builder stops. A required gate with no command is MISCONFIGURED and fails.

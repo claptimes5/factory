@@ -397,6 +397,13 @@ the diff guard. The daemon refuses a config where a reviewer could run the
 same harness and model as the builder it reviews. Stage prompts are in
 [`prompts/`](prompts).
 
+The defaults lean on the cheap models where a miss is cheap to retry. Small
+builds start on Haiku 5.5 and climb to Sonnet, then Opus, after two failed
+attempts at a tier. Larger builds start on Sonnet or Opus, and reviews run
+on GPT-6.1 Sol. Claude Code reports its own cost. Codex reports only tokens,
+which the daemon prices from `pricing`, cached input included. Keep those
+prices current when OpenAI changes them.
+
 ### Several repositories
 
 One factory can work on several repos. Each is worked on separately: its
@@ -712,13 +719,13 @@ so `claude-sonnet-4-5` counts as `sonnet`. Change these entries in
 
 ```yaml
 routing:
-  implement.S:       {harness: claude, model: sonnet}
+  implement.S:       {harness: claude, model: haiku}
   implement.M:       {harness: claude, model: sonnet}
   implement.L:       {harness: claude, model: sonnet}
   review:            {harness: claude, model: opus}
-  # drop review.high_risk, or point it at opus too
+  # drop review.high_risk, or point it at opus (or fable) too
 escalation:
-  implement: [sonnet]
+  implement: [haiku, sonnet]
 ```
 
 This is weaker than cross-vendor review: two models from one family tend to

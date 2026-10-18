@@ -777,7 +777,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		run := p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, x)
 		run.cost += res.CostUSD
 		if !res.CostKnown {
-			run.cost += p.Cfg.CostOf(j.Model, res.TokensIn, res.TokensOut)
+			run.cost += p.Cfg.CostOf(j.Model, res.TokensIn, res.TokensCached, res.TokensOut)
 		}
 		return run
 	}
@@ -794,7 +794,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		run.final = res.Final
 		run.cost = res.CostUSD
 		if !res.CostKnown {
-			run.cost = p.Cfg.CostOf(j.Model, res.TokensIn, res.TokensOut)
+			run.cost = p.Cfg.CostOf(j.Model, res.TokensIn, res.TokensCached, res.TokensOut)
 		}
 	}
 	return run

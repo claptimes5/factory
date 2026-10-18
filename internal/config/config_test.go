@@ -68,10 +68,10 @@ func TestSeveralRepos(t *testing.T) {
 func TestReviewerMustDifferFromBuilder(t *testing.T) {
 	b, _ := os.ReadFile("../../factory.yaml")
 	claudeReview := func(model, tiers string) string {
-		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-5-codex}", "review: {harness: claude, model: "+model+"}", 1)
-		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-5-codex, effort: high}", "", 1)
+		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-6.1-sol}", "review: {harness: claude, model: "+model+"}", 1)
+		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}", "", 1)
 		y = strings.Replace(y, "implement.L:       {harness: claude, model: opus}", "implement.L:       {harness: claude, model: sonnet}", 1)
-		return strings.Replace(y, "implement: [sonnet, opus]", "implement: "+tiers, 1)
+		return strings.Replace(y, "implement: [haiku, sonnet, opus]", "implement: "+tiers, 1)
 	}
 	cases := []struct {
 		name, model, tiers string
@@ -102,18 +102,20 @@ func TestRejectsUnknownFields(t *testing.T) {
 }
 
 func TestEscalation(t *testing.T) {
-	c := load(t) // implement: [sonnet, opus], 2 per tier
+	c := load(t) // implement: [haiku, sonnet, opus], 2 per tier
 	cases := []struct {
 		size    string
 		attempt int
 		model   string
 		ok      bool
 	}{
-		{"S", 1, "sonnet", true},
-		{"S", 2, "sonnet", true},
-		{"S", 3, "opus", true},
-		{"S", 4, "opus", true},
-		{"S", 5, "", false},
+		{"S", 1, "haiku", true},
+		{"S", 2, "haiku", true},
+		{"S", 3, "sonnet", true},
+		{"S", 4, "sonnet", true},
+		{"S", 5, "opus", true},
+		{"S", 6, "opus", true},
+		{"S", 7, "", false},
 		{"L", 1, "opus", true},
 		{"L", 2, "opus", true},
 		{"L", 3, "", false},
@@ -293,5 +295,19 @@ func TestWorkspaces(t *testing.T) {
 		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", ws, err, want)
 		}
+	}
+}
+
+func TestCostOfPricesCachedInput(t *testing.T) {
+	c := load(t)
+	// gpt-6.1-sol: $2 input, $0.10 cached, $10 output per million.
+	got := c.CostOf("gpt-6.1-sol", 1_000_000, 800_000, 100_000)
+	if want := 0.4 + 0.08 + 1.0; got < want-1e-9 || got > want+1e-9 {
+		t.Errorf("CostOf = %v, want %v", got, want)
+	}
+	// No cached price: cached input costs as much as other input.
+	c.Pricing["plain"] = Price{InputPerMTok: 1, OutputPerMTok: 2}
+	if got := c.CostOf("plain", 1_000_000, 500_000, 0); got != 1 {
+		t.Errorf("CostOf without a cached price = %v, want 1", got)
 	}
 }
