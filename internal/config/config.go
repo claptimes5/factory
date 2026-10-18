@@ -1074,20 +1074,29 @@ func (c *Config) resolve(r Repo) Repo {
 		r.AutoMerge = c.AutoMerge
 	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
+	// REVIEW.md tells the reviewers what to look for and what to skip, so
+	// the builder they review never may change it, whatever the config.
+	always := AlwaysProtected
 	if r.GitLab() {
 		// A pushed branch runs its own .gitlab-ci.yml with the project's
 		// runners and CI variables, and a GitLab token, unlike GitHub's,
 		// can push pipeline changes. So builders never may.
-		pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
-		for _, p := range []string{".gitlab-ci.yml", ".gitlab/"} {
-			if !slices.Contains(pp, p) {
-				pp = append(pp, p)
-			}
-		}
-		r.Gates.DiffGuard.ProtectedPaths = pp
+		always = append(slices.Clone(always), ".gitlab-ci.yml", ".gitlab/")
 	}
+	pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
+	for _, p := range always {
+		if !slices.Contains(pp, p) {
+			pp = append(pp, p)
+		}
+	}
+	r.Gates.DiffGuard.ProtectedPaths = pp
 	return r
 }
+
+// AlwaysProtected are protected paths every repo has, whatever its
+// gates.diff_guard.protected_paths say: the repo's review guidance. A bare
+// name protects that file name in any folder.
+var AlwaysProtected = []string{"REVIEW.md", ".github/REVIEW.md"}
 
 // mergeGates lays a repo's gates over the top-level ones.
 func mergeGates(top Gates, own *Gates) *Gates {

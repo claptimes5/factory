@@ -79,6 +79,9 @@ type Finding struct {
 	Blocks *bool `json:"blocks,omitempty"`
 	// Check is the verifier's ruling on a blocking finding.
 	Check *Check `json:"check,omitempty"`
+	// Skipped says the repo's REVIEW.md skips the finding's path, so it
+	// was kept as a note though it would have blocked.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // Check is what the verifier made of a blocking finding.
@@ -116,6 +119,17 @@ type Review struct {
 	// verdict blocks whatever findings it holds, from a paired reviewer or
 	// carried from an earlier round.
 	BlockedWithoutFinding bool `json:"blocked_without_finding,omitempty"`
+	// Guide is what the repo's REVIEW.md changed in this verdict.
+	Guide *GuideApplied `json:"guide,omitempty"`
+}
+
+// GuideApplied is what the repo's REVIEW.md did to a review's findings.
+type GuideApplied struct {
+	File string `json:"file"` // REVIEW.md or .github/REVIEW.md
+	// DroppedMinor counts the minor notes left out past its max_minor.
+	DroppedMinor int `json:"dropped_minor,omitempty"`
+	// Notes say what of the file was ignored (an unknown key, say).
+	Notes []string `json:"notes,omitempty"`
 }
 
 // Blocking lists, by index, the findings that can block. Each finding
@@ -299,12 +313,12 @@ func ParseReview(raw []byte) (*Review, error) {
 		return nil, err
 	}
 	var errs []error
-	if r.Verified || len(r.Reviewers) > 0 || len(r.Security) > 0 || r.BlockedWithoutFinding {
-		errs = append(errs, errors.New("verified, reviewers, security and blocked_without_finding are the factory's to set"))
+	if r.Verified || len(r.Reviewers) > 0 || len(r.Security) > 0 || r.BlockedWithoutFinding || r.Guide != nil {
+		errs = append(errs, errors.New("verified, reviewers, security, blocked_without_finding and guide are the factory's to set"))
 	}
 	for n, f := range r.Findings {
-		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil || f.Blocks != nil {
-			errs = append(errs, fmt.Errorf("findings[%d]: id, by, carried, blocks and check are the factory's to set", n))
+		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil || f.Blocks != nil || f.Skipped {
+			errs = append(errs, fmt.Errorf("findings[%d]: id, by, carried, blocks, check and skipped are the factory's to set", n))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

@@ -791,6 +791,10 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, by, fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
 			p.dropPreview(ctx, it, "once it merged")
+			if by == "human" {
+				// Findings it merged over teach the reviewers what not to flag.
+				p.recordOverruled(ctx, it, pr, want, changed)
+			}
 			if changed {
 				// What the human changed is what the factory missed: worth
 				// a replay case, so the next config is measured against it.
@@ -1279,6 +1283,8 @@ type PromptData struct {
 	Tune            TunePrompt     // the tuning loop's metrics and settings
 	Preview         bool           // the builder may name the pages it changed
 	Screenshots     []PromptShot   // the change's screenshots, for the reviewer
+	Guide           string         // the repo's REVIEW.md from the base branch, fenced, for reviewers
+	GuideFile       string         // where Guide is from, such as `REVIEW.md`
 }
 
 func (p *Pipeline) render(stage string, d any) (string, error) {

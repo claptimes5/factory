@@ -707,6 +707,9 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	data := PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff),
 		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(revRound), Round: rr.n}
+	// The repo's REVIEW.md, from the base branch: the change can't edit it.
+	gs := p.reviewGuides(ctx, parts)
+	data.Guide, data.GuideFile = gs.prompt(), gs.file()
 	if !ws {
 		p.incremental(ctx, it, own, rr, diff, &data)
 	}
@@ -811,6 +814,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		v, ok = withSecurity(v, sr.v, secRound.open, secWhy)
 		checkable = checkable && ok
 	}
+	applyGuides(gs, v, riskOrLow(it.Risk))
 	changed, err := p.settle(ctx, j, it, v, rr)
 	if err != nil {
 		return fail(run, state.Failed, err.Error())

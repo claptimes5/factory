@@ -10,12 +10,14 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/readiness"
+	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/verdict"
@@ -82,12 +84,100 @@ func (p *Pipeline) recordHumanEdit(ctx context.Context, it *store.WorkItem, pr *
 		PRNumber: pr.Number, FromSHA: from, HeadSHA: pr.Head.SHA}), "AddSignal")
 }
 
+// recordOverruled notes, as a human merges an item's PR, each blocking
+// finding they overruled: one the verifier refuted, or one the builder
+// called wrong and a later review withdrew. from is the factory's last
+// push, and changed says the human pushed after it: the learn job then
+// checks they didn't fix the finding's file after all. Like
+// recordHumanEdit, it runs under the intake lock and only records.
+func (p *Pipeline) recordOverruled(ctx context.Context, it *store.WorkItem, pr *github.PR, from string, changed bool) {
+	if !p.Cfg.Learning.On() || (changed && from == "") {
+		return
+	}
+	fs, err := p.Store.ItemFindings(ctx, it.ID, 0)
+	if err != nil {
+		p.warn(err, "ItemFindings")
+		return
+	}
+	for _, f := range fs {
+		why := overruled(f)
+		if why == "" {
+			continue
+		}
+		sig := store.Signal{Repo: it.Repo, Kind: store.SignalOverruled, ItemID: it.ID, IssueNumber: it.IssueNumber, JobID: f.JobID, PRNumber: pr.Number,
+			File: truncate(f.File, 500), Claim: truncate(f.Claim, 500), Severity: f.Severity, Evidence: truncate(why, 500)}
+		if changed {
+			sig.FromSHA, sig.HeadSHA = from, pr.Head.SHA
+		}
+		p.warn(p.Store.AddSignal(ctx, sig), "AddSignal")
+	}
+}
+
+// riskyLine are words a learned REVIEW.md line may not use: one that
+// tells reviewers to look away from security or correctness, or to stop
+// flagging a whole class of thing, does more harm than a false alarm.
+var (
+	riskyLine   = regexp.MustCompile(`(?i)secur|inject|validat|sanitiz|escap|xss|csrf|ssrf|privilege|permission|authori|authent|\bauth|\bacl\b|rbac`)
+	blanketLine = regexp.MustCompile(`(?i)\b(any|all|every|anything|everything|never flag|always approve|approve|skip|ignore)\b`)
+)
+
+// riskyReviewLine says why a learned line can't go in REVIEW.md, or "".
+func riskyReviewLine(l string) string {
+	switch {
+	case reviewmd.Sensitive(l) || riskyLine.MatchString(l):
+		return "it's about security-sensitive code"
+	case blanketLine.MatchString(l):
+		return "it's a blanket rule, not one false alarm"
+	}
+	return ""
+}
+
+// overruled says how a finding that blocked was overruled, or "" if it
+// wasn't: the verifier refuted it, or the builder answered wrong and a
+// review withdrew it, when the verifier hadn't confirmed it.
+func overruled(f store.ReviewFinding) string {
+	switch {
+	case !f.Blocking:
+	case f.Check == verdict.Refuted:
+		return "the verifier refuted it: " + oneLine(f.CheckReason)
+	case f.Answer == "wrong" && f.Ruling == "withdrawn" && f.Check != verdict.Confirmed && !f.Confirmed:
+		return "the builder said it was wrong (" + oneLine(f.AnswerWhy) + ") and the review withdrew it: " + oneLine(f.RulingReason)
+	}
+	return ""
+}
+
 // humanDiff is what the human changed on a merged PR after the factory's
 // last push: the patches of their own commits, in the checkout ws. Not a
 // diff of the two heads, which would hold whatever an "Update branch"
 // merge or a rebase brought in from base, and not the factory's own
 // commits rebased.
 func (p *Pipeline) humanDiff(ctx context.Context, repo string, ws *Workspace, s store.Signal) (string, error) {
+	out, err := p.humanLog(ctx, repo, ws, s, "-p")
+	if err != nil {
+		return "", err
+	}
+	return capDiff(out, maxEditDiff), nil
+}
+
+// humanFiles are the files the human's own commits changed (see
+// humanDiff), whole, where humanDiff is capped.
+func (p *Pipeline) humanFiles(ctx context.Context, repo string, ws *Workspace, s store.Signal) (map[string]bool, error) {
+	out, err := p.humanLog(ctx, repo, ws, s, "--name-only")
+	if err != nil {
+		return nil, err
+	}
+	files := map[string]bool{}
+	for _, f := range strings.Split(out, "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			files[f] = true
+		}
+	}
+	return files, nil
+}
+
+// humanLog runs git log over the human's own commits on a merged PR,
+// with what (-p, --name-only) it should show of each.
+func (p *Pipeline) humanLog(ctx context.Context, repo string, ws *Workspace, s store.Signal, what string) (string, error) {
 	g := p.git(repo)
 	// The branch may be gone after the merge; the PR's own ref isn't.
 	ref := fmt.Sprintf("refs/pull/%d/head", s.PRNumber)
@@ -114,7 +204,7 @@ func (p *Pipeline) humanDiff(ctx context.Context, repo string, ws *Workspace, s 
 	}
 	// Commits on head and not on from, less what base had before the
 	// merge, less those with a twin on from (the factory's, rebased).
-	args := []string{"log", "-p", "--reverse", "--no-merges", "--right-only", "--cherry-pick", "--format=",
+	args := []string{"log", what, "--reverse", "--no-merges", "--right-only", "--cherry-pick", "--format=",
 		"--no-ext-diff", "--no-textconv", s.FromSHA + "..." + s.HeadSHA}
 	if before != "" {
 		args = append(args, "^"+before)
@@ -123,7 +213,7 @@ func (p *Pipeline) humanDiff(ctx context.Context, repo string, ws *Workspace, s 
 	if _, err := g.run(ctx, ws.Repo, &b, append(args, "--")...); err != nil {
 		return "", err
 	}
-	return capDiff(b.String(), maxEditDiff), nil
+	return b.String(), nil
 }
 
 // baseBefore is base as it was before head merged into it: the first
@@ -281,13 +371,15 @@ func (p *Pipeline) learnTriggers(ctx context.Context) {
 // for one like them. trimmed are the older edits and findings of a picked
 // group past the caps: the job sets them aside with the rest.
 func learnable(sigs []store.Signal, min int) (use, trimmed []store.Signal) {
-	var edits, findings []store.Signal
+	var edits, findings, over []store.Signal
 	for _, s := range sigs {
 		switch s.Kind {
 		case store.SignalHumanEdit:
 			edits = append(edits, s)
 		case store.SignalFinding:
 			findings = append(findings, s)
+		case store.SignalOverruled:
+			over = append(over, s)
 		}
 	}
 	if len(edits) > maxEdits {
@@ -295,26 +387,42 @@ func learnable(sigs []store.Signal, min int) (use, trimmed []store.Signal) {
 		edits = edits[len(edits)-maxEdits:] // the newest
 	}
 	use = edits
-	n := 0
-	for _, g := range groupFindings(findings) {
-		items := map[int64]bool{}
-		for _, f := range g {
-			items[f.ItemID] = true
+	// Findings and overruled findings are grouped apart: one teaches the
+	// builders, the other the reviewers.
+	for _, kind := range [][]store.Signal{findings, over} {
+		n := 0
+		for _, g := range repeats(kind, min) {
+			if n == maxGroups {
+				break
+			}
+			n++
+			if len(g) > maxGroupSize {
+				trimmed = append(trimmed, g[:len(g)-maxGroupSize]...)
+				g = g[len(g)-maxGroupSize:]
+			}
+			use = append(use, g...)
 		}
-		if len(g) < min || len(items) < 2 || n == maxGroups {
-			continue
-		}
-		n++
-		if len(g) > maxGroupSize {
-			trimmed = append(trimmed, g[:len(g)-maxGroupSize]...)
-			g = g[len(g)-maxGroupSize:]
-		}
-		use = append(use, g...)
 	}
 	if len(use) == 0 {
 		return nil, nil
 	}
 	return use, trimmed
+}
+
+// repeats are the groups of alike findings (see groupFindings) with at
+// least min of them, from two or more items: a repeat, not a one-off.
+func repeats(fs []store.Signal, min int) [][]store.Signal {
+	var out [][]store.Signal
+	for _, g := range groupFindings(fs) {
+		items := map[int64]bool{}
+		for _, f := range g {
+			items[f.ItemID] = true
+		}
+		if len(g) >= min && len(items) >= 2 {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // groupFindings puts findings that may be the same mistake together: in
@@ -432,7 +540,14 @@ type learnPrompt struct {
 	Declined []string    // lines a human turned down: never again
 	Edits    []learnEdit
 	Groups   []learnGroup
-	Fence    string // a code fence none of the above can close
+	// Overruled are groups of findings a human overruled, which teach
+	// lines for ReviewFile, the REVIEW.md the repo's reviewers read.
+	Overruled      []learnGroup
+	ReviewFile     string
+	ReviewCurrent  string   // ReviewFile on the base branch, or ""
+	ReviewProposed []string // REVIEW.md lines in the open lessons PR
+	ReviewDeclined []string // REVIEW.md lines a human turned down
+	Fence          string   // a code fence none of the above can close
 }
 
 type learnFile struct{ Name, Text string }
@@ -483,11 +598,16 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	// The diffs of human edits are read here, not at merge time. One that
-	// can't be read now stays unused for the next run.
+	// can't be read now stays unused for the next run. So are the files a
+	// human changed before merging past a finding they overruled: one
+	// whose file they changed after all may have been right, and is set
+	// aside.
 	var use []int64
 	var kept []store.Signal
+	touched := map[int]map[string]bool{} // by PR
 	for _, s := range sigs {
-		if s.Kind == store.SignalHumanEdit && s.Diff == "" && s.FromSHA != "" {
+		switch {
+		case s.Kind == store.SignalHumanEdit && s.Diff == "" && s.FromSHA != "":
 			diff, err := p.humanDiff(ctx, in.Repo, ws, s)
 			if err != nil {
 				p.log().Warn("lessons: human edit", "pr", s.PRNumber, "err", err)
@@ -499,11 +619,26 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 			}
 			p.warn(p.Store.SetSignalDiff(ctx, s.ID, diff), "SetSignalDiff")
 			s.Diff = diff
-		} else {
+		case s.Kind == store.SignalOverruled && s.FromSHA != "":
+			files, ok := touched[s.PRNumber]
+			if !ok {
+				var err error
+				if files, err = p.humanFiles(ctx, in.Repo, ws, s); err != nil {
+					p.log().Warn("lessons: overruled finding", "pr", s.PRNumber, "err", err)
+					continue
+				}
+				touched[s.PRNumber] = files
+			}
+			use = append(use, s.ID)
+			if files[s.File] {
+				continue // the human changed its file after all
+			}
+		default:
 			use = append(use, s.ID)
 		}
 		kept = append(kept, s)
 	}
+	kept, use = p.overruledRepeats(ctx, j, in.Repo, plan, kept, use)
 	if len(kept) == 0 {
 		p.finish(ctx, j, agentRun{}, state.Succeeded, `{"lessons":[],"skip_reason":"nothing left to learn from"}`, "")
 		p.warn(p.Store.UseSignals(ctx, append(use, in.Trimmed...), j.ID), "UseSignals")
@@ -527,35 +662,54 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 			data.Proposed = newLines(all, branch)
 		}
 	}
-	data.Declined = p.settleLessons(ctx, in.Repo, ws, plan, all)
-	var findings []store.Signal
+	data.Declined, data.ReviewDeclined = p.settleLessons(ctx, in.Repo, ws, plan, all)
+	var findings, over []store.Signal
 	for _, s := range kept {
 		switch s.Kind {
 		case store.SignalHumanEdit:
 			data.Edits = append(data.Edits, learnEdit{Ref: p.ref(in.Repo, s.IssueNumber), PR: s.PRNumber, Diff: s.Diff})
 		case store.SignalFinding:
 			findings = append(findings, s)
+		case store.SignalOverruled:
+			over = append(over, s)
 		}
 	}
-	for _, grp := range groupFindings(findings) {
-		lg := learnGroup{N: len(data.Groups) + 1}
-		for _, f := range grp {
-			lg.Findings = append(lg.Findings, learnFinding{Ref: p.ref(in.Repo, f.IssueNumber), Severity: f.Severity, File: oneLine(f.File), Claim: oneLine(f.Claim), Evidence: oneLine(f.Evidence)})
+	groups := func(fs []store.Signal) []learnGroup {
+		var out []learnGroup
+		for _, grp := range groupFindings(fs) {
+			lg := learnGroup{N: len(out) + 1}
+			for _, f := range grp {
+				lg.Findings = append(lg.Findings, learnFinding{Ref: p.ref(in.Repo, f.IssueNumber), Severity: f.Severity, File: oneLine(f.File), Claim: oneLine(f.Claim), Evidence: oneLine(f.Evidence)})
+			}
+			out = append(out, lg)
 		}
-		data.Groups = append(data.Groups, lg)
+		return out
+	}
+	data.Groups, data.Overruled = groups(findings), groups(over)
+	if len(over) > 0 {
+		cur, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, plan.Review)
+		if err != nil {
+			return fail(agentRun{}, state.Failed, err.Error())
+		}
+		data.ReviewFile, data.ReviewCurrent = plan.Review, truncate(cur, 30_000)
+		if plan.Open != nil {
+			data.ReviewProposed = newLines(reviewText(ctx, g, ws.Repo, ws.BaseSHA), reviewText(ctx, g, ws.Repo, "refs/remotes/origin/"+plan.Branch))
+		}
 	}
 	var text strings.Builder
-	text.WriteString(data.Current)
+	text.WriteString(data.Current + data.ReviewCurrent)
 	for _, o := range data.Others {
 		text.WriteString(o.Text)
 	}
-	for _, l := range append(append([]string{}, data.Proposed...), data.Declined...) {
-		text.WriteString(l)
+	for _, ls := range [][]string{data.Proposed, data.Declined, data.ReviewProposed, data.ReviewDeclined} {
+		for _, l := range ls {
+			text.WriteString(l)
+		}
 	}
 	for _, e := range data.Edits {
 		text.WriteString(e.Diff)
 	}
-	for _, grp := range data.Groups {
+	for _, grp := range append(append([]learnGroup{}, data.Groups...), data.Overruled...) {
 		for _, f := range grp.Findings {
 			text.WriteString(f.File + f.Claim + f.Evidence)
 		}
@@ -577,7 +731,23 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 	if err := verdict.Parse([]byte(run.final), &v); err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
-	if err := p.proposeLessons(ctx, j, in.Repo, plan, v.Lessons, kept); err != nil {
+	// Each kind of line needs its own evidence: lessons for builders come
+	// from human edits and repeated findings, lines for reviewers only
+	// from findings a human overruled.
+	if len(data.Edits) == 0 && len(data.Groups) == 0 {
+		v.Lessons = nil
+	}
+	if len(data.Overruled) == 0 {
+		v.ReviewLines = nil
+	}
+	v.ReviewLines = slices.DeleteFunc(v.ReviewLines, func(l verdict.Lesson) bool {
+		if why := riskyReviewLine(l.Line); why != "" {
+			p.log().Info("lessons: REVIEW.md line refused", "line", oneLine(l.Line), "why", why)
+			return true
+		}
+		return false
+	})
+	if err := p.proposeLessons(ctx, j, in.Repo, plan, v.Lessons, v.ReviewLines, kept); err != nil {
 		return fail(run, state.Failed, "lessons PR: "+err.Error())
 	}
 	norm, _ := json.Marshal(v)
@@ -591,12 +761,54 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 func (p *Pipeline) refuseLearn(ctx context.Context, j *store.Job, in LearnInput, r refusal) {
 	p.finish(ctx, j, agentRun{}, state.Failed, "", r.msg)
 	p.warn(p.Store.UseSignals(ctx, append(append([]int64{}, in.Signals...), in.Trimmed...), j.ID), "UseSignals")
-	key := strings.ToLower(in.Repo) + ": " + r.msg
+	p.notifyRefusal(ctx, j, in.Repo, r.msg, fmt.Sprintf("Lessons for %s can't be proposed: %s. What the factory had to learn from is set aside; once that's fixed, new edits and findings start again.", in.Repo, r.msg))
+}
+
+// notifyRefusal tells you why the factory won't write some of a repo's
+// lines, once for each reason, not every day it happens again.
+func (p *Pipeline) notifyRefusal(ctx context.Context, j *store.Job, repo, why, msg string) {
+	key := strings.ToLower(repo) + ": " + why
 	if seen, err := p.Store.HasEvent(ctx, "learn_refused", key); err != nil || seen {
 		return
 	}
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", JobID: &j.ID, Type: "learn_refused", Reason: key}), "AddEvent")
-	p.notify(ctx, fmt.Sprintf("Lessons for %s can't be proposed: %s. What the factory had to learn from is set aside; once that's fixed, new edits and findings start again.", in.Repo, r.msg))
+	p.notify(ctx, msg)
+}
+
+// overruledRepeats keeps the overruled findings a learn job reads to
+// those still a repeat (see repeats), once the ones a human addressed
+// are gone; the others leave kept and use, to wait for one like them.
+// When the factory won't write REVIEW.md (see lessonsPlan), they are all
+// set aside: used, and not read.
+func (p *Pipeline) overruledRepeats(ctx context.Context, j *store.Job, repo string, plan *lessonsPlan, kept []store.Signal, use []int64) ([]store.Signal, []int64) {
+	var over []store.Signal
+	for _, s := range kept {
+		if s.Kind == store.SignalOverruled {
+			over = append(over, s)
+		}
+	}
+	if len(over) == 0 {
+		return kept, use
+	}
+	if plan.Review == "" {
+		p.notifyRefusal(ctx, j, repo, plan.ReviewRefused, fmt.Sprintf("Lines for %s's REVIEW.md can't be proposed: %s. The findings you overruled are set aside; lessons for AGENTS.md go on.", repo, plan.ReviewRefused))
+		return slices.DeleteFunc(kept, func(s store.Signal) bool { return s.Kind == store.SignalOverruled }), use
+	}
+	repeat := map[int64]bool{}
+	for _, g := range repeats(over, p.Cfg.Learning.MinFindings) {
+		for _, s := range g {
+			repeat[s.ID] = true
+		}
+	}
+	wait := map[int64]bool{}
+	for _, s := range over {
+		if !repeat[s.ID] {
+			wait[s.ID] = true
+		}
+	}
+	kept = slices.DeleteFunc(kept, func(s store.Signal) bool { return wait[s.ID] })
+	use = slices.DeleteFunc(use, func(id int64) bool { return wait[id] })
+	return kept, use
 }
 
 // lessonsPlan is where a repo's lessons go: the file and the PR's branch.
@@ -605,6 +817,11 @@ type lessonsPlan struct {
 	Import string     // the CLAUDE.md to add "@AGENTS.md" to, so Claude reads it too; or ""
 	Branch string     // LessonsBranch, or one with a suffix
 	Open   *github.PR // the open lessons PR on Branch, or nil
+	// Review is the REVIEW.md that lines for reviewers go in, or "" when
+	// the factory won't write it, for the reason in ReviewRefused. Unlike
+	// File, that refuses only those lines.
+	Review        string
+	ReviewRefused string
 }
 
 // lessonsPlan finds the branch and file for a repo's lessons in the
@@ -629,7 +846,43 @@ func (p *Pipeline) lessonsPlan(ctx context.Context, repo string, ws *Workspace) 
 			imp = ""
 		}
 	}
-	return &lessonsPlan{File: file, Import: imp, Branch: branch, Open: open}, nil
+	plan := &lessonsPlan{File: file, Import: imp, Branch: branch, Open: open}
+	plan.Review, err = reviewTarget(ctx, g, ws.Repo, rev)
+	if r := (refusal{}); errors.As(err, &r) {
+		plan.ReviewRefused = r.msg
+	} else if err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// reviewTarget is the file at rev that lines for reviewers go in: the
+// first REVIEW.md there is (see reviewmd.Files), or the tracked file it
+// links to; REVIEW.md, new, when there's none.
+func reviewTarget(ctx context.Context, g *Git, repo, rev string) (string, error) {
+	for _, name := range reviewmd.Files {
+		if f, err := instructionsFile(ctx, g, repo, rev, name); err != nil || f != "" {
+			return f, err
+		}
+	}
+	return reviewmd.Files[0], nil
+}
+
+// reviewText is every REVIEW.md at rev, as one text.
+func reviewText(ctx context.Context, g *Git, repo, rev string) string {
+	var b strings.Builder
+	seen := map[string]bool{}
+	for _, name := range reviewmd.Files {
+		f, err := instructionsFile(ctx, g, repo, rev, name)
+		if err != nil || f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		if text, ok, _ := g.FileAt(ctx, repo, rev, f); ok {
+			b.WriteString(text + "\n")
+		}
+	}
+	return b.String()
 }
 
 // lessonsBranch is the branch for the lessons PR: the one with the open
@@ -768,12 +1021,20 @@ func instructionsFile(ctx context.Context, g *Git, repo, rev, name string) (stri
 
 // checkWritable checks the checkout at repo for what git can't tell: on
 // a case-insensitive disk, an agents.md symlink is what AGENTS.md opens.
+// A REVIEW.md it can't write only takes Review out of the plan.
 func checkWritable(repo string, plan *lessonsPlan) error {
 	root, err := os.OpenRoot(repo)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
+	if plan.Review != "" {
+		if _, err := root.Lstat(plan.Review); !errors.Is(err, fs.ErrNotExist) {
+			if err := plainFile(root, plan.Review); err != nil {
+				plan.Review, plan.ReviewRefused = "", err.Error()
+			}
+		}
+	}
 	files := []string{plan.File}
 	if plan.Import != "" {
 		files = append(files, plan.Import)
@@ -812,14 +1073,17 @@ func writePlain(root *os.Root, rel string, b []byte) error {
 // settleLessons records what became of the lines the factory proposed:
 // merged, or declined when their PR closed unmerged, when a human took
 // them out of the PR before merging it, or out of the file after. It
-// returns every declined line. base is the base branch's instruction
-// files, in the checkout ws.
-func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace, plan *lessonsPlan, base string) []string {
+// returns every declined line, for AGENTS.md and for REVIEW.md. base is
+// the base branch's instruction files, in the checkout ws. A REVIEW.md
+// line is looked for in the REVIEW.md files.
+func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace, plan *lessonsPlan, base string) (declined, reviewDeclined []string) {
 	ls, err := p.Store.Lessons(ctx, repo)
 	if err != nil {
 		p.warn(err, "Lessons")
-		return nil
+		return nil, nil
 	}
+	g := p.git(repo)
+	reviewBase := reviewText(ctx, g, ws.Repo, ws.BaseSHA)
 	has := func(md, norm string) bool {
 		for _, l := range strings.Split(md, "\n") {
 			if normLine(l) == norm {
@@ -833,18 +1097,27 @@ func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace
 	if open != nil {
 		// Both files: a PR opened before lessons moved to AGENTS.md
 		// has them in CLAUDE.md.
-		branch, onBranch = instructionsText(ctx, p.git(repo), ws.Repo, "refs/remotes/origin/"+plan.Branch)
+		branch, onBranch = instructionsText(ctx, g, ws.Repo, "refs/remotes/origin/"+plan.Branch)
+	}
+	reviewBranch := ""
+	if open != nil {
+		reviewBranch = reviewText(ctx, g, ws.Repo, "refs/remotes/origin/"+plan.Branch)
 	}
 	prs := map[int]*github.PR{}
-	var declined []string
 	for _, l := range ls {
+		base, branch, onBranch, norm := base, branch, onBranch, l.Norm
+		rn, forReview := l.ForReview()
+		if forReview {
+			// As for AGENTS.md, a branch with no REVIEW.md settles nothing.
+			base, branch, onBranch, norm = reviewBase, reviewBranch, reviewBranch != "", rn
+		}
 		status := ""
 		switch {
-		case l.Status == store.LessonMerged && !has(base, l.Norm):
+		case l.Status == store.LessonMerged && !has(base, norm):
 			status = store.LessonDeclined // taken out after it merged
 		case l.Status != store.LessonProposed:
 		case open != nil && l.PRNumber == open.Number:
-			if onBranch && !has(branch, l.Norm) && !has(base, l.Norm) {
+			if onBranch && !has(branch, norm) && !has(base, norm) {
 				status = store.LessonDeclined // taken out of the open PR
 			}
 		default:
@@ -857,7 +1130,7 @@ func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace
 			}
 			switch {
 			case pr == nil:
-			case pr.Merged && has(base, l.Norm):
+			case pr.Merged && has(base, norm):
 				status = store.LessonMerged
 			case pr.Merged || pr.State == "closed":
 				status = store.LessonDeclined // closed, or merged without it
@@ -867,11 +1140,15 @@ func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace
 			p.warn(p.Store.DecideLesson(ctx, l.ID, status), "DecideLesson")
 			l.Status = status
 		}
-		if l.Status == store.LessonDeclined {
+		switch {
+		case l.Status != store.LessonDeclined:
+		case forReview:
+			reviewDeclined = append(reviewDeclined, l.Line)
+		default:
 			declined = append(declined, l.Line)
 		}
 	}
-	return declined
+	return declined, reviewDeclined
 }
 
 // oneLine joins a text's lines, for a list item.
@@ -881,10 +1158,14 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // proposeLessons adds the lessons not already in the file, on the base
 // branch or in the open lessons PR, to that PR, opening it if there is
-// none. It never merges: the PR waits for a human, whatever auto_merge
-// says. want is the plan the job checked before its agent ran.
-func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string, want *lessonsPlan, lessons []verdict.Lesson, sigs []store.Signal) error {
-	if len(lessons) == 0 {
+// none, and the lines for reviewers to the repo's REVIEW.md the same way.
+// It never merges: the PR waits for a human, whatever auto_merge says.
+// want is the plan the job checked before its agent ran.
+func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string, want *lessonsPlan, lessons, reviewLines []verdict.Lesson, sigs []store.Signal) error {
+	if want.Review == "" {
+		reviewLines = nil
+	}
+	if len(lessons) == 0 && len(reviewLines) == 0 {
 		return nil
 	}
 	rc := p.repoConf(repo)
@@ -898,69 +1179,93 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	if err != nil {
 		return err
 	}
-	if plan.Branch != want.Branch || (plan.Open == nil) != (want.Open == nil) {
+	if plan.Branch != want.Branch || (plan.Open == nil) != (want.Open == nil) || (len(reviewLines) > 0 && plan.Review != want.Review) {
 		return fmt.Errorf("the lessons PR changed while the job ran")
-	}
-	base, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, plan.File)
-	if err != nil {
-		return err
-	}
-	cur, _, err := g.FileAt(ctx, ws.Repo, "HEAD", plan.File)
-	if err != nil {
-		return err
-	}
-	others, _ := instructionsText(ctx, g, ws.Repo, "HEAD")
-	seen := map[string]bool{}
-	for _, l := range strings.Split(base+"\n"+cur+"\n"+others, "\n") {
-		seen[normLine(l)] = true
 	}
 	known, err := p.Store.Lessons(ctx, repo)
 	if err != nil {
 		return err
 	}
-	for _, l := range known {
-		if l.Status != store.LessonProposed {
-			seen[l.Norm] = true // declined, or merged once: settled
+	// fresh are the lines not in the files yet, nor settled before.
+	fresh := func(ls []verdict.Lesson, text string, norm func(string) string) []verdict.Lesson {
+		seen := map[string]bool{}
+		for _, l := range strings.Split(text, "\n") {
+			seen[norm(normLine(l))] = true
 		}
-	}
-	var add []verdict.Lesson
-	for _, l := range lessons {
-		l.Line = cleanLine(l.Line)
-		if k := normLine(l.Line); k != "" && !seen[k] {
-			seen[k] = true
-			add = append(add, l)
+		for _, l := range known {
+			if l.Status != store.LessonProposed {
+				seen[l.Norm] = true // declined, or merged once: settled
+			}
 		}
+		var add []verdict.Lesson
+		for _, l := range ls {
+			l.Line = cleanLine(l.Line)
+			if k := normLine(l.Line); k != "" && !seen[norm(k)] {
+				seen[norm(k)] = true
+				add = append(add, l)
+			}
+		}
+		return add
 	}
-	if len(add) == 0 {
+	var add, addR []verdict.Lesson
+	var cur string
+	if len(lessons) > 0 {
+		base, _, err := g.FileAt(ctx, ws.Repo, ws.BaseSHA, plan.File)
+		if err != nil {
+			return err
+		}
+		if cur, _, err = g.FileAt(ctx, ws.Repo, "HEAD", plan.File); err != nil {
+			return err
+		}
+		others, _ := instructionsText(ctx, g, ws.Repo, "HEAD")
+		add = fresh(lessons, base+"\n"+cur+"\n"+others, func(n string) string { return n })
+	}
+	if len(reviewLines) > 0 {
+		addR = fresh(reviewLines, reviewText(ctx, g, ws.Repo, ws.BaseSHA)+"\n"+reviewText(ctx, g, ws.Repo, "HEAD"), store.ReviewNorm)
+	}
+	if len(add) == 0 && len(addR) == 0 {
 		return nil
 	}
-	var lines []string
-	for _, l := range add {
-		lines = append(lines, l.Line)
-	}
+	lines, linesR := lessonLines(add), lessonLines(addR)
 	root, err := os.OpenRoot(ws.Repo)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	if err := writePlain(root, plan.File, []byte(appendLessons(cur, lines))); err != nil {
-		return err
+	var paths, whats []string
+	imp := ""
+	if len(add) > 0 {
+		if err := writePlain(root, plan.File, []byte(appendLessons(cur, lines))); err != nil {
+			return err
+		}
+		paths = append(paths, plan.File)
+		whats = append(whats, fmt.Sprintf("%d %s for %s", len(add), plural(len(add), "lesson", "lessons"), plan.File))
+		if imp = plan.Import; imp != "" {
+			md, _, err := g.FileAt(ctx, ws.Repo, "HEAD", imp)
+			if err != nil {
+				return err
+			}
+			if err := writePlain(root, imp, []byte(withImport(md))); err != nil {
+				return err
+			}
+			paths = append(paths, imp)
+		}
 	}
-	paths := []string{plan.File}
-	if plan.Import != "" {
-		md, _, err := g.FileAt(ctx, ws.Repo, "HEAD", plan.Import)
+	if len(addR) > 0 {
+		md, _, err := g.FileAt(ctx, ws.Repo, "HEAD", plan.Review)
 		if err != nil {
 			return err
 		}
-		if err := writePlain(root, plan.Import, []byte(withImport(md))); err != nil {
+		if err := writePlain(root, plan.Review, []byte(appendSection(md, reviewHeading, linesR))); err != nil {
 			return err
 		}
-		paths = append(paths, plan.Import)
+		paths = append(paths, plan.Review)
+		whats = append(whats, fmt.Sprintf("%d %s for %s", len(addR), plural(len(addR), "line", "lines"), plan.Review))
 	}
-	what := fmt.Sprintf("%d %s for %s", len(add), plural(len(add), "lesson", "lessons"), plan.File)
+	what := strings.Join(whats, " and ")
 	msg := fmt.Sprintf("factory: %s\n\nLearned by job %d.", what, j.ID)
-	if plan.Import != "" {
-		msg += "\n\n" + importNote(plan.Import)
+	if imp != "" {
+		msg += "\n\n" + importNote(imp)
 	}
 	sha, err := g.commitFiles(ctx, ws.Repo, msg, paths...)
 	if err != nil {
@@ -977,6 +1282,11 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 				return fmt.Errorf("record lessons: %w", err)
 			}
 		}
+		for _, l := range linesR {
+			if err := p.Store.AddLesson(ctx, store.Lesson{Repo: repo, Line: l, Norm: store.ReviewNorm(normLine(l)), PRNumber: n}); err != nil {
+				return fmt.Errorf("record lessons: %w", err)
+			}
+		}
 		return nil
 	}
 	pr := plan.Open
@@ -988,8 +1298,18 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		return err
 	}
 	entries := p.lessonEntries(repo, add, sigs)
+	if len(addR) > 0 {
+		entries += "For `" + plan.Review + "`, which the factory's reviewers read, from findings you overruled:\n\n" + p.lessonEntries(repo, addR, sigs)
+	}
 	if pr == nil {
-		if pr, err = gh.CreatePR(ctx, "Lessons from the factory for "+plan.File, lessonsIntro(plan.File, plan.Import)+entries+"\n"+lessonsFooter, plan.Branch, rc.BaseBranch, true); err != nil {
+		files := plan.File
+		switch {
+		case len(add) == 0:
+			files = plan.Review
+		case len(addR) > 0:
+			files += " and " + plan.Review
+		}
+		if pr, err = gh.CreatePR(ctx, "Lessons from the factory for "+files, lessonsIntro(plan.File, imp, len(addR) > 0)+entries+"\n"+lessonsFooter, plan.Branch, rc.BaseBranch, true); err != nil {
 			return err
 		}
 		if err := record(pr.Number); err != nil {
@@ -1007,7 +1327,11 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		}
 	}
 	p.warn(gh.LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
-	b, _ := json.Marshal(map[string]any{"file": plan.File, "lines": lines})
+	data := map[string]any{"file": plan.File, "lines": lines}
+	if len(linesR) > 0 {
+		data["review_file"], data["review_lines"] = plan.Review, linesR
+	}
+	b, _ := json.Marshal(data)
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", JobID: &j.ID, Type: "lessons_pr", Reason: fmt.Sprintf("%s PR #%d", repo, pr.Number), Data: string(b)}), "AddEvent")
 	if plan.Open == nil {
 		p.notify(ctx, fmt.Sprintf("Opened a lessons PR with %s: %s %s", what, p.ref(repo, pr.Number), pr.URL))
@@ -1017,11 +1341,24 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	return nil
 }
 
-// lessonsIntro opens the lessons PR's description.
-func lessonsIntro(file, imp string) string {
+// lessonLines are the lessons' lines.
+func lessonLines(ls []verdict.Lesson) []string {
+	var out []string
+	for _, l := range ls {
+		out = append(out, l.Line)
+	}
+	return out
+}
+
+// lessonsIntro opens the lessons PR's description. review says it also
+// has lines for REVIEW.md.
+func lessonsIntro(file, imp string, review bool) string {
 	note := ""
 	if imp != "" {
 		note = importNote(imp) + "\n\n"
+	}
+	if review {
+		note += "Lines for REVIEW.md come from reviewer findings that the verifier refuted, or that the builder disputed and the reviewer withdrew, on PRs that were then merged anyway, more than once. That isn't proof the findings were wrong: check each line before you merge. The factory's reviewers read REVIEW.md, so each tells them what not to flag in this repo.\n\n"
 	}
 	return "The factory learned these from the changes you made to its PRs before merging them, and from findings its reviewers repeated. " +
 		"Each is a line for `" + file + "`, which the factory's builders read before they start.\n\n" +
@@ -1121,15 +1458,22 @@ func newLines(before, after string) []string {
 	return out
 }
 
+// reviewHeading is the section of REVIEW.md that learned lines go under.
+const reviewHeading = "## Learned from findings you overruled"
+
 // appendLessons adds bullets to the end of AGENTS.md's lessons section,
 // making the section (and the file) if it isn't there.
-func appendLessons(md string, lines []string) string {
+func appendLessons(md string, lines []string) string { return appendSection(md, lessonsHeading, lines) }
+
+// appendSection adds bullets to the end of a file's section under
+// heading, making the section (and the file) if it isn't there.
+func appendSection(md, heading string, lines []string) string {
 	var bullets []string
 	for _, l := range lines {
 		bullets = append(bullets, "- "+l)
 	}
 	if strings.TrimSpace(md) == "" {
-		return lessonsHeading + "\n\n" + strings.Join(bullets, "\n") + "\n"
+		return heading + "\n\n" + strings.Join(bullets, "\n") + "\n"
 	}
 	ls := strings.Split(strings.TrimRight(md, "\n"), "\n")
 	start, inCode := -1, false
@@ -1137,13 +1481,13 @@ func appendLessons(md string, lines []string) string {
 		if strings.HasPrefix(strings.TrimSpace(l), "```") {
 			inCode = !inCode
 		}
-		if !inCode && strings.TrimSpace(l) == lessonsHeading {
+		if !inCode && strings.TrimSpace(l) == heading {
 			start = i
 			break
 		}
 	}
 	if start < 0 {
-		return strings.Join(ls, "\n") + "\n\n" + lessonsHeading + "\n\n" + strings.Join(bullets, "\n") + "\n"
+		return strings.Join(ls, "\n") + "\n\n" + heading + "\n\n" + strings.Join(bullets, "\n") + "\n"
 	}
 	end := len(ls)
 	inCode = false

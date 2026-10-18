@@ -8,10 +8,14 @@ import (
 )
 
 // Learn is the learn stage's verdict: lines it proposes for the repo's
-// AGENTS.md, or why it proposes none.
+// AGENTS.md, which builders read, and for its REVIEW.md, which reviewers
+// read, or why it proposes none.
 type Learn struct {
-	Lessons    []Lesson `json:"lessons"`
-	SkipReason string   `json:"skip_reason"`
+	Lessons []Lesson `json:"lessons"`
+	// ReviewLines are learned from findings a human overruled: what the
+	// repo's reviewers shouldn't flag. Nil in verdicts from before them.
+	ReviewLines []Lesson `json:"review_lines,omitempty"`
+	SkipReason  string   `json:"skip_reason"`
 }
 
 // Lesson is one proposed line and what it was learned from.
@@ -32,17 +36,25 @@ func (l *Learn) Validate() error {
 	if len(l.Lessons) > MaxLessons {
 		errs = append(errs, fmt.Errorf("at most %d lessons, got %d", MaxLessons, len(l.Lessons)))
 	}
-	for n, s := range l.Lessons {
-		if strings.TrimSpace(s.Line) == "" {
-			errs = append(errs, fmt.Errorf("lessons[%d].line is empty", n))
-		} else if why := unsafeLine(s.Line); why != "" {
-			errs = append(errs, fmt.Errorf("lessons[%d].line %s", n, why))
-		}
-		if strings.TrimSpace(s.Why) == "" {
-			errs = append(errs, fmt.Errorf("lessons[%d].why is empty", n))
+	if len(l.ReviewLines) > MaxLessons {
+		errs = append(errs, fmt.Errorf("at most %d review_lines, got %d", MaxLessons, len(l.ReviewLines)))
+	}
+	for _, list := range []struct {
+		name string
+		ls   []Lesson
+	}{{"lessons", l.Lessons}, {"review_lines", l.ReviewLines}} {
+		for n, s := range list.ls {
+			if strings.TrimSpace(s.Line) == "" {
+				errs = append(errs, fmt.Errorf("%s[%d].line is empty", list.name, n))
+			} else if why := unsafeLine(s.Line); why != "" {
+				errs = append(errs, fmt.Errorf("%s[%d].line %s", list.name, n, why))
+			}
+			if strings.TrimSpace(s.Why) == "" {
+				errs = append(errs, fmt.Errorf("%s[%d].why is empty", list.name, n))
+			}
 		}
 	}
-	if len(l.Lessons) == 0 && strings.TrimSpace(l.SkipReason) == "" {
+	if len(l.Lessons) == 0 && len(l.ReviewLines) == 0 && strings.TrimSpace(l.SkipReason) == "" {
 		errs = append(errs, errors.New("no lessons needs a skip_reason"))
 	}
 	return errors.Join(errs...)
@@ -70,9 +82,14 @@ func unsafeLine(l string) string {
 
 func init() {
 	schemas["learn"] = `{"type":"object","additionalProperties":false,
-"required":["lessons","skip_reason"],
+"required":["lessons","review_lines","skip_reason"],
 "properties":{
  "lessons":{"type":"array","items":{"type":"object","additionalProperties":false,
+   "required":["line","why","evidence"],
+   "properties":{
+    "line":{"type":"string"},"why":{"type":"string"},
+    "evidence":{"type":"array","items":{"type":"string"}}}}},
+ "review_lines":{"type":"array","items":{"type":"object","additionalProperties":false,
    "required":["line","why","evidence"],
    "properties":{
     "line":{"type":"string"},"why":{"type":"string"},

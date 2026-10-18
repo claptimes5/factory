@@ -353,6 +353,50 @@ Each pass is a job of its own, kind `security`, with its model, cost and
 log on record. The metrics count the passes and the rounds that blocked on
 one of their findings.
 
+## REVIEW.md
+
+A repo can tell the factory's reviewers what matters to it in a
+`REVIEW.md`, at the root or in `.github/` (the root one wins). Keep it
+short: what failure looks like in this repo, paths not worth a review,
+how many minor findings are worth reading, and real bugs from its past
+to look for again.
+
+```markdown
+---
+skip: [docs/, "*.lock", internal/gen/]
+max_minor: 3
+---
+A failure here is a wrong total on an invoice or a lost order.
+Past bugs: rounding in tax.go (#88), a missing tenant filter (#120).
+```
+
+- **It's read from the base branch,** never from the change, so a builder
+  can't change what reviews it. Builders can't edit it either: `REVIEW.md`
+  and `.github/REVIEW.md` are always [protected](security.md#isolation).
+- **The reviewer, the critic and the verifier read it,** fenced and marked
+  as the repo's guidance. It's written by people with write access, so it
+  steers what they look at, but it's guidance, not permission: the
+  verifier is told to refute a finding only when the code shows it's
+  wrong, never because the guidance says so.
+- **HTML comments are taken out,** and the text is cut at 16 KB, with a
+  note. A file over 1 MB isn't read, nor is a symlink (its target isn't
+  protected).
+
+The front matter, a YAML block between `---` lines at the very top, is
+optional. The daemon applies it to the reviewer's verdict itself:
+
+| Key | What it does |
+| --- | --- |
+| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one whose name looks security-sensitive (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`). Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
+| `max_minor` | Minor notes past this many are left out, and the PR says how many. A minor finding that blocks is never left out, so the cap can't pass a change. In a workspace, the lowest cap of its repos holds. |
+
+Neither ever touches a finding of the [security pass](#security-pass),
+which also reads the guidance, as guidance only.
+
+A key it doesn't know, or a value it can't use, is ignored; the PR's
+reviewer notes and the readiness check say so. The readiness check reports
+a missing `REVIEW.md` as a tip, which costs no points.
+
 ## Feature map
 
 A feature map, `features.yaml` at the repo root, lists what the product
@@ -538,6 +582,12 @@ The factory learns from the work you correct. It watches two things:
 - **Repeat findings.** Each critical or major finding in a review or critic
   verdict that blocked a build is kept, with its file and claim, once per
   item however often the review is retried.
+- **Findings you overruled.** When you merge a factory PR, each finding
+  that blocked a round and was overruled is kept: the verifier refuted it,
+  or the builder answered `wrong` and a later review withdrew it without
+  the verifier having confirmed it. If you
+  pushed to the PR first and your commits changed that finding's file, it
+  doesn't count: you may have agreed with it after all.
 
 Once a day per repo, a read-only learn job runs if there's something new: at
 least one edit of yours, or `learning.min_findings` alike findings (in
@@ -547,6 +597,20 @@ two or more items. One runs at a time. It reads them with the repo's current
 builder would follow next time, not one fix restated. It may propose none. A
 lone finding waits, for up to 30 days, for one like it. It reads your five
 newest edits and ten findings per group at most; older ones are set aside.
+
+Findings you overruled teach the reviewers, not the builders. When
+`learning.min_findings` alike ones (at least 2) from two or more items
+repeat, the learn job may propose up to three lines for the repo's
+[`REVIEW.md`](#reviewmd): a specific false alarm not to raise again. It
+proposes REVIEW.md lines only from those, and lessons only from your edits
+and repeated findings. The lines go under a `## Learned from findings you
+overruled` section of the `REVIEW.md` there is (a new `REVIEW.md` at the
+root when there's none), in the same lessons PR, with the same rules: you
+merge it, declined lines are never proposed again, and a line with HTML,
+an `@` or a link is refused. So is a REVIEW.md line about security-sensitive
+code (auth, permissions, validation, injection, secrets and the like) or a
+blanket one ("any", "all", "skip", "ignore", "never flag", "approve"). A `REVIEW.md` the factory can't write (a
+symlink out of the repo) only sets those findings aside.
 
 The lines go under a `## Lessons from the factory` section of `AGENTS.md`,
 which Codex reads. If it's a symlink to another file tracked in the repo,

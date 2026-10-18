@@ -119,7 +119,8 @@ gates:
     # The factory's own controls, and files that steer agents that later
     # read the checkout (the reviewer and critic).
     protected_paths: [".github/", ".gitlab-ci.yml", ".gitlab/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
-                      ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json"]
+                      ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json",
+                      "REVIEW.md", ".github/REVIEW.md"]
 
 # Screenshots of a web app's pages on each PR, once its gates pass: a repo
 # opts in with its own preview block (see docs/configuration.md#pr-previews):

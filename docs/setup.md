@@ -79,7 +79,9 @@ before moving on:
 
 For GitLab repos it also asks for `GITLAB_TOKEN` and checks it against each
 project (see [GitLab repos](configuration.md#gitlab-repos)). Setup ends by
-measuring [how ready each repo is](quality.md#how-ready-a-repo-is).
+measuring [how ready each repo is](quality.md#how-ready-a-repo-is). One
+of its tips is a `REVIEW.md` for the reviewers (see
+[REVIEW.md](quality.md#reviewmd)), which only you can write.
 
 Your answers go in `factory.env` next to `factory.yaml`, readable only by
 you, and every `factory` command loads it. Run `./factory setup` again any

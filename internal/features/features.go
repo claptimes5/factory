@@ -83,6 +83,11 @@ func Parse(b []byte) (*Map, error) {
 	return &m, nil
 }
 
+// Match reports whether file is covered by pattern: a file, a directory
+// (with or without a trailing /), or a glob matched against the whole
+// path, where * stops at / and there is no **.
+func Match(pattern, file string) bool { return match(pattern, file) }
+
 // match reports whether file is covered by pattern.
 func match(pattern, file string) bool {
 	pattern = strings.TrimPrefix(pattern, "./")

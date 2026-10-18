@@ -709,7 +709,7 @@ learning:
 | Key | What it does |
 | --- | --- |
 | `enabled` | On by default. Off, the factory records nothing and runs no learn jobs. |
-| `min_findings` | How many alike blocking findings, from at least two items, start a learn job when no edit of yours does. At least 2 (default 2). |
+| `min_findings` | How many alike blocking findings, from at least two items, start a learn job when no edit of yours does. At least 2 (default 2). The same count of alike findings you overruled starts one that may propose lines for `REVIEW.md`. |
 | `budget` | Dollars per learn job. Left out, it's `budgets.triage`. |
 
 `routing.learn` picks its model. Left out, it runs on triage's harness:
@@ -1141,3 +1141,8 @@ free (up to five times). When it can't start for another reason (such as
 the daily budget), fails, or ends without a valid verdict, the review
 fails: it is retried once, then the item parks. The daemon won't start without
 `prompts/security.md` while the pass is on.
+
+A repo's own `REVIEW.md`, read from its base branch, also steers review:
+its text goes to the reviewer, the critic and the verifier, and its front
+matter can skip paths and cap minor findings. It lives in the repo, not in
+`factory.yaml`; see [REVIEW.md](quality.md#reviewmd).

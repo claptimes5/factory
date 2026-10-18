@@ -728,6 +728,9 @@ func writeFinding(b *strings.Builder, f verdict.Finding) {
 	if f.Carried {
 		b.WriteString("  Raised in an earlier round and upheld by this review.\n")
 	}
+	if f.Skipped {
+		b.WriteString("  A note only: the repo's REVIEW.md skips this path.\n")
+	}
 	if c := f.Check; c != nil {
 		switch c.Status {
 		case verdict.Confirmed:
@@ -780,6 +783,14 @@ func reviewNotes(v *verdict.Review) string {
 	for i, f := range v.Findings {
 		if !v.BlocksOn(i) {
 			writeFinding(&b, f)
+		}
+	}
+	if g := v.Guide; g != nil {
+		if g.DroppedMinor > 0 {
+			fmt.Fprintf(&b, "%d more minor %s left out: %s caps them (max_minor).\n", g.DroppedMinor, plural(g.DroppedMinor, "finding", "findings"), g.File)
+		}
+		for _, n := range g.Notes {
+			fmt.Fprintf(&b, "REVIEW.md: %s\n", oneLine(n))
 		}
 	}
 	if b.Len() == 0 {
