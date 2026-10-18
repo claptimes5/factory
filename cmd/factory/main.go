@@ -229,7 +229,7 @@ func secrets() map[string]map[string]string {
 
 func newRunner(cfg *config.Config) runner.Runner {
 	if cfg.Runner.Kind == "docker" {
-		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid(), WSLDrive: cfg.Runner.WSLDrive}
+		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
 	}
 	return runner.Local{}
 }

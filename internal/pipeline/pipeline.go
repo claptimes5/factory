@@ -276,6 +276,9 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	}
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
+		if errors.Is(err, ErrDiskLow) && async {
+			return nil // said once already; the next tick looks again
+		}
 		if err == nil && j == nil && !claimed && p.Cfg.Orchestrator.On {
 			p.drainedTrigger(ctx)
 			j, err = p.claimNext(ctx) // it may have queued an orchestrator run
@@ -316,22 +319,26 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if running >= p.Cfg.Budgets.ConcurrentJobs {
 		return nil, nil
 	}
-	if msg := p.diskLow(ctx); msg != "" {
-		if !p.diskHalt {
-			p.diskHalt = true
-			p.notify(ctx, msg)
-		}
-		return nil, nil
-	} else if p.diskHalt {
-		p.diskHalt = false
-		p.notify(ctx, "There's room on disk again; jobs are starting.")
-	}
 	// One orchestrator at a time: its tools act on the whole queue.
 	var except []string
 	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
 		return nil, err
 	} else if n > 0 {
 		except = append(except, "orchestrate")
+	}
+	if msg := p.diskLow(ctx); msg != "" {
+		if !p.diskHalt {
+			p.diskHalt = true
+			p.notify(ctx, msg)
+		}
+		// The orchestrator writes next to nothing; builds wait.
+		if j, err := p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...); j != nil || err != nil {
+			return j, err
+		}
+		return nil, ErrDiskLow
+	} else if p.diskHalt {
+		p.diskHalt = false
+		p.notify(ctx, "There's room on disk again; jobs are starting.")
 	}
 	spent, err := p.buildSpend(ctx)
 	if err != nil {

@@ -86,9 +86,6 @@ type Docker struct {
 	CPUs, Memory, Network string
 	Bin                   string // docker binary, default "docker"
 	UID, GID              int    // run as this user so files in the mounts stay owned by the daemon
-	// WSLDrive is the Windows drive, as WSL mounts it, holding WSL's and
-	// Docker Desktop's virtual disks; Disks checks it under WSL.
-	WSLDrive string
 }
 
 const (

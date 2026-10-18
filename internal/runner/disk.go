@@ -2,12 +2,14 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Disk is the free space where something the jobs write is stored.
@@ -19,9 +21,14 @@ type Disk struct {
 // DiskChecker is a runner that knows where its containers' files go.
 type DiskChecker interface {
 	// Disks reports the free space of every filesystem a job's containers
-	// write to; image is one already pulled, for a probe if one is needed.
-	Disks(ctx context.Context, image string) ([]Disk, error)
+	// write to. images are ones the jobs use, for a probe if one is
+	// needed; none is pulled. An error means a disk couldn't be measured.
+	Disks(ctx context.Context, images []string) ([]Disk, error)
 }
+
+// DiskWait bounds each Docker call made to measure a disk: a wedged
+// Docker Desktop can leave `docker info` hanging.
+var DiskWait = 20 * time.Second
 
 // FreeAt is the free space, for an unprivileged writer, of the filesystem
 // holding path.
@@ -40,55 +47,76 @@ func WSL() bool {
 	return err == nil && strings.Contains(strings.ToLower(string(b)), "microsoft")
 }
 
-// Disks finds where Docker keeps images, containers and their writes:
-// a directory on this machine for a native engine, or the disk of Docker
-// Desktop's VM, which it reads from inside a container since the host
-// can't see it. Under WSL the Windows drive holding the virtual disks
-// counts too: WSL's own disk reports its virtual size, not what is left.
-func (d *Docker) Disks(ctx context.Context, image string) ([]Disk, error) {
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{.OperatingSystem}}|{{.DockerRootDir}}").Output()
+// Disks finds where Docker keeps images, containers and their writes. For
+// an engine on this machine that's its data root, read directly. Docker
+// Desktop keeps it in its own VM, and a remote engine (DOCKER_HOST, a
+// docker context) on another machine, so for those it asks a container,
+// whose / is on that storage.
+func (d *Docker) Disks(ctx context.Context, images []string) ([]Disk, error) {
+	ictx, cancel := context.WithTimeout(ctx, DiskWait)
+	out, err := exec.CommandContext(ictx, d.bin(), "info", "--format", "{{.OperatingSystem}}|{{.Name}}|{{.DockerRootDir}}").Output()
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("docker info: %w", err)
 	}
-	osName, root, _ := strings.Cut(strings.TrimSpace(string(out)), "|")
-	var disks []Disk
-	free, err := uint64(0), error(nil)
-	if !strings.Contains(osName, "Docker Desktop") && root != "" {
-		free, err = FreeAt(root)
-		if err == nil {
-			disks = append(disks, Disk{Where: "Docker's storage (" + root + ")", Free: free})
+	f := strings.SplitN(strings.TrimSpace(string(out)), "|", 3)
+	for len(f) < 3 {
+		f = append(f, "")
+	}
+	osName, name, root := f[0], f[1], f[2]
+	desktop := strings.Contains(osName, "Docker Desktop")
+	host, _ := os.Hostname()
+	if !desktop && root != "" && strings.EqualFold(name, host) {
+		if free, err := FreeAt(root); err == nil {
+			return []Disk{{Where: "Docker's storage (" + root + ")", Free: free}}, nil
 		}
 	}
-	if len(disks) == 0 {
-		// Docker Desktop, or an engine whose storage this machine can't
-		// read: ask a container, whose / is on that storage.
-		if free, err = d.probe(ctx, image); err != nil {
-			return nil, err
-		}
-		where := "Docker's disk"
-		if strings.Contains(osName, "Docker Desktop") {
-			where = "Docker Desktop's disk"
-		}
-		disks = append(disks, Disk{Where: where, Free: free})
+	where := "Docker's disk"
+	if desktop {
+		where = "Docker Desktop's disk"
 	}
-	if WSL() && d.WSLDrive != "" {
-		if free, err := FreeAt(d.WSLDrive); err == nil {
-			disks = append(disks, Disk{Where: "the Windows drive holding WSL's disks (" + d.WSLDrive + ")", Free: free})
+	free, err := d.probe(ctx, images)
+	if err != nil {
+		if isNoSpace(err) {
+			// It can't even create the probe: that's the answer.
+			return []Disk{{Where: where, Free: 0}}, nil
 		}
+		return nil, err
 	}
-	return disks, nil
+	return []Disk{{Where: where, Free: free}}, nil
 }
 
-// probe reads the free space of a container's root filesystem.
-func (d *Docker) probe(ctx context.Context, image string) (uint64, error) {
-	if image == "" {
-		return 0, fmt.Errorf("no image to measure Docker's disk with")
+// probe reads the free space of a container's root filesystem, from the
+// first of images that is there and has df.
+func (d *Docker) probe(ctx context.Context, images []string) (uint64, error) {
+	var errs []error
+	for _, image := range images {
+		if image == "" {
+			continue
+		}
+		pctx, cancel := context.WithTimeout(ctx, DiskWait)
+		var stderr strings.Builder
+		cmd := exec.CommandContext(pctx, d.bin(), "run", "--rm", "--pull", "never", "--network", "none",
+			"--label", "factory.job=factory-disk-probe", "--entrypoint", "df", image, "-Pk", "/")
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		cancel()
+		if err == nil {
+			return parseDF(string(out))
+		}
+		errs = append(errs, fmt.Errorf("%s: %w: %s", image, err, strings.TrimSpace(stderr.String())))
+		if isNoSpace(errs[len(errs)-1]) {
+			break
+		}
 	}
-	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm", "--network", "none", "--entrypoint", "df", image, "-Pk", "/").Output()
-	if err != nil {
-		return 0, fmt.Errorf("measuring Docker's disk: %w", err)
+	if len(errs) == 0 {
+		return 0, errors.New("no image to measure Docker's disk with")
 	}
-	return parseDF(string(out))
+	return 0, fmt.Errorf("measuring Docker's disk: %w", errors.Join(errs...))
+}
+
+func isNoSpace(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no space left")
 }
 
 // parseDF reads the available kilobytes from `df -Pk` output.
