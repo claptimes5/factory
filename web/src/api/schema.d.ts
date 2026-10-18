@@ -846,6 +846,8 @@ export interface paths {
                     "application/json": {
                         /** @description The version the settings GET returned; a file changed since is refused (409) */
                         version?: string;
+                        /** @description Indexes of the changes to apply; all of them when left out */
+                        changes?: number[];
                     };
                 };
             };
@@ -1220,6 +1222,8 @@ export interface components {
             why: string;
             /** @description Why the daemon dropped it; empty on a kept change */
             reason: string;
+            /** @description Why a kept change wouldn't apply to factory.yaml as it is now (it already says that, say); empty when it would */
+            now: string;
         };
         TuningProposal: {
             id: number;
@@ -1236,7 +1240,7 @@ export interface components {
             dropped: components["schemas"]["TuningChange"][];
             /** @description Prompt and skill changes, in prose, for you to make */
             ideas: string[];
-            /** @description The unified diff of factory.yaml when it was proposed */
+            /** @description The unified diff the changes would make to factory.yaml as it is now */
             diff: string;
             /** @description The draft PR it opened, when tuning.repo is set; empty otherwise */
             pr_url: string;

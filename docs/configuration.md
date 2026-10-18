@@ -501,7 +501,7 @@ the metrics, on a cadence. Its settings, with their defaults:
 
 ```yaml
 tuning:
-  every: 720h                 # how often; 0 or none turns it off
+  every: 720h                 # how often, at least 1h; 0 or none turns it off
   min_items: 10               # skip a run with fewer builds since the last
   budget: 3                   # dollars per run; default orchestrator.run_budget
   repo: you/infra             # optional: also open a draft PR there
@@ -510,10 +510,12 @@ tuning:
 
 | Key | What it does |
 | --- | --- |
-| `every` | The cadence. The clock starts the first time the daemon runs with tuning on, and survives restarts. |
+| `every` | The cadence, at least `1h`. The clock starts the first time the daemon runs with tuning on, and survives restarts. A clock more than two cadences old (tuning was off a while) starts again. A run reads at most two cadences back. |
 | `min_items` | A run with fewer items built since the last one is skipped, and you're told. `factory tune` ignores it. |
-| `budget` | The dollar cap for one run. Its spend counts toward `orchestrator.daily_budget`, not the build budget, but a run isn't held back by it. |
-| `repo`, `path` | Where this `factory.yaml` lives in one of the factory's repos. With `repo` set, each proposal with changes opens a draft PR there on `factory/tuning-<date>`, made to that copy of the file. |
+| `budget` | The dollar cap for one run. Its spend counts toward `orchestrator.daily_budget`, not the build budget. A run waits while either of those is spent for the day. |
+| `repo`, `path` | Where this `factory.yaml` lives in one of the factory's repos. With `repo` set, each proposal with changes opens a draft PR there on `factory/tuning-<date>`, made to that copy of the file. The file must exist there as a plain file, not a symlink or behind one, and still load with the change. If the day's branch has commits the factory didn't make, it uses `factory/tuning-<date>-2` and so on, rather than push over them. |
+
+With tuning on, the daemon won't start without `prompts/tune.md`.
 
 The run uses `routing.tune`, which defaults to the `orchestrate` route.
 Unlike the orchestrator it has no tools, so it can run on Codex too:

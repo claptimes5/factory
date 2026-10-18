@@ -213,6 +213,7 @@ paths:
               type: object
               properties:
                 version: { type: string, description: "The version the settings GET returned; a file changed since is refused (409)" }
+                changes: { type: array, items: { type: integer }, description: "Indexes of the changes to apply; all of them when left out" }
       responses:
         "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -579,12 +580,13 @@ components:
         groups: { type: array, items: { $ref: "#/components/schemas/SettingsGroup" } }
     TuningChange:
       type: object
-      required: [path, value, why, reason]
+      required: [path, value, why, reason, now]
       properties:
         path: { type: array, items: { type: string }, description: "One key per level: [routing, implement.S, model]" }
         value: { $ref: "#/components/schemas/SettingValue" }
         why: { type: string, description: The numbers the change rests on }
         reason: { type: string, description: "Why the daemon dropped it; empty on a kept change" }
+        now: { type: string, description: "Why a kept change wouldn't apply to factory.yaml as it is now (it already says that, say); empty when it would" }
     TuningProposal:
       type: object
       required: [id, status, created_at, period_from, period_to, summary, changes, dropped, ideas, diff, pr_url]
@@ -598,7 +600,7 @@ components:
         changes: { type: array, items: { $ref: "#/components/schemas/TuningChange" }, description: "Settings it would change, each on the dashboard's list and leaving a valid file" }
         dropped: { type: array, items: { $ref: "#/components/schemas/TuningChange" }, description: Changes the daemon refused, with the reason }
         ideas: { type: array, items: { type: string }, description: "Prompt and skill changes, in prose, for you to make" }
-        diff: { type: string, description: The unified diff of factory.yaml when it was proposed }
+        diff: { type: string, description: "The unified diff the changes would make to factory.yaml as it is now" }
         pr_url: { type: string, description: "The draft PR it opened, when tuning.repo is set; empty otherwise" }
     Tuning:
       type: object

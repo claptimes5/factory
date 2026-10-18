@@ -309,13 +309,23 @@ function TuningCard({ s, ro, onApplied }: { s: Settings; ro: boolean; onApplied:
   const { data } = useTuning();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // The changes you unticked; the rest that still apply are applied.
+  const [skip, setSkip] = useState<ReadonlySet<number>>(new Set());
   const p = data?.proposal;
   if (!p) return null;
+  const picked = p.changes.flatMap((c, i) => (c.now === "" && !skip.has(i) ? [i] : []));
+  const toggle = (i: number, on: boolean) =>
+    setSkip((was) => {
+      const next = new Set(was);
+      if (on) next.delete(i);
+      else next.add(i);
+      return next;
+    });
   const apply = async () => {
     setBusy(true);
     setErr("");
     try {
-      onApplied(await applyTuning(p.id, s.version));
+      onApplied(await applyTuning(p.id, s.version, picked));
       void qc.invalidateQueries({ queryKey: ["tuning"] });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -351,14 +361,29 @@ function TuningCard({ s, ro, onApplied }: { s: Settings; ro: boolean; onApplied:
         <p className="whitespace-pre-wrap">{p.summary}</p>
         {p.changes.length > 0 ? (
           <ul className="space-y-2" aria-label="Proposed changes">
-            {p.changes.map((c) => (
-              <li key={dotted(c)} className="rounded-md border p-2.5">
-                <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-sm">
-                  <span className="break-all">{dotted(c)}</span>
-                  <span className="text-muted-foreground">→</span>
-                  <span className="font-medium break-all">{c.value == null ? "default" : show(c.value)}</span>
+            {p.changes.map((c, i) => (
+              <li key={dotted(c)} className={cn("flex gap-2.5 rounded-md border p-2.5", c.now !== "" && "opacity-70")}>
+                <input
+                  type="checkbox"
+                  aria-label={`Apply ${dotted(c)}`}
+                  checked={c.now === "" && !skip.has(i)}
+                  disabled={ro || busy || c.now !== ""}
+                  onChange={(e) => toggle(i, e.target.checked)}
+                  className="mt-0.5 size-5 shrink-0 accent-primary md:size-4"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-sm">
+                    <span className="break-all">{dotted(c)}</span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="font-medium break-all">{c.value == null ? "default" : show(c.value)}</span>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">{c.why}</p>
+                  {c.now !== "" && (
+                    <p className="mt-1 text-xs text-warning">
+                      {c.now === "factory.yaml already says that" ? "Already applied: factory.yaml says this now." : `Won't apply now: ${c.now}`}
+                    </p>
+                  )}
                 </div>
-                <p className="mt-1 text-muted-foreground">{c.why}</p>
               </li>
             ))}
           </ul>
@@ -419,8 +444,8 @@ function TuningCard({ s, ro, onApplied }: { s: Settings; ro: boolean; onApplied:
         )}
         {!ro && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={apply} disabled={busy || p.changes.length === 0}>
-              <Check /> Apply
+            <Button onClick={apply} disabled={busy || picked.length === 0}>
+              <Check /> {picked.length === p.changes.length || picked.length === 0 ? "Apply" : `Apply ${picked.length} of ${p.changes.length}`}
             </Button>
             <Button variant="outline" onClick={dismiss} disabled={busy}>
               <X /> Dismiss

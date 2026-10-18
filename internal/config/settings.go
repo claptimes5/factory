@@ -33,9 +33,11 @@ type Setting struct {
 	// Min and Max bound a number: the config accepts values, such as no
 	// jobs at once, that would quietly stop the factory. Max 0 is none.
 	Min, Max float64
-	// Off says a duration of 0 (or none) turns the thing off, so it is
-	// allowed below the 10s every other duration needs.
-	Off bool
+	// MinDuration is a duration's least value; 0 means 10s. Off says a
+	// duration of 0 (or none) turns the thing off, so it is allowed
+	// below that.
+	MinDuration time.Duration
+	Off         bool
 }
 
 // SettingGroup is one card of the Settings screen.
@@ -106,7 +108,7 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
 		}},
 		{Name: "Tuning", Help: "How often the factory reads its metrics and proposes changes to these settings.", Settings: []Setting{
-			{Path: []string{"tuning", "every"}, Label: "Every", Help: "How often it proposes changes, such as 720h; 0 turns it off.", Kind: "duration", Default: "720h", Off: true},
+			{Path: []string{"tuning", "every"}, Label: "Every", Help: "How often it proposes changes, such as 720h, at least 1h; 0 turns it off.", Kind: "duration", Default: "720h", MinDuration: MinTuningEvery, Off: true},
 			integer("tuning.min_items", "Fewest builds", "It skips a run when fewer items were built since the last one.", 10),
 		}},
 		{Name: "Intake", Help: "How the factory finds labeled issues.", Settings: []Setting{
@@ -262,17 +264,33 @@ func (s Setting) Coerce(v any) (any, error) {
 		return nil, nil
 	case s.Kind == "select" && !slices.Contains(s.Options, str):
 		return nil, fmt.Errorf("%s must be one of %s", name, strings.Join(slices.DeleteFunc(slices.Clone(s.Options), func(o string) bool { return o == "" }), ", "))
-	case s.Kind == "duration" && s.Off && (str == "none" || str == "0"):
+	case s.Kind == "duration" && s.Off && str == "none":
 	case s.Kind == "duration":
 		d, err := time.ParseDuration(str)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %v", name, err)
 		}
-		if d < 10*time.Second {
-			return nil, fmt.Errorf("%s must be at least 10s", name)
+		least := s.MinDuration
+		if least == 0 {
+			least = 10 * time.Second
+		}
+		if d < least && (!s.Off || d != 0) {
+			return nil, fmt.Errorf("%s must be at least %s", name, shortDuration(least))
 		}
 	case strings.ContainsAny(str, "\n\r"):
 		return nil, errors.New(name + " must be one line")
 	}
 	return str, nil
+}
+
+// shortDuration writes a duration as factory.yaml would: 1h, not 1h0m0s.
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
 }

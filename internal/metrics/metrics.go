@@ -89,7 +89,7 @@ type Slice struct {
 	Escalation    float64 `json:"escalation_rate"`
 	Merged        int     `json:"merged"`
 	ReviewEscapes float64 `json:"review_escape_rate"`
-	CostPerMerged float64 `json:"cost_per_merged_usd"`
+	CostPerMerged float64 `json:"cost_per_merged_usd"` // -1 when none merged
 
 	firstPass, escalated, passed, escapes int
 	cost                                  float64
@@ -353,6 +353,7 @@ func sliced(m map[string]*Slice) []Slice {
 		s.FirstPass = rate(s.firstPass, s.Implemented)
 		s.Escalation = rate(s.escalated, s.Implemented)
 		s.ReviewEscapes = rate(s.escapes, s.passed)
+		s.CostPerMerged = -1 // nothing merged: no data
 		if s.Merged > 0 {
 			s.CostPerMerged = s.cost / float64(s.Merged)
 		}

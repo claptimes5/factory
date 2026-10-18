@@ -240,12 +240,15 @@ escalation rates, review escapes and cost per merged PR, each by size and
 by the model a build started on, plus the most common park reasons. It
 also gets the current value of every setting it may change.
 
-**What it may change.** Only what the Settings screen can: budgets,
-models, escalation, auto-merge, the orchestrator and intake. Never gate
-commands, repos, the runner or the network, and never its own `tuning`
-settings. The daemon applies each proposed change to a copy of
-`factory.yaml` and keeps it only if the whole file still loads. It drops
-the rest and says why. It never writes `factory.yaml` itself.
+**What it may change.** Most of what the Settings screen can: budgets,
+models, escalation, the orchestrator's budgets and schedule, and intake.
+Some things stay your call, so it never proposes them: auto-merge,
+whether the orchestrator runs, the `orchestrate` and `tune` routes, and
+its own `tuning` settings. Gate commands, repos, the runner and the
+network aren't on the screen at all. The daemon applies each proposed
+change to a copy of `factory.yaml` and keeps it only if the whole file
+still loads. It drops the rest and says why. It never writes
+`factory.yaml` itself.
 
 **What else it proposes.** Ideas for prompts and skills, in plain prose,
 for you to make by hand.
@@ -255,14 +258,19 @@ for you to make by hand.
 - A notification with the summary.
 - A **Tuning proposal** card at the top of the Settings screen: the
   summary, each change with the numbers behind it, the ideas, what was
-  dropped, and the diff. **Apply** saves the changes like the form does,
-  to the file as it is now, so edits you made since stay. Then restart to
-  apply them. **Dismiss** drops it. A new proposal replaces one you
-  haven't acted on.
+  dropped, and the diff against the file as it is now. Untick a change
+  to leave it out. **Apply** saves the ticked ones like the form does, to
+  the file as it is now, so edits you made since stay. A change the file
+  already makes is marked as applied. Then restart to apply them.
+  **Dismiss** drops it. A new proposal replaces one you haven't acted on.
 - With `tuning.repo` set, a draft PR on that repo with the change to
   `tuning.path`, labeled `factory:awaiting-you`. The factory never merges
   it. Applying the proposal on the Settings screen is fine too; close the
-  PR afterwards.
+  PR afterwards. If the PR can't be opened, the proposal says why.
+
+**Budgets.** A run that's due waits while today's budget or the
+orchestrator's daily budget is spent, and you're told once a day. It runs
+once there's budget again.
 
 **Thin data.** A run is skipped, and you're told, when fewer than
 `tuning.min_items` (10) items were built since the last run. The next one

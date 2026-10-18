@@ -467,11 +467,31 @@ func nullable(s string) any {
 
 // EnqueueJob inserts a queued job and returns its id.
 func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
+	id, _, err := s.enqueue(ctx, j, false)
+	return id, err
+}
+
+// EnqueueSole is EnqueueJob unless a job of the same kind is already
+// queued or running, in this process or another: then it inserts nothing
+// and returns false.
+func (s *Store) EnqueueSole(ctx context.Context, j Job) (int64, bool, error) {
+	return s.enqueue(ctx, j, true)
+}
+
+func (s *Store) enqueue(ctx context.Context, j Job, sole bool) (int64, bool, error) {
 	if j.Attempt == 0 {
 		j.Attempt = 1
 	}
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if sole {
+			// The write transaction is immediate, so no other writer can
+			// queue one between this check and the insert.
+			var n int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind = ? AND state IN ('queued', 'running')`, j.Kind).Scan(&n); err != nil || n > 0 {
+				return err
+			}
+		}
 		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, base_sha, branch, skillset, compare_id, input, route, fast)
 			VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			j.ItemID, j.Kind, j.Harness, j.Model, nullable(j.Effort), j.Attempt, j.Priority, j.BudgetUSD, Now(),
@@ -483,7 +503,7 @@ func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
 		return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &id, Type: "job_queued",
 			Data: fmt.Sprintf(`{"kind":%q,"harness":%q,"model":%q,"attempt":%d,"skillset":%q}`, j.Kind, j.Harness, j.Model, j.Attempt, j.Skillset)})
 	})
-	return id, err
+	return id, id != 0, err
 }
 
 // ClaimJob atomically moves the highest-priority, oldest queued job to

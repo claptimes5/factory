@@ -511,7 +511,7 @@ func TestTuning(t *testing.T) {
 	}
 	b, _ := os.ReadFile("../../factory.yaml")
 	with := func(block string) (*Config, error) { return Parse([]byte(string(b) + "\ntuning: " + block + "\n")) }
-	for block, every := range map[string]time.Duration{"{every: 0}": 0, "{every: none}": 0, "{every: 168h}": 168 * time.Hour} {
+	for block, every := range map[string]time.Duration{"{every: 0}": 0, "{every: 0s}": 0, "{every: none}": 0, "{every: 168h}": 168 * time.Hour, "{every: 1h}": time.Hour} {
 		c, err := with(block)
 		if err != nil || c.Tuning.Every != every {
 			t.Errorf("%s: every = %v, %v", block, c.Tuning.Every, err)
@@ -544,5 +544,50 @@ func TestUnifiedDiff(t *testing.T) {
 	}
 	if UnifiedDiff("f", a, a) != "" {
 		t.Fatal("no change, no diff")
+	}
+}
+
+func TestTuningEverySetting(t *testing.T) {
+	groups, err := Settings([]byte("repo: o/r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := FindSetting(groups, []string{"tuning", "every"})
+	if !ok {
+		t.Fatal("no tuning.every setting")
+	}
+	for in, want := range map[string]string{"0": "0", "0s": "0s", "none": "none", "1h": "1h", "720h": "720h"} {
+		if v, err := s.Coerce(in); err != nil || v != want {
+			t.Errorf("%s: %v, %v", in, v, err)
+		}
+	}
+	for _, in := range []string{"30m", "10s"} {
+		if _, err := s.Coerce(in); err == nil || !strings.Contains(err.Error(), "at least 1h") {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+	if s, _ := FindSetting(groups, []string{"orchestrator", "interval"}); s.Path == nil {
+		t.Fatal("no orchestrator.interval")
+	} else if _, err := s.Coerce("0"); err == nil {
+		t.Error("an interval of 0 isn't off")
+	}
+}
+
+func TestTunable(t *testing.T) {
+	for path, want := range map[string]bool{
+		"budgets.daily_total": true, "routing.implement.S.model": true, "routing.review.effort": true, "escalation.implement": true,
+		"tuning.every": false, "auto_merge.up_to": false, "orchestrator.enabled": false, "orchestrator.run_budget": true,
+		"routing.tune.model": false, "routing.orchestrate.model": false, "": false,
+	} {
+		p := strings.Split(path, ".")
+		if strings.HasPrefix(path, "routing.") {
+			p = []string{"routing", strings.TrimSuffix(strings.TrimPrefix(path, "routing."), "."+p[len(p)-1]), p[len(p)-1]}
+		}
+		if path == "" {
+			p = nil
+		}
+		if got := Tunable(p); got != want {
+			t.Errorf("%s: %v", path, got)
+		}
 	}
 }

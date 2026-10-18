@@ -207,32 +207,253 @@ func TestTuneOpensADraftPR(t *testing.T) {
 	ctx := context.Background()
 	e, _ := tuneSetup(t, map[string]string{"deploy/factory.yaml": testConfig})
 	e.p.Cfg.Tuning.Repo, e.p.Cfg.Tuning.Path = "o/r", "deploy/factory.yaml"
-	e.claude.tune = func(harness.RunRequest) (string, error) { return tuneAnswer, nil }
+	branch := "factory/tuning-" + time.Now().UTC().Format("2006-01-02")
+	// Someone pushed to the day's branch: it isn't force-pushed over.
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, "", "clone", "-q", e.remote, other)
+	git(t, other, "checkout", "-q", "-b", branch)
+	writeFile(other, "NOTES.md", "mine\n")
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "-qm", "my notes")
+	git(t, other, "push", "-q", "origin", branch)
+
+	e.claude.tune = func(harness.RunRequest) (string, error) {
+		return strings.Replace(tuneAnswer, "Builds went well;", "Builds went well; Closes #1, cc @someone;", 1), nil
+	}
 	if _, err := e.p.Tune(ctx, "factory tune", true); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	branch := "factory/tuning-" + time.Now().UTC().Format("2006-01-02")
-	pr := e.gh.prs[branch]
+	if got := git(t, e.remote, "log", "-1", "--format=%s", branch); got != "my notes" {
+		t.Fatalf("the day's branch was overwritten: %q", got)
+	}
+	pr := e.gh.prs[branch+"-2"]
 	if pr == nil || !pr.Draft || pr.Merged {
 		t.Fatalf("prs = %v", e.gh.prs)
 	}
 	if !hasLabel(e.gh.prLabels[pr.Number], LabelAwaitingYou) {
 		t.Fatalf("labels = %v", e.gh.prLabels[pr.Number])
 	}
+	// The model's words are fenced, so its "Closes #1" and @mention don't act.
 	body := e.gh.bodies[pr.Number]
-	for _, want := range []string{"Builds went well", "`budgets.daily_total`: `75`. spend hit the cap", "run go vet first", "never merges"} {
+	for _, want := range []string{"```text\nBuilds went well; Closes #1, cc @someone;", "budgets.daily_total: 75\n  why: spend hit the cap", "run go vet first", "never merges"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
 		}
 	}
-	got := git(t, e.remote, "show", branch+":deploy/factory.yaml")
+	if strings.Contains(strings.Split(body, "```")[0], "#1") {
+		t.Fatalf("model text outside a fence:\n%s", body)
+	}
+	got := git(t, e.remote, "show", branch+"-2:deploy/factory.yaml")
 	if !strings.Contains(got, "daily_total: 75}") || !strings.Contains(got, "runner: {kind: local}") {
 		t.Fatalf("file on the branch:\n%s", got)
 	}
 	if p, _ := e.p.Store.PendingProposal(ctx); p == nil || p.PRURL != pr.URL {
 		t.Fatalf("proposal = %+v", p)
+	}
+}
+
+// A tuning.path that is missing, a symlink, or behind one opens no PR,
+// writes nothing outside the clone, and says why on the proposal.
+func TestTunePRRefusesLinksAndMissingFiles(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(outside, []byte(testConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		path string
+		link func(seed string) error
+		want string
+	}{
+		"missing": {"deploy/factory.yaml", nil, "tuning.path deploy/factory.yaml not found in the repo"},
+		"linked file": {"factory.yaml", func(seed string) error { return os.Symlink(outside, filepath.Join(seed, "factory.yaml")) },
+			"factory.yaml is a symlink"},
+		"invalid there": {"deploy/factory.yaml", func(seed string) error {
+			return writeFile(seed, "deploy/factory.yaml", testConfig+"tuning: {path: ../elsewhere.yaml}\n")
+		}, "would not load"},
+		"linked folder": {"deploy/factory.yaml", func(seed string) error { return os.Symlink(filepath.Dir(outside), filepath.Join(seed, "deploy")) },
+			"deploy is a symlink"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			e, msgs := tuneSetup(t, nil)
+			if c.link != nil {
+				seed := filepath.Join(t.TempDir(), "seed")
+				git(t, "", "clone", "-q", e.remote, seed)
+				if err := c.link(seed); err != nil {
+					t.Fatal(err)
+				}
+				git(t, seed, "add", "-A")
+				git(t, seed, "commit", "-qm", "link")
+				git(t, seed, "push", "-q", "origin", "main")
+			}
+			e.p.Cfg.Tuning.Repo, e.p.Cfg.Tuning.Path = "o/r", c.path
+			e.claude.tune = func(harness.RunRequest) (string, error) { return tuneAnswer, nil }
+			if _, err := e.p.Tune(ctx, "factory tune", true); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.p.Drain(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for b := range e.gh.prs {
+				if strings.HasPrefix(b, "factory/tuning-") {
+					t.Fatalf("a PR was opened on %s", b)
+				}
+			}
+			if b, _ := os.ReadFile(outside); string(b) != testConfig {
+				t.Fatal("the file outside the clone was written")
+			}
+			p, _ := e.p.Store.PendingProposal(ctx)
+			if p == nil || p.PRURL != "" || !strings.Contains(p.Summary, "The draft PR on o/r was not opened") || !strings.Contains(p.Summary, c.want) {
+				t.Fatalf("proposal = %+v", p)
+			}
+			if last := (*msgs)[len(*msgs)-1]; !strings.Contains(last, c.want) {
+				t.Fatalf("notification = %q", last)
+			}
+		})
+	}
+}
+
+// The model's output is normalised before anything is applied, and what
+// stays the human's call is never proposed.
+func TestTuneNormalisesItsAnswer(t *testing.T) {
+	ctx := context.Background()
+	e, _ := tuneSetup(t, nil)
+	var prompt string
+	e.claude.tune = func(r harness.RunRequest) (string, error) {
+		prompt = r.Prompt
+		return `{"summary":"s","changes":[
+			{"path":["budgets","daily_total"],"value":70,"why":"first"},
+			{"path":["budgets","triage"],"why":"no value"},
+			{"path":[],"value":1,"why":"no path"},
+			{"path":["budgets",""],"value":1,"why":"empty key"},
+			{"path":["auto_merge","up_to"],"value":"low","why":"merge more"},
+			{"path":["orchestrator","enabled"],"value":false,"why":"save"},
+			{"path":["routing","orchestrate","model"],"value":"sonnet","why":"cheaper"},
+			{"path":["budgets","daily_total"],"value":80,"why":"last wins"}],"ideas":[]}`, nil
+	}
+	if _, err := e.p.Tune(ctx, "factory tune", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, never := range []string{`"auto_merge"`, `"enabled"`, `"orchestrate",`} {
+		if strings.Contains(prompt, never) {
+			t.Errorf("prompt offers %s", never)
+		}
+	}
+	// Nothing merged in the period before: its cost per merged PR is no data.
+	if !strings.Contains(prompt, `"cost_per_merged_usd": -1`) {
+		t.Error("an empty period's cost per merged PR isn't -1")
+	}
+	p, _ := e.p.Store.PendingProposal(ctx)
+	if len(p.Changes) != 1 || p.Changes[0].Value != 80.0 || p.Changes[0].Why != "last wins" {
+		t.Fatalf("kept = %+v", p.Changes)
+	}
+	reasons := map[string]string{}
+	for _, d := range p.Dropped {
+		reasons[d.Why] = d.Reason
+	}
+	for why, want := range map[string]string{
+		"first": "a later change", "no value": "gives no value", "no path": "names no setting", "empty key": "names no setting",
+		"merge more": "isn't a setting tuning may change", "save": "isn't a setting tuning may change", "cheaper": "isn't a setting tuning may change",
+	} {
+		if !strings.Contains(reasons[why], want) {
+			t.Errorf("%q dropped for %q, want %q", why, reasons[why], want)
+		}
+	}
+}
+
+// A due run waits while today's budget is spent, and a queued one isn't
+// claimed until there's budget again.
+func TestTuneWaitsForBudget(t *testing.T) {
+	ctx := context.Background()
+	e, msgs := tuneSetup(t, nil)
+	e.p.Cfg.Budgets.DailyTotal = 0.01 // the build that tuneSetup ran spent more
+	markAgo(t, e, markTuneDue, 31*24*time.Hour)
+	e.p.tuneDue = time.Time{}
+	e.p.tuneTrigger(ctx, time.Now())
+	if n := len(tuneJobs(t, e)); n != 0 {
+		t.Fatalf("over budget, but %d tune jobs", n)
+	}
+	if last := (*msgs)[len(*msgs)-1]; !strings.Contains(last, "Tuning is due, but today's budget is spent") {
+		t.Fatalf("notification = %q", last)
+	}
+	if at, _ := e.p.Store.Marked(ctx, markTuneDue); time.Since(mustTime(t, at)) < 24*time.Hour {
+		t.Fatal("the cadence fired although the run waited")
+	}
+	if _, err := e.p.Tune(ctx, "factory tune", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := tuneJobs(t, e); len(jobs) != 1 || jobs[0].State != state.Queued {
+		t.Fatalf("tune jobs = %+v", jobs)
+	}
+	e.p.Cfg.Budgets.DailyTotal = 60
+	e.p.Cfg.Orchestrator.DailyBudget = 0.01
+	e.p.Store.FinishJob(ctx, mustClaim(t, e, "orchestrate"), store.Result{State: state.Succeeded, CostUSD: 1})
+	if j, _ := e.p.claimNext(ctx); j != nil {
+		t.Fatalf("claimed %s %d over the orchestration budget", j.Kind, j.ID)
+	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	at, err := time.Parse(store.TimeFormat, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// mustClaim queues and claims a job of kind, returning its id.
+func mustClaim(t *testing.T, e *env, kind string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := e.p.Store.EnqueueJob(ctx, store.Job{Kind: kind, Harness: "claude", Model: "opus", BudgetUSD: 1, Priority: 100}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := e.p.Store.ClaimJobSkipping(ctx, []string{"tune"}, nil)
+	if err != nil || j == nil || j.Kind != kind {
+		t.Fatalf("claim = %+v, %v", j, err)
+	}
+	return j.ID
+}
+
+func TestTunePeriod(t *testing.T) {
+	ctx := context.Background()
+	e, _ := tuneSetup(t, nil)
+	to := time.Now().UTC()
+	every := e.p.Cfg.Tuning.Every
+	for name, c := range map[string]struct {
+		ago  time.Duration
+		want time.Duration
+	}{
+		"recent": {10 * 24 * time.Hour, 10 * 24 * time.Hour}, "long ago": {200 * 24 * time.Hour, 2 * every},
+		"in the future": {-time.Hour, every},
+	} {
+		markAgo(t, e, markTunePeriod, c.ago)
+		from, err := e.p.tunePeriodStart(ctx, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := to.Sub(from).Round(time.Second); got != c.want.Round(time.Second) {
+			t.Errorf("%s: period %v, want %v", name, got, c.want)
+		}
+	}
+	// A cadence clock left from long ago starts again rather than firing.
+	markAgo(t, e, markTuneDue, 100*24*time.Hour)
+	e.p.tuneDue = time.Time{}
+	e.p.tuneTrigger(ctx, time.Now())
+	if n := len(tuneJobs(t, e)); n != 0 {
+		t.Fatalf("a stale clock queued %d", n)
+	}
+	if at, _ := e.p.Store.Marked(ctx, markTuneDue); time.Since(mustTime(t, at)) > time.Minute {
+		t.Fatal("the stale clock wasn't reset")
 	}
 }

@@ -341,3 +341,24 @@ func TestWorkspaceHeadsAndPRs(t *testing.T) {
 		t.Fatalf("another item's prs = %+v", prs)
 	}
 }
+
+// One job of a kind across two processes, as `factory tune` and the
+// daemon are: the second EnqueueSole queues nothing.
+func TestEnqueueSoleAcrossHandles(t *testing.T) {
+	ctx := context.Background()
+	s, path := openTest(t)
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, ok, err := s.EnqueueSole(ctx, Job{Kind: "tune", Harness: "claude", Model: "opus", BudgetUSD: 3}); err != nil || !ok {
+		t.Fatalf("first = %v, %v", ok, err)
+	}
+	if id, ok, err := s2.EnqueueSole(ctx, Job{Kind: "tune", Harness: "claude", Model: "opus", BudgetUSD: 3}); err != nil || ok || id != 0 {
+		t.Fatalf("second = %d %v, %v", id, ok, err)
+	}
+	if _, ok, _ := s2.EnqueueSole(ctx, Job{Kind: "orchestrate", Harness: "claude", Model: "opus", BudgetUSD: 3}); !ok {
+		t.Fatal("another kind was refused")
+	}
+}

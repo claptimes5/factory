@@ -111,3 +111,43 @@ func TestTuningApplyRefusedWithoutAPassword(t *testing.T) {
 		t.Fatalf("pending = %+v", p)
 	}
 }
+
+// Apply takes the changes you picked, and the card reads each against the
+// file as it is now: the diff is fresh, and a change already made says so.
+func TestTuningApplyPicked(t *testing.T) {
+	base, path, s, _ := settingsSetup(t, "127.0.0.1:8080")
+	id := addProposal(t, s,
+		store.ProposedChange{Path: []string{"budgets", "daily_total"}, Value: 75.0, Why: "a"},
+		store.ProposedChange{Path: []string{"budgets", "concurrent_jobs"}, Value: 5.0, Why: "b"})
+	var tu APITuning
+	getJSON(t, base+"/api/v1/settings/tuning", &tu)
+	if p := tu.Proposal; p.Changes[0].Now != "" || p.Changes[1].Now != "" || !strings.Contains(p.Diff, "+  daily_total: 75") || !strings.Contains(p.Diff, "+  concurrent_jobs: 5") {
+		t.Fatalf("proposal = %+v", p)
+	}
+	var st APISettings
+	getJSON(t, base+"/api/v1/settings", &st)
+	apply := fmt.Sprintf("%s/api/v1/settings/tuning/%d/apply", base, id)
+	for body, want := range map[string]string{`[]`: "pick at least one", `[2]`: "no change 2", `[0,0]`: "no change 0"} {
+		if code, out := postJSON(t, apply, "", `{"version":"`+st.Version+`","changes":`+body+`}`); code != 400 || !strings.Contains(out, want) {
+			t.Errorf("%s: %d %s", body, code, out)
+		}
+	}
+	if code, out := postJSON(t, apply, "", `{"version":"`+st.Version+`","changes":[1]}`); code != 200 {
+		t.Fatalf("apply = %d %s", code, out)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "concurrent_jobs: 5") || strings.Contains(string(b), "daily_total: 75") {
+		t.Fatalf("file:\n%s", b)
+	}
+
+	// A new proposal for what the file already says: no diff, and it says so.
+	addProposal(t, s, store.ProposedChange{Path: []string{"budgets", "concurrent_jobs"}, Value: 5.0, Why: "b"})
+	getJSON(t, base+"/api/v1/settings/tuning", &tu)
+	if p := tu.Proposal; p.Changes[0].Now != "factory.yaml already says that" || p.Diff != "" {
+		t.Fatalf("proposal = %+v", p)
+	}
+	getJSON(t, base+"/api/v1/settings", &st)
+	if code, out := postJSON(t, fmt.Sprintf("%s/api/v1/settings/tuning/%d/apply", base, tu.Proposal.ID), "", `{"version":"`+st.Version+`"}`); code != 400 || !strings.Contains(out, "already makes") {
+		t.Fatalf("no-op apply = %d %s", code, out)
+	}
+}

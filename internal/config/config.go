@@ -322,6 +322,10 @@ type Config struct {
 	dir string
 }
 
+// MinTuningEvery is the shortest tuning cadence: each run costs a model
+// run, and a period shorter than this holds too few builds to read.
+const MinTuningEvery = time.Hour
+
 // Tuning says how often the factory proposes changes from its metrics,
 // and where its factory.yaml lives in a repo it works on, if anywhere.
 type Tuning struct {
@@ -740,6 +744,8 @@ func (c *Config) Validate() error {
 	}
 	if t := c.Tuning; t.everyErr != nil || t.Every < 0 {
 		bad("tuning.every must be a duration such as 720h, or 0 or none to turn tuning off")
+	} else if t.Every > 0 && t.Every < MinTuningEvery {
+		bad("tuning.every must be at least 1h, or 0 or none to turn tuning off")
 	}
 	if c.Tuning.MinItems < 0 {
 		bad("tuning.min_items can't be negative")

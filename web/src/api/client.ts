@@ -126,8 +126,9 @@ export const saveSettings = (changes: { path: string[]; value: SettingValue }[],
 
 export const useTuning = () => useQuery({ queryKey: ["tuning"], queryFn: () => getJSON<Tuning>("/settings/tuning") });
 
-/** Applies a tuning proposal's changes to factory.yaml as it is now, through the same checks as a save. */
-export const applyTuning = (id: number, version: string) => postJSON<Settings>(`/settings/tuning/${id}/apply`, { version });
+/** Applies the picked changes of a tuning proposal (by index) to factory.yaml as it is now, through the same checks as a save. */
+export const applyTuning = (id: number, version: string, changes: number[]) =>
+  postJSON<Settings>(`/settings/tuning/${id}/apply`, { version, changes });
 
 /**
  * Refetches everything on screen whenever the daemon reports a change.

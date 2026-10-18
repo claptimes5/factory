@@ -3,7 +3,11 @@ package web
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/store"
@@ -12,7 +16,8 @@ import (
 // The tuning loop's proposals show on the Settings screen. Applying one
 // goes through the same save as the form: it re-applies the proposed
 // changes to the file as it is now, rather than the stored diff, so edits
-// made since are kept.
+// made since are kept. For the same reason the diff shown is worked out
+// afresh against the file on every read.
 
 // APITuningChange is one proposed setting, with its evidence; Reason says
 // why the daemon dropped it.
@@ -21,6 +26,9 @@ type APITuningChange struct {
 	Value  any      `json:"value"`
 	Why    string   `json:"why"`
 	Reason string   `json:"reason"`
+	// Now says why a kept change wouldn't apply to the file as it is now
+	// (already made, say), or "" when it would.
+	Now string `json:"now"`
 }
 
 // APITuningProposal is one proposal from the tuning loop.
@@ -63,10 +71,27 @@ func (s *Server) apiTuning(w http.ResponseWriter, r *http.Request) {
 		if ideas == nil {
 			ideas = []string{}
 		}
-		out.Proposal = &APITuningProposal{ID: p.ID, Status: p.Status, CreatedAt: p.CreatedAt, PeriodFrom: p.PeriodFrom, PeriodTo: p.PeriodTo,
+		ap := &APITuningProposal{ID: p.ID, Status: p.Status, CreatedAt: p.CreatedAt, PeriodFrom: p.PeriodFrom, PeriodTo: p.PeriodTo,
 			Summary: p.Summary, Changes: tuningChanges(p.Changes), Dropped: tuningChanges(p.Dropped), Ideas: ideas, Diff: p.Diff, PRURL: p.PRURL}
+		if src, err := os.ReadFile(s.ConfigPath); err == nil && s.ConfigPath != "" {
+			dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
+			edited, why := config.Proposed(src, dir, proposalChanges(p.Changes))
+			for i := range ap.Changes {
+				ap.Changes[i].Now = why[i]
+			}
+			ap.Diff = config.UnifiedDiff(filepath.Base(s.ConfigPath), src, edited)
+		}
+		out.Proposal = ap
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func proposalChanges(cs []store.ProposedChange) []config.Change {
+	out := make([]config.Change, len(cs))
+	for i, c := range cs {
+		out[i] = config.Change{Path: c.Path, Value: c.Value}
+	}
+	return out
 }
 
 // pendingProposal reads the proposal a request names, refusing one a
@@ -109,6 +134,8 @@ func (s *Server) apiApplyTuning(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Version string `json:"version"`
+		// Changes are the indexes of the changes to apply; all when left out.
+		Changes *[]int `json:"changes"`
 	}
 	if err := s.readBody(r, &in); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
@@ -118,16 +145,54 @@ func (s *Server) apiApplyTuning(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "this proposal changes no settings; dismiss it instead")
 		return
 	}
-	changes := make([]config.Change, len(p.Changes))
-	for i, c := range p.Changes {
-		changes[i] = config.Change{Path: c.Path, Value: c.Value}
+	pick := make([]int, len(p.Changes))
+	for i := range pick {
+		pick[i] = i
+	}
+	if in.Changes != nil {
+		pick = *in.Changes
+	}
+	if len(pick) == 0 {
+		apiErr(w, http.StatusBadRequest, "pick at least one change to apply")
+		return
+	}
+	src, err := os.ReadFile(s.ConfigPath)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
+	_, why := config.Proposed(src, dir, proposalChanges(p.Changes))
+	var changes []config.Change
+	seen := map[int]bool{}
+	for _, i := range pick {
+		if i < 0 || i >= len(p.Changes) || seen[i] {
+			apiErr(w, http.StatusBadRequest, fmt.Sprintf("no change %d in this proposal", i))
+			return
+		}
+		seen[i] = true
+		c := p.Changes[i]
+		if !config.Tunable(c.Path) {
+			apiErr(w, http.StatusBadRequest, strings.Join(c.Path, ".")+" isn't a setting tuning may change")
+			return
+		}
+		if why[i] == config.NoChange {
+			continue // already made: nothing to write
+		}
+		changes = append(changes, config.Change{Path: c.Path, Value: c.Value})
+	}
+	if len(changes) == 0 {
+		apiErr(w, http.StatusBadRequest, "factory.yaml already makes the changes you picked")
+		return
 	}
 	res, code, err := s.saveChanges(r, changes, in.Version)
 	if err != nil {
 		apiErr(w, code, err.Error())
 		return
 	}
-	if err := s.Store.DecideProposal(r.Context(), p.ID, store.ProposalApplied, "human"); err != nil {
+	// The file is written: a newer proposal that superseded this one
+	// meanwhile doesn't make the save a failure.
+	if err := s.Store.DecideProposal(r.Context(), p.ID, store.ProposalApplied, "human"); err != nil && !errors.Is(err, store.ErrNotPending) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -135,6 +200,8 @@ func (s *Server) apiApplyTuning(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiDismissTuning(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	p, ok := s.pendingProposal(w, r)
 	if !ok {
 		return

@@ -200,6 +200,9 @@ func run(args []string) error {
 			return err
 		}
 		p.ConfigPath, _ = filepath.Abs(*cfgPath)
+		if err := p.CheckTunePrompt(); err != nil {
+			return err
+		}
 		if cmd == "serve" {
 			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
 				return err

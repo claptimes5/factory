@@ -200,6 +200,12 @@ test("a tuning proposal shows its changes, evidence and diff on the settings scr
   await expect(card.getByText("1 dropped change")).toBeVisible();
   await expect(card.getByRole("link", { name: /Draft PR/ })).toHaveAttribute("href", "https://github.com/acme/api/pull/120");
   await expect(card.getByRole("button", { name: "Apply" })).toBeEnabled();
+  // Each change can be left out.
+  const pick = card.getByRole("checkbox", { name: "Apply budgets.concurrent_jobs" });
+  await expect(pick).toBeChecked();
+  await pick.uncheck();
+  await expect(card.getByRole("button", { name: "Apply 1 of 2" })).toBeEnabled();
+  await pick.check();
   await expect(card.getByRole("button", { name: "Dismiss" })).toBeEnabled();
   await shot(page, info, "tuning");
   if (phone(info)) await noSidewaysScroll(page);

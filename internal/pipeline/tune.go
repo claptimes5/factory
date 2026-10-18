@@ -1,12 +1,13 @@
 package pipeline
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,9 +21,8 @@ import (
 // The tuning loop: on a cadence, a read-only agent reads the metrics for
 // the period since the last run (and the one before, for trends) and
 // proposes changes to the settings the dashboard may edit. The daemon
-// keeps only the changes on that list that still leave a valid
-// factory.yaml, and stores the proposal for a human to apply or dismiss.
-// It never changes factory.yaml itself.
+// keeps only the changes config.Proposed accepts, and stores the proposal
+// for a human to apply or dismiss. It never changes factory.yaml itself.
 
 // Marks the tuning loop keeps in the store.
 const (
@@ -40,21 +40,34 @@ type TuneInput struct {
 // ErrTuneQueued is returned when a tune job is already queued or running.
 var ErrTuneQueued = errors.New("a tuning run is already queued or running")
 
+// CheckTunePrompt fails when tuning is on and its prompt is missing, so
+// the daemon says so at start rather than a month later.
+func (p *Pipeline) CheckTunePrompt() error {
+	if p.Cfg.Tuning.Every <= 0 {
+		return nil
+	}
+	path := filepath.Join(p.Cfg.Path(p.Cfg.PromptsDir), "tune.md")
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("tuning is on (tuning.every: %s) but its prompt is missing: %w; restore it, or set tuning.every: 0", p.Cfg.Tuning.Every, err)
+	}
+	return nil
+}
+
+// tuneEvery is the cadence, or the default one when tuning is off (for
+// `factory tune`, which still needs a period).
+func (p *Pipeline) tuneEvery() time.Duration {
+	if p.Cfg.Tuning.Every > 0 {
+		return p.Cfg.Tuning.Every
+	}
+	return 720 * time.Hour
+}
+
 // Tune queues a tuning run for the period since the last one. Unless
 // force is set, a period with fewer than tuning.min_items builds is
 // skipped, with a notification saying so. It returns the job's id, or 0
-// when it skipped.
+// when it skipped. At most one tune job is queued or running, whichever
+// process asks (the daemon, or `factory tune`).
 func (p *Pipeline) Tune(ctx context.Context, reason string, force bool) (int64, error) {
-	p.tuneMu.Lock()
-	defer p.tuneMu.Unlock()
-	for _, st := range []state.JobState{state.Queued, state.Running} {
-		if n, err := p.Store.CountJobs(ctx, st, "tune"); err != nil || n > 0 {
-			if err == nil {
-				err = ErrTuneQueued
-			}
-			return 0, err
-		}
-	}
 	to := time.Now().UTC()
 	from, err := p.tunePeriodStart(ctx, to)
 	if err != nil {
@@ -75,30 +88,52 @@ func (p *Pipeline) Tune(ctx context.Context, reason string, force bool) (int64, 
 	}
 	r := p.Cfg.Routing["tune"]
 	b, _ := json.Marshal(TuneInput{Reason: reason, From: from.Format(store.TimeFormat), To: to.Format(store.TimeFormat)})
-	return p.Store.EnqueueJob(ctx, store.Job{Kind: "tune", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
+	id, queued, err := p.Store.EnqueueSole(ctx, store.Job{Kind: "tune", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
 		Skillset: r.Skills, Route: "tune", BudgetUSD: p.Cfg.FastBudget(p.Cfg.Tuning.Budget, r.FastFor(r.Harness, r.Model)), Priority: 10, Input: string(b)})
+	if err == nil && !queued {
+		err = ErrTuneQueued
+	}
+	return id, err
 }
 
 // tunePeriodStart is where the last tuning run's period ended, or one
-// cadence back when none has run.
+// cadence back when none has run. It reaches back two cadences at most,
+// so a factory that went untuned for long reads its recent work, and a
+// start in the future (the clock moved back) is one cadence back.
 func (p *Pipeline) tunePeriodStart(ctx context.Context, to time.Time) (time.Time, error) {
+	every := p.tuneEvery()
 	at, err := p.Store.Marked(ctx, markTunePeriod)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if t, err := time.Parse(store.TimeFormat, at); err == nil {
-		return t, nil
+	t, err := time.Parse(store.TimeFormat, at)
+	switch {
+	case err != nil, !t.Before(to):
+		return to.Add(-every), nil
+	case t.Before(to.Add(-2 * every)):
+		return to.Add(-2 * every), nil
 	}
-	every := p.Cfg.Tuning.Every
-	if every <= 0 {
-		every = 720 * time.Hour
+	return t, nil
+}
+
+// tuneBudget says why a tuning run can't spend now, or "": it waits for
+// both today's build budget and the orchestration budget, which its spend
+// counts toward.
+func (p *Pipeline) tuneBudget(ctx context.Context) string {
+	if spent, err := p.buildSpend(ctx); err != nil || spent >= p.Cfg.Budgets.DailyTotal {
+		return fmt.Sprintf("today's budget is spent ($%.2f of $%.2f)", spent, p.Cfg.Budgets.DailyTotal)
 	}
-	return to.Add(-every), nil
+	if spent, err := p.orchSpend(ctx); err != nil || spent >= p.Cfg.Orchestrator.DailyBudget {
+		return fmt.Sprintf("today's orchestration budget is spent ($%.2f of $%.2f)", spent, p.Cfg.Orchestrator.DailyBudget)
+	}
+	return ""
 }
 
 // tuneTrigger runs on each tick: a tuning run is due once tuning.every
 // has passed since the last one. The clock starts the first time the
-// daemon sees tuning on, and is kept in the store across restarts.
+// daemon sees tuning on, and is kept in the store across restarts. A
+// clock more than two cadences old (tuning was off, or the daemon was
+// down) or in the future (the clock moved back) starts again from now.
 func (p *Pipeline) tuneTrigger(ctx context.Context, now time.Time) {
 	every := p.Cfg.Tuning.Every
 	if every <= 0 {
@@ -110,7 +145,7 @@ func (p *Pipeline) tuneTrigger(ctx context.Context, now time.Time) {
 			return
 		}
 		t, err := time.Parse(store.TimeFormat, at)
-		if err != nil {
+		if err != nil || t.After(now) || now.Sub(t) > 2*every {
 			t = now
 			if err := p.Store.Mark(ctx, markTuneDue, now.UTC().Format(store.TimeFormat)); err != nil {
 				return
@@ -119,6 +154,14 @@ func (p *Pipeline) tuneTrigger(ctx context.Context, now time.Time) {
 		p.tuneDue = t
 	}
 	if now.Sub(p.tuneDue) < every {
+		return
+	}
+	// Over budget, it waits for the budget rather than a whole cadence.
+	if why := p.tuneBudget(ctx); why != "" {
+		if day := now.UTC().Format("2006-01-02"); p.tuneHeld != day {
+			p.tuneHeld = day
+			p.notify(ctx, "Tuning is due, but "+why+". It runs once there's budget again.")
+		}
 		return
 	}
 	// Marked first: a run that fails, or skips, waits for the next cadence.
@@ -148,15 +191,48 @@ const tuneSchema = `{"type":"object","additionalProperties":false,"required":["s
 	`"changes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","value","why"],"properties":{"path":{"type":"array","items":{"type":"string"}},"value":{},"why":{"type":"string"}}}},` +
 	`"ideas":{"type":"array","items":{"type":"string"}}}}`
 
-// tuneVerdict is the tune job's answer.
+// tuneVerdict is the tune job's answer. A value is kept raw, so a
+// missing one isn't read as null, which would put the default back.
 type tuneVerdict struct {
 	Summary string `json:"summary"`
 	Changes []struct {
-		Path  []string `json:"path"`
-		Value any      `json:"value"`
-		Why   string   `json:"why"`
+		Path  []string        `json:"path"`
+		Value json.RawMessage `json:"value"`
+		Why   string          `json:"why"`
 	} `json:"changes"`
 	Ideas []string `json:"ideas"`
+}
+
+// proposed reads the verdict's changes: one per path (the last), each
+// with a path of non-empty keys and a value. The others come back
+// dropped, with why.
+func (v tuneVerdict) proposed() (asked, dropped []store.ProposedChange) {
+	last := map[string]int{}
+	for i, c := range v.Changes {
+		last[strings.Join(c.Path, "\x00")] = i
+	}
+	for i, c := range v.Changes {
+		pc := store.ProposedChange{Path: c.Path, Why: strings.TrimSpace(c.Why)}
+		if pc.Path == nil {
+			pc.Path = []string{}
+		}
+		if len(c.Value) > 0 {
+			_ = json.Unmarshal(c.Value, &pc.Value)
+		}
+		switch {
+		case len(c.Path) == 0 || strings.Contains("\x00"+strings.Join(c.Path, "\x00")+"\x00", "\x00\x00"):
+			pc.Reason = "the change names no setting"
+		case len(c.Value) == 0:
+			pc.Reason = "the change gives no value"
+		case last[strings.Join(c.Path, "\x00")] != i:
+			pc.Reason = "a later change to the same setting replaces it"
+		default:
+			asked = append(asked, pc)
+			continue
+		}
+		dropped = append(dropped, pc)
+	}
+	return asked, dropped
 }
 
 func (p *Pipeline) runTune(ctx context.Context, j *store.Job) error {
@@ -212,12 +288,22 @@ func (p *Pipeline) runTune(ctx context.Context, j *store.Job) error {
 	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
 	p.warn(p.Store.Mark(ctx, markTunePeriod, in.To), "Mark")
 
-	asked := make([]store.ProposedChange, len(v.Changes))
-	for i, c := range v.Changes {
-		asked[i] = store.ProposedChange{Path: c.Path, Value: c.Value, Why: strings.TrimSpace(c.Why)}
+	asked, dropped := v.proposed()
+	changes := make([]config.Change, len(asked))
+	for i, c := range asked {
+		changes[i] = config.Change{Path: c.Path, Value: c.Value}
 	}
 	cfgDir, _ := filepath.Abs(filepath.Dir(p.ConfigPath))
-	edited, kept, dropped := ProposeEdit(src, cfgDir, asked)
+	edited, why := config.Proposed(src, cfgDir, changes)
+	kept := []store.ProposedChange{}
+	for i, c := range asked {
+		if why[i] == "" {
+			kept = append(kept, c)
+		} else {
+			c.Reason = why[i]
+			dropped = append(dropped, c)
+		}
+	}
 	ideas := []string{}
 	for _, idea := range v.Ideas {
 		if s := strings.TrimSpace(idea); s != "" {
@@ -226,23 +312,24 @@ func (p *Pipeline) runTune(ctx context.Context, j *store.Job) error {
 	}
 	prop := store.Proposal{JobID: &j.ID, Summary: strings.TrimSpace(v.Summary), Changes: kept, Dropped: dropped, Ideas: ideas,
 		Diff: config.UnifiedDiff(filepath.Base(p.ConfigPath), src, edited), PeriodFrom: in.From, PeriodTo: in.To}
-	id, err := p.Store.AddProposal(ctx, prop)
-	if err != nil {
+	if dropped == nil {
+		prop.Dropped = []store.ProposedChange{}
+	}
+	// The PR first, so the proposal is stored with its link, or with why
+	// there is none.
+	if p.Cfg.Tuning.Repo != "" && len(kept) > 0 {
+		url, err := p.tuningPR(ctx, j, prop)
+		if err != nil {
+			p.log().Warn("tuning PR", "err", err)
+			prop.Summary += "\n\nThe draft PR on " + p.Cfg.Tuning.Repo + " was not opened: " + truncate(err.Error(), 300)
+		}
+		prop.PRURL = url
+	}
+	if _, err := p.Store.AddProposal(ctx, prop); err != nil {
 		p.notify(ctx, "Tuning proposal could not be saved: "+err.Error())
 		return err
 	}
-	prURL := ""
-	if p.Cfg.Tuning.Repo != "" && len(kept) > 0 {
-		prURL, err = p.tuningPR(ctx, j, prop, edited)
-		if err != nil {
-			p.log().Warn("tuning PR", "err", err)
-			prURL = ""
-			prop.Summary += "\n\n(The draft PR could not be opened: " + truncate(err.Error(), 200) + ")"
-		} else if prURL != "" {
-			p.warn(p.Store.SetProposalPR(ctx, id, prURL), "SetProposalPR")
-		}
-	}
-	p.notify(ctx, tuneMessage(prop, prURL))
+	p.notify(ctx, tuneMessage(prop))
 	return nil
 }
 
@@ -256,6 +343,17 @@ func (p *Pipeline) tunePrompt(ctx context.Context, src []byte, from, to time.Tim
 	prev, prevB, err := metrics.Period(ctx, p.Store, from.Add(-to.Sub(from)), from)
 	if err != nil {
 		return TunePrompt{}, err
+	}
+	// The prompt says -1 is no data: nothing merged has no cost per merge.
+	for _, r := range []*metrics.Report{cur, prev} {
+		if r.Merged == 0 {
+			r.CostPerMerged = -1
+		}
+		for i := range r.Weekly {
+			if r.Weekly[i].Merged == 0 {
+				r.Weekly[i].CostPerMerged = -1
+			}
+		}
 	}
 	groups, err := config.Settings(src)
 	if err != nil {
@@ -273,7 +371,7 @@ func (p *Pipeline) tunePrompt(ctx context.Context, src []byte, from, to time.Tim
 	var settings []setting
 	for _, g := range groups {
 		for _, s := range g.Settings {
-			if tunable(s.Path) {
+			if config.Tunable(s.Path) {
 				settings = append(settings, setting{s.Path, s.Label, s.Help, s.Kind, s.Options, s.Value, s.Default})
 			}
 		}
@@ -288,57 +386,6 @@ func (p *Pipeline) tunePrompt(ctx context.Context, src []byte, from, to time.Tim
 	}, nil
 }
 
-// tunable says whether the tuning loop may propose a change at path: any
-// setting the dashboard may change, except the loop's own.
-func tunable(path []string) bool { return len(path) > 0 && path[0] != "tuning" }
-
-// ProposeEdit applies proposed changes to a factory.yaml's bytes, one at
-// a time, keeping each only if it is a setting the dashboard may change
-// (see config.Settings), its value fits, and the file still loads. It
-// returns the edited file, the changes kept and the ones dropped, each
-// with the reason. dir is the file's directory, for validation.
-func ProposeEdit(src []byte, dir string, changes []store.ProposedChange) (out []byte, kept, dropped []store.ProposedChange) {
-	out = src
-	kept, dropped = []store.ProposedChange{}, []store.ProposedChange{}
-	drop := func(c store.ProposedChange, why string) {
-		c.Reason = why
-		dropped = append(dropped, c)
-	}
-	for _, c := range changes {
-		groups, err := config.Settings(out)
-		if err != nil {
-			drop(c, err.Error())
-			continue
-		}
-		s, ok := config.FindSetting(groups, c.Path)
-		if !ok || !tunable(c.Path) {
-			drop(c, strings.Join(c.Path, ".")+" isn't a setting tuning may change")
-			continue
-		}
-		v, err := s.Coerce(c.Value)
-		if err != nil {
-			drop(c, err.Error())
-			continue
-		}
-		next, err := config.Edit(out, []config.Change{{Path: c.Path, Value: v}})
-		if err != nil {
-			drop(c, err.Error())
-			continue
-		}
-		if bytes.Equal(next, out) {
-			drop(c, "factory.yaml already says that")
-			continue
-		}
-		if _, err := config.ParseIn(next, dir); err != nil {
-			drop(c, "factory.yaml would not load: "+truncate(err.Error(), 300))
-			continue
-		}
-		out = next
-		kept = append(kept, c)
-	}
-	return out, kept, dropped
-}
-
 // showValue writes a proposed value for people: null as "the default".
 func showValue(v any) string {
 	if v == nil {
@@ -349,7 +396,7 @@ func showValue(v any) string {
 }
 
 // tuneMessage is the notification for a new proposal.
-func tuneMessage(prop store.Proposal, prURL string) string {
+func tuneMessage(prop store.Proposal) string {
 	var b strings.Builder
 	b.WriteString("Tuning proposal\n\n" + truncate(prop.Summary, 600))
 	if len(prop.Changes) == 0 {
@@ -367,81 +414,126 @@ func tuneMessage(prop store.Proposal, prURL string) string {
 		fmt.Fprintf(&b, "\n%d %s for prompts or skills.", n, plural(n, "idea", "ideas"))
 	}
 	b.WriteString("\n\nApply or dismiss it on the dashboard's Settings screen (/app/settings).")
-	if prURL != "" {
-		b.WriteString("\nDraft PR: " + prURL)
+	if prop.PRURL != "" {
+		b.WriteString("\nDraft PR: " + prop.PRURL)
 	}
 	return b.String()
 }
 
-// tuningBody is the draft PR's description.
+// fenced puts model text in a code block, where GitHub and GitLab link no
+// issues, close none and mention no one.
+func fenced(s string) string {
+	f := fence(s)
+	return f + "text\n" + strings.TrimRight(s, "\n") + "\n" + f + "\n"
+}
+
+// tuningBody is the draft PR's description. Everything the model wrote is
+// fenced: a "Closes #12" or an @mention in it must not act.
 func tuningBody(prop store.Proposal) string {
 	var b strings.Builder
-	b.WriteString(prop.Summary + "\n\n## Changes\n\n")
+	b.WriteString("The factory's tuning loop proposes these changes to its settings, from its metrics. Check model changes with `factory eval` before you merge. The factory never merges this PR.\n\n## Summary\n\n")
+	b.WriteString(fenced(prop.Summary))
+	var changes strings.Builder
 	for _, c := range prop.Changes {
-		fmt.Fprintf(&b, "- `%s`: `%s`. %s\n", strings.Join(c.Path, "."), showValue(c.Value), c.Why)
+		fmt.Fprintf(&changes, "%s: %s\n  why: %s\n", strings.Join(c.Path, "."), showValue(c.Value), c.Why)
 	}
+	b.WriteString("\n## Changes\n\n" + fenced(changes.String()))
 	if len(prop.Ideas) > 0 {
-		b.WriteString("\n## Ideas for prompts and skills\n\n")
-		for _, idea := range prop.Ideas {
-			b.WriteString("- " + idea + "\n")
-		}
+		b.WriteString("\n## Ideas for prompts and skills\n\n" + fenced("- "+strings.Join(prop.Ideas, "\n- ")))
 	}
 	if len(prop.Dropped) > 0 {
-		b.WriteString("\n## Dropped\n\n")
+		var d strings.Builder
 		for _, c := range prop.Dropped {
-			fmt.Fprintf(&b, "- `%s`: %s\n", strings.Join(c.Path, "."), c.Reason)
+			fmt.Fprintf(&d, "%s: %s\n", strings.Join(c.Path, "."), c.Reason)
+		}
+		b.WriteString("\n## Dropped\n\n" + fenced(d.String()))
+	}
+	return b.String()
+}
+
+// tuningBranch is the day's branch for the PR: factory/tuning-<date>, or
+// with a suffix when that branch has commits the factory didn't make,
+// which a force push would throw away.
+func (p *Pipeline) tuningBranch(ctx context.Context, g *Git, ws *Workspace) (string, error) {
+	base := "factory/tuning-" + time.Now().UTC().Format("2006-01-02")
+	for n := 1; n <= 20; n++ {
+		branch := base
+		if n > 1 {
+			branch = fmt.Sprintf("%s-%d", base, n)
+		}
+		if !g.HasBranch(ctx, ws.Repo, branch) {
+			return branch, nil
+		}
+		authors, err := g.Authors(ctx, ws.Repo, ws.BaseSHA, "refs/remotes/origin/"+branch)
+		if err != nil {
+			return "", err
+		}
+		mine := true
+		for _, a := range authors {
+			mine = mine && strings.EqualFold(a, g.AuthorEmail())
+		}
+		if mine {
+			return branch, nil
 		}
 	}
-	b.WriteString("\n_Proposed by the factory's tuning loop from its metrics. Check model changes with `factory eval` first. The factory never merges this PR._\n")
-	return b.String()
+	return "", fmt.Errorf("every %s branch has commits of someone else's", base)
 }
 
 // tuningPR opens (or updates) a draft PR with the proposal applied to the
-// repo's copy of factory.yaml at tuning.path, on a branch of the day.
-// Where the repo has no such file, it gets the edited local one.
-func (p *Pipeline) tuningPR(ctx context.Context, j *store.Job, prop store.Proposal, edited []byte) (string, error) {
+// repo's copy of factory.yaml at tuning.path. The file is read and
+// written through an os.Root of the daemon's clone and must be a plain
+// file there: a symlink in the repo can't send the write anywhere else.
+// The result must load, as the daemon would load it from that checkout.
+func (p *Pipeline) tuningPR(ctx context.Context, j *store.Job, prop store.Proposal) (string, error) {
 	repo := p.Cfg.Tuning.Repo
 	rc := p.repoConf(repo)
-	path, err := config.CleanFilePath(p.Cfg.Tuning.Path)
+	rel, err := config.CleanFilePath(p.Cfg.Tuning.Path)
 	if err != nil {
 		return "", err
 	}
-	branch := "factory/tuning-" + time.Now().UTC().Format("2006-01-02")
 	g := p.git(repo)
-	ws, err := g.Prepare(ctx, p.jobDir(j.ID), rc.BaseBranch, branch, true, false)
+	ws, err := g.Prepare(ctx, p.jobDir(j.ID), rc.BaseBranch, "", true, false)
 	if err != nil {
 		return "", err
 	}
-	file := filepath.Join(ws.Repo, filepath.FromSlash(path))
-	want := edited
-	if theirs, err := os.ReadFile(file); err == nil {
-		changes := make([]config.Change, 0, len(prop.Changes))
-		groups, err := config.Settings(theirs)
-		if err != nil {
-			return "", fmt.Errorf("%s in %s: %w", path, repo, err)
-		}
-		for _, c := range prop.Changes {
-			s, ok := config.FindSetting(groups, c.Path)
-			if !ok {
-				return "", fmt.Errorf("%s in %s has no %s", path, repo, strings.Join(c.Path, "."))
-			}
-			v, err := s.Coerce(c.Value)
-			if err != nil {
-				return "", err
-			}
-			changes = append(changes, config.Change{Path: c.Path, Value: v})
-		}
-		if want, err = config.Edit(theirs, changes); err != nil {
-			return "", err
-		}
-		if bytes.Equal(want, theirs) {
-			return "", nil // the repo already says this
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+	branch, err := p.tuningBranch(ctx, g, ws)
+	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(file, want, 0o644); err != nil {
+	root, err := os.OpenRoot(ws.Repo)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	if err := plainFile(root, rel); err != nil {
+		return "", err
+	}
+	theirs, err := root.ReadFile(rel)
+	if err != nil {
+		return "", err
+	}
+	changes := make([]config.Change, len(prop.Changes))
+	for i, c := range prop.Changes {
+		changes[i] = config.Change{Path: c.Path, Value: c.Value}
+	}
+	want, why := config.Proposed(theirs, filepath.Join(ws.Repo, filepath.FromSlash(path.Dir(rel))), changes)
+	for i, w := range why {
+		if w != "" && w != config.NoChange {
+			return "", fmt.Errorf("%s in %s: %s: %s", rel, repo, strings.Join(changes[i].Path, "."), w)
+		}
+	}
+	if string(want) == string(theirs) {
+		return "", nil // the repo already says this
+	}
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(want); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
 		return "", err
 	}
 	// The daemon's own clone is the work tree: no agent ever touched it.
@@ -460,7 +552,8 @@ func (p *Pipeline) tuningPR(ctx context.Context, j *store.Job, prop store.Propos
 		return "", err
 	}
 	if pr == nil {
-		if pr, err = gh.CreatePR(ctx, "Tuning: "+firstLine(truncate(prop.Summary, 80)), body, branch, rc.BaseBranch, true); err != nil {
+		// The title is the daemon's own words: model text could mention or link.
+		if pr, err = gh.CreatePR(ctx, "Tuning proposal "+time.Now().UTC().Format("2006-01-02"), body, branch, rc.BaseBranch, true); err != nil {
 			return "", err
 		}
 	} else {
@@ -468,4 +561,29 @@ func (p *Pipeline) tuningPR(ctx context.Context, j *store.Job, prop store.Propos
 	}
 	p.warn(gh.LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
 	return pr.URL, nil
+}
+
+// plainFile checks that rel is a regular file under root, reached through
+// folders only: no symlink on the way or at the end.
+func plainFile(root *os.Root, rel string) error {
+	parts := strings.Split(rel, "/")
+	for i := 1; i <= len(parts); i++ {
+		at := strings.Join(parts[:i], "/")
+		fi, err := root.Lstat(at)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("tuning.path %s not found in the repo", rel)
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case fi.Mode()&fs.ModeSymlink != 0:
+			return fmt.Errorf("tuning.path %s: %s is a symlink in the repo; refusing to write through it", rel, at)
+		case i < len(parts) && !fi.IsDir():
+			return fmt.Errorf("tuning.path %s not found in the repo", rel)
+		case i == len(parts) && !fi.Mode().IsRegular():
+			return fmt.Errorf("tuning.path %s isn't a regular file in the repo", rel)
+		}
+	}
+	return nil
 }

@@ -152,7 +152,7 @@ type Pipeline struct {
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
 	tuneDue     time.Time // when the tuning cadence last fired
-	tuneMu      sync.Mutex
+	tuneHeld    string    // day a due tuning run waited for budget, to notify once
 
 	restart atomic.Bool // a restart was asked for: claim nothing more
 }
@@ -416,6 +416,10 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 		} else if n > 0 {
 			except = append(except, kind)
 		}
+	}
+	// A tuning run waits for both today's budget and the orchestrator's.
+	if !slices.Contains(except, "tune") && p.tuneBudget(ctx) != "" {
+		except = append(except, "tune")
 	}
 	if msg := p.diskLow(ctx); msg != "" {
 		if !p.diskHalt {
