@@ -162,3 +162,36 @@ func TestImplementPromptHighRisk(t *testing.T) {
 		t.Fatalf("implement prompt:\n%s", b)
 	}
 }
+
+// A text-only issue builds on the XS route and budget, the builder is
+// told it needs no test, and the reviewer is told to check that.
+func TestTextOnlyLane(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"README.md": "# Fixture\n"})
+	e.p.Cfg.Gates.Commands["test"] = "grep -q fixture README.md"
+	e.claude.triage = `{"decision":"ready","complexity":"XS","risk":"low","question":"","summary":"fix a typo"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{func(work string) error {
+		if err := writeFile(work, "README.md", "# The fixture\n"); err != nil {
+			return err
+		}
+		return commitIn(work, "copy")
+	}}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b := e.claude.prompts["implement"][0]; !strings.Contains(b, "rated a text-only change") || strings.Contains(b, "Write a failing test first that captures the issue, then make it pass.") {
+		t.Fatalf("implement prompt:\n%s", b)
+	}
+	if b := e.codex.prompts["review"][0]; !strings.Contains(b, "Triage rated this a text-only change") {
+		t.Fatalf("review prompt:\n%s", b)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 1).ID, Kind: "implement"})
+	if len(jobs) != 1 || jobs[0].BudgetUSD != e.p.Cfg.Budgets.PerJob["XS"] {
+		t.Fatalf("implement jobs: %+v", jobs)
+	}
+	if it := e.item(t, 1); it.PRNumber == 0 {
+		t.Fatalf("no PR: stage %s", it.Stage)
+	}
+}

@@ -141,3 +141,9 @@ func (p *Pipeline) riskyFeatures(ctx context.Context, repo, dir, base string) []
 	}
 	return out
 }
+
+// textOnly says the builder may skip the test-first rule: triage rated the
+// change XS (text, not behavior) and not high risk.
+func textOnly(it *store.WorkItem) bool {
+	return it.Complexity == "XS" && riskOrLow(it.Risk) != "high"
+}

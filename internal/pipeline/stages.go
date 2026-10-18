@@ -217,7 +217,8 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 
 	work := agentDir(dir, parts, true)
 	data := PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(work, out)).Out,
-		Findings: in.Findings, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts)}
+		Findings: in.Findings, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts),
+		TextOnly: textOnly(it)}
 	for _, pt := range parts {
 		for _, f := range p.riskyFeatures(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA) {
 			if pt.folder != "" {
@@ -614,7 +615,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts)})
+	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}

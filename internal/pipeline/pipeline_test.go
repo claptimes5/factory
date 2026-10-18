@@ -287,7 +287,7 @@ routing:
   implement.L: {harness: claude, model: opus}
   review:      {harness: codex,  model: gpt-test}
 escalation: {implement: [sonnet, opus], max_attempts_per_tier: 2, max_review_rounds: 2}
-budgets: {per_job: {S: 2, M: 6, L: 15}, triage: 0.5, review: 3, daily_total: 60}
+budgets: {per_job: {XS: 0.5, S: 2, M: 6, L: 15}, triage: 0.5, review: 3, daily_total: 60}
 pricing: {gpt-test: {input_per_mtok: 1, output_per_mtok: 1}}
 gates:
   required: [types, test]
