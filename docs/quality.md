@@ -284,6 +284,13 @@ real runs, and are to be looked at again once the metrics have data:
   change, since its high-risk features can't be ruled out.
 - A security finding the verifier refutes stops blocking. The PR says so
   and won't merge itself, but a person has to read it.
+- Old-bug hunting is off, and its findings aren't put to the verifier
+  before they're filed: a person approves each issue anyway. If too many
+  are closed unbuilt, a verifier pass, or a stricter prompt, comes next.
+- A hunt's finding counts as filed before when its file and title match
+  one, or it's within 5 lines of one in the same file: two real bugs that
+  close together are filed one at a time at best, and the same bug moved
+  further by edits, and worded anew, can come back.
 
 ## Security pass
 
@@ -346,6 +353,50 @@ Each pass is a job of its own, kind `security`, with its model, cost and
 log on record. The metrics count the passes and the rounds that blocked on
 one of their findings.
 
+## REVIEW.md
+
+A repo can tell the factory's reviewers what matters to it in a
+`REVIEW.md`, at the root or in `.github/` (the root one wins). Keep it
+short: what failure looks like in this repo, paths not worth a review,
+how many minor findings are worth reading, and real bugs from its past
+to look for again.
+
+```markdown
+---
+skip: [docs/, "*.lock", internal/gen/]
+max_minor: 3
+---
+A failure here is a wrong total on an invoice or a lost order.
+Past bugs: rounding in tax.go (#88), a missing tenant filter (#120).
+```
+
+- **It's read from the base branch,** never from the change, so a builder
+  can't change what reviews it. Builders can't edit it either: `REVIEW.md`
+  and `.github/REVIEW.md` are always [protected](security.md#isolation).
+- **The reviewer, the critic and the verifier read it,** fenced and marked
+  as the repo's guidance. It's written by people with write access, so it
+  steers what they look at, but it's guidance, not permission: the
+  verifier is told to refute a finding only when the code shows it's
+  wrong, never because the guidance says so.
+- **HTML comments are taken out,** and the text is cut at 16 KB, with a
+  note. A file over 1 MB isn't read, nor is a symlink (its target isn't
+  protected).
+
+The front matter, a YAML block between `---` lines at the very top, is
+optional. The daemon applies it to the reviewer's verdict itself:
+
+| Key | What it does |
+| --- | --- |
+| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one whose name looks security-sensitive (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`). Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
+| `max_minor` | Minor notes past this many are left out, and the PR says how many. A minor finding that blocks is never left out, so the cap can't pass a change. In a workspace, the lowest cap of its repos holds. |
+
+Neither ever touches a finding of the [security pass](#security-pass),
+which also reads the guidance, as guidance only.
+
+A key it doesn't know, or a value it can't use, is ignored; the PR's
+reviewer notes and the readiness check say so. The readiness check reports
+a missing `REVIEW.md` as a tip, which costs no points.
+
 ## Feature map
 
 A feature map, `features.yaml` at the repo root, lists what the product
@@ -395,6 +446,9 @@ tests include no property-based or fuzz test. It files the work to fix
 each.
 
 This repo's own map is [`features.yaml`](../features.yaml).
+
+The map also steers [old-bug hunting](using.md#hunting-for-old-bugs),
+which reviews one feature at a time, riskiest and longest-unhunted first.
 
 ## How ready a repo is
 
@@ -504,6 +558,64 @@ blocking findings (and how many the verifier refuted). With `-baseline`, it fail
 is worse. See [`evals/README.md`](../evals/README.md) and the
 [commands](using.md#commands).
 
+## Reviewer evals
+
+The replay set measures the builder. Reviewer cases, in the same
+directory, measure the reviewer: each has a `kind` in its `case.yaml` and
+the change to review in `change.patch`. `factory eval` ignores them, and
+`factory eval review` reads only them.
+
+| Kind | What it is | Scored |
+| --- | --- | --- |
+| `planted` | A merged PR with a known bug planted in a line it added | Caught when the review blocks with a finding in the bug's file within 6 lines of it (or on no line) |
+| `clean` | A merged PR that stood | Any block is a false positive |
+| `revert` | A factory PR the revert watch saw reverted | It should have been blocked |
+
+The bugs are put in by the program, the same way each run: a flipped
+comparison in an `if`, an off-by-one on a `< len(` bound, a dropped
+`if err != nil` block, and a dropped `if x == nil` block. Go code only
+for now (not tests). The case records the mutation, the file and the
+line; a case whose bug would land elsewhere (the patch no longer applies
+the same) fails as an eval error rather than scoring wrong.
+
+Each case runs only the review stage, against a private copy of the repo
+frozen at the case's base with the change on its branch, as if its gates
+had passed: the review route for the case's `risk` (default low), the
+verifier, and a high-risk change's critic. A block stops there; no fix
+round runs. The report gives recall (planted bugs caught), the
+false-positive rate (clean changes blocked), how many reverts it
+blocked, and cost. A case the review gave no ruling on (an eval error, or
+a review parked for no valid verdict) counts as an error and in no rate;
+a review that asks questions counts as a block. With `-baseline`, the
+candidate is rejected when the two runs reviewed different cases, when
+more cases got no ruling, when recall falls or the false-positive rate
+rises by more than `-tolerance` (default `tuning.review_eval_tolerance`,
+5 points; 0 allows none), or when it blocks fewer reverts. The reasons
+name each case that got worse.
+
+`factory eval capture -review PR` writes, from a merged PR, a clean case
+and one planted case per mutation that fits a line it added. When the
+revert watch saw that PR reverted, it writes a revert case instead.
+`factory eval capture -reverts` writes one for every reverted factory PR
+that has none yet. Pick clean cases from PRs that merged unchanged and
+stood a while: a PR fixed soon after isn't clean.
+
+With `tuning.review_eval` on, the [tuning loop](using.md#tuning) runs
+these before keeping any proposed change to how review works (see
+[Tuning](configuration.md#tuning)).
+
+**To revisit after real use.** Picked before any real runs:
+- The tolerance, 5 points of recall or false-positive rate, is a guess;
+  with 20 cases one case is 5 points, so it allows one case of noise.
+- A finding counts as at the bug within 6 lines; a reviewer that names
+  the right function from further away is scored as a miss.
+- A reviewer that asks questions on a clean case counts as blocking it.
+- Only four Go mutations; JS, TS and Python changes give clean cases only.
+- The gate reviews at most `tuning.review_eval_cases` (20) cases, twice
+  per proposal, each run capped at half of what's left of today's
+  budget. The cap is checked before each case, so a run can pass it by
+  one case's cost.
+
 ## Failures become cases
 
 When you merge a factory PR only after changing it, the daemon tells you,
@@ -528,6 +640,12 @@ The factory learns from the work you correct. It watches two things:
 - **Repeat findings.** Each critical or major finding in a review or critic
   verdict that blocked a build is kept, with its file and claim, once per
   item however often the review is retried.
+- **Findings you overruled.** When you merge a factory PR, each finding
+  that blocked a round and was overruled is kept: the verifier refuted it,
+  or the builder answered `wrong` and a later review withdrew it without
+  the verifier having confirmed it. If you
+  pushed to the PR first and your commits changed that finding's file, it
+  doesn't count: you may have agreed with it after all.
 
 Once a day per repo, a read-only learn job runs if there's something new: at
 least one edit of yours, or `learning.min_findings` alike findings (in
@@ -537,6 +655,20 @@ two or more items. One runs at a time. It reads them with the repo's current
 builder would follow next time, not one fix restated. It may propose none. A
 lone finding waits, for up to 30 days, for one like it. It reads your five
 newest edits and ten findings per group at most; older ones are set aside.
+
+Findings you overruled teach the reviewers, not the builders. When
+`learning.min_findings` alike ones (at least 2) from two or more items
+repeat, the learn job may propose up to three lines for the repo's
+[`REVIEW.md`](#reviewmd): a specific false alarm not to raise again. It
+proposes REVIEW.md lines only from those, and lessons only from your edits
+and repeated findings. The lines go under a `## Learned from findings you
+overruled` section of the `REVIEW.md` there is (a new `REVIEW.md` at the
+root when there's none), in the same lessons PR, with the same rules: you
+merge it, declined lines are never proposed again, and a line with HTML,
+an `@` or a link is refused. So is a REVIEW.md line about security-sensitive
+code (auth, permissions, validation, injection, secrets and the like) or a
+blanket one ("any", "all", "skip", "ignore", "never flag", "approve"). A `REVIEW.md` the factory can't write (a
+symlink out of the repo) only sets those findings aside.
 
 The lines go under a `## Lessons from the factory` section of `AGENTS.md`,
 which Codex reads. If it's a symlink to another file tracked in the repo,

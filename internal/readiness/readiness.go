@@ -23,6 +23,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/features"
 	"github.com/claptimes5/factory/internal/gates"
+	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/runner"
 )
 
@@ -35,6 +36,8 @@ const (
 	Blocker Level = "blocker"
 	// Gap: jobs work, but less of what they change is verified.
 	Gap Level = "gap"
+	// Tip: optional, and worth doing; it doesn't count against the score.
+	Tip Level = "tip"
 	// Good: in place.
 	Good Level = "good"
 )
@@ -272,6 +275,7 @@ func Assess(ctx context.Context, in Input) *Report {
 		r.add(Finding{Level: Gap, Area: "instructions", Title: "CLAUDE.md doesn't load AGENTS.md",
 			Detail: "Claude Code reads CLAUDE.md, not AGENTS.md, so Claude builders miss what AGENTS.md says, including the lessons the factory proposes there. Add a line `@AGENTS.md` to CLAUDE.md (create it if there's none). Builders can't edit these files, so this one is yours; the factory's next lessons PR adds it too."})
 	}
+	r.reviewGuide(in.Dir)
 	if ci(files) {
 		r.add(Finding{Level: Good, Area: "ci", Title: "CI runs on the repo"})
 	} else {
@@ -280,6 +284,28 @@ func Assess(ctx context.Context, in Input) *Report {
 	}
 
 	return r.finish()
+}
+
+// reviewGuide looks for a REVIEW.md, which tells the factory's reviewers
+// what matters in the repo. It's the repo's people's to write (builders
+// can't edit it), so no issue is filed for it.
+func (r *Report) reviewGuide(dir string) {
+	for _, name := range reviewmd.Files {
+		b, err := readCapped(filepath.Join(dir, filepath.FromSlash(name)))
+		if err != nil {
+			continue
+		}
+		g := reviewmd.Parse(name, string(b))
+		r.add(Finding{Level: Good, Area: "review", Title: "Has review guidance in " + name})
+		if len(g.Notes) > 0 {
+			r.add(Finding{Level: Tip, Area: "review", Title: name + " has settings the factory ignores",
+				Detail: "The factory reads `skip` and `max_minor` in its front matter.\n\n" + fence(strings.Join(g.Notes, "\n"))})
+		}
+		return
+	}
+	r.add(Finding{Level: Tip, Area: "review", Title: "No REVIEW.md",
+		Detail: "A short REVIEW.md at the repo root (or in .github/) tells the factory's reviewers what failure looks like in this repo, which paths to skip, how many minor findings are worth reading, and real bugs from its past. " +
+			"Reviewers, the critic and the verifier read it from the base branch, and builders can't edit it. See docs/quality.md#reviewmd in the factory's docs."})
 }
 
 // loadsAgents says whether Claude, reading CLAUDE.md in dir, reads
@@ -338,7 +364,7 @@ func (r *Report) finish() *Report {
 
 // add keeps findings ordered blockers first, in the order found.
 func (r *Report) add(f Finding) {
-	rank := map[Level]int{Blocker: 0, Gap: 1, Good: 2}
+	rank := map[Level]int{Blocker: 0, Gap: 1, Tip: 2, Good: 3}
 	i := len(r.Findings)
 	for i > 0 && rank[r.Findings[i-1].Level] > rank[f.Level] {
 		i--
@@ -373,7 +399,7 @@ func (r *Report) Text() string {
 		sha = sha[:7]
 	}
 	fmt.Fprintf(&b, "%s at %s (%s): %d/100, %s\n", r.Repo, r.Branch, sha, r.Score, verdict)
-	mark := map[Level]string{Blocker: "✗", Gap: "!", Good: "✓"}
+	mark := map[Level]string{Blocker: "✗", Gap: "!", Tip: "·", Good: "✓"}
 	for _, f := range r.Findings {
 		fmt.Fprintf(&b, "  %s %s\n", mark[f.Level], f.Title)
 	}

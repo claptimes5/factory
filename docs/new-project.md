@@ -40,6 +40,10 @@ These are recommended from day one too:
    line `@AGENTS.md`, since Claude Code reads only `CLAUDE.md`. A new repo
    can start with a `CLAUDE.md` of just that line. The factory adds what it
    learns from your edits to `AGENTS.md`.
+5. **A short `REVIEW.md`** at the root (or `.github/REVIEW.md`) for the
+   reviewers: what failure looks like here, paths to skip, a cap on minor
+   findings, and real bugs from the repo's past. Builders can't edit it;
+   it's yours. See [REVIEW.md](quality.md#reviewmd).
 
 ## Per stack
 

@@ -207,6 +207,9 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 	return Result{Gate: "diff_guard", Status: Pass, Detail: ""}
 }
 
+// Protected says whether the diff guard protects path p under list.
+func Protected(p string, list []string) bool { return protected(p, list) }
+
 // protected matches a path against the protected list: "dir/" protects a
 // tree, "a/b.yml" one file, and a bare name such as "CLAUDE.md" that file
 // name in any directory.

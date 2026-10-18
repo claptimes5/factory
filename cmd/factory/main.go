@@ -76,7 +76,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -192,7 +192,7 @@ func run(args []string) error {
 	case "compare":
 		return runCompare(ctx, cfg, st, fs.Args()[1:])
 	case "eval":
-		return runEval(ctx, cfg, fs.Args()[1:])
+		return runEval(ctx, cfg, st, fs.Args()[1:])
 	case "tune":
 		// Queued for the daemon, which runs it on its next pass, however
 		// few items were built: you asked for it.
@@ -224,6 +224,9 @@ func run(args []string) error {
 			return err
 		}
 		if err := p.CheckSecurityPrompt(); err != nil {
+			return err
+		}
+		if err := p.CheckHuntPrompt(); err != nil {
 			return err
 		}
 		if cmd == "serve" {
@@ -387,6 +390,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		Log:        slog.Default(),
 		Notify:     notifier(),
 		Sentry:     sentryClient(cfg),
+		ReviewEval: reviewEvaluator(cfg),
 	}, nil
 }
 
@@ -596,6 +600,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	for _, l := range groomLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
+	for _, l := range huntLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
 	for _, l := range autoMergeLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
@@ -797,9 +804,14 @@ func trunc(s string, n int) string {
 
 // runEval runs the replay set against a candidate config and, with a
 // baseline, rejects a candidate that passes less or costs more per pass.
-func runEval(ctx context.Context, cfg *config.Config, args []string) error {
+// `eval review` runs the reviewer cases instead.
+func runEval(ctx context.Context, cfg *config.Config, st *store.Store, args []string) error {
 	if len(args) > 0 && args[0] == "capture" {
-		return runCapture(ctx, cfg, args[1:])
+		return runCapture(ctx, cfg, st, args[1:])
+	}
+	reviewer := len(args) > 0 && args[0] == "review"
+	if reviewer {
+		args = args[1:]
 	}
 	if _, err := codexAuth(); err != nil {
 		return err // as build checks it for the daemon
@@ -810,6 +822,7 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	baseline := fs.String("baseline", "", "report JSON of the current config to compare against")
 	out := fs.String("out", "", "write the report JSON here")
 	parallel := fs.Int("parallel", 1, "cases to run at once")
+	tolerance := fs.Float64("tolerance", -1, "eval review: how far recall may fall or false positives rise, as a share; default tuning.review_eval_tolerance")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -820,6 +833,31 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 		}
 		cfg = c
 	}
+	if reviewer {
+		cases, err := eval.LoadReview(cfg.Path(*set))
+		if err != nil {
+			return err
+		}
+		if len(cases) == 0 {
+			return fmt.Errorf("no reviewer cases in %s; `factory eval capture -review PR` writes some", *set)
+		}
+		rep, err := runReviewEval(ctx, cfg, cases, *parallel, 0)
+		if err != nil {
+			return err
+		}
+		rep.Config = *candidate
+		fmt.Print(rep.Table())
+		if *tolerance < 0 {
+			*tolerance = cfg.Tuning.ReviewTolerance()
+		}
+		return report(rep, *out, *baseline, func(b []byte) ([]string, error) {
+			var base eval.ReviewReport
+			if err := json.Unmarshal(b, &base); err != nil {
+				return nil, err
+			}
+			return eval.CompareReview(rep, &base, *tolerance), nil
+		})
+	}
 	cases, err := eval.Load(cfg.Path(*set))
 	if err != nil {
 		return err
@@ -827,6 +865,56 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	if len(cases) == 0 {
 		return fmt.Errorf("no cases in %s", *set)
 	}
+	o, done, err := evalOptions(cfg, *parallel)
+	if err != nil {
+		return err
+	}
+	defer done()
+	rep, err := eval.Run(ctx, o, cases)
+	if err != nil {
+		return err
+	}
+	rep.Config = *candidate
+	fmt.Print(rep.Table())
+	return report(rep, *out, *baseline, func(b []byte) ([]string, error) {
+		var base eval.Report
+		if err := json.Unmarshal(b, &base); err != nil {
+			return nil, err
+		}
+		return eval.Compare(rep, &base), nil
+	})
+}
+
+// report writes rep to out, when set, and with a baseline file fails
+// with why compare finds it worse.
+func report(rep any, out, baseline string, compare func([]byte) ([]string, error)) error {
+	if out != "" {
+		b, _ := json.MarshalIndent(rep, "", "  ")
+		if err := os.WriteFile(out, b, 0o644); err != nil {
+			return err
+		}
+	}
+	if baseline == "" {
+		return nil
+	}
+	b, err := os.ReadFile(baseline)
+	if err != nil {
+		return err
+	}
+	why, err := compare(b)
+	if err != nil {
+		return fmt.Errorf("baseline: %w", err)
+	}
+	if len(why) > 0 {
+		return fmt.Errorf("rejected: %s", strings.Join(why, "; "))
+	}
+	fmt.Println("accepted: no worse than the baseline")
+	return nil
+}
+
+// evalOptions wires an eval run: the runner, the harnesses, each repo's
+// credentials, and scratch space, which done removes.
+func evalOptions(cfg *config.Config, parallel int) (eval.Options, func(), error) {
 	ts, err := tokens(cfg, cfg.RepoNames()[0])
 	if err != nil {
 		slog.Warn("no GitHub credentials; cases must name a local or public repo", "err", err)
@@ -842,43 +930,53 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	}
 	r, err := newRunner(cfg, "")
 	if err != nil {
-		return err
+		return eval.Options{}, nil, err
+	}
+	if err := os.MkdirAll(cfg.Path(cfg.DataDir), 0o755); err != nil {
+		return eval.Options{}, nil, err
 	}
 	work, err := os.MkdirTemp(cfg.Path(cfg.DataDir), "eval-")
 	if err != nil {
-		return err
+		return eval.Options{}, nil, err
 	}
-	defer os.RemoveAll(work)
-	rep, err := eval.Run(ctx, eval.Options{
-		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, TokensFor: tokensFor, WorkDir: work, Parallel: *parallel,
+	return eval.Options{
+		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, TokensFor: tokensFor, WorkDir: work, Parallel: parallel,
 		Harnesses: map[string]harness.Harness{"claude": harness.NewClaude(r), "codex": newCodex(cfg, r)},
-	}, cases)
+	}, func() { _ = os.RemoveAll(work) }, nil
+}
+
+// runReviewEval runs reviewer cases on cfg.
+func runReviewEval(ctx context.Context, cfg *config.Config, cases []eval.ReviewCase, parallel int, capUSD float64) (*eval.ReviewReport, error) {
+	o, done, err := evalOptions(cfg, parallel)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	rep.Config = *candidate
-	fmt.Print(rep.Table())
-	if *out != "" {
-		b, _ := json.MarshalIndent(rep, "", "  ")
-		if err := os.WriteFile(*out, b, 0o644); err != nil {
-			return err
-		}
-	}
-	if *baseline != "" {
-		b, err := os.ReadFile(*baseline)
+	defer done()
+	o.MaxCostUSD = capUSD
+	return eval.RunReview(ctx, o, cases)
+}
+
+// reviewEvaluator is the daemon's pipeline.ReviewEval: at most
+// tuning.review_eval_cases reviewer cases of tuning.review_eval_set (see
+// eval.Sample), read from the daemon's own config's directory, on the
+// config given, one at a time within capUSD.
+func reviewEvaluator(daemon *config.Config) pipeline.ReviewEvaluator {
+	return func(ctx context.Context, cfg *config.Config, capUSD float64) (pipeline.ReviewScore, error) {
+		cases, err := eval.LoadReview(daemon.Path(daemon.Tuning.ReviewEvalSet))
 		if err != nil {
-			return err
+			return pipeline.ReviewScore{}, err
 		}
-		var base eval.Report
-		if err := json.Unmarshal(b, &base); err != nil {
-			return fmt.Errorf("baseline: %w", err)
+		if len(cases) == 0 {
+			return pipeline.ReviewScore{}, fmt.Errorf("no reviewer cases in %s", daemon.Tuning.ReviewEvalSet)
 		}
-		if why := eval.Compare(rep, &base); len(why) > 0 {
-			return fmt.Errorf("rejected: %s", strings.Join(why, "; "))
+		cases = eval.Sample(cases, daemon.Tuning.ReviewEvalCases)
+		cfg.DataDir = daemon.DataDir
+		rep, err := runReviewEval(ctx, cfg, cases, 1, capUSD)
+		if rep == nil {
+			return pipeline.ReviewScore{}, err
 		}
-		fmt.Println("accepted: no worse than the baseline")
+		return rep.ReviewScore, err
 	}
-	return nil
 }
 
 // pull hands an item over for local work: it fetches the item's branch into

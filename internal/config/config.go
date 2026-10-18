@@ -355,6 +355,9 @@ type Config struct {
 	// Sources file issues from Sentry, Dependabot and TODO comments, for
 	// you to approve. See Sources.
 	Sources Sources `yaml:"sources"`
+	// Hunt reviews one feature area at a time for old bugs, and files
+	// them for you to approve. See Hunt.
+	Hunt Hunt `yaml:"hunt"`
 	// Grooming flags duplicate, stale and too-big issues on a cadence, for
 	// you to confirm. See Grooming.
 	Grooming Grooming `yaml:"grooming"`
@@ -429,8 +432,27 @@ type Tuning struct {
 	// to factory.yaml.
 	Repo string `yaml:"repo"`
 	Path string `yaml:"path"`
+	// ReviewEval runs the reviewer evals (the kind: planted, clean and
+	// revert cases in ReviewEvalSet) on the current config and on the
+	// proposal before keeping a change to how review works; a proposal
+	// worse by more than ReviewEvalTolerance (a share, default 0.05)
+	// loses those changes. Off by default: it costs two runs of the set.
+	ReviewEval          bool     `yaml:"review_eval,omitempty"`
+	ReviewEvalSet       string   `yaml:"review_eval_set,omitempty"`       // default evals
+	ReviewEvalTolerance *float64 `yaml:"review_eval_tolerance,omitempty"` // default 0.05; 0 allows no drop
+	// ReviewEvalCases is the most cases each run reviews, the first by
+	// name; default 20.
+	ReviewEvalCases int `yaml:"review_eval_cases,omitempty"`
 
 	everyErr error
+}
+
+// ReviewTolerance is tuning.review_eval_tolerance, 0.05 when left out.
+func (t Tuning) ReviewTolerance() float64 {
+	if t.ReviewEvalTolerance == nil {
+		return 0.05
+	}
+	return *t.ReviewEvalTolerance
 }
 
 // Price is dollars per million tokens.
@@ -568,6 +590,12 @@ func (c *Config) defaults() {
 	if t.Path == "" {
 		t.Path = "factory.yaml"
 	}
+	if t.ReviewEvalSet == "" {
+		t.ReviewEvalSet = "evals"
+	}
+	if t.ReviewEvalCases == 0 {
+		t.ReviewEvalCases = 20
+	}
 	if _, ok := c.Routing["tune"]; !ok && c.Routing != nil {
 		c.Routing["tune"] = c.Routing["orchestrate"]
 	}
@@ -578,6 +606,7 @@ func (c *Config) defaults() {
 	c.previewDefaults()
 	c.reviewDefaults()
 	c.riskDefaults()
+	c.huntDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -868,6 +897,12 @@ func (c *Config) Validate() error {
 			bad("tuning.repo %s isn't in repos", r)
 		}
 	}
+	if t := c.Tuning.ReviewTolerance(); t < 0 || t >= 1 {
+		bad("tuning.review_eval_tolerance must be a share from 0 to 1, such as 0.05")
+	}
+	if c.Tuning.ReviewEvalCases < 0 {
+		bad("tuning.review_eval_cases can't be negative")
+	}
 	if _, err := CleanFilePath(c.Tuning.Path); err != nil {
 		bad("tuning.path: %v", err)
 	}
@@ -879,6 +914,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkReview()...)
 	errs = append(errs, c.checkRisk()...)
 	errs = append(errs, c.checkSecurity()...)
+	errs = append(errs, c.checkHunt()...)
 	switch c.PR.CheckOutput {
 	case "", CheckOutputPrivate, CheckOutputAlways, CheckOutputNever:
 	default:
@@ -1069,20 +1105,29 @@ func (c *Config) resolve(r Repo) Repo {
 		r.AutoMerge = c.AutoMerge
 	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
+	// REVIEW.md tells the reviewers what to look for and what to skip, so
+	// the builder they review never may change it, whatever the config.
+	always := AlwaysProtected
 	if r.GitLab() {
 		// A pushed branch runs its own .gitlab-ci.yml with the project's
 		// runners and CI variables, and a GitLab token, unlike GitHub's,
 		// can push pipeline changes. So builders never may.
-		pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
-		for _, p := range []string{".gitlab-ci.yml", ".gitlab/"} {
-			if !slices.Contains(pp, p) {
-				pp = append(pp, p)
-			}
-		}
-		r.Gates.DiffGuard.ProtectedPaths = pp
+		always = append(slices.Clone(always), ".gitlab-ci.yml", ".gitlab/")
 	}
+	pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
+	for _, p := range always {
+		if !slices.Contains(pp, p) {
+			pp = append(pp, p)
+		}
+	}
+	r.Gates.DiffGuard.ProtectedPaths = pp
 	return r
 }
+
+// AlwaysProtected are protected paths every repo has, whatever its
+// gates.diff_guard.protected_paths say: the repo's review guidance. A bare
+// name protects that file name in any folder.
+var AlwaysProtected = []string{"REVIEW.md", ".github/REVIEW.md"}
 
 // mergeGates lays a repo's gates over the top-level ones.
 func mergeGates(top Gates, own *Gates) *Gates {

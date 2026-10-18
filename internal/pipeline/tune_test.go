@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -462,5 +464,164 @@ func TestTunePeriod(t *testing.T) {
 	}
 	if at, _ := e.p.Store.Marked(ctx, markTuneDue); time.Since(mustTime(t, at)) > time.Minute {
 		t.Fatal("the stale clock wasn't reset")
+	}
+}
+
+// tuneWith runs one tuning run whose answer proposes changes, with the
+// reviewer-eval gate on and eval as its evaluator, and returns the proposal.
+func tuneWith(t *testing.T, changes string, eval ReviewEvaluator) (*env, *store.Proposal) {
+	t.Helper()
+	ctx := context.Background()
+	e, _ := tuneSetup(t, nil)
+	e.p.Cfg.Tuning.ReviewEval = true
+	e.p.ReviewEval = eval
+	e.claude.tune = func(harness.RunRequest) (string, error) {
+		return `{"summary":"s","changes":[` + changes + `],"ideas":[]}`, nil
+	}
+	if _, err := e.p.Tune(ctx, "factory tune", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.p.Store.PendingProposal(ctx)
+	if err != nil || p == nil {
+		t.Fatalf("pending = %v, %v", p, err)
+	}
+	return e, p
+}
+
+func score(caught, fp int) ReviewScore {
+	s := ReviewScore{Planted: 10, Caught: caught, Clean: 10, FalsePo: fp, CostUSD: 1, Outcomes: map[string]string{"a": OutcomeCaught, "b": OutcomeOK}}
+	s.Rates()
+	return s
+}
+
+// A proposed change to how review works runs the reviewer evals on the
+// current config and on the proposal first, and goes only if the reviewer
+// judges no worse; other changes are kept either way.
+func TestTuneGatesReviewChangesOnReviewerEvals(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		candidate ReviewScore
+		kept      int
+		why       string
+	}{
+		{"worse", score(5, 1), 1, "reviewer recall fell from 80% to 50%"},
+		{"noisier", score(8, 4), 1, "false-positive rate rose from 10% to 40%"},
+		{"as good", score(8, 1), 2, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var runs []string
+			var caps []float64
+			e, p := tuneWith(t, `{"path":["budgets","daily_total"],"value":75,"why":"w"},{"path":["routing","review","effort"],"value":"high","why":"w"}`,
+				func(_ context.Context, cfg *config.Config, capUSD float64) (ReviewScore, error) {
+					runs, caps = append(runs, cfg.Routing["review"].Effort), append(caps, capUSD)
+					if cfg.Routing["review"].Effort == "high" {
+						return tc.candidate, nil
+					}
+					return score(8, 1), nil
+				})
+			if strings.Join(runs, ",") != ",high" {
+				t.Fatalf("reviewer evals ran on %q", runs)
+			}
+			// Each run may spend half of what's left of today's budget.
+			spent, _ := e.p.buildSpend(context.Background())
+			if caps[0] <= 0 || caps[0] > e.p.Cfg.Budgets.DailyTotal/2 || caps[0] < (e.p.Cfg.Budgets.DailyTotal-spent)/2 {
+				t.Fatalf("caps %v (spent %.2f)", caps, spent)
+			}
+			if len(p.Changes) != tc.kept || !strings.Contains(p.Summary, "Reviewer evals: recall 80%") {
+				t.Fatalf("proposal = %+v", p)
+			}
+			if tc.why != "" {
+				if len(p.Dropped) != 1 || strings.Join(p.Dropped[0].Path, ".") != "routing.review.effort" || !strings.Contains(p.Dropped[0].Reason, tc.why) {
+					t.Fatalf("dropped = %+v", p.Dropped)
+				}
+				if strings.Contains(p.Diff, "effort") {
+					t.Fatalf("the dropped change is still in the diff:\n%s", p.Diff)
+				}
+			} else if !strings.Contains(p.Diff, "effort: high") {
+				t.Fatalf("diff:\n%s", p.Diff)
+			}
+			// What the evals spent counts toward today's.
+			if spent < 2 {
+				t.Fatalf("spend %.2f", spent)
+			}
+		})
+	}
+}
+
+// A change gates when it changes how review resolves, through a fallback
+// too: budgets.triage is the verifier's budget while budgets.verify is
+// unset, and implement.L the critic's route while routing.critic is.
+// A change that leaves review alone runs no evals.
+func TestTuneGatesReviewFallbacks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		change string
+		gated  bool
+	}{
+		{`{"path":["budgets","triage"],"value":0.7,"why":"w"}`, true},
+		{`{"path":["routing","implement.L","effort"],"value":"high","why":"w"}`, true},
+		{`{"path":["budgets","daily_total"],"value":75,"why":"w"}`, false},
+	} {
+		ran := 0
+		_, p := tuneWith(t, tc.change, func(_ context.Context, cfg *config.Config, _ float64) (ReviewScore, error) {
+			ran++
+			if ran == 2 {
+				return score(1, 0), nil // the proposal's run: worse
+			}
+			return score(8, 0), nil
+		})
+		if tc.gated != (ran == 2) || tc.gated != (len(p.Changes) == 0) {
+			t.Errorf("%s: ran %d, kept %+v", tc.change, ran, p.Changes)
+		}
+	}
+}
+
+// Evals that can't finish, as when they reach their cap, drop the review
+// changes: an unmeasured change to review never goes through.
+func TestTuneReviewGateDropsWhatItCantMeasure(t *testing.T) {
+	t.Parallel()
+	_, p := tuneWith(t, `{"path":["routing","review","effort"],"value":"high","why":"w"}`, func(context.Context, *config.Config, float64) (ReviewScore, error) {
+		return ReviewScore{CostUSD: 0.5}, errors.New("stopped at its $3.00 cap with cases left to run")
+	})
+	if len(p.Changes) != 0 || len(p.Dropped) != 1 || !strings.Contains(p.Dropped[0].Reason, "could not run: stopped at its $3.00 cap") {
+		t.Fatalf("proposal = %+v", p)
+	}
+}
+
+func TestReviewRegressions(t *testing.T) {
+	t.Parallel()
+	mk := func(caught, fp, stopped, errs int) ReviewScore {
+		s := ReviewScore{Planted: 20, Caught: caught, Clean: 20, FalsePo: fp, Reverts: 4, Stopped: stopped, Errors: errs,
+			Outcomes: map[string]string{"p1": OutcomeCaught, "c1": OutcomeOK}}
+		s.Rates()
+		return s
+	}
+	base := mk(16, 2, 3, 0)
+	if why := ReviewRegressions(mk(15, 3, 3, 0), base, 0.05); len(why) != 0 {
+		t.Fatalf("within tolerance: %v", why)
+	}
+	if why := ReviewRegressions(mk(15, 2, 3, 0), base, 0); len(why) == 0 {
+		t.Fatal("a tolerance of 0 allows no drop")
+	}
+	worse := mk(14, 2, 3, 0)
+	worse.Outcomes = map[string]string{"p1": OutcomeMissed, "c1": OutcomeOK}
+	if why := ReviewRegressions(worse, base, 0.05); len(why) != 2 || !strings.Contains(why[0], "recall fell from 80% to 70%") || why[1] != "worse: p1 caught → missed" {
+		t.Fatalf("recall: %v", why)
+	}
+	if why := ReviewRegressions(mk(16, 4, 2, 0), base, 0.05); len(why) != 2 || !strings.Contains(why[1], "blocked 2 of 4") {
+		t.Fatalf("false positives and reverts: %v", why)
+	}
+	if why := ReviewRegressions(mk(16, 2, 3, 1), base, 0.05); len(why) != 1 || !strings.Contains(why[0], "1 cases got no ruling") {
+		t.Fatalf("errors: %v", why)
+	}
+	other := mk(16, 2, 3, 0)
+	other.Outcomes = map[string]string{"p1": OutcomeCaught, "c2": OutcomeOK}
+	if why := ReviewRegressions(other, base, 0.05); len(why) != 1 || !strings.Contains(why[0], "different cases (c1 only in the baseline, c2 only in the candidate)") {
+		t.Fatalf("different cases: %v", why)
 	}
 }

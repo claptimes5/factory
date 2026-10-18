@@ -28,10 +28,15 @@ type Signal struct {
 	LearnJob    int64 // the learn job that used it; 0 while unused
 }
 
-// Signal kinds.
+// Signal kinds. An overruled signal is a blocking finding a human
+// overruled: the verifier refuted it, or the builder said it was wrong
+// and a review withdrew it, and the human merged the PR. FromSHA and
+// HeadSHA are set when they pushed to it first, so the learn job can tell
+// whether they addressed it after all.
 const (
 	SignalHumanEdit = "human_edit"
 	SignalFinding   = "finding"
+	SignalOverruled = "overruled"
 )
 
 // AddSignal records a signal. The same one recorded again (a retried
@@ -106,7 +111,8 @@ func (s *Store) UseSignals(ctx context.Context, ids []int64, learnJob int64) err
 	})
 }
 
-// Lesson is a line the factory proposed for a repo's AGENTS.md or CLAUDE.md.
+// Lesson is a line the factory proposed for a repo's AGENTS.md or CLAUDE.md,
+// or for its REVIEW.md (see ReviewNorm).
 type Lesson struct {
 	ID        int64
 	Repo      string
@@ -117,6 +123,17 @@ type Lesson struct {
 	CreatedAt string
 	DecidedAt string
 }
+
+// reviewNorm starts the norm of a line for REVIEW.md. A norm is
+// lowercased, so no AGENTS.md line's can start with it.
+const reviewNorm = "REVIEW.md "
+
+// ReviewNorm is the norm of a REVIEW.md line, from its norm as a line.
+func ReviewNorm(norm string) string { return reviewNorm + norm }
+
+// ForReview says the line was proposed for REVIEW.md, and gives its norm
+// as a line.
+func (l Lesson) ForReview() (string, bool) { return strings.CutPrefix(l.Norm, reviewNorm) }
 
 // Lesson statuses.
 const (

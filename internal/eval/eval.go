@@ -43,6 +43,9 @@ type Case struct {
 	Title   string `yaml:"title"`
 	Body    string `yaml:"body"`
 	Accept  string `yaml:"accept"` // e.g. go test -run TestAdd ./...
+	// Kind is empty for a builder case; a reviewer case (see ReviewCase)
+	// says planted, clean or revert, and Load leaves it out.
+	Kind string `yaml:"kind,omitempty"`
 }
 
 // Load reads every case under dir.
@@ -67,6 +70,9 @@ func Load(dir string) ([]Case, error) {
 			return nil, fmt.Errorf("%s: %w", e.Name(), err)
 		}
 		c.Name, c.Dir = e.Name(), filepath.Join(dir, e.Name())
+		if c.Kind != "" {
+			continue // the reviewer's, for LoadReview
+		}
 		if c.BaseSHA == "" || c.Title == "" || c.Accept == "" {
 			return nil, fmt.Errorf("%s: base_sha, title and accept are required", c.Name)
 		}
@@ -120,7 +126,10 @@ type Options struct {
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
 	WorkDir  string // scratch space; each case gets a subdirectory
 	Parallel int
-	Log      *slog.Logger
+	// MaxCostUSD stops a reviewer eval run starting cases once it has
+	// spent this much (0: no cap); one that stops for it is an error.
+	MaxCostUSD float64
+	Log        *slog.Logger
 }
 
 // Run runs every case and reports.
@@ -182,24 +191,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return res, err
 	}
-	cfg := *o.Cfg
-	cfg.DataDir = filepath.Join(dir, "data")
-	cfg.Intake.PollInterval = config.Duration{}
-	cfg.Orchestrator.On = false
-	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
-	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
-	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
-	cfg.Previews.Off()               // nor is there a PR to show them on
-	cfg.Budgets.ConfirmOver = 0      // nobody is there to say go
-	cfg.Grooming.Off()               // nor is its backlog the run's
-	cfg.NoGuard = true               // nor are its reverts, nor its breaker
-	rc, known := o.Cfg.RepoConf(c.Repo)
-	if !known {
-		rc = o.Cfg.Primary()
-		rc.Files = nil // the primary repo's files aren't this one's
-	}
-	rc.ConfirmOver = nil
-	cfg.Repos = []config.Repo{rc}
+	cfg, rc, known := caseConfig(o, c.Repo, dir)
 	base := rc.BaseBranch
 	remote := filepath.Join(dir, "remote.git")
 	if err := freeze(ctx, o, c, rc.Name, known || c.Repo == "", remote, base); err != nil {
@@ -213,7 +205,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	gh := github.NewMemory()
 	gh.AddIssue(1, c.Title, c.Body, cfg.Intake.Label)
 	p := &pipeline.Pipeline{
-		Cfg: &cfg, Store: st, GH: gh, Runner: o.Runner, Harnesses: o.Harnesses, Secrets: o.Secrets, Log: o.Log.With("case", c.Name),
+		Cfg: cfg, Store: st, GH: gh, Runner: o.Runner, Harnesses: o.Harnesses, Secrets: o.Secrets, Log: o.Log.With("case", c.Name),
 		Git:      &pipeline.Git{RemoteURL: remote, Author: "factory-eval <eval@localhost>", AskPassDir: dir},
 		GateExec: o.GateExec, JobPrefix: prefix,
 	}
@@ -276,6 +268,33 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 		res.Passed = true
 	}
 	return res, nil
+}
+
+// caseConfig is the config one case runs on, in dir: the candidate's,
+// with everything that acts beyond the run turned off, and only the
+// case's repo (repo: a configured repo's name, else the primary's gates).
+// known says whether repo is a configured one.
+func caseConfig(o Options, repo, dir string) (*config.Config, config.Repo, bool) {
+	cfg := *o.Cfg
+	cfg.DataDir = filepath.Join(dir, "data")
+	cfg.Intake.PollInterval = config.Duration{}
+	cfg.Orchestrator.On = false
+	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
+	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
+	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
+	cfg.Hunt.Enabled = false         // nor is its code hunted for bugs
+	cfg.Previews.Off()               // nor is there a PR to show them on
+	cfg.Budgets.ConfirmOver = 0      // nobody is there to say go
+	cfg.Grooming.Off()               // nor is its backlog the run's
+	cfg.NoGuard = true               // nor are its reverts, nor its breaker
+	rc, known := o.Cfg.RepoConf(repo)
+	if !known {
+		rc = o.Cfg.Primary()
+		rc.Files = nil // the primary repo's files aren't this one's
+	}
+	rc.ConfirmOver = nil
+	cfg.Repos = []config.Repo{rc}
+	return &cfg, rc, known
 }
 
 // freeze makes a private bare remote whose base branch is the case's base.

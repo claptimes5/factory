@@ -67,8 +67,11 @@ Nothing the builder writes is trusted:
   `CLAUDE.md`, `AGENTS.md`, `AGENTS.override.md`, `.codex/`, `.mcp.json`).
   The list is `gates.diff_guard.protected_paths`; this repo's also covers
   the factory's own controls (`.github/`, `factory.yaml`, `prompts/`,
-  `skills/`, `.golangci.yml`, `CODEOWNERS`). For every GitLab repo it adds
-  `.gitlab-ci.yml` and `.gitlab/`.
+  `skills/`, `.golangci.yml`, `CODEOWNERS`). For every repo it adds
+  `REVIEW.md` and `.github/REVIEW.md`, whatever the list says, since they
+  steer the reviewers (and the review reads them from the base branch, not
+  the change). For every GitLab repo it adds `.gitlab-ci.yml` and
+  `.gitlab/`.
 - **The review is pinned to the verified commit.** If the branch moved
   after the gates ran, the item parks.
 - **The PR description quotes the checks, never the reverse.** By default

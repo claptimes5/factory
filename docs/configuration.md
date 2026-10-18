@@ -672,6 +672,10 @@ tuning:
   budget: 3                   # dollars per run; default orchestrator.run_budget
   repo: you/infra             # optional: also open a draft PR there
   path: deploy/factory.yaml   # where this file lives in that repo; default factory.yaml
+  review_eval: false          # run the reviewer evals before keeping a review change
+  review_eval_set: evals      # where the reviewer cases are
+  review_eval_tolerance: 0.05 # how much worse the reviewer may get, as a share
+  review_eval_cases: 20       # the most cases each run reviews
 ```
 
 | Key | What it does |
@@ -680,6 +684,8 @@ tuning:
 | `min_items` | A run with fewer items built since the last one is skipped, and you're told. `factory tune` ignores it. |
 | `budget` | The dollar cap for one run. Its spend counts toward `orchestrator.daily_budget`, not the build budget. A run waits while either of those is spent for the day. |
 | `repo`, `path` | Where this `factory.yaml` lives in one of the factory's repos. With `repo` set, each proposal with changes opens a draft PR there on `factory/tuning-<date>`, made to that copy of the file. The file must exist there as a plain file, not a symlink or behind one, and still load with the change. If the day's branch has commits the factory didn't make, it uses `factory/tuning-<date>-2` and so on, rather than push over them. |
+
+| `review_eval`, `review_eval_set`, `review_eval_tolerance`, `review_eval_cases` | Off by default. On, each proposed change is checked on its own for whether it changes how review works, as resolved with every fallback: the review route for each risk, the verifier's, critic's and security pass's routes (so `routing.implement.L` counts while `routing.critic` is unset), the `review` and `security` settings, the review and verifier budgets (so `budgets.triage` counts while `budgets.verify` is unset), fast mode's multiplier, the review, critic, verify and security timeouts, and `prompts_dir`. If any does, the [reviewer evals](quality.md#reviewer-evals) in `review_eval_set` run on the current config and on the proposal: at most `review_eval_cases`, taken in turn from the planted, clean and revert cases in name order, so a small set still holds each kind. If recall falls or the false-positive rate rises by more than `review_eval_tolerance` (0 allows no fall at all), fewer reverts are blocked, or more cases get no ruling, the changes that alter review are dropped with why, naming the cases that got worse; the others stay. The proposal's summary gives both runs' numbers. Each run may spend half of what's left of today's budget, counted toward it, and waits like the tuning run when the budget is spent. If the evals can't run or finish (no cases, an error, the cap reached), the review changes are dropped. |
 
 With tuning on, the daemon won't start without `prompts/tune.md`.
 
@@ -709,7 +715,7 @@ learning:
 | Key | What it does |
 | --- | --- |
 | `enabled` | On by default. Off, the factory records nothing and runs no learn jobs. |
-| `min_findings` | How many alike blocking findings, from at least two items, start a learn job when no edit of yours does. At least 2 (default 2). |
+| `min_findings` | How many alike blocking findings, from at least two items, start a learn job when no edit of yours does. At least 2 (default 2). The same count of alike findings you overruled starts one that may propose lines for `REVIEW.md`. |
 | `budget` | Dollars per learn job. Left out, it's `budgets.triage`. |
 
 `routing.learn` picks its model. Left out, it runs on triage's harness:
@@ -846,6 +852,41 @@ grooming:
 `timeouts.groom` is 10 minutes by default. With grooming on, the daemon
 won't start without `prompts/groom.md`. `factory eval` and
 `factory compare` never groom.
+
+## Old-bug hunting
+
+When the factory has nothing else to do, it can review one area of a
+repo's [feature map](quality.md#feature-map) at a time for bugs already
+in the code, and file what it finds for you to approve (see
+[Hunting for old bugs](using.md#hunting-for-old-bugs)). It's off unless
+you turn it on, since it spends on its own schedule:
+
+```yaml
+hunt:
+  enabled: true
+  every: 24h          # at least 1h
+  budget: 3           # dollars per hunt; left out, budgets.review
+  daily_budget: 3     # dollars on hunts a day; left out, one hunt's budget
+  max_findings: 3     # issues one hunt files at most, up to 10
+  daily_issue_cap: 3  # issues hunts file per repo a day; left out, max_findings
+  # repos: [acme/api] # default: every repo
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` | Turns hunting on. |
+| `every` | `24h` | How often a hunt may start, at least `1h`. The first starts as soon as the factory is idle; the clock survives restarts. A hunt starts only while no other job is queued or running, and is queued behind every other kind. |
+| `budget` | `budgets.review` | Dollars per hunt. |
+| `daily_budget` | `budget` | What hunts may spend a day. A hunt also counts toward `budgets.daily_total`, and starts only when a whole hunt's `budget` still fits in both. |
+| `max_findings` | `3` | The most issues one hunt files; the most severe go first. |
+| `daily_issue_cap` | `max_findings` | How many issues hunts may file per repo a day, apart from `sources.daily_issue_cap`. Findings it holds back aren't lost: the area counts as not hunted, and comes round again next. |
+| `repos` | every repo | Which repos. Each hunt takes the repo hunted longest ago. |
+
+`routing.hunt` picks its model; left out, it's the reviewer's
+(`routing.review`'s harness, model and effort). `timeouts.hunt` is 20
+minutes by default. With hunting on, the daemon won't start without
+`prompts/hunt.md`. A repo with no `features.yaml` isn't hunted.
+`factory eval` and `factory compare` never hunt.
 
 ## PR previews
 
@@ -1106,3 +1147,8 @@ free (up to five times). When it can't start for another reason (such as
 the daily budget), fails, or ends without a valid verdict, the review
 fails: it is retried once, then the item parks. The daemon won't start without
 `prompts/security.md` while the pass is on.
+
+A repo's own `REVIEW.md`, read from its base branch, also steers review:
+its text goes to the reviewer, the critic and the verifier, and its front
+matter can skip paths and cap minor findings. It lives in the repo, not in
+`factory.yaml`; see [REVIEW.md](quality.md#reviewmd).

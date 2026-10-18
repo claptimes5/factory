@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"github.com/claptimes5/factory/internal/eval"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
+	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 // prForge is the slice of a forge capture uses.
@@ -156,6 +159,20 @@ func TestCaptureMergedPR(t *testing.T) {
 			if len(cases) != 2 || cases[1].Title != "factory: #3" || cases[1].Accept != "go test ./..." || !strings.Contains(strings.Join(c.Notes, "\n"), "names no issue") {
 				t.Fatalf("cases = %+v, notes = %v", cases, c.Notes)
 			}
+
+			// Reviewer cases from the same PR: a clean one, beside the
+			// builder's, and no plant, since Add's one line fits none.
+			rc, err := captureReview(ctx, cfg, "o/r", 7, f, &pipeline.Git{RemoteURL: remote}, t.TempDir(), set, "", false)
+			if err != nil || len(rc.Dirs) != 1 || !strings.HasSuffix(rc.Dirs[0], "-clean") || !strings.Contains(strings.Join(rc.Notes, "\n"), "flip-comparison: nothing") {
+				t.Fatalf("review capture %+v %v", rc, err)
+			}
+			rcs, err := eval.LoadReview(set)
+			if err != nil || len(rcs) != 1 || rcs[0].Kind != eval.KindClean || rcs[0].BaseSHA != base {
+				t.Fatalf("reviewer cases %+v %v", rcs, err)
+			}
+			if cases, _ = eval.Load(set); len(cases) != 2 {
+				t.Fatalf("builder cases = %+v", cases)
+			}
 		})
 	}
 }
@@ -170,5 +187,39 @@ func TestCaptureUnconfiguredRepo(t *testing.T) {
 	_, err = capture(context.Background(), cfg, "other/repo", 1, &prForge{}, &pipeline.Git{}, t.TempDir(), t.TempDir(), "", "")
 	if err == nil || !strings.Contains(err.Error(), "isn't in the config") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A factory PR the revert watch saw reverted is captured as a revert
+// case, named by its number so a second run skips it.
+func TestRevertedPRs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{4, 5} {
+		if err := st.RecordMerge(ctx, store.FactoryMerge{Repo: "o/r", PR: n, MergeSHA: fmt.Sprintf("sha%d", n), Title: "t"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.MarkReverted(ctx, "o/r", 5, "abc123", store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range map[int]bool{4: false, 5: true, 6: false} {
+		if got, err := reverted(ctx, st, "o/r", n); err != nil || got != want {
+			t.Errorf("reverted(%d) = %v, %v", n, got, err)
+		}
+	}
+	if n := revertCaseName(cfg, store.FactoryMerge{Repo: "o/r", PR: 5}); n != "pr-5" {
+		t.Fatalf("name = %s", n)
+	}
+	// One already captured is skipped without reaching the forge.
+	set := t.TempDir()
+	os.MkdirAll(filepath.Join(set, "pr-5-revert"), 0o755)
+	if err := captureReverts(ctx, cfg, st, set); err != nil {
+		t.Fatal(err)
 	}
 }

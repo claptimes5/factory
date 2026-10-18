@@ -313,3 +313,21 @@ func TestImportsAgents(t *testing.T) {
 		}
 	}
 }
+
+// A missing REVIEW.md is a tip, which costs no points; one with keys the
+// factory ignores says so.
+func TestReviewGuide(t *testing.T) {
+	exec, _ := fails()
+	dir := tree(t, "go.mod", "a_test.go")
+	r := Assess(context.Background(), Input{Repo: repo("", "test"), Dir: dir, Exec: exec})
+	if !strings.Contains(titles(r, Tip), "No REVIEW.md") || !strings.Contains(r.Text(), "· No REVIEW.md") {
+		t.Fatalf("report:\n%s", r.Text())
+	}
+	without := r.Score
+	os.MkdirAll(filepath.Join(dir, ".github"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".github", "REVIEW.md"), []byte("---\ncolour: blue\n---\nLook hard at totals.\n"), 0o644)
+	r = Assess(context.Background(), Input{Repo: repo("", "test"), Dir: dir, Exec: exec})
+	if !strings.Contains(titles(r, Good), "Has review guidance in .github/REVIEW.md") || !strings.Contains(titles(r, Tip), "settings the factory ignores") || r.Score != without {
+		t.Fatalf("report (%d, was %d):\n%s", r.Score, without, r.Text())
+	}
+}

@@ -35,3 +35,26 @@ passes. The command lists what it couldn't copy: a test the fix deleted
 `factory eval -config candidate.yaml -baseline base.json` before changing a
 model, prompt, skill or routing threshold. The command fails if the
 candidate's pass rate is lower or its cost per pass higher.
+
+## Reviewer cases
+
+A case with a `kind` is the reviewer's: `factory eval review` runs only
+the review stage on its `change.patch` (see
+[Reviewer evals](../docs/quality.md#reviewer-evals)), and `factory eval`
+skips it.
+
+```yaml
+kind: planted                # planted, clean or revert
+title: Add Max, Read and Sum # the task the change was for
+body: |
+  The issue text.
+base_sha: 0123abcd...        # change.patch applies here
+risk: low                    # optional: the review route's risk
+plant: {mutation: drop-err-check, file: f.go, line: 16}   # planted only
+```
+
+`factory eval capture -review PR` writes them from a merged PR, and
+`factory eval capture -reverts` from the factory PRs that were reverted.
+Run `factory eval review -out base.json`, then
+`factory eval review -config candidate.yaml -baseline base.json` before
+changing a review prompt, route or model.

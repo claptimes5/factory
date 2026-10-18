@@ -198,7 +198,7 @@ func TestEvalRefusesABadCodexAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runEval(context.Background(), cfg, []string{"-set", t.TempDir()}); err == nil || !strings.Contains(err.Error(), "FACTORY_CODEX_AUTH") {
+	if err := runEval(context.Background(), cfg, nil, []string{"-set", t.TempDir()}); err == nil || !strings.Contains(err.Error(), "FACTORY_CODEX_AUTH") {
 		t.Fatalf("eval ran with a bad FACTORY_CODEX_AUTH: %v", err)
 	}
 }
