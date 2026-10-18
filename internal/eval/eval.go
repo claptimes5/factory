@@ -172,6 +172,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	cfg.Orchestrator.On = false
 	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
+	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
 	rc, known := o.Cfg.RepoConf(c.Repo)
 	if !known {
 		rc = o.Cfg.Primary()

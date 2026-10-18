@@ -280,7 +280,7 @@ func (p *Pipeline) linkedTop(it *store.WorkItem, prs []openedPR, i int) string {
 // touches, links them to each other and hands the item to a human.
 func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is github.Issue, in ReviewInput) error {
 	branch := p.branchFor(it)
-	title := fmt.Sprintf("%s (%s)", is.Title, p.issueRef(it.Repo, is.Number))
+	title := fmt.Sprintf("%s (%s)", noClose(is.Title), p.issueRef(it.Repo, is.Number))
 	var prs []openedPR
 	for _, h := range in.Heads {
 		gh := p.gh(h.Repo)
@@ -340,7 +340,7 @@ func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is 
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
 	p.notify(ctx, fmt.Sprintf("%s-risk change ready for review across %d repos: %s %s. Merge in order: %s",
-		capitalize(riskOrLow(it.Risk)), len(prs), p.ref(it.Repo, it.IssueNumber), is.Title, strings.Join(urls, " then ")))
+		capitalize(riskOrLow(it.Risk)), len(prs), p.ref(it.Repo, it.IssueNumber), SafeText(is.Title, 100), strings.Join(urls, " then ")))
 	return nil
 }
 

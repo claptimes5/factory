@@ -113,7 +113,10 @@ The daemon also tells you when builds stop for
 merge a factory PR only after changing it (see
 [Failures become cases](quality.md#failures-become-cases)). With
 [main health](#keeping-main-green) on, it tells you once each time a check
-goes red or flaky on a base branch and once when it's green again.
+goes red or flaky on a base branch and once when it's green again. With
+[sources](#issues-from-sentry-dependabot-and-todos) on, it tells you about
+each issue they file, once a day when the cap holds some back, and once
+when a source can't be read.
 
 The dashboard's Inbox can also show browser notifications, but only while
 a dashboard tab is open.
@@ -396,6 +399,99 @@ until you reopen it.
 
 `factory status` shows each repo's state and the checks failing now; so
 does the dashboard while a repo is red or flaky.
+
+## Issues from Sentry, Dependabot and TODOs
+
+The factory can find work on its own in three places, each turned on in
+[`sources`](configuration.md#sources):
+
+- **Sentry:** unresolved errors with enough events (and users).
+- **Dependabot:** open security alerts at or above a severity (GitHub only).
+- **TODOs:** comments marked `TODO(factory)` or `FIXME(factory)` on each
+  repo's base branch.
+
+For each thing it finds, it files one issue, labeled `factory:from-sentry`,
+`factory:from-dependabot` or `factory:from-todo`, and tells you (the
+notice names the issue, not its title, which is someone else's text). Unlike
+[main health](#keeping-main-green)'s, these issues are **never built on
+their own.** They're filed without `factory:ready` and wait for someone
+with write access to add it, through the usual
+[approval check](security.md#who-can-start-work). Each issue says so in a
+line of its own. Read it, edit it if you like, then label it; or close it.
+
+**Sentry.** Every `sources.sentry.every` (15 minutes) the factory lists the
+unresolved issues of each repo's Sentry project, most events first (or most
+users, with `sort: user`), and files those with at least `min_events` (10)
+events and `min_users` (0) users. The issue links the Sentry issue, gives
+its counts and when it was first and last seen, and quotes its title,
+culprit and the latest event's stack trace: the in-app frames only, at most
+20 per exception. All of that is fenced and marked untrusted, since whoever
+sets off an error controls its message.
+
+**Dependabot.** Every `sources.dependabot.every` (1 hour) it reads the
+open security alerts of each GitHub repo at `min_severity` (high) or worse,
+and files one issue per alert, worst first: the advisory (GHSA and CVE),
+severity, package, vulnerable versions, first patched version and manifest.
+Dependabot often opens its own PR for an alert. When an open Dependabot PR
+bumps the same package in the same folder (by its title or its
+`dependabot/` branch, or a grouped update that lists the package), the
+factory files nothing for it; if that PR closes unmerged, the alert is
+filed on the next read. On a
+GitHub App, reading alerts needs the *Dependabot alerts: read* permission
+(see [Configuration](configuration.md#sources)). GitLab's dependency
+scanning isn't read.
+
+**TODOs.** Every `sources.todos.every` (6 hours) it makes a shallow clone of
+each repo's base branch and searches the files git tracks there for the
+markers, where one starts a comment (`// TODO(factory): ...`, `# ...`,
+`/* ... */`, `<!-- ... -->`, and the like). The default markers are only
+the factory's, so ordinary TODOs aren't filed; add `TODO` and `FIXME` to
+`markers` to file those too. It leaves out vendored and generated code
+(`vendor/`, `node_modules/`, `third_party/`, `dist/`, `testdata/`, minified
+and lock files, files that say `Code generated ... DO NOT EDIT`), prose
+(`.md`, `.txt` and the like), and anything in `skip_paths`. At most
+`max_per_run` (5) are filed per scan; the rest follow on later scans. A
+TODO is known by its file and its text, not its line, so lines added above
+it don't file it again. The issue links the line at the commit and quotes
+the lines around it, fenced and marked untrusted.
+
+**When it goes away.** Once the Sentry issue is resolved (or archived),
+the alert is fixed or dismissed, or the comment is gone from the base
+branch, the factory closes the issue (as not planned, on GitHub) and says
+why, as long as the issue is still open, still has its source label, was
+opened by the factory, still reads as the factory filed it, and nobody
+approved it (`factory:ready`, `factory:epic`, or a build for it). An
+approved issue is left to its build; the factory only stops tracking it
+once it closes. One someone edited is left open for you.
+
+Titles are cut to one line with no invisible characters, and `#12` and
+`@name` in them are spaced out, so a title can't mention anyone or, once
+built, close another issue. The factory's commit messages and PR titles
+also space out a closing keyword's issue number (`fixes # 12`) for every
+issue, not only these.
+
+**Not looping.**
+
+- One issue per Sentry issue, alert, or TODO, kept in the factory's
+  database. Before filing it also looks for an open issue it filed itself
+  (opened by its own app or account) for the same thing, so a lost
+  database doesn't file twice. An issue you close
+  isn't filed again while what it was filed for is still there.
+- At most `sources.daily_issue_cap` (3) issues per repo per UTC day, across
+  all three sources. Past that you're told once that day, and the rest are
+  filed on later days if they're still there.
+- A source the factory can't read for a repo (a missing or bad Sentry
+  token, no permission for the alerts, no such project) files nothing, and
+  you're told once, and again when it can read it. A server error or a
+  rate limit is retried quietly, then read again on the next cadence.
+
+Reads run beside the daemon's loop, so a slow API or a large clone doesn't
+hold up intake or builds, and a restart doesn't read again before the
+cadence is due. The TODO scan stops reading matches at 2000 (and then
+closes nothing that scan), and doesn't clone while the disk is low.
+
+`factory status` shows each source's last read of each repo, what it found
+and the issues it has open.
 
 ## Working on the dashboard
 

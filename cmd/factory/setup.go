@@ -29,7 +29,7 @@ import (
 var envKeys = []string{
 	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
 	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_CODEX_AUTH", "CODEX_ACCESS_TOKEN",
-	"FACTORY_NOTIFY_URL",
+	"FACTORY_NOTIFY_URL", "SENTRY_AUTH_TOKEN",
 }
 
 // prompter asks questions on a terminal, or reads answers line by line
@@ -336,6 +336,17 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 		vals["FACTORY_NOTIFY_URL"] = u
 		break
+	}
+
+	if cfg.Sources.Sentry.Enabled {
+		p.say("\n== 10. Sentry (optional)")
+		p.say("sources.sentry files an issue for each unresolved Sentry error. It reads Sentry with")
+		p.say("an auth token: an internal integration's, or a personal one, with the project:read")
+		p.say("and event:read scopes (Settings > Developer Settings on your Sentry).")
+		vals["SENTRY_AUTH_TOKEN"] = p.secret("Sentry auth token (Enter to skip)", vals["SENTRY_AUTH_TOKEN"])
+		if vals["SENTRY_AUTH_TOKEN"] == "" {
+			p.say("Without it the factory files nothing from Sentry, and tells you so once.")
+		}
 	}
 
 	if err := save(); err != nil {

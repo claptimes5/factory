@@ -10,3 +10,6 @@ gh label create "factory:parked"       -R "$repo" -c d93f0b -d "Factory: needs a
 gh label create "factory:awaiting-you" -R "$repo" -c 1d76db -d "Factory: draft PR ready for your review" --force
 gh label create "factory:retry"        -R "$repo" -c 5319e7 -d "Factory: send a parked issue back to triage" --force
 gh label create "factory:epic"         -R "$repo" -c c5def5 -d "Factory: split into child issues" --force
+gh label create "factory:from-sentry"     -R "$repo" -c 362d59 -d "Factory: filed from a Sentry error; add factory:ready to build it" --force
+gh label create "factory:from-dependabot" -R "$repo" -c 0366d6 -d "Factory: filed from a Dependabot alert; add factory:ready to build it" --force
+gh label create "factory:from-todo"       -R "$repo" -c c5def5 -d "Factory: filed from a TODO comment; add factory:ready to build it" --force

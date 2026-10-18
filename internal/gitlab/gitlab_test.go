@@ -40,7 +40,7 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		j([]map[string]any{{"iid": 3, "title": "Fix login", "description": "It breaks", "state": "opened", "labels": []string{"factory:ready"}}})
 	case r.Method == "GET" && path == p+"/issues/9":
-		j(map[string]any{"iid": 9, "title": "Old", "state": "closed"})
+		j(map[string]any{"iid": 9, "title": "Old", "state": "closed", "author": map[string]any{"username": "factory-bot"}})
 	case r.Method == "PUT" && (path == p+"/issues/3" || path == p+"/merge_requests/5"):
 		f.puts = append(f.puts, in)
 		j(map[string]any{})
@@ -101,7 +101,7 @@ func TestClient(t *testing.T) {
 	if err != nil || len(is) != 1 || is[0].Number != 3 || is[0].Body != "It breaks" || is[0].State != "open" || is[0].Labels[0] != "factory:ready" {
 		t.Fatalf("issues %+v %v", is, err)
 	}
-	if old, err := c.GetIssue(ctx, 9); err != nil || old.State != "closed" || old.StateReason != "" {
+	if old, err := c.GetIssue(ctx, 9); err != nil || old.State != "closed" || old.StateReason != "" || old.Author != "factory-bot" {
 		t.Fatalf("closed %+v %v", old, err)
 	}
 	if err := c.AddLabels(ctx, 3, "a", "b"); err != nil {

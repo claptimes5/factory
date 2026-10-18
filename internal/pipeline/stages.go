@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -265,9 +266,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	// From here on the builder's checkouts are only read as files. Everything
 	// below runs in the daemon's own repositories.
 	msg := fmt.Sprintf("factory: %s %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
-		p.ref(it.Repo, it.IssueNumber), is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+		p.ref(it.Repo, it.IssueNumber), noClose(is.Title), noClose(v.Summary), j.ID, j.Harness, j.Model, j.Attempt)
 	if len(members) == 1 {
-		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, noClose(is.Title), noClose(v.Summary), j.ID, j.Harness, j.Model, j.Attempt)
 	}
 	changed := false
 	for _, pt := range parts {
@@ -760,7 +761,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return err
 	}
 	if pr == nil {
-		pr, err = p.gh(it.Repo).CreatePR(ctx, fmt.Sprintf("%s (#%d)", is.Title, is.Number), body, branch, p.repoConf(it.Repo).BaseBranch, true)
+		pr, err = p.gh(it.Repo).CreatePR(ctx, fmt.Sprintf("%s (#%d)", noClose(is.Title), is.Number), body, branch, p.repoConf(it.Repo).BaseBranch, true)
 		if err != nil {
 			return err
 		}
@@ -785,7 +786,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
+	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return nil
 }
 
@@ -894,7 +895,7 @@ func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAutoMerge), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself once its checks pass: %s %s %s", capitalize(it.Risk), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
+	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself once its checks pass: %s %s %s", capitalize(it.Risk), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return true
 }
 
@@ -944,3 +945,14 @@ func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why 
 	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
 	return nil
 }
+
+// closeRE is an issue reference a closing keyword could act on:
+// "#12", "o/r#12", or an issue's URL. Forges accept more keywords and
+// forms ("Closes #1, #2 and #3", "Implements #5", "fixes <url>") than a
+// keyword list can keep up with, so every reference is broken.
+var closeRE = regexp.MustCompile(`(#|/issues/|/work_items/)(\d)`)
+
+// noClose keeps text an issue's author or a job wrote from closing
+// issues when the factory's commit or PR merges: "fixes #12" becomes
+// "fixes # 12", and an issue's URL loses its number.
+func noClose(s string) string { return closeRE.ReplaceAllString(s, "$1 $2") }

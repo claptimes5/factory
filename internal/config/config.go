@@ -298,6 +298,9 @@ type Config struct {
 	// MainHealth files fix issues when CI goes red or flakes on a repo's
 	// base branch. See MainHealth.
 	MainHealth MainHealth `yaml:"main_health"`
+	// Sources file issues from Sentry, Dependabot and TODO comments, for
+	// you to approve. See Sources.
+	Sources Sources `yaml:"sources"`
 
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
@@ -488,6 +491,7 @@ func (c *Config) defaults() {
 	}
 	c.learningDefaults()
 	c.healthDefaults()
+	c.sourcesDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -769,6 +773,7 @@ func (c *Config) Validate() error {
 	}
 	errs = append(errs, c.checkLearning()...)
 	errs = append(errs, c.checkHealth()...)
+	errs = append(errs, c.checkSources()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}

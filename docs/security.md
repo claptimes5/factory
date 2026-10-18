@@ -26,6 +26,10 @@ to it can start work there. The factory checks who added `factory:ready`
   `factory:retry`.
 - **The orchestrator reads only approved text.** It sees an issue's title
   and body only if that issue was approved and is unchanged since.
+- **Issues the factory files from Sentry, Dependabot or TODOs wait for
+  you.** They never carry `factory:ready` and are never approved as the
+  factory, so the same check applies to them as to an outsider's issue
+  (see [Sources](#sources-tokens-and-untrusted-text)).
 
 Items that were already in the factory when you upgrade take their text,
 the next time it's read, as approved.
@@ -78,6 +82,39 @@ Nothing the builder writes is trusted:
   sign-in's tokens are taken out of the job's log. The agent in that job
   can read the sign-in, as it can read an API key, so don't use a ChatGPT
   plan on public repos.
+
+## Sources: tokens and untrusted text
+
+The [sources](using.md#issues-from-sentry-dependabot-and-todos) read text
+other people control into issues the builder may later read:
+
+- **Error messages are attacker-influenced.** Anyone who can make your app
+  throw can choose what a Sentry error says, and so can a crafted request
+  for its stack frames' file names. Advisory summaries and the lines around
+  a TODO come from elsewhere too. The factory puts all of it in a fenced
+  block, marked as data and not instructions, never in a heading or a
+  link. Titles are cut to one line with no backticks or invisible
+  characters, and `#12` and `@name` in them are spaced out, so a title
+  can't mention anyone or close an issue once built. Notifications leave
+  the title out, and no notification pings: Slack's `<!channel>` and links
+  are escaped, and Discord resolves no mentions. Nothing it files is built
+  until someone with write access reads it and adds `factory:ready`.
+- **Only its own issues.** The factory takes an issue as one it filed
+  only when its own app or account opened it, and closes it only while
+  its text still reads as filed. An issue template or someone who can
+  label can't plant one for it to adopt and close, and an issue someone
+  edited is left open.
+- **The Sentry token** (`SENTRY_AUTH_TOKEN` in `factory.env`) is read as
+  soon as `factory.env` is loaded, by every command, then taken out of the
+  process's environment, so nothing it runs inherits it: not git, not
+  Docker, not a job or an eval, even on the local runner. Its
+  `base_url` must be `https` (or `http` on this machine). It's sent only to `sources.sentry.base_url`, never logged, and
+  never in an issue or a notification. Give it read scopes only
+  (`project:read`, `event:read`).
+- **Dependabot alerts** are read with the factory's GitHub credentials; the
+  app's permission for them is read-only.
+- **The TODO scan** is a shallow clone the daemon owns, read with
+  `git grep` and `git show` and deleted after. Nothing in it runs.
 
 ## Network: the egress allowlist
 
