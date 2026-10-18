@@ -739,7 +739,9 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 			return nil
 		}
 	}
-	p.finishReview(ctx, j, it, run, v, rr, changed, by)
+	if err := p.finishReview(ctx, j, it, run, v, rr, changed, by); err != nil {
+		return err
+	}
 	p.recordFindings(ctx, j, it, v)
 	return p.afterReview(ctx, it, j.Kind, v, in)
 }

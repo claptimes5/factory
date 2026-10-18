@@ -220,3 +220,24 @@ func TestBlockingIsMarkedWhenRaised(t *testing.T) {
 		t.Fatalf("unmarked blocking %v", b)
 	}
 }
+
+// A block without a finding is recorded when it's read, so findings added
+// later (carried from an earlier round, or a paired reviewer's) can't
+// hide it.
+func TestABlockWithoutFindingsIsKept(t *testing.T) {
+	r, err := ParseReview([]byte(`{"decision":"block","findings":[],"challenged_assumptions":["it's untested"]}`))
+	if err != nil || !r.BlockedWithoutFinding {
+		t.Fatalf("%v %+v", err, r)
+	}
+	yes := true
+	r.Findings = append(r.Findings, Finding{Severity: Major, File: "a.go", Claim: "upheld", ID: "F1", Carried: true, Blocks: &yes, Check: &Check{Status: Refuted}})
+	if !r.Blocks() {
+		t.Fatal("refuting a carried finding lifted a block that had none")
+	}
+	if _, err := ParseReview([]byte(`{"decision":"pass","findings":[],"challenged_assumptions":[],"blocked_without_finding":true}`)); err == nil {
+		t.Fatal("a reviewer set blocked_without_finding")
+	}
+	if r, _ := ParseReview([]byte(`{"decision":"pass","findings":[],"challenged_assumptions":[]}`)); r.BlockedWithoutFinding {
+		t.Fatal("a pass marked as a block")
+	}
+}

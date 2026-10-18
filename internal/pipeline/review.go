@@ -255,8 +255,9 @@ type reviewer struct{ kind, route, harness, model string }
 
 // finishReview ends a review that produced verdict v, recording this
 // round's findings and the earlier ones it changed, with how each stands
-// now, in the same transaction.
-func (p *Pipeline) finishReview(ctx context.Context, j *store.Job, it *store.WorkItem, run agentRun, v *verdict.Review, rr *reviewRound, changed map[string]*store.ReviewFinding, by map[string]reviewer) {
+// now, in the same transaction. If that fails, nothing is recorded and the
+// review must go no further.
+func (p *Pipeline) finishReview(ctx context.Context, j *store.Job, it *store.WorkItem, run agentRun, v *verdict.Review, rr *reviewRound, changed map[string]*store.ReviewFinding, by map[string]reviewer) error {
 	blocking := v.Blocking()
 	var raised, updated []store.ReviewFinding
 	for i, f := range v.Findings {
@@ -295,8 +296,9 @@ func (p *Pipeline) finishReview(ctx context.Context, j *store.Job, it *store.Wor
 	slices.SortFunc(updated, func(a, b store.ReviewFinding) int { return a.Seq - b.Seq })
 	norm, _ := json.Marshal(v)
 	if err := p.Store.FinishReview(ctx, j.ID, p.result(ctx, j, run, state.Succeeded, string(norm), ""), raised, updated); err != nil {
-		p.log().Error("finish review", "job", j.ID, "err", err)
+		return fmt.Errorf("finish review %d: %w", j.ID, err)
 	}
+	return nil
 }
 
 func seqOf(fid string) int {
@@ -429,12 +431,12 @@ func (p *Pipeline) cantRun(ctx context.Context, j *store.Job, h string, budget f
 // startSub starts sub-job sub of job j once cantRun allows it, or says
 // why it can't.
 func (p *Pipeline) startSub(ctx context.Context, j *store.Job, sub store.Job) (*store.Job, string) {
-	p.claimMu.Lock()
-	defer p.claimMu.Unlock()
-	if why := p.cantRun(ctx, j, sub.Harness, sub.BudgetUSD); why != "" {
+	lctx, unlock := p.lockClaims(ctx)
+	defer unlock()
+	if why := p.cantRun(lctx, j, sub.Harness, sub.BudgetUSD); why != "" {
 		return nil, why
 	}
-	started, err := p.Store.StartSubJob(ctx, j.ID, sub)
+	started, err := p.Store.StartSubJob(lctx, j.ID, sub)
 	if err != nil {
 		return nil, "it couldn't start: " + err.Error()
 	}
@@ -573,8 +575,9 @@ func pair(a, b *verdict.Review) (v *verdict.Review, ok bool) {
 			v.Findings = append(v.Findings, f)
 		}
 		v.ChallengedAssumptions = append(v.ChallengedAssumptions, x.r.ChallengedAssumptions...)
-		if x.r.Decision == "block" && len(x.r.Findings) == 0 {
-			ok = false
+		if x.r.BlockedWithoutFinding || (x.r.Decision == "block" && len(x.r.Findings) == 0) {
+			// Its block stands, whatever the other side's findings.
+			ok, v.BlockedWithoutFinding = false, true
 		}
 	}
 	switch {

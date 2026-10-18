@@ -261,9 +261,33 @@ func (p *Pipeline) warn(err error, what string) {
 }
 
 func (p *Pipeline) notify(ctx context.Context, msg string) {
+	if h, ok := ctx.Value(heldNotesKey{}).(*heldNotes); ok {
+		h.msgs = append(h.msgs, msg) // sent once the lock is let go
+		return
+	}
 	p.log().Info("notify", "msg", msg)
 	if p.Notify != nil {
 		p.Notify(ctx, msg)
+	}
+}
+
+// heldNotes collects the notifications of code that runs under claimMu,
+// to send after it unlocks: sending is a network call that can take
+// seconds, and the scheduler and every sub-job start wait on that lock.
+type heldNotes struct{ msgs []string }
+
+type heldNotesKey struct{}
+
+// lockClaims takes claimMu and returns a context whose notifications wait
+// for the unlock, and the unlock, which sends them.
+func (p *Pipeline) lockClaims(ctx context.Context) (context.Context, func()) {
+	p.claimMu.Lock()
+	h := &heldNotes{}
+	return context.WithValue(ctx, heldNotesKey{}, h), func() {
+		p.claimMu.Unlock()
+		for _, m := range h.msgs {
+			p.notify(ctx, m)
+		}
 	}
 }
 
@@ -441,8 +465,8 @@ func (p *Pipeline) Drain(ctx context.Context) error {
 
 // claimNext applies every daemon-enforced cap, then claims one job.
 func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
-	p.claimMu.Lock()
-	defer p.claimMu.Unlock()
+	ctx, unlock := p.lockClaims(ctx)
+	defer unlock()
 	p.mu.Lock()
 	running := p.running
 	p.mu.Unlock()

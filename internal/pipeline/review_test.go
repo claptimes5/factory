@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -531,5 +532,77 @@ func TestPassNotesIncludeReviewerAndCritic(t *testing.T) {
 	}
 	if got := e.p.passNotes(jobs[1:]); strings.Contains(got, "From the") || !strings.Contains(got, "from the reviewer") {
 		t.Errorf("a review alone:\n%s", got)
+	}
+}
+
+// In a paired review, one side's block without a finding stands, even
+// when the other side raised only notes; either way round.
+func TestPairKeepsABlockWithoutFindings(t *testing.T) {
+	bare := `{"decision":"block","findings":[],"challenged_assumptions":["the design is wrong"]}`
+	note := `{"decision":"pass","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`
+	for _, order := range [][2]string{{bare, note}, {note, bare}} {
+		a, err := verdict.ParseReview([]byte(order[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := verdict.ParseReview([]byte(order[1]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, ok := pair(a, b)
+		if ok || v.Decision != "block" || !v.BlockedWithoutFinding || !v.Blocks() {
+			t.Fatalf("paired %+v, ok %v", v, ok)
+		}
+		// It survives the round trip through the store.
+		raw, _ := json.Marshal(v)
+		var back verdict.Review
+		if err := verdict.Parse(raw, &back); err != nil || !back.Blocks() {
+			t.Fatalf("stored %v %s", err, raw)
+		}
+	}
+}
+
+// End to end: the reviewer blocks with no finding, the paired critic
+// leaves a note, and the round goes back to the builder.
+func TestPairedReviewBlockWithoutFindingsSendsItBack(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.p.Cfg.Reviews.PairedHighRisk = true
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.codex.reviews = []string{`{"decision":"block","findings":[],"challenged_assumptions":["the design is wrong"]}`, pass}
+	e.claude.critics = []string{`{"decision":"pass","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`, pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.claude.prompts["implement"]); n != 2 {
+		t.Fatalf("the block was lost: %d builds", n)
+	}
+	if e.claude.calls["verify"] != 0 {
+		t.Fatal("a block without a finding went to the verifier")
+	}
+}
+
+// Notifications raised while the claim lock is held are sent after it's
+// let go: sending one can take seconds.
+func TestNotesWaitForTheClaimLock(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Budgets.DailyTotal = 0
+	var sent []string
+	e.p.Notify = func(_ context.Context, m string) {
+		if !e.p.claimMu.TryLock() {
+			t.Errorf("%q sent under the claim lock", m)
+			return
+		}
+		e.p.claimMu.Unlock()
+		sent = append(sent, m)
+	}
+	if _, err := e.p.claimNext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 || !strings.Contains(sent[0], "Daily budget reached") {
+		t.Fatalf("sent %q", sent)
 	}
 }

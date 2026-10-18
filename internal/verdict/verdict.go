@@ -107,6 +107,11 @@ type Review struct {
 	// Reviewers are the reviewers whose findings this verdict holds, when
 	// two reviewed side by side (a paired high-risk review).
 	Reviewers []string `json:"reviewers,omitempty"`
+	// BlockedWithoutFinding says a reviewer of this verdict decided block
+	// without raising a finding that can block (see MarkBlocking): the
+	// verdict blocks whatever findings it holds, from a paired reviewer or
+	// carried from an earlier round.
+	BlockedWithoutFinding bool `json:"blocked_without_finding,omitempty"`
 }
 
 // Blocking lists, by index, the findings that can block. Each finding
@@ -151,14 +156,16 @@ func blockingByRule(decision string, fs []Finding) []int {
 }
 
 // MarkBlocking records on each finding of a reviewer's own verdict whether
-// it can block, judged against that reviewer's decision. Called once, as
-// the verdict is read, so merging it with another reviewer's or carrying
-// earlier findings into it can't change what blocks.
+// it can block, judged against that reviewer's decision, and whether it
+// blocked with no finding that can. Called once, as the verdict is read,
+// so merging it with another reviewer's or carrying earlier findings into
+// it can't change what blocks.
 func (r *Review) MarkBlocking() {
 	can := map[int]bool{}
 	for _, i := range blockingByRule(r.Decision, r.Findings) {
 		can[i] = true
 	}
+	r.BlockedWithoutFinding = r.Decision == "block" && len(r.Findings) == 0
 	for i := range r.Findings {
 		b := can[i]
 		r.Findings[i].Blocks = &b
@@ -166,11 +173,11 @@ func (r *Review) MarkBlocking() {
 }
 
 // Blocks reports whether the review sends the work back: a block decision
-// with no findings to check, or a blocking finding the verifier didn't
+// with no findings to check (its own, or a reviewer's in a pair), or a blocking finding the verifier didn't
 // refute. A finding the verifier never saw blocks, so a review that wasn't
 // verified (or whose verifier couldn't run) blocks as it always did.
 func (r *Review) Blocks() bool {
-	if r.Decision == "block" && len(r.Findings) == 0 {
+	if r.BlockedWithoutFinding || (r.Decision == "block" && len(r.Findings) == 0) {
 		return true
 	}
 	for _, i := range r.Blocking() {
@@ -288,8 +295,8 @@ func ParseReview(raw []byte) (*Review, error) {
 		return nil, err
 	}
 	var errs []error
-	if r.Verified || len(r.Reviewers) > 0 {
-		errs = append(errs, errors.New("verified and reviewers are the factory's to set"))
+	if r.Verified || len(r.Reviewers) > 0 || r.BlockedWithoutFinding {
+		errs = append(errs, errors.New("verified, reviewers and blocked_without_finding are the factory's to set"))
 	}
 	for n, f := range r.Findings {
 		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil || f.Blocks != nil {

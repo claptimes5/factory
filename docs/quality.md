@@ -138,6 +138,11 @@ a round that blocks only because it upheld an earlier finding doesn't
 turn its new notes into blocks. A finding carried from an earlier round
 always blocks.
 
+A reviewer that blocks without raising a finding blocks the round, with
+nothing to verify. That holds when other findings join it: an earlier
+round's carried into this one, or, in a paired review, the other side's
+notes.
+
 **Verified before it blocks.** Every finding that would block goes to the
 verifier (`routing.verify`, a cheap model), with the issue, the diff and
 a read-only checkout. It confirms each one or refutes it, with a reason;
