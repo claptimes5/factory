@@ -25,8 +25,24 @@ it back through triage.
 
 ## Setup
 
-You need a Linux machine (or WSL2 on Windows) with Docker and Go 1.26+, and
-admin rights on the GitHub repo you want the factory to work on.
+You need a Linux machine (or WSL2 on Windows) and admin rights on the
+GitHub repo you want the factory to work on.
+
+### Dependencies
+
+| What | Version | Why |
+| --- | --- | --- |
+| Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
+| Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
+| git | any recent | Worktrees and pushes. |
+| Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
+| A Claude API key or subscription token | | The builder and Claude reviewers. |
+| An OpenAI API key | | Only if a reviewer uses Codex. |
+
+You don't install Claude Code, Codex or Playwright yourself: they're
+pinned in the job image (`deploy/job-image/Dockerfile`), which setup builds.
+The binary has no other runtime dependencies (SQLite is built in, so
+`CGO_ENABLED=0` works).
 
 ```sh
 git clone https://github.com/claptimes5/factory && cd factory
@@ -760,6 +776,58 @@ The builder runs arbitrary code, so nothing it writes is trusted:
   `.mcp.json`).
 - **The review is pinned to the verified commit.** If the branch moved after
   the gates ran, the item parks.
+
+### Network: the egress allowlist
+
+With the docker runner, jobs can reach only the hosts on an allowlist. A
+builder that reads a prompt injection in an issue or a dependency can
+then send what it holds only to those hosts. This narrows the ways out;
+it doesn't close them. An injection that brings its own credentials could
+still push to the attacker's GitHub repo or publish a package. Keep
+secrets the jobs don't need out of `env`.
+
+- **Jobs sit on a network with no way out** (`factory-egress`, internal,
+  with its gateway off the host). They can't resolve outside names, reach
+  an address, or reach the host's ports. The factory refuses to use an
+  existing network of that name that isn't set up this way. Their HTTP(S)
+  goes through the egress proxy (`factory-egress-proxy-…`). That proxy is
+  this binary, run from an empty image in a locked-down container on that
+  network and on the usual one.
+- **The proxy forwards only to listed host names,** on ports 443 and 80.
+  A TLS connection on port 443 must name (in its SNI) the host it asked
+  for. That stops a client from naming a different site there, but not
+  from sending another site's `Host` header inside the encrypted stream
+  (domain fronting) or hiding the name with Encrypted Client Hello, so an
+  allowed CDN name can still reach other sites behind that CDN. Other
+  ports you allow (`host:8443`) get no SNI check. It never
+  forwards to IP addresses, or to names that resolve to private, loopback
+  or link-local addresses. That rules out the cloud metadata service and
+  your LAN.
+- **The built-in list** covers the Claude and OpenAI APIs and their
+  sign-in, GitHub, gitlab.com, and the Go, npm, PyPI, RubyGems, crates.io
+  and Maven registries. Each repo's own self-hosted GitLab is added for
+  you.
+- **Tests and hidden scenarios that run with no network** still get none.
+- **Jobs that run at the same time share the network,** so they can reach
+  each other's open ports, as they could on Docker's default network.
+
+```yaml
+runner:
+  egress:
+    allow: [registry.example.com, "*.cdn.example.com", "git.example.com:8443"]
+    private: [mirror.corp.example]   # on your LAN
+    # no_defaults: true              # only the hosts above
+    # mode: open                     # Docker's usual network: the whole internet
+```
+
+Jobs get the proxy in `HTTPS_PROXY` and the other usual variables, which
+git, Go, npm, pip, cargo, Claude Code and Codex all honor. They also get it
+in `JAVA_TOOL_OPTIONS` for the JVM. Maven may still need a proxy in its
+`settings.xml`. When a job hits a host that isn't listed, it gets a 403
+that names the setting to change, and `docker logs` on the proxy lists
+every refusal. The allowlist needs Docker 28 or later on a Linux host (WSL
+counts). On anything else, the factory won't start until you set
+`mode: open`. Changing the list starts a new proxy before the next job.
 
 ## Where this differs from SPEC.md
 

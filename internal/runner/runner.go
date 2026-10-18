@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -86,6 +87,13 @@ type Docker struct {
 	CPUs, Memory, Network string
 	Bin                   string // docker binary, default "docker"
 	UID, GID              int    // run as this user so files in the mounts stay owned by the daemon
+	// Egress, when set, sends jobs' traffic through the egress proxy.
+	Egress *Egress
+
+	egressMu sync.Mutex
+	egressAt time.Time // when the proxy was last seen up with egressFP
+	egressFP string
+	svcNames map[string][]string // services network -> its host names
 }
 
 const (
@@ -126,6 +134,8 @@ func (d *Docker) Args(s Spec) []string {
 		a = append(a, "--network", s.Services)
 	case s.NoNetwork:
 		a = append(a, "--network", "none")
+	case d.Egress != nil:
+		a = append(a, "--network", EgressNet)
 	case d.Network != "":
 		a = append(a, "--network", d.Network)
 	}
@@ -151,6 +161,12 @@ func (d *Docker) Args(s Spec) []string {
 func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 	ctx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
+	if d.Egress != nil && !s.NoNetwork {
+		if err := d.ensureEgress(ctx); err != nil {
+			return -1, err
+		}
+		s.Env = d.Egress.proxyEnv(s.Env, d.serviceNames(s.Services))
+	}
 	args := d.Args(s)
 	// Env values reach the container from the docker command's own
 	// environment (-e NAME), at create time.
@@ -169,7 +185,10 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 		}
 		if !s.NoNetwork {
 			net := d.Network
-			if net == "" {
+			switch {
+			case d.Egress != nil:
+				net = EgressNet
+			case net == "":
 				net = "bridge"
 			}
 			if out, err := exec.CommandContext(ctx, d.bin(), "network", "connect", net, s.Name).CombinedOutput(); err != nil {
@@ -255,6 +274,11 @@ func (d *Docker) StartServices(ctx context.Context, job string, svcs []Service, 
 			return fail(fmt.Errorf("service %s: %v: %s", s.Name, err, strings.TrimSpace(string(out))))
 		}
 	}
+	names := make([]string, 0, len(svcs))
+	for _, s := range svcs {
+		names = append(names, s.Name)
+	}
+	d.setServiceNames(net, names)
 	rctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	for _, s := range svcs {
@@ -307,6 +331,7 @@ func (d *Docker) StopServices(ctx context.Context, job string) error {
 	}
 	// Fails when there is no network, which is fine.
 	_ = exec.CommandContext(ctx, d.bin(), "network", "rm", serviceNet(job)).Run()
+	d.setServiceNames(serviceNet(job), nil)
 	return nil
 }
 

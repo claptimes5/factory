@@ -228,7 +228,12 @@ func skippedNote(n int) string {
 // setupReadiness runs the readiness check on each repo and offers to file
 // the work that makes it verifiable.
 func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client clientFor) {
-	pl := &pipeline.Pipeline{Cfg: cfg, Runner: newRunner(cfg), JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
+	rn, err := newRunner(cfg, "")
+	if err != nil {
+		p.say("Skipping the readiness check: %v", err)
+		return
+	}
+	pl := &pipeline.Pipeline{Cfg: cfg, Runner: rn, JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
 		gh, ts, err := client(repo)
 		if err != nil {
 			gh, ts = newForge(cfg, repo, github.StaticToken("")), nil

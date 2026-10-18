@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/claptimes5/factory/internal/egress"
 )
 
 // Route says which harness and model run a stage.
@@ -163,6 +165,22 @@ type Config struct {
 		// WSLDrive is where WSL mounts the Windows drive that holds its
 		// virtual disks (and Docker Desktop's): default /mnt/c.
 		WSLDrive string `yaml:"wsl_drive"`
+		// Egress is where jobs may connect. With the docker runner they
+		// reach only allowlisted hosts, through the egress proxy.
+		Egress struct {
+			// Mode is allowlist (the default) or open: Docker's usual
+			// network, the whole internet.
+			Mode string `yaml:"mode,omitempty"`
+			// Allow adds hosts ("registry.example.com", "*.example.com",
+			// either with ":port") to the built-in list.
+			Allow []string `yaml:"allow,omitempty"`
+			// Private are hosts on a private network, such as a
+			// self-hosted package mirror; the repos' own hosts are added.
+			Private []string `yaml:"private,omitempty"`
+			// NoDefaults drops the built-in list: only Allow, Private and
+			// the repos' hosts are reachable.
+			NoDefaults bool `yaml:"no_defaults,omitempty"`
+		} `yaml:"egress"`
 	} `yaml:"runner"`
 
 	Web struct {
@@ -371,6 +389,30 @@ func SplitRepo(host, name string) (string, string) {
 	return host, host + "/" + name
 }
 
+// EgressAllowlist reports whether jobs reach only allowlisted hosts.
+func (c *Config) EgressAllowlist() bool {
+	return c.Runner.Kind == "docker" && c.Runner.Egress.Mode != "open"
+}
+
+// EgressRules are the hosts jobs may reach: the built-in list unless
+// dropped, plus runner.egress.allow; and the private ones, which include
+// each repo's own git host (a self-hosted GitLab may be on the LAN).
+func (c *Config) EgressRules() (allow, private []string) {
+	if !c.Runner.Egress.NoDefaults {
+		allow = append(allow, egress.Defaults...)
+	}
+	allow = append(allow, c.Runner.Egress.Allow...)
+	private = append(private, c.Runner.Egress.Private...)
+	seen := map[string]bool{}
+	for _, r := range c.Repos {
+		if r.Host != "" && !seen[r.Host] && r.Host != "gitlab.com" {
+			seen[r.Host] = true
+			private = append(private, r.Host)
+		}
+	}
+	return allow, private
+}
+
 // GitLab reports whether the repo is on GitLab.
 func (r Repo) GitLab() bool { return r.Host != "" }
 
@@ -572,6 +614,24 @@ func (c *Config) Validate() error {
 			// services' private network.
 			bad("services can't be used with runner.network: host")
 		}
+	}
+	switch c.Runner.Egress.Mode {
+	case "", "allowlist":
+		if c.Runner.Kind == "docker" && c.Runner.Network == "host" {
+			bad("runner.network: host leaves the egress allowlist nothing to control; set runner.egress.mode: open to run that way")
+		}
+		allow, private := c.EgressRules()
+		if c.Runner.Kind == "docker" && len(allow)+len(private) == 0 {
+			bad("runner.egress: with no_defaults, list the hosts jobs may reach in allow")
+		}
+		for _, r := range append(allow, private...) {
+			if _, err := egress.ParseRule(r); err != nil {
+				bad("runner.egress: %v", err)
+			}
+		}
+	case "open":
+	default:
+		bad("runner.egress.mode must be allowlist or open")
 	}
 	// A required gate without a command is allowed here: it reports
 	// MISCONFIGURED at run time and fails the job, so the gap is visible.

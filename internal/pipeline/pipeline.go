@@ -221,6 +221,9 @@ func (p *Pipeline) notify(ctx context.Context, msg string) {
 func (p *Pipeline) Recover(ctx context.Context) error {
 	// Nothing runs yet, so every factory container (jobs and gates) is stale.
 	p.warn(p.Runner.KillAll(ctx), "kill stale containers")
+	if d, ok := p.Runner.(*runner.Docker); ok {
+		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
+	}
 	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool { return false })
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
