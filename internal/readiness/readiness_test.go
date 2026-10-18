@@ -61,7 +61,8 @@ func titles(r *Report, l Level) string {
 }
 
 func TestReadyRepo(t *testing.T) {
-	dir := tree(t, "Gemfile", "Gemfile.lock", "spec/models/user_spec.rb", "spec/system/login_spec.rb", "features.yaml", ".github/workflows/ci.yml")
+	dir := tree(t, "Gemfile", "Gemfile.lock", "app/models/user.rb", "spec/models/user_spec.rb", "spec/system/login_spec.rb", ".github/workflows/ci.yml")
+	os.WriteFile(filepath.Join(dir, "features.yaml"), []byte("features:\n  - {name: Login, paths: [app/], tests: [spec/system/login_spec.rb], risk: high}\n"), 0o644)
 	exec, ran := fails()
 	r := Assess(context.Background(), Input{Repo: repo("bundle install", "lint", "test", "build"), SHA: "abc1234567", Dir: dir, Exec: exec})
 	if !r.Ready || r.Score != 100 || titles(r, Blocker) != "" || titles(r, Gap) != "" {
@@ -140,6 +141,23 @@ func TestMissingCommand(t *testing.T) {
 	r := Assess(context.Background(), Input{Repo: rp, Dir: tree(t, "go.mod", "a_test.go"), Exec: exec})
 	if strings.Contains(titles(r, Good), "Every required check passes") {
 		t.Fatalf("report:\n%s", r.Text())
+	}
+}
+
+func TestFeatureMapHealth(t *testing.T) {
+	exec, _ := fails()
+	for name, c := range map[string]struct{ yaml, want string }{
+		"broken":   {"features: [{name: A}]\n", "The feature map doesn't parse"},
+		"partial":  {"features:\n  - {name: Models, paths: [app/models/], tests: [spec/models/user_spec.rb]}\n", "Feature map covers 50% of the code"},
+		"stale":    {"features:\n  - {name: All, paths: [app/, lib/gone.rb], tests: [spec/models/user_spec.rb]}\n", "1 feature map entries point at nothing"},
+		"untested": {"features:\n  - {name: All, paths: [app/], tests: []}\n", "1 features have no tests: All"},
+	} {
+		dir := tree(t, "Gemfile", "Gemfile.lock", "app/models/user.rb", "app/controllers/home.rb", "spec/models/user_spec.rb", ".github/workflows/ci.yml")
+		os.WriteFile(filepath.Join(dir, "features.yaml"), []byte(c.yaml), 0o644)
+		r := Assess(context.Background(), Input{Repo: repo("", "test"), Dir: dir, Exec: exec})
+		if !strings.Contains(titles(r, Gap), c.want) {
+			t.Errorf("%s: gaps %s", name, titles(r, Gap))
+		}
 	}
 }
 

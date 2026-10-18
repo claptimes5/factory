@@ -245,6 +245,18 @@ func (g *Git) Diff(ctx context.Context, repo, from, to string) (string, error) {
 	return g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--no-textconv", from, to)
 }
 
+// FileAt returns a file's contents at sha, and false if it isn't there.
+func (g *Git) FileAt(ctx context.Context, repo, sha, path string) (string, bool, error) {
+	if _, err := g.run(ctx, repo, nil, "cat-file", "-e", sha+":"+path); err != nil {
+		return "", false, nil
+	}
+	var b strings.Builder
+	if _, err := g.run(ctx, repo, &b, "show", sha+":"+path); err != nil {
+		return "", false, err
+	}
+	return b.String(), true, nil
+}
+
 // ChangedFiles lists paths changed between two commits.
 func (g *Git) ChangedFiles(ctx context.Context, repo, from, to string) ([]string, error) {
 	out, err := g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--name-only", "--no-renames", from, to)

@@ -613,6 +613,7 @@ type ReviewInput struct {
 	ImplementJob int64  `json:"implement_job"`
 	Head         string `json:"head"` // the commit the gates verified
 	Gates        string `json:"gates"`
+	Features     string `json:"features,omitempty"` // the blast radius, from the feature map
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
@@ -869,6 +870,7 @@ type PromptData struct {
 	Findings        string
 	PreviousFailure string
 	Gates           string
+	Features        string // the change's blast radius, when the repo has a feature map
 	Diff            string
 	Fence           string   // a code fence the diff cannot close
 	Reasons         []string // why the orchestrator runs

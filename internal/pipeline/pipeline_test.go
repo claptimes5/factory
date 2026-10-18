@@ -255,7 +255,10 @@ type env struct {
 	remote string
 }
 
-func setup(t *testing.T) *env {
+func setup(t *testing.T) *env { t.Helper(); return setupWith(t, nil) }
+
+// setupWith seeds the remote with extra files.
+func setupWith(t *testing.T, files map[string]string) *env {
 	t.Helper()
 	root := t.TempDir()
 	// A bare remote seeded with a tiny Go module.
@@ -264,6 +267,9 @@ func setup(t *testing.T) *env {
 	git(t, seed, "init", "-q", "-b", "main")
 	writeFile(seed, "go.mod", "module fixture\n\ngo 1.23\n")
 	writeFile(seed, "doc.go", "package fixture\n")
+	for name, body := range files {
+		writeFile(seed, name, body)
+	}
 	git(t, seed, "add", "-A")
 	git(t, seed, "commit", "-qm", "seed")
 	remote := filepath.Join(root, "remote.git")

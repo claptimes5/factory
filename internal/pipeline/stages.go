@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/claptimes5/factory/internal/features"
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/state"
@@ -220,7 +221,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
-	results, err := p.verify(ctx, j.ID, it, ws, base, head)
+	results, blast, err := p.verify(ctx, j.ID, it, ws, base, head)
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
@@ -241,24 +242,33 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", line); err != nil {
 		return err
 	}
-	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: head, Gates: line + "\n\n" + gateTable(results)})
+	if blast != nil {
+		// Review scales with the riskiest feature the change touches.
+		if risk, feature := features.MaxRisk(blast.hits); features.Higher(risk, it.Risk) {
+			p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Risk: &risk}), "UpdateItem")
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &j.ID, Type: "risk_raised",
+				Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature)}), "AddEvent")
+			it.Risk = risk
+		}
+	}
+	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: head, Gates: line + "\n\n" + gateTable(results), Features: blast.markdown()})
 }
 
 // verify runs the deterministic checks on the commit under test: the diff
 // guard on the daemon's repository, then install, the gates and the
 // test-proves-fix check on exports, with a check after each that the
 // commit's files are untouched.
-func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head string) ([]gates.Result, error) {
+func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head string) ([]gates.Result, *blastRadius, error) {
 	g := p.repoConf(it.Repo).Gates
 	results := []gates.Result{gates.DiffGuard(ctx, ws.Repo, base, head, gates.Guard{
 		MaxChangedLines: g.DiffGuard.MaxChangedLines, ProtectedPaths: g.DiffGuard.ProtectedPaths})}
 	gateDir := filepath.Join(p.jobDir(jobID), "gate")
 	if err := p.git(it.Repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	snap, err := takeSnapshot(gateDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if g.Install != "" {
 		r := gates.Result{Gate: "install", Status: gates.Pass}
@@ -274,7 +284,7 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 			}
 		}
 		if results = append(results, r); r.Status != gates.Pass {
-			return results, nil // nothing else can run without the dependencies
+			return results, nil, nil // nothing else can run without the dependencies
 		}
 	}
 	results = append(results, gates.Run(ctx, g.Required, g.Commands, func(ctx context.Context, cmd string) (int, string, error) {
@@ -287,15 +297,21 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 	if g.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, it, g.ProvesFix, ws.Repo, base, head))
 	}
-	// Scenarios are slow end-to-end checks: run them only on code that
-	// already passes everything else.
+	// The checks of the features the change touches, then the scenarios:
+	// slow end-to-end checks, run only on code that passes everything else.
+	var blast *blastRadius
+	if gates.Passed(results) {
+		var fr []gates.Result
+		fr, blast = p.featureChecks(ctx, jobID, it, ws, base, head, gateDir, snap)
+		results = append(results, fr...)
+	}
 	if gates.Passed(results) {
 		results = append(results, p.runScenarios(ctx, it.Repo, jobID, gateDir, g.ScenariosDir)...)
 		if note := snap.tamperNote(gateDir); note != "" {
 			results = append(results, gates.Result{Gate: "scenarios", Status: gates.Fail, Detail: "a hidden scenario run: " + note})
 		}
 	}
-	return results, nil
+	return results, blast, nil
 }
 
 // provesFix reverts the non-test code to base, keeps the changed tests, and
@@ -470,7 +486,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Diff: diff, Fence: fence(diff)})
+	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Diff: diff, Fence: fence(diff)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -620,6 +636,9 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 	var b strings.Builder
 	fmt.Fprintf(&b, "Closes #%d\n\nBuilt by the factory. Triage: complexity **%s**, risk **%s**. Verified commit `%s`.\n\n", it.IssueNumber, it.Complexity, it.Risk, short(in.Head))
 	b.WriteString("## Gates\n\n" + in.Gates + "\n")
+	if in.Features != "" {
+		b.WriteString("## Blast radius\n\nWhat this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features + "\n")
+	}
 	var total float64
 	b.WriteString("## Jobs\n\n| Job | Kind | Harness | Model | Skills | Attempt | State | Cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for i := len(jobs) - 1; i >= 0; i-- {

@@ -18,7 +18,13 @@ Reply with only the JSON object described by the schema.
 ## Gate results
 
 {{.Gates}}
+{{if .Features}}
+## Blast radius
 
+The features this change touches, from the repo's feature map. Check that the change doesn't break the other behavior of each one, and that something proves each feature it changes still works. Files the map doesn't cover deserve a closer look.
+
+{{.Features}}
+{{end}}
 ## Diff
 
 {{.Fence}}diff
