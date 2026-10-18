@@ -421,6 +421,25 @@ Two differences from GitHub: GitLab doesn't record why an issue was closed,
 so the readiness check never files a gap again once its issue is closed.
 The dashboard's CI panel shows the commit's pipeline jobs.
 
+### Review scaled by risk
+
+Every item has a risk: triage rates it `low` or `high`, and a feature map
+can raise it to `medium` or `high` (see below). Review gets stricter with
+it, and the PR tells you how much of your attention it needs:
+
+| Risk | Reviewers | The PR says |
+| --- | --- | --- |
+| low | `review` | a skim of the diff is enough |
+| medium | `review.medium_risk` if set, else `review` | read the changes to the features it touches |
+| high | `review.high_risk`, then a second, independent Claude critic | read the whole diff, and check the features it touches by hand |
+
+The reviewer is told the risk and holds a high-risk change to a higher
+bar. Each PR carries a `factory:risk-low|medium|high` label (filter on it
+to find the quick ones) and a "How to review" section that says why it got
+its risk. Merging is yours at every level. To make GitHub enforce it, give
+the paths behind your high-risk features a CODEOWNERS entry and require
+code owner review on the base branch.
+
 ### Feature map
 
 A feature map, `features.yaml` at the repo root, lists what the product

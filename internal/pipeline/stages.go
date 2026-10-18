@@ -479,7 +479,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Diff: diff, Fence: fence(diff)})
+	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -615,9 +615,10 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return err
 	}
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
+	p.labelRisk(ctx, it, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("PR ready for review: %s %s %s", p.ref(it.Repo, pr.Number), is.Title, pr.URL))
+	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
 	return nil
 }
 
@@ -628,6 +629,7 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Closes #%d\n\nBuilt by the factory. Triage: complexity **%s**, risk **%s**. Verified commit `%s`.\n\n", it.IssueNumber, it.Complexity, it.Risk, short(in.Head))
+	b.WriteString("## How to review\n\n" + p.reviewGuide(ctx, it, in.Features != "") + "\n")
 	b.WriteString("## Gates\n\n" + in.Gates + "\n")
 	if in.Features != "" {
 		b.WriteString("## Blast radius\n\nWhat this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features + "\n")

@@ -51,7 +51,8 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 		t.Fatalf("no risk_raised event in %+v", evs)
 	}
 	body := e.gh.comments[it.PRNumber][0]
-	for _, want := range []string{"feature:Math=pass", "## Blast radius", "| Math | high | `add.go`, `add_test.go` | `test -f add_test.go && echo math-ok`: pass; `add_test.go` |", "Not in the feature map: `extra.go`"} {
+	for _, want := range []string{"feature:Math=pass", "## Blast radius",
+		"**High risk**: it touches Math, a high-risk feature in the feature map. Two independent reviewers passed it", "check the features under Blast radius by hand", "| Math | high | `add.go`, `add_test.go` | `test -f add_test.go && echo math-ok`: pass; `add_test.go` |", "Not in the feature map: `extra.go`"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("PR body missing %q:\n%s", want, body)
 		}
@@ -60,13 +61,18 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 		t.Errorf("an untouched feature is in the blast radius:\n%s", body)
 	}
 	var prompt string
-	for _, h := range []*fakeHarness{e.codex, e.claude} {
-		if len(h.prompts["review"]) > 0 {
-			prompt = h.prompts["review"][0]
-		}
+	if len(e.codex.prompts["review"]) > 0 {
+		prompt = e.codex.prompts["review"][0]
 	}
-	if !strings.Contains(prompt, "## Blast radius") || !strings.Contains(prompt, "| Math |") {
-		t.Fatalf("review prompt has no blast radius:\n%s", prompt)
+	if !strings.Contains(prompt, "## Blast radius") || !strings.Contains(prompt, "| Math |") || !strings.Contains(prompt, "rated **high risk**") {
+		t.Fatalf("review prompt has no blast radius or risk:\n%s", prompt)
+	}
+	// Raised to high, it got the critic too, and the PR says so in its label.
+	if len(e.codex.prompts["review"]) != 1 || len(e.claude.prompts["critic"]) != 1 {
+		t.Fatalf("want the reviewer and the critic: codex %d, claude %d", len(e.codex.prompts["review"]), len(e.claude.prompts["critic"]))
+	}
+	if l := e.gh.prLabels[it.PRNumber]; !hasLabel(l, "factory:risk-high") || hasLabel(l, "factory:risk-low") {
+		t.Fatalf("PR labels = %v", l)
 	}
 }
 

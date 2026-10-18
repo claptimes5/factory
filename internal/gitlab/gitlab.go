@@ -175,6 +175,12 @@ func (c *Client) LabelPR(ctx context.Context, n int, labels ...string) error {
 	return c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), map[string]any{"add_labels": strings.Join(labels, ",")}, nil)
 }
 
+// UnlabelPR removes a label from a merge request; one that isn't there is
+// not an error.
+func (c *Client) UnlabelPR(ctx context.Context, n int, label string) error {
+	return c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), map[string]any{"remove_labels": label}, nil)
+}
+
 // RemoveLabel removes a label from an issue; one that isn't there is
 // not an error.
 func (c *Client) RemoveLabel(ctx context.Context, n int, label string) error {

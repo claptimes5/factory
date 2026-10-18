@@ -415,7 +415,7 @@ func (c *Config) Validate() error {
 		if !ok {
 			continue
 		}
-		for _, rk := range []string{"review", "review.high_risk"} {
+		for _, rk := range []string{"review", "review.medium_risk", "review.high_risk"} {
 			r, ok := c.Routing[rk]
 			if !ok || r.Harness != b.Harness {
 				continue
@@ -649,10 +649,11 @@ func sameModel(harness, a, b string) bool {
 	return false
 }
 
-// Review returns the reviewer route for an item's risk.
+// Review returns the reviewer route for an item's risk: review.high_risk
+// or review.medium_risk when set, else review.
 func (c *Config) Review(risk string) Route {
-	if risk == "high" {
-		if r, ok := c.Routing["review.high_risk"]; ok {
+	if risk == "high" || risk == "medium" {
+		if r, ok := c.Routing["review."+risk+"_risk"]; ok {
 			return r
 		}
 	}

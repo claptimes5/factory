@@ -125,6 +125,11 @@ func (m *Memory) CreateIssue(_ context.Context, title, body string, labels []str
 	return m.next, nil
 }
 
+// UnlabelPR is RemoveLabel, as LabelPR is AddLabels.
+func (m *Memory) UnlabelPR(ctx context.Context, n int, l string) error {
+	return m.RemoveLabel(ctx, n, l)
+}
+
 // LabelPR is AddLabels: PRs and issues share numbers here, as on GitHub.
 func (m *Memory) LabelPR(ctx context.Context, n int, ls ...string) error {
 	return m.AddLabels(ctx, n, ls...)
