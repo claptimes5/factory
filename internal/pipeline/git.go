@@ -111,7 +111,20 @@ type Workspace struct {
 // from base when it does not exist, or reset to base when fresh is set).
 // With builder set it also makes the builder's separate clone in dir/work.
 func (g *Git) Prepare(ctx context.Context, dir, base, branch string, fresh, builder bool) (*Workspace, error) {
-	ws := &Workspace{Repo: filepath.Join(dir, "repo")}
+	work := ""
+	if builder {
+		work = filepath.Join(dir, "work")
+	}
+	return g.PrepareAt(ctx, filepath.Join(dir, "repo"), work, base, branch, fresh)
+}
+
+// PrepareAt is Prepare with the daemon's clone at repoDir and the
+// builder's at workDir ("" for none), for a workspace's repos side by side.
+func (g *Git) PrepareAt(ctx context.Context, repoDir, workDir, base, branch string, fresh bool) (*Workspace, error) {
+	ws := &Workspace{Repo: repoDir}
+	if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
+		return nil, err
+	}
 	if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-tags", g.remote(), ws.Repo); err != nil {
 		return nil, err
 	}
@@ -145,8 +158,8 @@ func (g *Git) Prepare(ctx context.Context, dir, base, branch string, fresh, buil
 	if ws.Start, err = g.run(ctx, ws.Repo, nil, "rev-parse", "HEAD"); err != nil {
 		return nil, err
 	}
-	if builder {
-		ws.Work = filepath.Join(dir, "work")
+	if workDir != "" {
+		ws.Work = workDir
 		// --no-local copies only what the branch reaches: a local clone would
 		// copy the whole object store, other branches' work included.
 		if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-local", "--single-branch", "--branch", branch, ws.Repo, ws.Work); err != nil {
@@ -243,6 +256,12 @@ func (g *Git) CommitsSince(ctx context.Context, repo, from, to string) (int, err
 // Diff returns the patch between two commits.
 func (g *Git) Diff(ctx context.Context, repo, from, to string) (string, error) {
 	return g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--no-textconv", from, to)
+}
+
+// DiffIn is Diff with every path under folder/, for a workspace's
+// combined diff.
+func (g *Git) DiffIn(ctx context.Context, repo, from, to, folder string) (string, error) {
+	return g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--no-textconv", "--src-prefix=a/"+folder+"/", "--dst-prefix=b/"+folder+"/", from, to)
 }
 
 // FileAt returns a file's contents at sha, and false if it isn't there.

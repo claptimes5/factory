@@ -265,3 +265,33 @@ services:
 		t.Errorf("host network: err = %v", err)
 	}
 }
+
+func TestWorkspaces(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	repos := "repos: [o/api, o/web, o/docs, p/web]\n"
+	c, err := Parse([]byte(repos + "workspaces:\n  shop: [O/API, o/web]\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name, m := c.Workspace("o/WEB"); name != "shop" || !slices.Equal(m, []string{"o/api", "o/web"}) {
+		t.Fatalf("workspace = %s %v", name, m)
+	}
+	if name, m := c.Workspace("o/docs"); name != "" || m != nil {
+		t.Fatalf("o/docs is on its own: %s %v", name, m)
+	}
+	if ShortName("group/sub/Web") != "web" {
+		t.Fatal("ShortName")
+	}
+	for ws, want := range map[string]string{
+		"Shop: [o/api, o/web]":                    "names are lowercase",
+		"shop: [o/api]":                           "at least two repos",
+		"shop: [o/api, o/nope]":                   "o/nope isn't in repos",
+		"a: [o/api, o/web]\n  b: [o/api, o/docs]": "o/api is already in workspace a",
+		"shop: [o/web, p/web]":                    "two repos are named web",
+	} {
+		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", ws, err, want)
+		}
+	}
+}

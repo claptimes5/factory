@@ -402,6 +402,37 @@ A repo's `gates` override the top-level ones field by field. Its
 the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
 `scenarios_dir: none` to turn one off for that repo.
 
+### Workspaces: one change across repos
+
+Some repos change together, like a Rails API and the React app that calls
+it. Put them in a workspace and an issue in either one becomes a single
+change across both:
+
+```yaml
+repos: [you/api, you/web]
+workspaces:
+  shop: [you/api, you/web]      # the order their PRs merge in
+```
+
+- The builder gets every repo of the workspace checked out side by side,
+  `api/` and `web/`, on one branch named for the issue
+  (`factory/web-12` for `you/web#12`), and is told each repo's checks.
+- The gates run in each repo the change touches, in that repo's own image
+  and with its own commands, feature map and scenarios. Their results are
+  named for the repo: `api: test`, `web: build`.
+- The reviewer reads one diff across the repos, every path under its
+  repo's folder, and is asked to check the repos still agree.
+- Each repo the change touches gets its own draft PR. The PRs link to each
+  other and list the order to merge them in. Only the one that merges last
+  closes the issue, so it stays open until the whole change is in.
+- The item waits on you once every repo passes, and is done when every PR
+  is merged. A PR closed without merging parks it.
+
+The builder and reviewer run in the first repo's image with its `env`, so
+that image needs every member's toolchain (Ruby and Node, say). Services
+of all the members start together; where two name a service the same, the
+first repo's wins. Triage reads only the issue's own repo.
+
 ### GitLab repos
 
 Repos can be on GitLab, gitlab.com or self-hosted, alongside GitHub ones.
@@ -716,4 +747,5 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 M1 (store, claim, config), M2 (runner and adapters), M3 (the pipeline),
 M4 (control room and notifications), M5 (the orchestrator) and M6 (hidden
 scenarios, metrics, `factory eval`, session resume, safe upgrade) are in.
-Side-by-side skill comparison and M7 (Dashboard v2) are in too.
+Side-by-side skill comparison, M7 (Dashboard v2), services and workspaces
+across repos are in too.

@@ -607,6 +607,86 @@ func (s *Store) SetJobHead(ctx context.Context, id int64, sha string) error {
 	})
 }
 
+// RepoHead is a commit in one repo of a workspace.
+type RepoHead struct {
+	Repo string
+	SHA  string
+}
+
+// SetJobHeads records the commits a workspace implement job produced, one
+// per repo it changed, replacing any it recorded before.
+func (s *Store) SetJobHeads(ctx context.Context, id int64, heads []RepoHead) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM job_heads WHERE job_id = ?`, id); err != nil {
+			return err
+		}
+		for _, h := range heads {
+			if _, err := tx.Exec(`INSERT INTO job_heads(job_id, repo, head_sha) VALUES (?, ?, ?)`, id, h.Repo, h.SHA); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// JobHeads returns what SetJobHeads recorded, in the order it was given.
+func (s *Store) JobHeads(ctx context.Context, id int64) ([]RepoHead, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT repo, head_sha FROM job_heads WHERE job_id = ? ORDER BY rowid`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RepoHead
+	for rows.Next() {
+		var h RepoHead
+		if err := rows.Scan(&h.Repo, &h.SHA); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// RepoPR is a PR in one repo of a workspace.
+type RepoPR struct {
+	Repo   string
+	Number int
+}
+
+// SetItemPRs records the PRs a workspace item has open, one per repo,
+// replacing the ones it recorded before.
+func (s *Store) SetItemPRs(ctx context.Context, itemID int64, prs []RepoPR) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM item_prs WHERE item_id = ?`, itemID); err != nil {
+			return err
+		}
+		for _, p := range prs {
+			if _, err := tx.Exec(`INSERT INTO item_prs(item_id, repo, pr_number) VALUES (?, ?, ?)`, itemID, p.Repo, p.Number); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ItemPRs returns a workspace item's PRs, in merge order.
+func (s *Store) ItemPRs(ctx context.Context, itemID int64) ([]RepoPR, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT repo, pr_number FROM item_prs WHERE item_id = ? ORDER BY rowid`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RepoPR
+	for rows.Next() {
+		var p RepoPR
+		if err := rows.Scan(&p.Repo, &p.Number); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // Result is a job's outcome as recorded by FinishJob.
 type Result struct {
 	State     state.JobState

@@ -268,11 +268,26 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         c.blocked_note && <p className="text-sm leading-relaxed text-text-2">“{c.blocked_note}”</p>
       )}
       <div className="mt-auto flex flex-wrap gap-2">
-        {pr && c.pr_url && (
-          <a href={c.pr_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
-            Review PR #{c.pr_number} <ExternalLink className="size-3.5" aria-hidden />
-          </a>
-        )}
+        {pr && c.prs.length > 1
+          ? // A change across a workspace: one PR per repo, in the order they merge.
+            c.prs.map((p, i) => (
+              <a
+                key={p.url}
+                href={p.url}
+                target="_blank"
+                rel="noreferrer"
+                title={`Merge ${i + 1} of ${c.prs.length}`}
+                className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}
+              >
+                {i + 1}. Review {p.ref} <ExternalLink className="size-3.5" aria-hidden />
+              </a>
+            ))
+          : pr &&
+            c.pr_url && (
+              <a href={c.pr_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+                Review PR #{c.prs[0]?.number ?? c.pr_number} <ExternalLink className="size-3.5" aria-hidden />
+              </a>
+            )}
         {pr && (
           <Link to={`/items/${c.id}/diff`} className={cn(btn, "border border-warning-border hover:bg-warning-fill/10")}>
             View diff

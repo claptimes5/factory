@@ -181,7 +181,7 @@ components:
         version: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -195,12 +195,24 @@ components:
         parent_id: { type: [integer, "null"] }
         branch: { type: string }
         pr_number: { type: integer, description: 0 when there is no PR }
+        prs:
+          type: array
+          description: A workspace change's PRs, one per repo it touches, in merge order; empty otherwise
+          items: { $ref: "#/components/schemas/LinkedPR" }
         created_at: { type: string }
         updated_at: { type: string }
         issue_url: { type: string }
         pr_url: { type: string }
         needs_you: { type: boolean, description: Awaiting review or parked }
         blocked_note: { type: string, description: Why it is parked or blocked }
+    LinkedPR:
+      type: object
+      required: [repo, number, ref, url]
+      properties:
+        repo: { type: string }
+        number: { type: integer }
+        ref: { type: string, description: "How to show it: web#12" }
+        url: { type: string }
     Stage:
       type: string
       enum: [epic, triage, spec, ready, implementing, reviewing, awaiting_human, parked, blocked, done]
@@ -318,10 +330,11 @@ components:
         url: { type: string }
     PRPanel:
       type: object
-      required: [pr_number, pr_url, head_sha, checks, checks_error, gate_job_id, gates, review, last_job_id]
+      required: [pr_number, pr_url, prs, head_sha, checks, checks_error, gate_job_id, gates, review, last_job_id]
       properties:
         pr_number: { type: integer }
         pr_url: { type: string }
+        prs: { type: array, items: { $ref: "#/components/schemas/LinkedPR" } }
         head_sha: { type: string }
         checks: { type: array, items: { $ref: "#/components/schemas/Check" } }
         checks_error: { type: string }

@@ -26,24 +26,34 @@ import (
 
 // APIItem is a work item.
 type APIItem struct {
-	ID          int64  `json:"id"`
-	Repo        string `json:"repo"` // owner/name
-	Ref         string `json:"ref"`  // how to show the issue: #12, or owner/name#12 with several repos
-	Issue       int    `json:"issue"`
-	Title       string `json:"title"`
-	Stage       string `json:"stage"`
-	Complexity  string `json:"complexity"`
-	Risk        string `json:"risk"`
-	Priority    int    `json:"priority"`
-	ParentID    *int64 `json:"parent_id"`
-	Branch      string `json:"branch"`
-	PRNumber    int    `json:"pr_number"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-	IssueURL    string `json:"issue_url"`
-	PRURL       string `json:"pr_url"`
-	NeedsYou    bool   `json:"needs_you"`
-	BlockedNote string `json:"blocked_note"`
+	ID         int64  `json:"id"`
+	Repo       string `json:"repo"` // owner/name
+	Ref        string `json:"ref"`  // how to show the issue: #12, or owner/name#12 with several repos
+	Issue      int    `json:"issue"`
+	Title      string `json:"title"`
+	Stage      string `json:"stage"`
+	Complexity string `json:"complexity"`
+	Risk       string `json:"risk"`
+	Priority   int    `json:"priority"`
+	ParentID   *int64 `json:"parent_id"`
+	Branch     string `json:"branch"`
+	PRNumber   int    `json:"pr_number"`
+	// PRs are a workspace change's PRs, one per repo, in merge order.
+	PRs         []APILinkedPR `json:"prs"`
+	CreatedAt   string        `json:"created_at"`
+	UpdatedAt   string        `json:"updated_at"`
+	IssueURL    string        `json:"issue_url"`
+	PRURL       string        `json:"pr_url"`
+	NeedsYou    bool          `json:"needs_you"`
+	BlockedNote string        `json:"blocked_note"`
+}
+
+// APILinkedPR is one PR of a change that spans a workspace's repos.
+type APILinkedPR struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Ref    string `json:"ref"` // web#12
+	URL    string `json:"url"`
 }
 
 // APICard is an item on the board, with its live status.
@@ -178,10 +188,12 @@ type APICheck struct {
 
 // APIPRPanel is the PR panel: CI, gates and the reviewer's verdict.
 type APIPRPanel struct {
-	PRNumber int        `json:"pr_number"`
-	PRURL    string     `json:"pr_url"`
-	HeadSHA  string     `json:"head_sha"`
-	Checks   []APICheck `json:"checks"`
+	PRNumber int    `json:"pr_number"`
+	PRURL    string `json:"pr_url"`
+	// PRs are a workspace change's PRs, in merge order.
+	PRs     []APILinkedPR `json:"prs"`
+	HeadSHA string        `json:"head_sha"`
+	Checks  []APICheck    `json:"checks"`
 	// ChecksError is set when GitHub could not be asked.
 	ChecksError string     `json:"checks_error"`
 	GateJobID   *int64     `json:"gate_job_id"`
@@ -273,14 +285,40 @@ func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
 		IssueURL: s.issueURL(it.Repo, it.IssueNumber),
 		NeedsYou: it.Stage == state.AwaitingHuman || it.Stage == state.Parked,
 	}
-	if it.PRNumber > 0 {
-		a.PRURL = s.prURL(it.Repo, it.PRNumber)
-	}
+	a.PRs, a.PRURL = s.linkedPRs(ctx, it)
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}
 	return a
 }
+
+// linkedPRs are an item's PRs across a workspace, and the URL of its main
+// PR: the one in its own repo when the change has one, else the first.
+func (s *Server) linkedPRs(ctx context.Context, it *store.WorkItem) ([]APILinkedPR, string) {
+	out := []APILinkedPR{}
+	rows, _ := s.Store.ItemPRs(ctx, it.ID)
+	for _, r := range rows {
+		out = append(out, APILinkedPR{Repo: r.Repo, Number: r.Number, Ref: fmt.Sprintf("%s#%d", repoShort(r.Repo), r.Number), URL: s.prURL(r.Repo, r.Number)})
+	}
+	switch {
+	case len(out) > 0:
+		return out, mainPR(it, out).URL
+	case it.PRNumber > 0:
+		return out, s.prURL(it.Repo, it.PRNumber)
+	}
+	return out, ""
+}
+
+func mainPR(it *store.WorkItem, prs []APILinkedPR) APILinkedPR {
+	for _, p := range prs {
+		if strings.EqualFold(p.Repo, it.Repo) {
+			return p
+		}
+	}
+	return prs[0]
+}
+
+func repoShort(repo string) string { return repo[strings.LastIndex(repo, "/")+1:] }
 
 // stageReason is the reason recorded when the item last entered stage.
 func (s *Server) stageReason(ctx context.Context, itemID int64, st state.Stage) string {
@@ -525,8 +563,12 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := APIPRPanel{PRNumber: it.PRNumber, Checks: []APICheck{}, Gates: []APIGate{}}
-	if it.PRNumber > 0 {
-		p.PRURL = s.prURL(it.Repo, it.PRNumber)
+	p.PRs, p.PRURL = s.linkedPRs(ctx, it)
+	// The checks shown are the main PR's: in a workspace, the head the
+	// pipeline recorded is that PR's repo's.
+	checksRepo := it.Repo
+	if len(p.PRs) > 0 {
+		checksRepo = mainPR(it, p.PRs).Repo
 	}
 	for i := len(jobs) - 1; i >= 0; i-- {
 		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" {
@@ -549,7 +591,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.HeadSHA != "" && s.Checks != nil {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		runs, err := s.Checks(cctx, it.Repo, p.HeadSHA)
+		runs, err := s.Checks(cctx, checksRepo, p.HeadSHA)
 		cancel()
 		var he *github.HTTPError
 		switch {

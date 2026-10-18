@@ -685,6 +685,8 @@ export interface components {
             branch: string;
             /** @description 0 when there is no PR */
             pr_number: number;
+            /** @description A workspace change's PRs, one per repo it touches, in merge order; empty otherwise */
+            prs: components["schemas"]["LinkedPR"][];
             created_at: string;
             updated_at: string;
             issue_url: string;
@@ -693,6 +695,13 @@ export interface components {
             needs_you: boolean;
             /** @description Why it is parked or blocked */
             blocked_note: string;
+        };
+        LinkedPR: {
+            repo: string;
+            number: number;
+            /** @description How to show it: web#12 */
+            ref: string;
+            url: string;
         };
         /** @enum {string} */
         Stage: "epic" | "triage" | "spec" | "ready" | "implementing" | "reviewing" | "awaiting_human" | "parked" | "blocked" | "done";
@@ -799,6 +808,7 @@ export interface components {
         PRPanel: {
             pr_number: number;
             pr_url: string;
+            prs: components["schemas"]["LinkedPR"][];
             head_sha: string;
             checks: components["schemas"]["Check"][];
             checks_error: string;

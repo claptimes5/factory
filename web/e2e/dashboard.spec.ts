@@ -33,10 +33,10 @@ test("the floor puts what needs you first, with live work and repo chips", async
 
   // One repo's chip narrows the floor to it.
   await page.getByRole("button", { name: "web", exact: true }).click();
-  await expect(needs.getByTestId("card")).toHaveCount(1);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card")).toHaveCount(2);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(3);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -45,6 +45,20 @@ test("the floor puts what needs you first, with live work and repo chips", async
   } else {
     await expect(board.getByRole("region", { name: "Blocked" })).toContainText("Waits on #102");
   }
+});
+
+test("a change across a workspace links a PR per repo, in merge order", async ({ page }, info) => {
+  await page.goto("/app/");
+  const card = page.getByRole("region", { name: "Needs you" }).getByTestId("card").filter({ hasText: "Show order totals" }).filter({ visible: true });
+  await expect(card.getByRole("link", { name: /1\. Review api#91/ })).toHaveAttribute("href", /acme\/api\/pull\/91$/);
+  await expect(card.getByRole("link", { name: /2\. Review web#92/ })).toHaveAttribute("href", /acme\/web\/pull\/92$/);
+  await card.getByRole("link", { name: "Show order totals on the checkout page" }).click();
+  const pr = page.getByTestId("pr-panel");
+  await expect(pr).toContainText("2 linked PRs");
+  await expect(pr.getByTestId("linked-prs")).toContainText("1.api#91");
+  await expect(pr).toContainText("web: build");
+  await shot(page, info, "workspace");
+  if (phone(info)) await noSidewaysScroll(page);
 });
 
 test("the palette jumps to an item by number", async ({ page }, info) => {

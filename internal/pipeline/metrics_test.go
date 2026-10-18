@@ -37,12 +37,12 @@ func TestMetricsFromRealRuns(t *testing.T) {
 		}
 	}
 	for n, head := range map[int]string{1: "", 2: "", 3: "human-edited"} {
-		pr := e.gh.prs[branchFor(e.item(t, n))]
+		pr := e.gh.prs[e.p.branchFor(e.item(t, n))]
 		pr.Merged = true
 		if head != "" {
 			pr.Head.SHA = head
 		} else {
-			pr.Head.SHA = e.p.lastPushedHead(ctx, e.item(t, n).ID)
+			pr.Head.SHA, _ = headOf(e.p.lastHeads(ctx, e.item(t, n)), e.item(t, n).Repo)
 		}
 	}
 	e.p.lastPoll = time.Time{}
