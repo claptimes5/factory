@@ -10,6 +10,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/runner"
+	"gopkg.in/yaml.v3"
 )
 
 func tree(t *testing.T, files ...string) string {
@@ -199,5 +200,60 @@ func TestPropertyTests(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no property-tests issue: %+v", r.Issues())
+	}
+}
+
+// A check that can't reach the database the repo's compose file names is
+// a services problem for factory.yaml, not a code issue for the builder.
+func TestServicesHint(t *testing.T) {
+	dir := tree(t, "Gemfile", "Gemfile.lock", "app/models/user.rb", "spec/models/user_spec.rb", "docker-compose.yml")
+	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  db:\n    image: postgres:16-alpine\n  cache:\n    image: redis:7\n"), 0o644)
+	exec := func(_ context.Context, _ string, cmd string, _ bool) (int, string, error) {
+		if strings.Contains(cmd, "run test") {
+			return 1, "PG::ConnectionBad: could not connect to server: Connection refused", nil
+		}
+		return 0, "", nil
+	}
+	r := Assess(context.Background(), Input{Repo: repo("", "test"), SHA: "abc1234567", Dir: dir, Exec: exec})
+	var f *Finding
+	for i := range r.Findings {
+		if r.Findings[i].Area == "services" {
+			f = &r.Findings[i]
+		}
+	}
+	if f == nil || f.Level != Blocker || f.Issue != nil {
+		t.Fatalf("finding = %+v\n%s", f, r.Text())
+	}
+	// The snippet pastes into factory.yaml as is.
+	_, rest, _ := strings.Cut(f.Detail, "```yaml\n")
+	snippet, _, _ := strings.Cut(rest, "```")
+	var pasted struct {
+		Repos []struct {
+			Name     string
+			Services map[string]config.Service
+		}
+	}
+	if err := yaml.Unmarshal([]byte(snippet), &pasted); err != nil || len(pasted.Repos) != 1 {
+		t.Fatalf("snippet doesn't parse (%v):\n%s", err, snippet)
+	}
+	pg := pasted.Repos[0].Services["postgres"]
+	if pg.Image != "postgres:16" || pg.Env["POSTGRES_PASSWORD"] != "factory" || pg.Ready != "pg_isready -U postgres" || pasted.Repos[0].Services["redis"].Image != "redis:7" {
+		t.Fatalf("snippet = %+v:\n%s", pasted, snippet)
+	}
+	// A refused connection that names none of them isn't a missing database.
+	if h := servicesHint(dir, []string{"docker-compose.yml"}, repo("", "test"), "dial tcp api.example.com:443: connection refused"); h != "" {
+		t.Fatalf("hint for an unrelated failure:\n%s", h)
+	}
+	for _, is := range r.Issues() {
+		if is.Key == "check:test" {
+			t.Fatal("filed a code issue for a missing service")
+		}
+	}
+	// With services configured, or a failure of another kind, it's the code's.
+	rp := repo("", "test")
+	rp.Services = map[string]config.Service{"postgres": {Image: "postgres:16"}}
+	r = Assess(context.Background(), Input{Repo: rp, SHA: "abc1234567", Dir: dir, Exec: exec})
+	if !strings.Contains(titles(r, Blocker), "`test` fails on main") {
+		t.Fatalf("with services: %s", titles(r, Blocker))
 	}
 }

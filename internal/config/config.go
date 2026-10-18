@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -60,6 +61,9 @@ type Repo struct {
 	// Env is set in this repo's agent and gate containers, on top of the
 	// top-level env. It is not for secrets: agents can read it.
 	Env map[string]string `yaml:"env,omitempty"`
+	// Services are containers this repo's builds and checks need, such as
+	// a database; they replace the top-level services. See Service.
+	Services map[string]Service `yaml:"services,omitempty"`
 	// Gates overrides the top-level gates field by field: what it leaves
 	// out (the diff guard's protected paths, say) is inherited, and its
 	// commands replace the top level's. install, proves_fix or scenarios_dir "none"
@@ -107,17 +111,37 @@ func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
 	return n.Decode((*plain)(r))
 }
 
+// Service is a container started for each build and check of a repo,
+// reachable by its name as a host name (postgres:5432), for example:
+//
+//	services:
+//	  postgres:
+//	    image: postgres:16
+//	    env: {POSTGRES_PASSWORD: factory}
+//	    ready: pg_isready -U postgres
+//
+// Its network has no way out, and it is removed when the job ends. Env is
+// not for secrets: it is on the docker command line.
+type Service struct {
+	Image string            `yaml:"image"`
+	Env   map[string]string `yaml:"env,omitempty"`
+	// Ready runs in the service until it succeeds, before anything else
+	// starts; leave it out for services ready as soon as they start.
+	Ready string `yaml:"ready,omitempty"`
+}
+
 type Config struct {
 	// SingleRepo is the short form for a factory with one repo; Repos is
 	// filled from it. Use RepoNames and RepoConf rather than either field.
 	SingleRepo string `yaml:"repo"`
 	Repos      []Repo `yaml:"repos"`
 	// BaseBranch, Env and Gates are the defaults for every repo.
-	BaseBranch string            `yaml:"base_branch"`
-	Env        map[string]string `yaml:"env"`
-	DataDir    string            `yaml:"data_dir"`
-	SkillsDir  string            `yaml:"skills_dir"`
-	PromptsDir string            `yaml:"prompts_dir"`
+	BaseBranch string             `yaml:"base_branch"`
+	Env        map[string]string  `yaml:"env"`
+	Services   map[string]Service `yaml:"services,omitempty"`
+	DataDir    string             `yaml:"data_dir"`
+	SkillsDir  string             `yaml:"skills_dir"`
+	PromptsDir string             `yaml:"prompts_dir"`
 
 	Intake struct {
 		Label        string   `yaml:"label"`
@@ -479,10 +503,36 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	svcs := []map[string]Service{c.Services}
+	for _, r := range c.Repos {
+		svcs = append(svcs, r.Services)
+	}
+	for _, m := range svcs {
+		for name, s := range m {
+			if !serviceName.MatchString(name) {
+				bad("services: %q must be a host name: lowercase letters, digits and dashes", name)
+			}
+			if s.Image == "" {
+				bad("services.%s needs an image", name)
+			}
+		}
+	}
+	if len(c.Services) > 0 || slices.ContainsFunc(c.Repos, func(r Repo) bool { return len(r.Services) > 0 }) {
+		if c.Runner.Kind != "docker" {
+			bad("services need the docker runner")
+		}
+		if c.Runner.Network == "host" {
+			// On the host's network, a job reaches the host and not the
+			// services' private network.
+			bad("services can't be used with runner.network: host")
+		}
+	}
 	// A required gate without a command is allowed here: it reports
 	// MISCONFIGURED at run time and fails the job, so the gap is visible.
 	return errors.Join(errs...)
 }
+
+var serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // RepoNames lists the repos the factory works on, the first being the one
 // commands use when you don't name one.
@@ -530,6 +580,9 @@ func (c *Config) resolve(r Repo) Repo {
 		env[k] = v
 	}
 	r.Env = env
+	if r.Services == nil {
+		r.Services = c.Services
+	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	if r.GitLab() {
 		// A pushed branch runs its own .gitlab-ci.yml with the project's

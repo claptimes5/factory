@@ -576,6 +576,45 @@ could then install it, but only on their own repos, and its private key
 stays with you. The orchestrator sees every repo and names one when it
 opens an issue.
 
+### Services: databases and the like
+
+When a repo's tests need a database, cache or queue, list it under the
+repo (or at the top level, for every repo) and the factory starts it for
+each build and check:
+
+```yaml
+repos:
+  - name: you/api
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: factory}
+        ready: pg_isready -U postgres     # run until it succeeds, before anything else
+      redis: {image: redis:7, ready: redis-cli ping}
+    env:
+      DATABASE_URL: postgres://postgres:factory@postgres:5432/api_test
+      REDIS_URL: redis://redis:6379
+```
+
+Each service is reachable by its name as the host. Every implement job,
+and the readiness check, gets its own fresh set on a private network that
+has no way out. The builder and every check join it, and reviewers don't.
+Hidden scenarios join it as well, but they still reach nothing else. The
+services are removed when the job ends, and the daemon clears any that a
+crash left behind. Create the test database in the install step (for
+example `bin/rails db:prepare`), because each job starts empty. Within a
+job, though, the builder and every check share one set, so data one check
+writes is there for the next; tests that clean up after themselves (a
+transaction per test) keep that from mattering. `factory eval` gets a set
+too. Services need the docker runner on Docker 28 or newer, and can't be
+used with `network: host`. Don't put secrets in their `env`, since it goes
+on the docker command line.
+
+If a check fails because it can't connect to a database and the repo has
+no services, the readiness check says so. It suggests the services to add,
+read from the repo's `docker-compose.yml` or `config/database.yml`,
+instead of filing an issue for a builder, who can't edit factory.yaml.
+
 ### Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the

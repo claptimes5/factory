@@ -41,6 +41,11 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err := g.Export(ctx, ws.Repo, ws.BaseSHA, export); err != nil {
 		return nil, err
 	}
+	stop, err := p.StartServices(ctx, 0, repo)
+	defer stop()
+	if err != nil {
+		return nil, err
+	}
 	r := readiness.Assess(ctx, readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export,
 		Exec: func(ctx context.Context, dir, cmd string, install bool) (int, string, error) {
 			fmt.Fprintf(out, "  running %s\n", cmd)

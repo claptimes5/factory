@@ -164,8 +164,9 @@ type fakeHarness struct {
 	prompts map[string][]string
 	plant   string // a verdict file written where a planted hook could write it
 	orch    func(req harness.RunRequest) (string, error)
-	resumes []string // Resume of each implement call
-	noSess  bool     // fail any resumed run, as if the session were gone
+	resumes []string            // Resume of each implement call
+	noSess  bool                // fail any resumed run, as if the session were gone
+	nets    map[string][]string // Services of each call, by stage
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -178,6 +179,10 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 	n := h.calls[req.Stage]
 	h.calls[req.Stage]++
 	h.prompts[req.Stage] = append(h.prompts[req.Stage], req.Prompt)
+	if h.nets == nil {
+		h.nets = map[string][]string{}
+	}
+	h.nets[req.Stage] = append(h.nets[req.Stage], req.Services)
 	res := &harness.Result{CostUSD: 0.1, CostKnown: true, TokensIn: 10, TokensOut: 5, Turns: 1}
 	switch req.Stage {
 	case "triage":

@@ -115,6 +115,11 @@ func (p *Pipeline) Check(ctx context.Context, repo, dir, command string) (int, s
 	if err := os.MkdirAll(p.jobDir(0), 0o755); err != nil {
 		return -1, "", err
 	}
+	stop, err := p.StartServices(ctx, 0, repo)
+	defer stop()
+	if err != nil {
+		return -1, "", err
+	}
 	if install := p.repoConf(repo).Gates.Install; install != "" {
 		code, out, err := p.gateExec(ctx, 0, dir, install, gateRun{repo: repo, install: true})
 		if err != nil || code != 0 {

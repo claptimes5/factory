@@ -222,3 +222,46 @@ func TestGitLabRepos(t *testing.T) {
 		}
 	}
 }
+
+// Services at the top level apply to every repo that names none of its
+// own; a repo's replace them. Names must be host names, each needs an
+// image, and only the docker runner runs them.
+func TestServices(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	c, err := Parse([]byte(`repos:
+  - o/api
+  - name: o/web
+    services:
+      cache: {image: "redis:7", ready: redis-cli ping}
+services:
+  postgres: {image: "postgres:16", env: {POSTGRES_PASSWORD: factory}, ready: pg_isready -U postgres}
+` + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := c.RepoConf("o/api")
+	web, _ := c.RepoConf("o/web")
+	if s := api.Services["postgres"]; len(api.Services) != 1 || s.Image != "postgres:16" || s.Env["POSTGRES_PASSWORD"] != "factory" || s.Ready != "pg_isready -U postgres" {
+		t.Fatalf("api services = %+v", api.Services)
+	}
+	if len(web.Services) != 1 || web.Services["cache"].Image != "redis:7" {
+		t.Fatalf("web services = %+v", web.Services)
+	}
+	for bad, want := range map[string]string{
+		"services:\n  Bad_Name: {image: x}\n": "must be a host name",
+		"services:\n  db: {ready: x}\n":       "services.db needs an image",
+	} {
+		if _, err := Parse([]byte("repo: o/api\n" + base + bad)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", bad, err, want)
+		}
+	}
+	local := strings.Replace(base, "kind: docker", "kind: local", 1)
+	if _, err := Parse([]byte("repo: o/api\n" + local + "services:\n  db: {image: x}\n")); err == nil || !strings.Contains(err.Error(), "need the docker runner") {
+		t.Errorf("local runner: err = %v", err)
+	}
+	host := strings.Replace(base, `network: ""`, "network: host", 1)
+	if _, err := Parse([]byte("repo: o/api\n" + host + "services:\n  db: {image: x}\n")); err == nil || !strings.Contains(err.Error(), "network: host") {
+		t.Errorf("host network: err = %v", err)
+	}
+}
