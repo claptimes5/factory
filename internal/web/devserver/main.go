@@ -56,7 +56,7 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &web.Server{
-		Store: st, Actions: actions{}, Repos: []string{"acme/widgets"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
+		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		Issue: func(_ context.Context, _ string, n int) (*github.Issue, error) {
 			return &github.Issue{Number: n, Body: fmt.Sprintf("Issue #%d.\n\nThe parser drops the last token when the input has no trailing newline.\n\nExpected: every token is kept.\nVerify: `go test ./parser`.", n)}, nil
 		},
@@ -99,7 +99,6 @@ func main() {
 }
 
 func seed(ctx context.Context, st *store.Store, jobs string) error {
-	const repo = "acme/widgets"
 	path := map[state.Stage][]state.Stage{
 		state.Triage:        {},
 		state.Ready:         {state.Ready},
@@ -110,22 +109,23 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		state.Done:          {state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Done},
 	}
 	items := []struct {
+		repo  string
 		issue int
 		title string
 		stage state.Stage
 		size  string
 	}{
-		{101, "Parser drops the last token without a trailing newline", state.AwaitingHuman, "S"},
-		{102, "Add retry with backoff to the webhook client", state.Implementing, "M"},
-		{103, "Rate-limit the public search endpoint", state.Reviewing, "M"},
-		{104, "Support YAML anchors in config files", state.Parked, "L"},
-		{105, "Typo in the CLI help for --dry-run", state.Ready, "S"},
-		{106, "Flaky TestCacheEviction on CI", state.Triage, ""},
-		{107, "Export metrics in OpenMetrics format", state.Done, "M"},
+		{"acme/web", 101, "Parser drops the last token without a trailing newline", state.AwaitingHuman, "S"},
+		{"acme/api", 102, "Add retry with backoff to the webhook client", state.Implementing, "M"},
+		{"acme/api", 103, "Rate-limit the public search endpoint", state.Reviewing, "M"},
+		{"acme/api", 104, "Support YAML anchors in config files", state.Parked, "L"},
+		{"acme/web", 105, "Typo in the CLI help for --dry-run", state.Ready, "S"},
+		{"acme/api", 106, "Flaky TestCacheEviction on CI", state.Triage, ""},
+		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
-		it, _, err := st.UpsertItem(ctx, repo, x.issue, x.title)
+		it, _, err := st.UpsertItem(ctx, x.repo, x.issue, x.title)
 		if err != nil {
 			return err
 		}
@@ -174,6 +174,9 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			`{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the parser and its tests."}]}}`,
 			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./parser"}}]}}`,
 			`{"type":"assistant","message":{"content":[{"type":"text","text":"The loop stops one token early when the input lacks a trailing newline. Writing a failing test first."}]}}`,
+		}
+		if end == state.Running && kind == "implement" {
+			lines = append(lines, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/work/webhook/retry.go"}}]}}`)
 		}
 		if end != state.Running {
 			lines = append(lines, `{"type":"result","subtype":"success","result":"Fixed and tested."}`)
@@ -260,7 +263,11 @@ new file mode 100644
 	if _, err := job(103, "implement", "sonnet", state.Failed, 2.1, ""); err != nil {
 		return err
 	}
-	if _, err := job(103, "implement", "opus", state.Succeeded, 4.3, ""); err != nil {
+	opus, err := job(103, "implement", "opus", state.Succeeded, 4.3, "")
+	if err != nil {
+		return err
+	}
+	if err := st.SetGateResults(ctx, opus, []store.GateResult{{Gate: "build", Status: "pass"}, {Gate: "test", Status: "pass"}, {Gate: "lint", Status: "pass"}, {Gate: "proves_fix", Status: "pass"}, {Gate: "diff_guard", Status: "pass"}}); err != nil {
 		return err
 	}
 	if _, err := job(103, "review", "gpt-5", state.Running, 0, ""); err != nil {

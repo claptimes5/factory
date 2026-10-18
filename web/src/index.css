@@ -1,58 +1,131 @@
 @import "tailwindcss";
 
+/* Bundled, so the dashboard loads nothing from outside: Latin only, woff2 only. */
+@font-face {
+  font-family: "Space Grotesk Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url("@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* shadcn/ui tokens (zinc), light then dark. */
+/*
+ * The control room: a dark floor where amber is what needs you, blue is
+ * what is running and green is what is done. Light mode keeps the same
+ * meanings with darker inks so text holds 4.5:1 on white.
+ */
 :root {
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --border: oklch(0.92 0.004 286.32);
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --success: oklch(0.627 0.194 149.214);
-  --warning: oklch(0.666 0.179 58.318);
-  --ring: oklch(0.546 0.245 262.881);
+  --background: #f5f6f8;
+  --surface: #ffffff;
+  --foreground: #14171c;
+  --card: #ffffff;
+  --card-foreground: #14171c;
+  --muted: #eceef2;
+  --muted-foreground: #586170;
+  --text-2: #3a414c;
+  --accent: #eceef2;
+  --border: #dadee5;
+  --primary: #1d64c4;
+  --primary-soft: #1d64c4;
+  --primary-foreground: #ffffff;
+  --live-bg: #eef4fd;
+  --live-border: #9fc3f2;
+  --destructive: #c42d2d;
+  --success: #17804f;
+  --success-fill: #2fae73;
+  --warning: #955300;
+  --warning-fill: #ffb547;
+  --warning-ink: #1a1206;
+  --warning-bg: #fff6e6;
+  --warning-border: #f2c879;
+  --ring: #1d64c4;
 }
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --border: oklch(1 0 0 / 10%);
-  --primary: oklch(0.623 0.214 259.815);
-  --primary-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --success: oklch(0.723 0.219 149.579);
-  --warning: oklch(0.769 0.188 70.08);
-  --ring: oklch(0.623 0.214 259.815);
+  --background: #0d0f12;
+  --surface: #101318;
+  --foreground: #eceff4;
+  --card: #14171c;
+  --card-foreground: #eceff4;
+  --muted: #1c2027;
+  --muted-foreground: #9aa3b2;
+  --text-2: #c9d0db;
+  --accent: #1c2027;
+  --border: #262b34;
+  --primary: #6cb4ff;
+  --primary-soft: #9ccbff;
+  --primary-foreground: #0d0f12;
+  --live-bg: #141a22;
+  --live-border: #6cb4ff55;
+  --destructive: #ff7a7a;
+  --success: #5fd39a;
+  --success-fill: #5fd39a;
+  --warning: #ffb547;
+  --warning-fill: #ffb547;
+  --warning-ink: #1a1206;
+  --warning-bg: #1c1810;
+  --warning-border: #ffb54766;
+  --ring: #6cb4ff;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-text-2: var(--text-2);
   --color-accent: var(--accent);
   --color-border: var(--border);
   --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
   --color-primary-foreground: var(--primary-foreground);
+  --color-live-bg: var(--live-bg);
+  --color-live-border: var(--live-border);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
+  --color-success-fill: var(--success-fill);
   --color-warning: var(--warning);
+  --color-warning-fill: var(--warning-fill);
+  --color-warning-ink: var(--warning-ink);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
   --color-ring: var(--ring);
   --radius-lg: 0.625rem;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk Variable", "IBM Plex Sans", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @layer base {
@@ -61,8 +134,32 @@
   body {
     background: var(--background);
     color: var(--foreground);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
   :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+}
+
+@layer components {
+  /* Section labels: small caps in the display face. */
+  .label {
+    font-family: var(--font-display);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  .working {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 20%, transparent) 0%, var(--primary) 50%, color-mix(in srgb, var(--primary) 20%, transparent) 100%);
+    background-size: 200px 100%;
+    animation: shimmer 1.8s linear infinite;
+  }
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse, .working { animation: none; }
 }

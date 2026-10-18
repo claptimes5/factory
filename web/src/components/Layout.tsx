@@ -1,16 +1,11 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router";
-import { Activity, Bell, Bot, LayoutGrid, Moon, Sun } from "lucide-react";
-import { useLiveUpdates, useNotifications, useOverview } from "@/api/client";
+import { Link, NavLink, Outlet } from "react-router";
+import { Activity, Bell, LayoutGrid, Moon, Radio, Search, Sun } from "lucide-react";
+import { useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
+import { CommandPalette } from "@/components/CommandPalette";
 import { useBrowserNotifications } from "@/lib/notify";
-import { cn, money } from "@/lib/utils";
-
-const nav = [
-  { to: "/", label: "Board", icon: LayoutGrid, end: true },
-  { to: "/notifications", label: "Inbox", icon: Bell },
-  { to: "/orchestrator", label: "Orchestrator", icon: Bot },
-  { to: "/metrics", label: "Spend", icon: Activity },
-];
+import { setRepo, useRepo } from "@/lib/repo";
+import { cn, money, repoName } from "@/lib/utils";
 
 function useTheme() {
   const [dark, setDark] = useState(() => {
@@ -33,81 +28,223 @@ function useTheme() {
   return [dark, setDark] as const;
 }
 
+/** ⌘K or Ctrl+K anywhere opens the palette. */
+function usePalette() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return [open, setOpen] as const;
+}
+
+export function Logo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 28 28" aria-hidden className={className}>
+      <rect x="2" y="10" width="7" height="16" rx="1.5" className="fill-warning-fill" />
+      <rect x="10.5" y="5" width="7" height="21" rx="1.5" className="fill-primary" />
+      <rect x="19" y="14" width="7" height="12" rx="1.5" className="fill-success-fill" />
+    </svg>
+  );
+}
+
+const links = [
+  { to: "/", label: "Floor", end: true },
+  { to: "/orchestrator", label: "Orchestrator" },
+  { to: "/metrics", label: "Spend" },
+];
+
+const tabs = [
+  { to: "/", label: "Floor", icon: LayoutGrid, end: true },
+  { to: "/notifications", label: "Inbox", icon: Bell },
+  { to: "/live", label: "Live", icon: Radio },
+  { to: "/metrics", label: "Spend", icon: Activity },
+];
+
 export function Layout() {
   useLiveUpdates();
   const { data: o } = useOverview();
   const { data: n } = useNotifications();
   useBrowserNotifications(n?.notifications);
   const [dark, setDark] = useTheme();
+  const [palette, setPalette] = usePalette();
   const inbox = n?.notifications.length ?? 0;
-  const near = o ? o.spent_today_usd >= 0.8 * o.daily_cap_usd : false;
+  const repos = o?.repos ?? [];
+  const repo = useRepo(repos);
+  const theme = (
+    <button
+      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+      className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-card text-foreground hover:bg-accent md:size-9"
+      onClick={() => setDark(!dark)}
+    >
+      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+    </button>
+  );
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
-        <div className="mx-auto flex h-12 max-w-[1600px] items-center gap-4 px-4">
-          <span className="font-semibold">Factory</span>
-          <span className="hidden truncate text-sm text-muted-foreground sm:inline">{o?.repos.join(", ")}</span>
-          <nav className="ml-2 hidden gap-1 md:flex" aria-label="Main">
-            {nav.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                className={({ isActive }) =>
-                  cn("flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm", isActive ? "bg-accent font-medium" : "text-muted-foreground hover:text-foreground")
-                }
-              >
-                <Icon className="size-4" /> {label}
-                {to === "/notifications" && inbox > 0 && <Count n={inbox} />}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-            {o && (
-              <>
-                <span title="Jobs running / queued">
-                  {o.running} running · {o.queued} queued
-                </span>
-                <span className={cn(near && "font-medium text-warning")} title="Spent today (UTC) of the daily cap">
-                  {money(o.spent_today_usd)} / {money(o.daily_cap_usd)}
-                </span>
-              </>
-            )}
-            <a href="/" className="hidden hover:text-foreground lg:inline" title="The server-rendered control room">
-              Classic view
-            </a>
-            <button aria-label="Toggle dark mode" className="cursor-pointer rounded p-1 hover:bg-accent" onClick={() => setDark(!dark)}>
-              {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 md:px-6 lg:h-16 lg:flex-nowrap lg:py-0">
+          <Link to="/" className="flex items-center gap-2.5">
+            <Logo className="size-6 md:size-7" />
+            <span className="font-display text-lg font-bold tracking-tight">Factory</span>
+          </Link>
+
+          {/* Repos, the main screens and search: a row of their own until a laptop has room. */}
+          <div className="order-last flex w-full min-w-0 items-center gap-2 max-md:hidden lg:order-none lg:w-auto lg:flex-1">
+            {repos.length > 1 && <RepoChips repos={repos} repo={repo} />}
+            <nav aria-label="Main" className="flex gap-1">
+              {links.map((l) => (
+                <NavLink
+                  key={l.to}
+                  to={l.to}
+                  end={l.end}
+                  className={({ isActive }) =>
+                    cn("rounded-md px-2.5 py-1.5 text-sm", isActive ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  {l.label}
+                </NavLink>
+              ))}
+            </nav>
+            <button
+              onClick={() => setPalette(true)}
+              className="ml-auto flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg border bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/50 lg:h-9 lg:max-w-96"
+            >
+              <Search className="size-4 shrink-0" aria-hidden />
+              <span className="flex-1 truncate">Jump to an issue or screen</span>
+              <kbd className="rounded border px-1.5 font-mono text-xs">⌘K</kbd>
             </button>
           </div>
+
+          <div className="ml-auto flex items-center gap-3 lg:ml-0">
+            {o && <Running o={o} className="max-md:hidden" />}
+            {o && <SpendMeter o={o} className="max-md:hidden" />}
+            <button
+              aria-label="Search"
+              onClick={() => setPalette(true)}
+              className="flex size-11 cursor-pointer items-center justify-center rounded-lg border bg-card md:hidden"
+            >
+              <Search className="size-4" />
+            </button>
+            <Link
+              to="/notifications"
+              aria-label={inbox ? `Inbox, ${inbox} need you` : "Inbox"}
+              className="relative flex size-11 items-center justify-center rounded-lg border bg-card hover:bg-accent max-md:hidden md:size-9"
+            >
+              <Bell className="size-[18px]" />
+              {inbox > 0 && <Count n={inbox} className="absolute -top-1.5 -right-1.5" />}
+            </Link>
+            {theme}
+          </div>
+
+          {/* Phone: what's running and the day's spend under the logo. */}
+          {o && (
+            <div className="flex w-full items-center gap-3 md:hidden">
+              <Running o={o} />
+              <SpendMeter o={o} className="flex-1" />
+            </div>
+          )}
+          {repos.length > 1 && (
+            <div className="-mx-4 w-[calc(100%+2rem)] overflow-x-auto px-4 md:hidden">
+              <RepoChips repos={repos} repo={repo} />
+            </div>
+          )}
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4 pb-24 md:pb-6">
+      <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 pb-28 md:px-6 md:pb-8">
         <Outlet />
       </main>
-      {/* Phone: the main screens as a bottom tab bar. */}
-      <nav aria-label="Tabs" className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
-        {nav.map(({ to, label, icon: Icon, end }) => (
+      <nav
+        aria-label="Tabs"
+        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
+      >
+        {tabs.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
-            className={({ isActive }) => cn("relative flex flex-col items-center gap-0.5 py-2 text-[11px]", isActive ? "text-primary" : "text-muted-foreground")}
+            className={({ isActive }) =>
+              cn("relative flex h-16 flex-col items-center justify-center gap-1 text-[11px]", isActive ? "text-foreground" : "text-muted-foreground")
+            }
           >
-            <Icon className="size-5" />
+            <Icon className="size-5" aria-hidden />
             {label}
-            {to === "/notifications" && inbox > 0 && (
-              <span className="absolute top-1 left-1/2 ml-2">
-                <Count n={inbox} />
-              </span>
-            )}
+            {to === "/notifications" && inbox > 0 && <Count n={inbox} className="absolute top-2 left-[55%]" />}
           </NavLink>
         ))}
       </nav>
+      <CommandPalette open={palette} onClose={() => setPalette(false)} />
     </div>
   );
 }
 
-function Count({ n }: { n: number }) {
-  return <span className="rounded-full bg-destructive px-1.5 text-[10px] leading-4 font-semibold text-white">{n}</span>;
+function RepoChips({ repos, repo }: { repos: string[]; repo: string }) {
+  const chip = (value: string, label: string) => (
+    <button
+      key={value || "all"}
+      aria-pressed={repo === value}
+      onClick={() => setRepo(value)}
+      className={cn(
+        "h-9 shrink-0 cursor-pointer rounded-full border px-3 text-[13px] font-medium whitespace-nowrap lg:h-8",
+        value && "font-mono",
+        repo === value ? "border-foreground bg-foreground text-background" : "text-text-2 hover:border-muted-foreground",
+      )}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Repositories" className="flex gap-1.5">
+      {chip("", "All repos")}
+      {repos.map((r) => chip(r, repoName(r)))}
+    </div>
+  );
+}
+
+function Running({ o, className }: { o: Overview; className?: string }) {
+  return (
+    <div
+      title="Jobs running and queued"
+      className={cn(
+        className,
+        "flex h-8 items-center gap-2 rounded-full px-3 text-[13px] font-medium whitespace-nowrap",
+        o.running > 0 ? "bg-primary/10 text-primary-soft" : "bg-muted text-muted-foreground",
+      )}
+    >
+      <span className={cn("size-2 rounded-full", o.running > 0 ? "pulse bg-primary" : "bg-muted-foreground")} />
+      {o.running} running · {o.queued} queued
+    </div>
+  );
+}
+
+function SpendMeter({ o, className }: { o: Overview; className?: string }) {
+  const share = o.daily_cap_usd > 0 ? Math.min(1, o.spent_today_usd / o.daily_cap_usd) : 0;
+  const near = share >= 0.8;
+  return (
+    <div className={cn("flex flex-col gap-1.5 md:w-40", className)} title="Spent today (UTC) of the daily cap">
+      <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+        <span>Today</span>
+        <span className={cn("font-mono", near ? "font-semibold text-warning" : "text-foreground")}>
+          {money(o.spent_today_usd)} / {money(o.daily_cap_usd)}
+        </span>
+      </div>
+      <div className="h-1 rounded-full bg-border" role="meter" aria-label="Spent today" aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
+        <div className={cn("h-1 rounded-full", near ? "bg-warning-fill" : "bg-success-fill")} style={{ width: `${share * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function Count({ n, className }: { n: number; className?: string }) {
+  return (
+    <span className={cn("flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-fill px-1 text-[11px] font-bold text-warning-ink", className)}>
+      {n}
+    </span>
+  );
 }

@@ -18,14 +18,14 @@ export function ItemScreen() {
       <div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Link to="/" className="hover:text-foreground">
-            Board
+            Floor
           </Link>
           <span>/</span>
           <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
             {it.ref} <ExternalLink className="size-3" />
           </a>
         </div>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-lg font-semibold">
+        <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
           {it.title} <StageBadge stage={it.stage} />
         </h1>
         {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}

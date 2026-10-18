@@ -103,6 +103,15 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Action" }
         "409": { $ref: "#/components/responses/Action" }
+  /activity:
+    get:
+      summary: What happened lately, said for people, newest first
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Activity" }
   /orchestrator:
     get:
       summary: The orchestrator's decisions, newest first
@@ -193,12 +202,18 @@ components:
       allOf:
         - $ref: "#/components/schemas/Item"
         - type: object
-          required: [model, cost_usd, live, live_job]
+          required: [model, cost_usd, live, live_job, live_kind, live_since, activity, attempt, gates_passed, gates_total]
           properties:
             model: { type: string }
             cost_usd: { type: number }
             live: { type: boolean }
             live_job: { type: [integer, "null"] }
+            live_kind: { type: string, description: "The running job's kind (implement, review, ...), or empty" }
+            live_since: { type: string, description: When the running job started }
+            activity: { type: string, description: "What the running job is doing now, from its log: editing parser/parser.go" }
+            attempt: { type: integer, description: The latest implement attempt, 0 before the first }
+            gates_passed: { type: integer }
+            gates_total: { type: integer, description: Gates the latest implement attempt ran, 0 before any }
     Column:
       type: object
       required: [stage, cards]
@@ -323,6 +338,23 @@ components:
       required: [events]
       properties:
         events: { type: array, items: { $ref: "#/components/schemas/Event" } }
+    ActivityEntry:
+      type: object
+      required: [id, at, item_id, job_id, actor, ref, text, tone]
+      properties:
+        id: { type: integer }
+        at: { type: string }
+        item_id: { type: [integer, "null"] }
+        job_id: { type: [integer, "null"] }
+        actor: { type: string, description: "Who did it: daemon, orchestrator, human, ..." }
+        ref: { type: string, description: "The item's issue as on its card; empty for none" }
+        text: { type: string, description: Follows the ref }
+        tone: { type: string, enum: [live, needs_you, done, bad, info] }
+    Activity:
+      type: object
+      required: [entries]
+      properties:
+        entries: { type: array, items: { $ref: "#/components/schemas/ActivityEntry" } }
     DaySpend:
       type: object
       required: [day, cost_usd]

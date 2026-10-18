@@ -18,6 +18,8 @@ export type PRPanel = S["PRPanel"];
 export type Finding = S["Finding"];
 export type Diff = S["Diff"];
 export type Feed = S["Feed"];
+export type Activity = S["Activity"];
+export type ActivityEntry = S["ActivityEntry"];
 export type Spend = S["Spend"];
 export type Metrics = S["Metrics"];
 export type Notification = S["Notification"];
@@ -79,6 +81,7 @@ export const useFeed = (item?: number) =>
     queryKey: ["feed", item ?? 0],
     queryFn: () => getJSON<Feed>(item ? `/orchestrator?item=${item}` : "/orchestrator"),
   });
+export const useActivity = () => useQuery({ queryKey: ["activity"], queryFn: () => getJSON<Activity>("/activity") });
 export const useSpend = () => useQuery({ queryKey: ["spend"], queryFn: () => getJSON<Spend>("/spend") });
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () => getJSON<Metrics>("/metrics") });
 export const useNotifications = () =>

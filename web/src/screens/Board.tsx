@@ -1,134 +1,286 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { AlertTriangle, GitPullRequest, Hand } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { useBoard, useOverview, type Card as CardT } from "@/api/client";
+import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading } from "@/components/common";
-import { Badge } from "@/components/ui/badge";
-import { cn, money, stageName } from "@/lib/utils";
+import { useRepo } from "@/lib/repo";
+import { cn, duration, money, shortRef, stageName } from "@/lib/utils";
 
-// Stages hidden unless they hold something, so a phone sees what matters.
-const quiet = new Set(["epic", "spec", "blocked", "done"]);
+// The floor's columns, in the order work moves through them. The quiet
+// ones show only when they hold something.
+const floor = ["epic", "triage", "spec", "ready", "implementing", "reviewing", "blocked"];
+const quiet = new Set(["epic", "spec", "blocked"]);
+const live = new Set(["implementing", "reviewing"]);
 
 export function BoardScreen() {
   const { data, error, isLoading } = useBoard();
-  const [filter, setFilter] = useState("");
-  const [showDone, setShowDone] = useState(false);
-  const [repo, setRepo] = useState("");
   const repos = useOverview().data?.repos ?? [];
-  const columns = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    return (data?.columns ?? [])
-      .map((c) => ({
-        ...c,
-        cards: c.cards.filter(
-          (k) => (!repo || k.repo === repo) && (!q || k.title.toLowerCase().includes(q) || k.ref.toLowerCase().includes(q)),
-        ),
-      }))
-      .filter((c) => (c.stage === "done" ? showDone : !quiet.has(c.stage) || c.cards.length > 0));
-  }, [data, filter, showDone, repo]);
-  if (isLoading) return <Loading what="Loading the board" />;
+  const repo = useRepo(repos);
+  const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
+  const [showDone, setShowDone] = useState(false);
+  const cols = useMemo(() => {
+    const m = new Map<string, CardT[]>();
+    for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => !repo || k.repo === repo));
+    return m;
+  }, [data, repo]);
+  if (isLoading) return <Loading what="Loading the floor" />;
   if (error) return <ErrorBox error={error} />;
-  const total = data!.columns.reduce((n, c) => n + c.cards.length, 0);
+
+  const needs = [...(cols.get("awaiting_human") ?? []), ...(cols.get("parked") ?? [])];
+  const shown = floor.filter((s) => !quiet.has(s) || (cols.get(s)?.length ?? 0) > 0);
+  const done = cols.get("done") ?? [];
+  const moving = shown.filter((s) => live.has(s)).flatMap((s) => cols.get(s) ?? []);
+  const waiting = shown.filter((s) => !live.has(s));
+
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <h1 className="text-lg font-semibold">Board</h1>
-        <span className="text-sm text-muted-foreground">{total} items</span>
-        <input
-          aria-label="Filter items"
-          placeholder="Filter by title or #issue"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="ml-auto h-8 w-full rounded-md border bg-card px-2.5 text-sm sm:w-64"
-        />
-        {repos.length > 1 && (
-          <select
-            aria-label="Repository"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            className="h-8 rounded-md border bg-card px-2 text-sm"
-          >
-            <option value="">All repos</option>
-            {repos.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        )}
-        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Done
-        </label>
-      </div>
-      {/* Columns scroll sideways on a desktop and stack on a phone. */}
-      <div className="flex flex-col gap-4 md:flex-row md:overflow-x-auto md:pb-2" data-testid="board">
-        {columns.map((col) => (
-          <section
-            key={col.stage}
-            aria-label={stageName(col.stage)}
-            // On a phone, what needs you comes first.
-            className={cn("md:max-w-96 md:min-w-64 md:flex-1", (col.stage === "awaiting_human" || col.stage === "parked") && "max-md:order-first")}
-          >
-            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              {stageName(col.stage)}
-              <span className="rounded-full bg-muted px-1.5 font-normal normal-case">{col.cards.length}</span>
-            </h2>
-            <div className="flex flex-col gap-2">
-              {col.cards.map((c) => (
-                <BoardCard key={c.id} card={c} />
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]" data-testid="board">
+      <div className="flex min-w-0 flex-col gap-6">
+        <section aria-label="Needs you">
+          <h2 className="label mb-3 flex items-center gap-2.5 text-warning">
+            Needs you
+            <span className="rounded-full bg-warning-fill px-2 font-mono text-xs tracking-normal text-warning-ink">{needs.length}</span>
+          </h2>
+          {needs.length === 0 ? (
+            <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Nothing needs you. The floor is running on its own.</p>
+          ) : (
+            <div className="grid gap-3.5 lg:grid-cols-2">
+              {needs.map((c) => (
+                <NeedsYouCard key={c.id} card={c} />
               ))}
-              {col.cards.length === 0 && <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
             </div>
-          </section>
-        ))}
+          )}
+        </section>
+
+        {/* Laptop and tablet: a column per stage. */}
+        <section aria-label="The floor" className="grid gap-3.5 max-md:hidden md:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
+          {shown.map((s) => (
+            <Column key={s} stage={s} cards={cols.get(s) ?? []} />
+          ))}
+        </section>
+
+        {/* Phone: what's moving as cards, the rest a tap away. */}
+        <section aria-label="On the floor" className="flex flex-col gap-2.5 md:hidden">
+          <h2 className="label text-muted-foreground">On the floor</h2>
+          {moving.map((c) => (
+            <FloorCard key={c.id} card={c} showStage />
+          ))}
+          {moving.length === 0 && <p className="text-sm text-muted-foreground">Nothing is building or in review.</p>}
+          <div className="flex gap-2">
+            {[...waiting, "done"].map((s) => {
+              const n = (s === "done" ? done : (cols.get(s) ?? [])).length;
+              return (
+                <button
+                  key={s}
+                  aria-expanded={open === s}
+                  onClick={() => setOpen(open === s ? "" : s)}
+                  className={cn(
+                    "flex h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-[13px]",
+                    open === s && "border-foreground",
+                  )}
+                >
+                  {stageName(s)} <span className="font-mono text-muted-foreground">{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          {open && (
+            <div role="region" aria-label={stageName(open)} className="flex flex-col gap-2.5">
+              {(open === "done" ? done : (cols.get(open) ?? [])).map((c) => (
+                <FloorCard key={c.id} card={c} />
+              ))}
+              {(open === "done" ? done : (cols.get(open) ?? [])).length === 0 && <p className="text-sm text-muted-foreground">Nothing here.</p>}
+            </div>
+          )}
+        </section>
+
+        <section aria-label="Done" className="max-md:hidden">
+          <button onClick={() => setShowDone(!showDone)} aria-expanded={showDone} className="label cursor-pointer text-muted-foreground hover:text-foreground">
+            Done <span className="font-mono tracking-normal">{done.length}</span> {showDone ? "▴" : "▾"}
+          </button>
+          {showDone && (
+            <ul className="mt-3 divide-y rounded-xl border bg-card">
+              {done.map((c) => (
+                <li key={c.id}>
+                  <Link to={`/items/${c.id}`} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent">
+                    <span className="font-mono text-xs text-success">{shortRef(c.ref)}</span>
+                    <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                    {c.cost_usd > 0 && <span className="font-mono text-xs text-muted-foreground">{money(c.cost_usd)}</span>}
+                  </Link>
+                </li>
+              ))}
+              {done.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground">Nothing done yet.</li>}
+            </ul>
+          )}
+        </section>
       </div>
+
+      <aside aria-label="Live activity" className="flex flex-col gap-4 max-md:hidden xl:sticky xl:top-[88px] xl:max-h-[calc(100vh-112px)] xl:self-start">
+        <div className="flex items-center justify-between">
+          <LiveHeading />
+          <Link to="/live" className="text-sm text-primary hover:underline">
+            All activity
+          </Link>
+        </div>
+        <div className="min-h-0 overflow-y-auto xl:flex-1">
+          <ActivityFeed repo={repo} limit={12} />
+        </div>
+        <WeekStats />
+      </aside>
     </div>
   );
 }
 
-function BoardCard({ card: c }: { card: CardT }) {
+function Column({ stage, cards }: { stage: string; cards: CardT[] }) {
   return (
-    <Link
-      to={`/items/${c.id}`}
+    <section aria-label={stageName(stage)} className="flex min-w-0 flex-col gap-2.5">
+      <h3 className="label flex justify-between text-muted-foreground">
+        {stageName(stage)} <span className="font-mono tracking-normal">{cards.length}</span>
+      </h3>
+      {cards.map((c, i) => (
+        <FloorCard key={c.id} card={c} next={stage === "ready" && i === 0} />
+      ))}
+      {cards.length === 0 && <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
+    </section>
+  );
+}
+
+/** A title that is the card's link, stretched over the card so the whole card opens it. */
+function CardLink({ card, className }: { card: CardT; className?: string }) {
+  return (
+    <Link to={`/items/${card.id}`} className={cn("after:absolute after:inset-0 after:rounded-[inherit] focus-visible:outline-none", className)}>
+      {card.title}
+    </Link>
+  );
+}
+
+const doing: Record<string, string> = {
+  implement: "building",
+  review: "reviewing the diff",
+  critic: "a second critic is reading",
+  triage: "sizing it up",
+};
+
+function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; showStage?: boolean }) {
+  const kind = c.live_kind;
+  return (
+    <article
       data-testid="card"
       className={cn(
-        "block rounded-lg border bg-card p-3 text-sm shadow-xs transition-colors hover:border-primary/50",
-        c.needs_you && "border-warning/60",
-        c.stage === "blocked" && "border-destructive/60",
+        "relative flex flex-col gap-2.5 rounded-[10px] border bg-card p-3.5 transition-colors focus-within:border-primary hover:border-primary/60",
+        c.live && "border-live-border bg-live-bg",
+        c.stage === "blocked" && "border-destructive/50",
       )}
     >
-      <div className="mb-1 flex items-start gap-2">
-        <span className="font-mono text-xs text-muted-foreground">{c.ref}</span>
-        <span className="line-clamp-2 flex-1 font-medium">{c.title}</span>
-        {c.live && (
-          <span className="relative mt-1 flex size-2 shrink-0" title="A job is running">
-            <span className="absolute size-2 animate-ping rounded-full bg-primary opacity-60" />
-            <span className="size-2 rounded-full bg-primary" />
-          </span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        {c.needs_you && (
-          <Badge variant="warning">
-            <Hand className="size-3" /> needs you
-          </Badge>
-        )}
-        {c.stage === "blocked" && (
-          <Badge variant="destructive">
-            <AlertTriangle className="size-3" /> blocked
-          </Badge>
-        )}
-        {c.complexity && <Badge variant="secondary">{c.complexity}</Badge>}
-        {c.model && <span>{c.model}</span>}
+      <div className="flex items-center justify-between gap-2 font-mono text-xs">
+        <span className="text-muted-foreground">
+          {shortRef(c.ref)}
+          {showStage && ` · ${stageName(c.stage).toLowerCase()}`}
+        </span>
         {c.cost_usd > 0 && <span>{money(c.cost_usd)}</span>}
-        {c.pr_number > 0 && (
-          <span className="flex items-center gap-0.5">
-            <GitPullRequest className="size-3" />
-            {c.pr_number}
-          </span>
+      </div>
+      <CardLink card={c} className="text-[15px] leading-snug font-semibold" />
+      {c.live && (
+        <div className={cn("flex min-w-0 items-center gap-2 text-xs text-primary-soft", c.activity && "font-mono")}>
+          <span title="A job is running" className="pulse size-[7px] shrink-0 rounded-full bg-primary" />
+          <span className="truncate">{c.activity || doing[kind] || kind}</span>
+        </div>
+      )}
+      {c.live && kind === "implement" && <div className="working h-[3px] rounded-full" aria-hidden />}
+      {c.gates_total > 0 && c.stage !== "implementing" && <GateBar passed={c.gates_passed} total={c.gates_total} />}
+      {c.stage === "blocked" && c.blocked_note && <p className="line-clamp-2 text-xs text-muted-foreground">{c.blocked_note}</p>}
+      <Footer card={c} next={next} />
+    </article>
+  );
+}
+
+function Footer({ card: c, next }: { card: CardT; next?: boolean }) {
+  const parts: string[] = [];
+  const building = c.live && c.live_kind === "implement";
+  if (building && c.model) parts.push(c.model);
+  if (building && c.attempt > 0) parts.push(`attempt ${c.attempt}`);
+  if (!building && c.stage === "reviewing" && c.model) parts.push(`${c.model} built it`);
+  if (c.live && c.live_since) parts.push(duration(c.live_since));
+  if (!c.live && c.gates_total > 0) parts.push(`gates ${c.gates_passed}/${c.gates_total}`);
+  if (parts.length === 0 && !c.complexity && !next) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      {c.complexity && !c.live && <span className="rounded border px-1.5">{c.complexity}</span>}
+      {next && <span>next in line</span>}
+      {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+    </div>
+  );
+}
+
+function GateBar({ passed, total }: { passed: number; total: number }) {
+  return (
+    <div className="flex gap-1" role="img" aria-label={`Gates: ${passed} of ${total} passed`}>
+      {Array.from({ length: total }, (_, i) => (
+        <span key={i} className={cn("h-1 flex-1 rounded-full", i < passed ? "bg-success-fill" : "bg-destructive")} />
+      ))}
+    </div>
+  );
+}
+
+function Dot({ ok }: { ok: boolean | null }) {
+  return <span className={cn("size-2 shrink-0 rounded-full", ok === null ? "pulse bg-primary" : ok ? "bg-success-fill" : "bg-destructive")} aria-hidden />;
+}
+
+function NeedsYouCard({ card: c }: { card: CardT }) {
+  const pr = c.stage === "awaiting_human";
+  const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-lg px-3.5 text-sm md:h-9";
+  return (
+    <article
+      data-testid="card"
+      className="relative flex flex-col gap-3 rounded-xl border border-warning-border bg-warning-bg p-4 transition-colors focus-within:border-warning hover:border-warning"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="font-mono text-xs font-medium text-warning">{shortRef(c.ref)}</span>
+        {pr ? (
+          <span className="rounded bg-warning-fill px-1.5 text-xs font-semibold text-warning-ink">PR ready</span>
+        ) : (
+          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">Question</span>
+        )}
+        <span className="ml-auto font-mono text-xs text-muted-foreground">
+          {pr ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ") : c.complexity && `size ${c.complexity}`}
+        </span>
+      </div>
+      <CardLink card={c} className="font-display text-[17px] leading-tight font-semibold" />
+      {pr ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-text-2">
+          {c.gates_total > 0 && (
+            <span className="flex items-center gap-1.5">
+              <Dot ok={c.gates_passed === c.gates_total} />
+              {c.gates_passed} of {c.gates_total} gates
+            </span>
+          )}
+          {c.live && (
+            <span className="flex items-center gap-1.5">
+              <Dot ok={null} />
+              {c.activity || doing[c.live_kind] || "working"}
+            </span>
+          )}
+        </div>
+      ) : (
+        c.blocked_note && <p className="text-sm leading-relaxed text-text-2">“{c.blocked_note}”</p>
+      )}
+      <div className="mt-auto flex flex-wrap gap-2">
+        {pr && c.pr_url && (
+          <a href={c.pr_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+            Review PR #{c.pr_number} <ExternalLink className="size-3.5" aria-hidden />
+          </a>
+        )}
+        {pr && (
+          <Link to={`/items/${c.id}/diff`} className={cn(btn, "border border-warning-border hover:bg-warning-fill/10")}>
+            View diff
+          </Link>
+        )}
+        {!pr && c.issue_url && (
+          <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+            Answer on the issue <ExternalLink className="size-3.5" aria-hidden />
+          </a>
         )}
       </div>
-      {c.blocked_note && <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{c.blocked_note}</p>}
-    </Link>
+    </article>
   );
 }

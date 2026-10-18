@@ -422,6 +422,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What happened lately, said for people, newest first */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Activity"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orchestrator": {
         parameters: {
             query?: never;
@@ -662,6 +698,17 @@ export interface components {
             cost_usd: number;
             live: boolean;
             live_job: number | null;
+            /** @description The running job's kind (implement, review, ...), or empty */
+            live_kind: string;
+            /** @description When the running job started */
+            live_since: string;
+            /** @description What the running job is doing now, from its log: editing parser/parser.go */
+            activity: string;
+            /** @description The latest implement attempt */
+            attempt: number;
+            gates_passed: number;
+            /** @description Gates the latest implement attempt ran */
+            gates_total: number;
         };
         Column: {
             stage: components["schemas"]["Stage"];
@@ -764,6 +811,23 @@ export interface components {
         };
         Feed: {
             events: components["schemas"]["Event"][];
+        };
+        ActivityEntry: {
+            id: number;
+            at: string;
+            item_id: number | null;
+            job_id: number | null;
+            /** @description Who did it: daemon, orchestrator, human, ... */
+            actor: string;
+            /** @description The item's issue as on its card; empty for none */
+            ref: string;
+            /** @description Follows the ref */
+            text: string;
+            /** @enum {string} */
+            tone: "live" | "needs_you" | "done" | "bad" | "info";
+        };
+        Activity: {
+            entries: components["schemas"]["ActivityEntry"][];
         };
         DaySpend: {
             day: string;

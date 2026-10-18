@@ -846,10 +846,16 @@ func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]E
 	return s.EventsByActorFor(ctx, actor, 0, limit)
 }
 
-// EventsByActorFor is EventsByActor limited to one item (all items if 0).
+// RecentEvents returns the newest events by anyone, newest first.
+func (s *Store) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
+	return s.EventsByActorFor(ctx, "", 0, limit)
+}
+
+// EventsByActorFor is EventsByActor limited to one item (all items if 0);
+// an empty actor is anyone.
 func (s *Store) EventsByActorFor(ctx context.Context, actor string, itemID int64, limit int) ([]Event, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT id, at, actor, item_id, job_id, type, COALESCE(reason,''), COALESCE(data,'')
-		FROM events WHERE actor = ? AND (? = 0 OR item_id = ?) ORDER BY id DESC LIMIT ?`, actor, itemID, itemID, limit)
+		FROM events WHERE (? = '' OR actor = ?) AND (? = 0 OR item_id = ?) ORDER BY id DESC LIMIT ?`, actor, actor, itemID, itemID, limit)
 	if err != nil {
 		return nil, err
 	}

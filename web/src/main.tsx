@@ -12,6 +12,7 @@ import { OrchestratorScreen } from "@/screens/Orchestrator";
 import { MetricsScreen } from "@/screens/Metrics";
 import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
+import { LiveScreen } from "@/screens/Live";
 import "./index.css";
 
 const router = createBrowserRouter(
@@ -26,6 +27,7 @@ const router = createBrowserRouter(
         { path: "/orchestrator", element: <OrchestratorScreen /> },
         { path: "/metrics", element: <MetricsScreen /> },
         { path: "/notifications", element: <NotificationsScreen /> },
+        { path: "/live", element: <LiveScreen /> },
         { path: "*", element: <NotFound /> },
       ],
     },
