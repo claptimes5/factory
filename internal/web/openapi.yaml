@@ -145,6 +145,54 @@ paths:
       summary: 'A `version` event (data `{"version": string}`) whenever anything shown changes'
       responses:
         "200": { description: Event stream, content: { text/event-stream: { schema: { type: string } } } }
+  /settings:
+    get:
+      summary: The settings the dashboard may change, with factory.yaml's values
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Change settings in factory.yaml, keeping its comments
+      description: |
+        Only paths the GET lists are accepted. A null value removes the key,
+        so the default applies. The whole file must still load, or nothing
+        is written and the error says why. Changes apply when the factory
+        restarts.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [changes, version]
+              properties:
+                changes:
+                  type: array
+                  items:
+                    type: object
+                    required: [path, value]
+                    properties:
+                      path: { type: array, items: { type: string } }
+                      value: { $ref: "#/components/schemas/SettingValue" }
+                version: { type: string, description: "The version the GET returned; a save over a file changed since is refused (409)" }
+      responses:
+        "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /settings/restart:
+    post:
+      summary: Restart the factory once running jobs finish, to apply saved settings
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
+  /settings/restart/cancel:
+    post:
+      summary: Call off a restart that is still waiting for jobs
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
 components:
   parameters:
     ID: { name: id, in: path, required: true, schema: { type: integer } }
@@ -459,3 +507,38 @@ components:
         awaiting_human_hours: { type: number }
         awaiting_human_mean_hours: { type: number }
         weekly: { type: array, items: { $ref: "#/components/schemas/Week" } }
+    SettingValue:
+      description: A number, text, true or false, or a list of names; null when unset
+      type: [number, string, boolean, array, "null"]
+      items: { type: string }
+    Setting:
+      type: object
+      required: [path, label, help, kind, options, row, value, default]
+      properties:
+        path: { type: array, items: { type: string }, description: "One key per level: [routing, implement.S, model]" }
+        label: { type: string }
+        help: { type: string }
+        kind: { type: string, enum: [number, integer, text, bool, select, list, duration] }
+        options: { type: array, items: { type: string }, description: "A select's choices; an empty one means the default" }
+        row: { type: string, description: "The routing entry it belongs to, or empty" }
+        value: { $ref: "#/components/schemas/SettingValue" }
+        default: { $ref: "#/components/schemas/SettingValue" }
+    SettingsGroup:
+      type: object
+      required: [name, help, fields]
+      properties:
+        name: { type: string }
+        help: { type: string }
+        fields: { type: array, items: { $ref: "#/components/schemas/Setting" } }
+    Settings:
+      type: object
+      required: [path, writable, reason, version, changed, restart_pending, running_jobs, groups]
+      properties:
+        path: { type: string, description: The config file }
+        writable: { type: boolean }
+        reason: { type: string, description: "Why settings can't be changed here; empty when they can" }
+        version: { type: string, description: Changes whenever the file does }
+        changed: { type: boolean, description: The file differs from the one the factory started with }
+        restart_pending: { type: boolean }
+        running_jobs: { type: integer }
+        groups: { type: array, items: { $ref: "#/components/schemas/SettingsGroup" } }

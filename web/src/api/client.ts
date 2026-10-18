@@ -25,6 +25,10 @@ export type Metrics = S["Metrics"];
 export type Notification = S["Notification"];
 export type Notifications = S["Notifications"];
 export type ActionResult = S["ActionResult"];
+export type Settings = S["Settings"];
+export type SettingsGroup = S["SettingsGroup"];
+export type Setting = S["Setting"];
+export type SettingValue = S["SettingValue"];
 
 export class APIError extends Error {
   constructor(
@@ -60,6 +64,19 @@ export async function act(path: string, body: unknown = {}): Promise<ActionResul
   signIn(r);
   const res = (await r.json().catch(() => ({ ok: false, message: r.statusText }))) as ActionResult;
   return { ok: r.ok && res.ok, message: res.message ?? (res as unknown as S["Error"]).error ?? r.statusText };
+}
+
+/** POSTs JSON and returns the reply, throwing the server's error when it refuses. */
+export async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(base + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  signIn(r);
+  const res = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) throw new APIError((res as S["Error"]).error ?? r.statusText, r.status);
+  return res as T;
 }
 
 export const queryClient = new QueryClient({
@@ -98,6 +115,11 @@ export const useSpend = () => useQuery({ queryKey: ["spend"], queryFn: () => get
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () => getJSON<Metrics>("/metrics") });
 export const useNotifications = () =>
   useQuery({ queryKey: ["notifications"], queryFn: () => getJSON<Notifications>("/notifications") });
+export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () => getJSON<Settings>("/settings") });
+
+/** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
+export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
+  postJSON<Settings>("/settings", { changes, version });
 
 /**
  * Refetches everything on screen whenever the daemon reports a change.

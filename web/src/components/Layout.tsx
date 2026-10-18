@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
-import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, Sun } from "lucide-react";
+import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useBrowserNotifications } from "@/lib/notify";
@@ -58,6 +58,7 @@ const links = [
   { to: "/", label: "Floor", end: true },
   { to: "/orchestrator", label: "Orchestrator" },
   { to: "/metrics", label: "Spend" },
+  { to: "/settings", label: "Settings" },
 ];
 
 const tabs = [
@@ -65,6 +66,7 @@ const tabs = [
   { to: "/notifications", label: "Inbox", icon: Bell },
   { to: "/live", label: "Live", icon: Radio },
   { to: "/metrics", label: "Spend", icon: Activity },
+  { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
 export function Layout() {
@@ -182,7 +184,7 @@ export function Layout() {
       </main>
       <nav
         aria-label="Tabs"
-        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         {tabs.map(({ to, label, icon: Icon, end }) => (
           <NavLink

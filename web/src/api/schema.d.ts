@@ -644,6 +644,143 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The settings the dashboard may change, with factory.yaml's values */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Settings"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        /**
+         * Change settings in factory.yaml, keeping its comments
+         * @description Only paths the GET lists are accepted. A null value removes the key,
+         *     so the default applies. The whole file must still load, or nothing
+         *     is written and the error says why. Changes apply when the factory
+         *     restarts.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        changes: {
+                            path: string[];
+                            value: components["schemas"]["SettingValue"];
+                        }[];
+                        /** @description The version the GET returned; a save over a file changed since is refused (409) */
+                        version: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Settings"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restart the factory once running jobs finish, to apply saved settings */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/restart/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call off a restart that is still waiting for jobs */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -916,6 +1053,41 @@ export interface components {
             awaiting_human_hours: number;
             awaiting_human_mean_hours: number;
             weekly: components["schemas"]["Week"][];
+        };
+        /** @description A number, text, true or false, or a list of names; null when unset */
+        SettingValue: number | string | boolean | string[] | null;
+        Setting: {
+            /** @description One key per level: [routing, implement.S, model] */
+            path: string[];
+            label: string;
+            help: string;
+            /** @enum {string} */
+            kind: "number" | "integer" | "text" | "bool" | "select" | "list" | "duration";
+            /** @description A select's choices; an empty one means the default */
+            options: string[];
+            /** @description The routing entry it belongs to, or empty */
+            row: string;
+            value: components["schemas"]["SettingValue"];
+            default: components["schemas"]["SettingValue"];
+        };
+        SettingsGroup: {
+            name: string;
+            help: string;
+            fields: components["schemas"]["Setting"][];
+        };
+        Settings: {
+            /** @description The config file */
+            path: string;
+            writable: boolean;
+            /** @description Why settings can't be changed here; empty when they can */
+            reason: string;
+            /** @description Changes whenever the file does */
+            version: string;
+            /** @description The file differs from the one the factory started with */
+            changed: boolean;
+            restart_pending: boolean;
+            running_jobs: number;
+            groups: components["schemas"]["SettingsGroup"][];
         };
     };
     responses: {
