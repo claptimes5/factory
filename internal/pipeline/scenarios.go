@@ -71,8 +71,9 @@ func (s scenario) command(dir string) string {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// runScenarios runs every hidden scenario in dir against the exported checkout.
-func (p *Pipeline) runScenarios(ctx context.Context, repo string, jobID int64, gateDir, dir string) []gates.Result {
+// runScenarios runs every hidden scenario in dir against the exported
+// checkout; their logs go to the job's scenarios<sfx> directory.
+func (p *Pipeline) runScenarios(ctx context.Context, repo string, jobID int64, gateDir, dir, sfx string) []gates.Result {
 	list, err := p.scenarios(dir)
 	if err != nil {
 		return []gates.Result{{Gate: "scenarios", Status: gates.Misconfigured, Detail: err.Error()}}
@@ -86,7 +87,7 @@ func (p *Pipeline) runScenarios(ctx context.Context, repo string, jobID int64, g
 		pathEnv = "PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin "
 		mounts = []runner.Mount{{Host: host, Container: dockerScenarios, ReadOnly: true}}
 	}
-	logDir := filepath.Join(p.jobDir(jobID), "scenarios")
+	logDir := filepath.Join(p.jobDir(jobID), "scenarios"+sfx)
 	var out []gates.Result
 	for i, s := range list {
 		cmd := fmt.Sprintf("export %sFACTORY_SCENARIOS=%s FACTORY_WORK=%s; %s", pathEnv, shellQuote(seen), shellQuote(work), s.command(seen))

@@ -27,13 +27,14 @@ type fakeGH struct {
 	comments map[int][]string
 	prs      map[string]*github.PR
 	prLabels map[int][]string
+	bodies   map[int]string // each PR's latest body
 	nextPR   int
 
 	failCreatePR int
 }
 
 func newFakeGH() *fakeGH {
-	return &fakeGH{issues: map[int]*github.Issue{}, comments: map[int][]string{}, prs: map[string]*github.PR{}, prLabels: map[int][]string{}, nextPR: 100}
+	return &fakeGH{issues: map[int]*github.Issue{}, comments: map[int][]string{}, prs: map[string]*github.PR{}, prLabels: map[int][]string{}, bodies: map[int]string{}, nextPR: 100}
 }
 
 func (f *fakeGH) ListIssues(_ context.Context, label string) ([]github.Issue, error) {
@@ -136,9 +137,15 @@ func (f *fakeGH) CreatePR(_ context.Context, title, body, head, base string, dra
 	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", State: "open", Draft: draft}
 	f.prs[head] = pr
 	f.comments[pr.Number] = append(f.comments[pr.Number], "BODY:"+body)
+	f.bodies[pr.Number] = body
 	return pr, nil
 }
-func (f *fakeGH) UpdatePRBody(_ context.Context, n int, body string) error { return nil }
+func (f *fakeGH) UpdatePRBody(_ context.Context, n int, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bodies[n] = body
+	return nil
+}
 func (f *fakeGH) CreateIssue(_ context.Context, title, body string, labels []string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

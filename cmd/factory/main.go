@@ -378,6 +378,13 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		if it.PRNumber > 0 {
 			pr = fmt.Sprintf("#%d", it.PRNumber)
 		}
+		if prs, _ := st.ItemPRs(ctx, it.ID); len(prs) > 0 {
+			refs := make([]string, len(prs))
+			for i, p := range prs {
+				refs[i] = fmt.Sprintf("%s#%d", config.ShortName(p.Repo), p.Number)
+			}
+			pr = strings.Join(refs, ",")
+		}
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, issueRef(cfg, it.Repo, it.IssueNumber), it.Stage, dash(it.Complexity), dash(it.Risk), pr, it.Title)
 	}
 	fmt.Fprintln(w)

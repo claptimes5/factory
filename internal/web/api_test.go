@@ -520,3 +520,25 @@ func TestCardGatesFollowTheLatestAttempt(t *testing.T) {
 		t.Fatal("no card for the item")
 	}
 }
+
+// A workspace change lists its PRs in merge order, and its main PR is the
+// one in the item's own repo.
+func TestWorkspacePRs(t *testing.T) {
+	base, st, _, _ := apiSetup(t)
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/web", 4, "Show totals")
+	n := 8
+	st.UpdateItem(ctx, it.ID, store.ItemUpdate{PRNumber: &n})
+	st.SetItemPRs(ctx, it.ID, []store.RepoPR{{Repo: "o/api", Number: 5}, {Repo: "o/web", Number: 8}})
+	var d APIItemDetail
+	getJSON(t, base+"/api/v1/items/"+itoa(it.ID), &d)
+	a := d.Item
+	if len(a.PRs) != 2 || a.PRs[0].Ref != "api#5" || a.PRs[0].URL != "https://github.com/o/api/pull/5" || a.PRURL != "https://github.com/o/web/pull/8" {
+		t.Fatalf("item = %+v", a)
+	}
+	var p APIPRPanel
+	getJSON(t, base+"/api/v1/items/"+itoa(it.ID)+"/pr", &p)
+	if len(p.PRs) != 2 || p.PRURL != a.PRURL {
+		t.Fatalf("panel = %+v", p)
+	}
+}

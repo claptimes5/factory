@@ -38,15 +38,16 @@ func (p *Pipeline) loadMap(ctx context.Context, repo, dir, sha string) (*feature
 
 // featureChecks finds the features the change touches and runs the check
 // of each one that has one, as a gate named feature:<name>.
-func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head, gateDir string, snap snapshot) ([]gates.Result, *blastRadius) {
-	m, err := p.loadMap(ctx, it.Repo, ws.Repo, base)
+func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, pt *part, base, head, gateDir string, snap snapshot) ([]gates.Result, *blastRadius) {
+	ws := pt.ws
+	m, err := p.loadMap(ctx, pt.repo, ws.Repo, base)
 	switch {
 	case err != nil:
 		return nil, &blastRadius{note: "The feature map on the base branch can't be used: " + err.Error()}
 	case m == nil:
 		return nil, nil
 	}
-	changed, err := p.git(it.Repo).ChangedFiles(ctx, ws.Repo, base, head)
+	changed, err := p.git(pt.repo).ChangedFiles(ctx, ws.Repo, base, head)
 	if err != nil {
 		return nil, &blastRadius{note: "Couldn't list the changed files: " + err.Error()}
 	}
@@ -62,7 +63,7 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 		}
 		r, done := ran[cmd]
 		if !done {
-			r = p.featureCheck(ctx, jobID, it.Repo, gateDir, cmd, snap)
+			r = p.featureCheck(ctx, jobID, pt.repo, gateDir, cmd, snap)
 			if r.Status == gates.Fail && r.code > 0 {
 				// A check that fails the same way on the base branch isn't
 				// this change's to fix, and the builder can't change the
@@ -70,10 +71,10 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 				// base gets the same install as the change, so missing
 				// dependencies don't pass for a red base.
 				if baseDir == "" {
-					baseDir = p.baseExport(ctx, jobID, it.Repo, ws.Repo, base)
+					baseDir = p.baseExport(ctx, jobID, pt.repo, ws.Repo, base, pt.sfx())
 				}
 				if baseDir != "" && baseDir != "-" {
-					if code, _, err := p.gateExec(ctx, jobID, baseDir, cmd, gateRun{repo: it.Repo}); err == nil && code == r.code {
+					if code, _, err := p.gateExec(ctx, jobID, baseDir, cmd, gateRun{repo: pt.repo}); err == nil && code == r.code {
 						r = checkResult{Result: gates.Result{Status: gates.Pass, Detail: "fails the same way on the base branch, so it isn't counted against this change\n\n" + r.Detail}, baseRed: true}
 					}
 				}
@@ -89,8 +90,8 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 
 // baseExport exports the base commit and installs its dependencies, for
 // rerunning a failing check there; "-" when that can't be done.
-func (p *Pipeline) baseExport(ctx context.Context, jobID int64, repo, repoDir, base string) string {
-	dir := filepath.Join(p.jobDir(jobID), "feature-base")
+func (p *Pipeline) baseExport(ctx context.Context, jobID int64, repo, repoDir, base, sfx string) string {
+	dir := filepath.Join(p.jobDir(jobID), "feature-base"+sfx)
 	if err := p.git(repo).Export(ctx, repoDir, base, dir); err != nil {
 		return "-"
 	}
@@ -131,24 +132,53 @@ type checkResult struct {
 	baseRed bool
 }
 
+// partBlast is one repo's blast radius; folder is "" outside a workspace.
+type partBlast struct {
+	folder string
+	b      *blastRadius
+}
+
 // applyBlast raises the item's risk to the riskiest feature the change
 // touches, so review scales with it, and saves the blast radius with the
-// job for a review resumed after a restart. It returns the markdown.
-func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int64, b *blastRadius) string {
-	if b == nil {
+// job for a review resumed after a restart. It returns the markdown: in a
+// workspace, a section per repo.
+func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int64, bs []partBlast) string {
+	var md strings.Builder
+	found := false
+	risk, feature := "", ""
+	for _, pb := range bs {
+		if pb.b == nil {
+			continue
+		}
+		found = true
+		if r, f := features.MaxRisk(pb.b.hits); features.Higher(r, risk) {
+			risk, feature = r, f
+			if pb.folder != "" {
+				feature = pb.folder + ": " + f
+			}
+		}
+		if pb.folder != "" {
+			fmt.Fprintf(&md, "### %s\n\n", pb.folder)
+		}
+		md.WriteString(pb.b.markdown())
+		if pb.folder != "" {
+			md.WriteString("\n")
+		}
+	}
+	if !found {
 		return ""
 	}
-	if risk, feature := features.MaxRisk(b.hits); features.Higher(risk, it.Risk) {
+	if features.Higher(risk, it.Risk) {
 		p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Risk: &risk}), "UpdateItem")
 		data, _ := json.Marshal(map[string]string{"feature": feature, "from": it.Risk, "to": risk})
 		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "risk_raised",
 			Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature), Data: string(data)}), "AddEvent")
 		it.Risk = risk
 	}
-	md := b.markdown()
-	data, _ := json.Marshal(map[string]string{"markdown": md})
+	out := md.String()
+	data, _ := json.Marshal(map[string]string{"markdown": out})
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "blast_radius", Data: string(data)}), "AddEvent")
-	return md
+	return out
 }
 
 // savedBlast is the blast radius applyBlast saved for a job.

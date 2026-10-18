@@ -168,7 +168,8 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	// The builder runs the checks too, so the services run for the whole job.
-	stop, err := p.StartServices(ctx, j.ID, it.Repo)
+	members := p.members(it)
+	stop, err := p.StartServices(ctx, j.ID, members...)
 	defer stop()
 	if err != nil {
 		// Another model tier can't start a database: say so and stop.
@@ -177,29 +178,49 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
 	// A fresh attempt starts from the base branch; a fix round builds on the
-	// branch the reviewer saw.
-	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, j.Branch, !in.FixRound, true)
+	// branch the reviewer saw, in the repos the reviewer saw it in. A
+	// workspace repo the last change left alone starts from base, so a
+	// stale branch from an earlier run can't creep in.
+	prev := map[string]bool{}
+	if in.FixRound && len(members) > 1 {
+		for _, h := range p.lastHeads(ctx, it) {
+			prev[strings.ToLower(h.Repo)] = true
+		}
+	}
+	onBranch := func(repo string) bool { return len(members) == 1 || !in.FixRound || prev[strings.ToLower(repo)] }
+	parts, err := p.prepareParts(ctx, dir, it, func(repo string) string {
+		if onBranch(repo) {
+			return j.Branch
+		}
+		return ""
+	}, !in.FixRound, true)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
+	own := homePart(parts, it.Repo)
+	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", own.ws.Start), "SetJobRuntime")
 
-	g := p.repoConf(it.Repo).Gates
-	var checks []string
-	for _, name := range g.Required {
-		if c := g.Commands[name]; c != "" {
-			checks = append(checks, c)
+	work := agentDir(dir, parts, true)
+	data := PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(work, out)).Out,
+		Findings: in.Findings, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts)}
+	for _, pt := range parts {
+		for _, f := range p.riskyFeatures(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA) {
+			if pt.folder != "" {
+				f = pt.folder + ": " + f
+			}
+			data.Risky = append(data.Risky, f)
 		}
 	}
-	prompt, err := p.render("implement", PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(ws.Work, out)).Out,
-		Install: g.Install, Checks: checks, Findings: in.Findings, PreviousFailure: in.PreviousFailure,
-		Risk: riskOrLow(it.Risk), Risky: p.riskyFeatures(ctx, it.Repo, ws.Repo, ws.BaseSHA)})
+	if data.Members == nil {
+		data.Install, data.Checks = p.repoConf(it.Repo).Gates.Install, p.requiredChecks(it.Repo)
+	}
+	prompt, err := p.render("implement", data)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	x := p.sessionFor(ctx, j, in.FixRound)
-	x.repo = it.Repo
-	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), x)
+	x.repo = members[0]
+	run := p.runAgentWith(ctx, j, work, out, prompt, "", p.Cfg.Timeout("implement"), x)
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -215,23 +236,54 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(run, state.Failed, "builder reported blocked: "+v.Blocker)
 	}
 
-	// From here on the builder's checkout is only read as files. Everything
-	// below runs in the daemon's own repository.
-	head, changed, err := p.git(it.Repo).Ingest(ctx, ws, fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
-		it.IssueNumber, is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt))
-	if err != nil {
-		return fail(run, state.Failed, err.Error())
+	// From here on the builder's checkouts are only read as files. Everything
+	// below runs in the daemon's own repositories.
+	msg := fmt.Sprintf("factory: %s %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
+		p.ref(it.Repo, it.IssueNumber), is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+	if len(members) == 1 {
+		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+	}
+	changed := false
+	for _, pt := range parts {
+		if err := realDir(pt.ws.Work); err != nil {
+			return fail(run, state.Failed, err.Error())
+		}
+		head, ch, err := p.git(pt.repo).Ingest(ctx, pt.ws, msg)
+		if err != nil {
+			return fail(run, state.Failed, err.Error())
+		}
+		pt.head, changed = head, changed || ch
 	}
 	if !changed {
 		return fail(run, state.Failed, "builder made no changes")
 	}
-	base, err := p.git(it.Repo).MergeBase(ctx, ws.Repo, ws.BaseSHA, head)
-	if err != nil {
-		return fail(run, state.Failed, err.Error())
+	// The change is every repo whose branch is ahead of base: what this
+	// round changed, and in a fix round what the last one did.
+	var touched []*part
+	for _, pt := range parts {
+		base, err := p.git(pt.repo).MergeBase(ctx, pt.ws.Repo, pt.ws.BaseSHA, pt.head)
+		if err != nil {
+			return fail(run, state.Failed, err.Error())
+		}
+		if pt.base = base; base != pt.head {
+			touched = append(touched, pt)
+		}
 	}
-	results, blast, err := p.verify(ctx, j.ID, it, ws, base, head)
-	if err != nil {
-		return fail(run, state.Failed, err.Error())
+	if len(touched) == 0 {
+		return fail(run, state.Failed, "builder made no changes")
+	}
+	var results []gates.Result
+	var blasts []partBlast
+	for _, pt := range touched {
+		rs, blast, err := p.verify(ctx, j.ID, pt)
+		if err != nil {
+			return fail(run, state.Failed, err.Error())
+		}
+		for i := range rs {
+			rs[i].Gate = pt.gate(rs[i].Gate)
+		}
+		results = append(results, rs...)
+		blasts = append(blasts, partBlast{pt.folder, blast})
 	}
 	p.warn(p.Store.SetGateResults(ctx, j.ID, toStore(results)), "SetGateResults")
 	line := gates.VerdictLine(results)
@@ -239,13 +291,32 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(run, state.Failed, line+"\n\n"+gateDetails(results))
 	}
 
-	p.warn(p.Store.SetJobHead(ctx, j.ID, head), "SetJobHead")
+	primary := touched[0]
+	var heads []store.RepoHead
+	for _, pt := range touched {
+		if pt == own {
+			primary = pt
+		}
+		heads = append(heads, store.RepoHead{Repo: pt.repo, SHA: pt.head})
+	}
+	p.warn(p.Store.SetJobHead(ctx, j.ID, primary.head), "SetJobHead")
+	if len(members) > 1 {
+		p.warn(p.Store.SetJobHeads(ctx, j.ID, heads), "SetJobHeads")
+	} else {
+		heads = nil
+	}
 	// Before the job is marked done, so a restart that resumes at review
 	// finds both: the risk raised and the blast radius saved.
-	blastMD := p.applyBlast(ctx, it, j.ID, blast)
-	// Push exactly the commit that was verified.
-	if err := p.git(it.Repo).Push(ctx, ws.Repo, head, j.Branch, !in.FixRound); err != nil {
-		return fail(run, state.Failed, "push: "+err.Error())
+	blastMD := p.applyBlast(ctx, it, j.ID, blasts)
+	// Push exactly the commits that were verified. A workspace repo new to
+	// a fix round replaces whatever an earlier run left on its branch.
+	for _, pt := range touched {
+		if err := p.git(pt.repo).Push(ctx, pt.ws.Repo, pt.head, j.Branch, !onBranch(pt.repo) || !in.FixRound); err != nil {
+			if pt.folder != "" {
+				err = fmt.Errorf("%s: %w", pt.repo, err)
+			}
+			return fail(run, state.Failed, "push: "+err.Error())
+		}
 	}
 	branch := j.Branch
 	p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Branch: &branch}), "UpdateItem")
@@ -253,19 +324,20 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", line); err != nil {
 		return err
 	}
-	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: head, Gates: line + "\n\n" + gateTable(results), Features: blastMD})
+	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: primary.head, Heads: heads, Gates: line + "\n\n" + gateTable(results), Features: blastMD})
 }
 
-// verify runs the deterministic checks on the commit under test: the diff
-// guard on the daemon's repository, then install, the gates and the
-// test-proves-fix check on exports, with a check after each that the
+// verify runs the deterministic checks on one repo's commit under test:
+// the diff guard on the daemon's repository, then install, the gates and
+// the test-proves-fix check on exports, with a check after each that the
 // commit's files are untouched.
-func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head string) ([]gates.Result, *blastRadius, error) {
-	g := p.repoConf(it.Repo).Gates
+func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.Result, *blastRadius, error) {
+	ws, base, head, repo := pt.ws, pt.base, pt.head, pt.repo
+	g := p.repoConf(repo).Gates
 	results := []gates.Result{gates.DiffGuard(ctx, ws.Repo, base, head, gates.Guard{
 		MaxChangedLines: g.DiffGuard.MaxChangedLines, ProtectedPaths: g.DiffGuard.ProtectedPaths})}
-	gateDir := filepath.Join(p.jobDir(jobID), "gate")
-	if err := p.git(it.Repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
+	gateDir := filepath.Join(p.jobDir(jobID), "gate"+pt.sfx())
+	if err := p.git(repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
 		return nil, nil, err
 	}
 	snap, err := takeSnapshot(gateDir)
@@ -274,7 +346,7 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 	}
 	if g.Install != "" {
 		r := gates.Result{Gate: "install", Status: gates.Pass}
-		code, out, err := p.gateExec(ctx, jobID, gateDir, g.Install, gateRun{repo: it.Repo, install: true})
+		code, out, err := p.gateExec(ctx, jobID, gateDir, g.Install, gateRun{repo: repo, install: true})
 		switch {
 		case err != nil:
 			r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
@@ -290,25 +362,25 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 		}
 	}
 	results = append(results, gates.Run(ctx, g.Required, g.Commands, func(ctx context.Context, cmd string) (int, string, error) {
-		code, out, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: it.Repo})
+		code, out, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: repo})
 		if note := snap.tamperNote(gateDir); err == nil && note != "" {
 			return 1, out + "\n\nfactory: " + note, nil
 		}
 		return code, out, err
 	})...)
 	if g.ProvesFix != "" {
-		results = append(results, p.provesFix(ctx, jobID, it, g.ProvesFix, ws.Repo, base, head))
+		results = append(results, p.provesFix(ctx, jobID, pt, g.ProvesFix))
 	}
 	// The checks of the features the change touches, then the scenarios:
 	// slow end-to-end checks, run only on code that passes everything else.
 	var blast *blastRadius
 	if gates.Passed(results) {
 		var fr []gates.Result
-		fr, blast = p.featureChecks(ctx, jobID, it, ws, base, head, gateDir, snap)
+		fr, blast = p.featureChecks(ctx, jobID, pt, base, head, gateDir, snap)
 		results = append(results, fr...)
 	}
 	if gates.Passed(results) {
-		results = append(results, p.runScenarios(ctx, it.Repo, jobID, gateDir, g.ScenariosDir)...)
+		results = append(results, p.runScenarios(ctx, repo, jobID, gateDir, g.ScenariosDir, pt.sfx())...)
 		if note := snap.tamperNote(gateDir); note != "" {
 			results = append(results, gates.Result{Gate: "scenarios", Status: gates.Fail, Detail: "a hidden scenario run: " + note})
 		}
@@ -318,9 +390,10 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 
 // provesFix reverts the non-test code to base, keeps the changed tests, and
 // requires them to fail: a test that passes without the fix proves nothing.
-func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkItem, command, repo, base, head string) gates.Result {
+func (p *Pipeline) provesFix(ctx context.Context, jobID int64, pt *part, command string) gates.Result {
 	r := gates.Result{Gate: "proves_fix"}
-	files, err := p.git(it.Repo).ChangedFiles(ctx, repo, base, head)
+	repo, base, head := pt.ws.Repo, pt.base, pt.head
+	files, err := p.git(pt.repo).ChangedFiles(ctx, repo, base, head)
 	if err != nil {
 		r.Status, r.Detail = gates.Fail, err.Error()
 		return r
@@ -348,14 +421,14 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkIte
 		r.Status, r.Detail = gates.Fail, "the change touches Go code but adds or changes no test"
 		return r
 	}
-	dir := filepath.Join(p.jobDir(jobID), "proves")
-	if err := p.git(it.Repo).Export(ctx, repo, base, dir); err != nil {
+	dir := filepath.Join(p.jobDir(jobID), "proves"+pt.sfx())
+	if err := p.git(pt.repo).Export(ctx, repo, base, dir); err != nil {
 		r.Status, r.Detail = gates.Fail, err.Error()
 		return r
 	}
 	for _, f := range tests {
 		// A test file deleted at head is skipped; the diff guard reports it.
-		if err := p.git(it.Repo).Show(ctx, repo, head, f, filepath.Join(dir, f)); err != nil {
+		if err := p.git(pt.repo).Show(ctx, repo, head, f, filepath.Join(dir, f)); err != nil {
 			continue
 		}
 	}
@@ -365,7 +438,7 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkIte
 	}
 	sort.Strings(pkgs)
 	cmd := strings.ReplaceAll(command, "{pkgs}", strings.Join(pkgs, " "))
-	exit, output, err := p.gateExec(ctx, jobID, dir, cmd, gateRun{repo: it.Repo})
+	exit, output, err := p.gateExec(ctx, jobID, dir, cmd, gateRun{repo: pt.repo})
 	switch {
 	case err != nil:
 		r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
@@ -464,22 +537,49 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, j.Branch, false, false)
+	// A workspace repo the change doesn't touch is checked out at base, so
+	// the reviewer can still read it.
+	ws := len(in.Heads) > 0
+	parts, err := p.prepareParts(ctx, dir, it, func(repo string) string {
+		if _, ok := headOf(in.Heads, repo); ws && !ok {
+			return ""
+		}
+		return j.Branch
+	}, false, false)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	if in.Head != "" && ws.Start != in.Head {
-		// Someone pushed after the gates ran: those commits were never verified.
-		p.finish(ctx, j, agentRun{}, state.Failed, "", "branch moved after the gates ran")
-		return p.park(ctx, it, fmt.Sprintf("Branch `%s` moved to %s after the gates verified %s. Push changes through the factory, or review them yourself.",
-			j.Branch, short(ws.Start), short(in.Head)))
+	for _, pt := range parts {
+		want := in.Head
+		if ws {
+			var ok bool
+			if want, ok = headOf(in.Heads, pt.repo); !ok {
+				continue
+			}
+		}
+		if want != "" && pt.ws.Start != want {
+			// Someone pushed after the gates ran: those commits were never verified.
+			p.finish(ctx, j, agentRun{}, state.Failed, "", "branch moved after the gates ran")
+			where := ""
+			if ws {
+				where = " in " + pt.repo
+			}
+			return p.park(ctx, it, fmt.Sprintf("Branch `%s`%s moved to %s after the gates verified %s. Push changes through the factory, or review them yourself.",
+				j.Branch, where, short(pt.ws.Start), short(want)))
+		}
+		if pt.base, err = p.git(pt.repo).MergeBase(ctx, pt.ws.Repo, pt.ws.BaseSHA, pt.ws.Start); err != nil {
+			return fail(agentRun{}, state.Failed, err.Error())
+		}
+		pt.head = pt.ws.Start
 	}
-	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
-	base, err := p.git(it.Repo).MergeBase(ctx, ws.Repo, ws.BaseSHA, ws.Start)
-	if err != nil {
-		return fail(agentRun{}, state.Failed, err.Error())
+	own := homePart(parts, it.Repo)
+	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", own.ws.Start), "SetJobRuntime")
+	var diff string
+	if ws {
+		diff, err = p.combinedDiff(ctx, parts)
+	} else {
+		diff, err = p.git(it.Repo).Diff(ctx, own.ws.Repo, own.base, own.head)
 	}
-	diff, err := p.git(it.Repo).Diff(ctx, ws.Repo, base, ws.Start)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -488,12 +588,12 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff)})
+	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("review")
-	run := p.runAgent(ctx, it.Repo, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("review"))
+	run := p.runAgent(ctx, p.members(it)[0], j, agentDir(dir, parts, false), out, prompt, schema, true, p.Cfg.Timeout("review"))
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -599,11 +699,14 @@ func formatFindings(v *verdict.Review) string {
 // openPR opens (or refreshes) the draft PR carrying the evidence and hands
 // the item to a human. Merge is always human.
 func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Issue, in ReviewInput) error {
-	body, err := p.prBody(ctx, it, in)
+	if len(in.Heads) > 0 {
+		return p.openWorkspacePRs(ctx, it, is, in)
+	}
+	body, err := p.prBody(ctx, it, in, fmt.Sprintf("Closes #%d", it.IssueNumber))
 	if err != nil {
 		return err
 	}
-	branch := branchFor(it)
+	branch := p.branchFor(it)
 	pr, err := p.gh(it.Repo).FindPR(ctx, branch)
 	if err != nil {
 		return err
@@ -624,20 +727,30 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return err
 	}
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
-	p.labelRisk(ctx, it, pr.Number)
+	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
 	p.notify(ctx, fmt.Sprintf("%s-risk PR ready for review: %s %s %s", capitalize(riskOrLow(it.Risk)), p.ref(it.Repo, pr.Number), is.Title, pr.URL))
 	return nil
 }
 
-func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInput) (string, error) {
+// prBody is a PR's description: top (what it closes, and in a workspace
+// the linked PRs), then the evidence.
+func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInput, top string) (string, error) {
 	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Closes #%d\n\nBuilt by the factory. Complexity **%s**, risk **%s**. Verified commit `%s`.\n\n", it.IssueNumber, it.Complexity, riskOrLow(it.Risk), short(in.Head))
+	verified := fmt.Sprintf("Verified commit `%s`.", short(in.Head))
+	if len(in.Heads) > 0 {
+		var cs []string
+		for _, h := range in.Heads {
+			cs = append(cs, fmt.Sprintf("%s `%s`", h.Repo, short(h.SHA)))
+		}
+		verified = "Verified commits: " + strings.Join(cs, ", ") + "."
+	}
+	fmt.Fprintf(&b, "%s\n\nBuilt by the factory. Complexity **%s**, risk **%s**. %s\n\n", strings.TrimRight(top, "\n"), it.Complexity, riskOrLow(it.Risk), verified)
 	b.WriteString("## How to review\n\n" + p.reviewGuide(ctx, it, in.Features != "") + "\n")
 	b.WriteString("## Gates\n\n" + in.Gates + "\n")
 	if in.Features != "" {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -135,6 +136,11 @@ type Config struct {
 	// filled from it. Use RepoNames and RepoConf rather than either field.
 	SingleRepo string `yaml:"repo"`
 	Repos      []Repo `yaml:"repos"`
+	// Workspaces group repos that change together, like an API and the
+	// web app that calls it: an issue in any member becomes one change
+	// across all of them, with a PR in each repo it touches. Members are
+	// listed in the order their PRs should merge.
+	Workspaces map[string][]string `yaml:"workspaces,omitempty"`
 	// BaseBranch, Env and Gates are the defaults for every repo.
 	BaseBranch string             `yaml:"base_branch"`
 	Env        map[string]string  `yaml:"env"`
@@ -413,6 +419,33 @@ func (c *Config) Validate() error {
 		}
 		seen[strings.ToLower(r.Name)] = true
 	}
+	inWS := map[string]string{}
+	for _, name := range sortedKeys(c.Workspaces) {
+		members := c.Workspaces[name]
+		if !wsName.MatchString(name) {
+			bad("workspace %q: names are lowercase letters, digits and -", name)
+		}
+		if len(members) < 2 {
+			bad("workspace %s needs at least two repos", name)
+		}
+		short := map[string]bool{}
+		for _, m := range members {
+			key := strings.ToLower(m)
+			switch {
+			case !seen[key]:
+				bad("workspace %s: %s isn't in repos", name, m)
+			case inWS[key] != "":
+				bad("workspace %s: %s is already in workspace %s", name, m, inWS[key])
+			}
+			inWS[key] = name
+			// Each member is checked out in a folder named for it.
+			if sn := ShortName(m); short[sn] {
+				bad("workspace %s: two repos are named %s; a workspace's repos need different names", name, sn)
+			} else {
+				short[sn] = true
+			}
+		}
+	}
 	for _, k := range []string{"triage", "implement.S", "implement.M", "implement.L", "review"} {
 		if _, ok := c.Routing[k]; !ok {
 			bad("routing.%s is required", k)
@@ -553,6 +586,43 @@ func (c *Config) RepoConf(name string) (Repo, bool) {
 		}
 	}
 	return Repo{}, false
+}
+
+// Workspace returns the workspace a repo belongs to and its members, in
+// merge order, as listed in repos; "" and nil for a repo on its own.
+func (c *Config) Workspace(repo string) (string, []string) {
+	for _, name := range sortedKeys(c.Workspaces) {
+		for _, m := range c.Workspaces[name] {
+			if strings.EqualFold(m, repo) {
+				out := make([]string, 0, len(c.Workspaces[name]))
+				for _, x := range c.Workspaces[name] {
+					if r, ok := c.RepoConf(x); ok {
+						x = r.Name
+					}
+					out = append(out, x)
+				}
+				return name, out
+			}
+		}
+	}
+	return "", nil
+}
+
+// ShortName is a repo's name without its owner or group: the folder it is
+// checked out in within a workspace.
+func ShortName(repo string) string {
+	return strings.ToLower(repo[strings.LastIndex(repo, "/")+1:])
+}
+
+var wsName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
+func sortedKeys[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // Primary is the first repo: the one commands use when you name none.

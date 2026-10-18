@@ -315,3 +315,29 @@ func TestVersionMovesOnItemOnlyWrites(t *testing.T) {
 		t.Fatal("a priority change must move the version")
 	}
 }
+
+// A workspace job's heads and an item's PRs keep their order, and each
+// write replaces the last.
+func TestWorkspaceHeadsAndPRs(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTest(t)
+	it := newItem(t, s, 1)
+	id := enqueue(t, s, it.ID, 0)
+	for _, hs := range [][]RepoHead{{{"o/web", "b"}, {"o/api", "a"}}, {{"o/web", "c"}}} {
+		if err := s.SetJobHeads(ctx, id, hs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hs, err := s.JobHeads(ctx, id); err != nil || len(hs) != 1 || hs[0] != (RepoHead{"o/web", "c"}) {
+		t.Fatalf("heads = %+v %v", hs, err)
+	}
+	if err := s.SetItemPRs(ctx, it.ID, []RepoPR{{"o/web", 7}, {"o/api", 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if prs, err := s.ItemPRs(ctx, it.ID); err != nil || len(prs) != 2 || prs[0] != (RepoPR{"o/web", 7}) || prs[1] != (RepoPR{"o/api", 3}) {
+		t.Fatalf("prs = %+v %v", prs, err)
+	}
+	if prs, _ := s.ItemPRs(ctx, it.ID+1); prs != nil {
+		t.Fatalf("another item's prs = %+v", prs)
+	}
+}

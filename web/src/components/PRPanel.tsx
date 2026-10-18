@@ -64,9 +64,11 @@ export function PRPanel({ itemId, needsYou }: { itemId: number; needsYou: boolea
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <GitPullRequest className="size-4" />
-          {p.pr_number > 0 ? (
+          {p.prs.length > 1 ? (
+            `${p.prs.length} linked PRs`
+          ) : p.pr_number > 0 ? (
             <a href={p.pr_url} target="_blank" rel="noreferrer" className="hover:underline">
-              PR #{p.pr_number}
+              PR #{p.prs[0]?.number ?? p.pr_number}
             </a>
           ) : (
             "No PR yet"
@@ -76,8 +78,28 @@ export function PRPanel({ itemId, needsYou }: { itemId: number; needsYou: boolea
         {decision && <Badge variant={decision === "pass" ? "success" : decision === "block" ? "destructive" : "warning"}>review: {decision}</Badge>}
       </CardHeader>
       <CardContent className="space-y-4">
+        {p.prs.length > 1 && (
+          <section>
+            <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Merge in this order</h4>
+            <ol data-testid="linked-prs" className="space-y-1 text-sm">
+              {p.prs.map((x, i) => (
+                <li key={x.url} className="flex items-center gap-2">
+                  <span className="w-4 font-mono text-xs text-muted-foreground">{i + 1}.</span>
+                  <a href={x.url} target="_blank" rel="noreferrer" className="font-mono hover:underline">
+                    {x.ref}
+                  </a>
+                  {needsYou && (
+                    <a href={`${x.url}/files`} target="_blank" rel="noreferrer" className="ml-auto text-xs text-primary-soft hover:underline">
+                      Approve on GitHub
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         <div className="flex flex-wrap gap-2">
-          {p.pr_number > 0 && needsYou && (
+          {p.pr_number > 0 && needsYou && p.prs.length <= 1 && (
             // Approving is a GitHub review in your own name; the factory never approves its own work.
             <a
               href={`${p.pr_url}/files`}

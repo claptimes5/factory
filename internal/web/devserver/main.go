@@ -124,6 +124,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/api", 106, "Flaky TestCacheEviction on CI", state.Triage, ""},
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
+		{"acme/web", 109, "Show order totals on the checkout page", state.AwaitingHuman, "M"},
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -282,6 +283,27 @@ new file mode 100644
 		return err
 	}
 	if _, err := job(107, "review", "gpt-5", state.Succeeded, 0.5, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
+		return err
+	}
+	// 109 spans the acme workspace: an API change and the page that shows it.
+	ws, err := job(109, "implement", "sonnet", state.Succeeded, 3.1, `{"status":"done","summary":"Totals","tests_added":["TestOrderTotals"],"blocker":""}`)
+	if err != nil {
+		return err
+	}
+	if err := st.SetJobHead(ctx, ws, "8c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d"); err != nil {
+		return err
+	}
+	if err := st.SetGateResults(ctx, ws, []store.GateResult{{Gate: "api: test", Status: "pass"}, {Gate: "api: diff_guard", Status: "pass"}, {Gate: "web: build", Status: "pass"}, {Gate: "web: test", Status: "pass"}, {Gate: "web: diff_guard", Status: "pass"}}); err != nil {
+		return err
+	}
+	if _, err := job(109, "review", "gpt-5", state.Succeeded, 0.8, `{"decision":"pass","findings":[],"challenged_assumptions":[]}`); err != nil {
+		return err
+	}
+	wsPR, wsBranch := 92, "factory/web-109"
+	if err := st.UpdateItem(ctx, ids[109], store.ItemUpdate{PRNumber: &wsPR, Branch: &wsBranch}); err != nil {
+		return err
+	}
+	if err := st.SetItemPRs(ctx, ids[109], []store.RepoPR{{Repo: "acme/api", Number: 91}, {Repo: "acme/web", Number: 92}}); err != nil {
 		return err
 	}
 	for _, e := range []store.Event{

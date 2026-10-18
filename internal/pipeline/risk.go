@@ -36,15 +36,16 @@ func riskOrLow(risk string) string {
 	return "low"
 }
 
-// labelRisk puts the item's risk label on its PR and takes off any other.
-func (p *Pipeline) labelRisk(ctx context.Context, it *store.WorkItem, pr int) {
+// labelRisk puts the item's risk label on its PR in repo and takes off
+// any other.
+func (p *Pipeline) labelRisk(ctx context.Context, it *store.WorkItem, repo string, pr int) {
 	risk := riskOrLow(it.Risk)
 	for _, r := range riskLevels {
 		if r != risk {
-			p.warn(p.gh(it.Repo).UnlabelPR(ctx, pr, riskLabel(r)), "UnlabelPR")
+			p.warn(p.gh(repo).UnlabelPR(ctx, pr, riskLabel(r)), "UnlabelPR")
 		}
 	}
-	p.warn(p.gh(it.Repo).LabelPR(ctx, pr, riskLabel(risk)), "LabelPR")
+	p.warn(p.gh(repo).LabelPR(ctx, pr, riskLabel(risk)), "LabelPR")
 }
 
 // riskWhy says where the item's risk came from: the feature that raised it

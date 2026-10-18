@@ -438,6 +438,12 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 		return err
 	}
 	for _, it := range waiting {
+		if prs, err := p.Store.ItemPRs(ctx, it.ID); err != nil {
+			return err
+		} else if len(prs) > 0 {
+			p.closeOutWorkspace(ctx, it, prs)
+			continue
+		}
 		if it.PRNumber == 0 {
 			continue
 		}
@@ -449,7 +455,8 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 		}
 		if pr.Merged {
 			// Metrics: did the human change the PR before merging it?
-			changed := pr.Head.SHA != "" && pr.Head.SHA != p.lastPushedHead(ctx, it.ID)
+			want, _ := headOf(p.lastHeads(ctx, it), it.Repo)
+			changed := pr.Head.SHA != "" && pr.Head.SHA != want
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
@@ -547,7 +554,11 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 				return err
 			}
 		}
-		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
+		var heads []store.RepoHead
+		if p.inWorkspace(it) {
+			heads = p.jobHeads(ctx, it, last)
+		}
+		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Heads: heads, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
 	default:
 		var in ImplementInput
 		_ = json.Unmarshal([]byte(last.Input), &in)
@@ -557,15 +568,6 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 		}
 		return err
 	}
-}
-
-// lastPushedHead is the commit the factory last pushed for an item.
-func (p *Pipeline) lastPushedHead(ctx context.Context, itemID int64) string {
-	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID, Kind: "implement", State: state.Succeeded, Limit: 1})
-	if err != nil || len(jobs) == 0 {
-		return ""
-	}
-	return jobs[0].HeadSHA
 }
 
 // hasLabel matches like GitHub does: case-insensitively.
@@ -617,7 +619,7 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: r.Harness, Model: r.Model, Effort: r.Effort,
 		Skillset: r.Skills, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("implement", it.Complexity),
-		Branch: branchFor(it), Input: string(b)})
+		Branch: p.branchFor(it), Input: string(b)})
 	return true, err
 }
 
@@ -625,8 +627,11 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 type ReviewInput struct {
 	ImplementJob int64  `json:"implement_job"`
 	Head         string `json:"head"` // the commit the gates verified
-	Gates        string `json:"gates"`
-	Features     string `json:"features,omitempty"` // the blast radius, from the feature map
+	// Heads are the commits verified in each repo a workspace change
+	// touches, in merge order; empty outside a workspace.
+	Heads    []store.RepoHead `json:"heads,omitempty"`
+	Gates    string           `json:"gates"`
+	Features string           `json:"features,omitempty"` // the blast radius, from the feature map
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
@@ -641,15 +646,8 @@ func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind s
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: kind, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
 		Skillset: r.Skills, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""),
-		Branch: branchFor(it), Input: string(b)})
+		Branch: p.branchFor(it), Input: string(b)})
 	return err
-}
-
-func branchFor(it *store.WorkItem) string {
-	if it.Branch != "" {
-		return it.Branch
-	}
-	return fmt.Sprintf("factory/issue-%d", it.IssueNumber)
 }
 
 // --- running a job ---
@@ -887,10 +885,11 @@ type PromptData struct {
 	Risk            string   // low, medium or high
 	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
-	Fence           string   // a code fence the diff cannot close
-	Reasons         []string // why the orchestrator runs
-	Summary         bool     // the orchestrator writes the daily summary
-	Status          string   // queue snapshot for the orchestrator
+	Fence           string         // a code fence the diff cannot close
+	Members         []PromptMember // a workspace's repos, side by side in the checkout
+	Reasons         []string       // why the orchestrator runs
+	Summary         bool           // the orchestrator writes the daily summary
+	Status          string         // queue snapshot for the orchestrator
 }
 
 func (p *Pipeline) render(stage string, d PromptData) (string, error) {
