@@ -25,15 +25,78 @@ it back through triage.
 
 ## Setup
 
-You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolchain itself).
+You need a Linux machine (or WSL2 on Windows) with Docker and Go 1.26+, and
+admin rights on the GitHub repo you want the factory to work on.
 
-1. **Build the job image.** It has the Go toolchain, golangci-lint and the
-   pinned `claude` and `codex` CLIs.
+```sh
+git clone https://github.com/claptimes5/factory && cd factory
+CGO_ENABLED=0 go build -o factory ./cmd/factory
+./factory setup
+./factory serve
+```
 
-   ```sh
-   docker build -t factory-job:latest deploy/job-image
-   ```
+`factory setup` walks you through everything else and checks each answer
+before moving on:
 
+1. **Repository:** which repo the factory works on. It updates `factory.yaml`.
+2. **Docker:** checks that Docker works for you, and offers to build the job
+   image the first time (a few minutes).
+3. **GitHub:** creates a GitHub App for the factory for you. It gives you a
+   link that opens GitHub with the app already filled in (only the
+   permissions the factory needs), then asks you to install it on the repo.
+   It saves the app's key and finds the IDs itself, so you copy nothing by
+   hand. It then confirms it can reach the repo and offers to create the
+   factory's labels.
+4. **Claude:** an API key, or a subscription token from `claude setup-token`.
+5. **OpenAI:** an API key for the Codex reviewer, only if `factory.yaml` uses
+   Codex (see [Claude-only review](#claude-only-review) to skip it).
+6. **Phone notifications** (optional): an ntfy, Slack or Discord URL.
+
+Your answers go in `factory.env` next to `factory.yaml`, readable only by
+you, and every `factory` command loads it. Run `./factory setup` again any
+time to change something; it shows the saved answers as defaults.
+
+Then open the dashboard at http://127.0.0.1:8080/app/ and label an issue
+`factory:ready`.
+
+One thing setup can't do for you: **protect `main`**. In the repo's settings,
+require a pull request with your review and the `test` and `web` checks.
+`.github/CODEOWNERS` makes you the owner of `.github/`, `factory.yaml`,
+`prompts/` and the lint config.
+
+### Running it as a service
+
+To keep the factory running across reboots, install it from a checkout in
+`/opt/factory`, run as a `factory` user that can use Docker, and run setup
+as that user. It gets its own settings and database there:
+
+```sh
+sudo useradd --system --create-home --groups docker factory
+sudo git clone https://github.com/claptimes5/factory /opt/factory
+sudo chown -R factory /opt/factory
+cd /opt/factory
+sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o factory ./cmd/factory
+sudo -u factory ./factory setup
+sudo cp deploy/factory.service /etc/systemd/system/
+sudo systemctl enable --now factory
+journalctl -u factory -f     # follow its log
+```
+
+To upgrade later, build the new binary somewhere else and hand it to
+`deploy/upgrade.sh`, which keeps the old one and rolls back on failure
+(see [Quality (M6)](#quality-m6)):
+
+```sh
+cd /opt/factory && sudo -u factory git pull
+sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o /tmp/factory.new ./cmd/factory
+sudo deploy/upgrade.sh /tmp/factory.new
+```
+
+### Manual setup
+
+`factory setup` is the easy way. If you'd rather do each step yourself:
+
+1. **Build the job image:** `docker build -t factory-job:latest deploy/job-image`.
 2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
    access is limited to one repo and a few permissions you choose.
    ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app))
@@ -79,36 +142,24 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
       [Settings → Applications](https://github.com/settings/installations) →
       *Configure*.
 
-3. **Set the daemon's environment.** The daemon reads these and passes the
-   model keys to each job container as env vars; they are never written into
-   a job's files. Where they go depends on how you run the daemon:
+3. **Save the settings** in `factory.env` next to `factory.yaml`, as plain
+   `NAME=value` lines with no comments after a value, and `chmod 600` it.
+   Every `factory` command loads it; a variable already set in the
+   environment wins. The model keys reach each job container as env vars and
+   are never written into a job's files.
 
-   - **Trying it out:** paste them as `export` lines into the same terminal
-     you run `./factory serve` from in step 6. They last until you close it.
+   ```sh
+   FACTORY_GITHUB_APP_ID=123456
+   FACTORY_GITHUB_INSTALLATION_ID=7890123
+   FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
+   ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
+   ```
 
-     ```sh
-     export FACTORY_GITHUB_APP_ID=...            # step 2.6
-     export FACTORY_GITHUB_INSTALLATION_ID=...   # step 2.9
-     export FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
-     export ANTHROPIC_API_KEY=...                # or CLAUDE_CODE_OAUTH_TOKEN
-     export OPENAI_API_KEY=...                   # for the Codex reviewer (or CODEX_API_KEY)
-     ```
-
-   - **As a service** ([`deploy/factory.service`](deploy/factory.service)):
-     put the same values in `/etc/factory/env`, which the service loads at
-     start. Write plain `NAME=value` lines, with no `export` and no comments
-     after a value (systemd would keep them as part of it):
-
-     ```sh
-     FACTORY_GITHUB_APP_ID=123456
-     FACTORY_GITHUB_INSTALLATION_ID=7890123
-     FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
-     ANTHROPIC_API_KEY=sk-ant-...
-     OPENAI_API_KEY=sk-...
-     ```
-
-     Create it with `sudoedit /etc/factory/env`, then
-     `sudo chmod 600 /etc/factory/env`. Step 6 sets up the user that reads it.
+   `CLAUDE_CODE_OAUTH_TOKEN` can replace `ANTHROPIC_API_KEY`, `CODEX_API_KEY`
+   can replace `OPENAI_API_KEY`, and `FACTORY_NOTIFY_URL` turns on phone
+   notifications. Use `-env PATH` or `FACTORY_ENV_FILE` to keep the file
+   elsewhere.
 
    For a quick local try you can use `GITHUB_TOKEN=<a PAT>` instead of the app.
 
@@ -121,46 +172,8 @@ You need a Linux host with Docker and Go 1.26+ (Go fetches the pinned 1.27 toolc
    `factory:retry` and `factory:awaiting-you` (`scripts/setup-labels.sh` does
    it with `gh`).
 
-5. **Protect `main`:** require a pull request with your review, and require
-   the `test` and `web` checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
-   `factory.yaml`, `prompts/` and the lint config.
-
-6. **Run it.**
-
-   ```sh
-   CGO_ENABLED=0 go build -o factory ./cmd/factory   # static: the orchestrator's container runs it too
-   ./factory status        # creates data/factory.db
-   ./factory serve         # or run it as a service, below
-   ```
-
-   Then label an issue `factory:ready`.
-
-   To run it as a service instead, using the env file from step 3, install
-   it from a checkout in `/opt/factory` and run it as a `factory` user that
-   can use Docker. The service gets its own database in `/opt/factory/data`,
-   separate from any trial run:
-
-   ```sh
-   sudo useradd --system --create-home --groups docker factory
-   sudo chown factory /etc/factory/app.pem   # the trial user can no longer read it
-   sudo git clone https://github.com/<you>/factory /opt/factory   # this repo
-   sudo chown -R factory /opt/factory
-   cd /opt/factory
-   sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o factory ./cmd/factory
-   sudo cp deploy/factory.service /etc/systemd/system/
-   sudo systemctl enable --now factory
-   journalctl -u factory -f     # follow its log
-   ```
-
-   To upgrade later, build the new binary somewhere else and hand it to
-   `deploy/upgrade.sh`, which keeps the old one and rolls back on failure
-   (see [Quality (M6)](#quality-m6)):
-
-   ```sh
-   cd /opt/factory && sudo -u factory git pull
-   sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o /tmp/factory.new ./cmd/factory
-   sudo deploy/upgrade.sh /tmp/factory.new
-   ```
+4. **Create the labels:** `scripts/setup-labels.sh <owner>/<repo>` does it
+   with `gh`.
 
 Set a spend alert on both API accounts. The daemon enforces its own caps
 (`budgets` in `factory.yaml`): a per-job cap, a daily total that stops new
@@ -240,6 +253,7 @@ If that forwarding is unreliable, set `networkingMode=mirrored` in
 
 | Command | What it does |
 | --- | --- |
+| `factory setup` | Guided first-run setup: repo, Docker, GitHub App, labels, keys; saves `factory.env` |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
 | `factory status` | Items by stage, queue depth, today's spend, recent jobs |

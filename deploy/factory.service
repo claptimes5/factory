@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 User=factory
 WorkingDirectory=/opt/factory
-EnvironmentFile=/etc/factory/env
+EnvironmentFile=-/etc/factory/env
 ExecStart=/opt/factory/factory serve
 Restart=on-failure
 KillSignal=SIGTERM
