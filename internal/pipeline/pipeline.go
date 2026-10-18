@@ -139,7 +139,10 @@ type Pipeline struct {
 	// plan rather than bill dollars, for the cost estimate.
 	PlanBilled map[string]bool
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// claimMu holds the scheduler's caps still while it claims a job, or
+	// while a running job checks them and starts a sub-job (see startSub).
+	claimMu    sync.Mutex
 	clientsMu  sync.Mutex
 	clientsBy  map[string]RepoClients
 	running    int
@@ -258,9 +261,33 @@ func (p *Pipeline) warn(err error, what string) {
 }
 
 func (p *Pipeline) notify(ctx context.Context, msg string) {
+	if h, ok := ctx.Value(heldNotesKey{}).(*heldNotes); ok {
+		h.msgs = append(h.msgs, msg) // sent once the lock is let go
+		return
+	}
 	p.log().Info("notify", "msg", msg)
 	if p.Notify != nil {
 		p.Notify(ctx, msg)
+	}
+}
+
+// heldNotes collects the notifications of code that runs under claimMu,
+// to send after it unlocks: sending is a network call that can take
+// seconds, and the scheduler and every sub-job start wait on that lock.
+type heldNotes struct{ msgs []string }
+
+type heldNotesKey struct{}
+
+// lockClaims takes claimMu and returns a context whose notifications wait
+// for the unlock, and the unlock, which sends them.
+func (p *Pipeline) lockClaims(ctx context.Context) (context.Context, func()) {
+	p.claimMu.Lock()
+	h := &heldNotes{}
+	return context.WithValue(ctx, heldNotesKey{}, h), func() {
+		p.claimMu.Unlock()
+		for _, m := range h.msgs {
+			p.notify(ctx, m)
+		}
 	}
 }
 
@@ -438,6 +465,8 @@ func (p *Pipeline) Drain(ctx context.Context) error {
 
 // claimNext applies every daemon-enforced cap, then claims one job.
 func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
+	ctx, unlock := p.lockClaims(ctx)
+	defer unlock()
 	p.mu.Lock()
 	running := p.running
 	p.mu.Unlock()
@@ -799,6 +828,8 @@ func (p *Pipeline) Reconcile(ctx context.Context, quiet time.Duration) error {
 }
 
 func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store.Job) error {
+	// A verifier or paired critic is part of the review it ran inside.
+	jobs = slices.DeleteFunc(slices.Clone(jobs), func(j *store.Job) bool { return store.IsSubKind(j.Kind) })
 	var last *store.Job
 	if len(jobs) > 0 {
 		last = jobs[0]
@@ -888,9 +919,11 @@ func (p *Pipeline) enqueueTriage(ctx context.Context, it *store.WorkItem, attemp
 
 // ImplementInput is carried to implement jobs.
 type ImplementInput struct {
-	Findings        string `json:"findings,omitempty"`         // reviewer findings for a fix round
-	PreviousFailure string `json:"previous_failure,omitempty"` // why the last attempt failed
-	FixRound        bool   `json:"fix_round,omitempty"`
+	Findings string `json:"findings,omitempty"` // reviewer findings for a fix round, fenced
+	// FindingIDs are the blocking findings the builder must answer.
+	FindingIDs      []string `json:"finding_ids,omitempty"`
+	PreviousFailure string   `json:"previous_failure,omitempty"` // why the last attempt failed
+	FixRound        bool     `json:"fix_round,omitempty"`
 }
 
 func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, attempt int, in ImplementInput) (bool, error) {
@@ -925,14 +958,7 @@ func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind s
 	route := p.Cfg.ReviewKey(it.Risk)
 	r := p.Cfg.Routing[route]
 	if kind == "critic" {
-		route = "critic"
-		r = p.Cfg.Routing["implement.L"] // the strongest Claude tier
-		// Only what makes it the strongest model: not the builder's skills,
-		// instructions or fast mode.
-		r.Skills, r.Use, r.Instructions, r.InstructionsFile, r.Fast = "", nil, "", "", false
-		if c, ok := p.Cfg.Routing["critic"]; ok {
-			r = c
-		}
+		route, r = "critic", p.Cfg.CriticRoute()
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: kind, Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
@@ -1084,6 +1110,16 @@ func scrub(s string, secrets map[string]string) string {
 }
 
 func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st state.JobState, verdict, errMsg string) {
+	if err := p.Store.FinishJob(ctx, j.ID, p.result(ctx, j, run, st, verdict, errMsg)); err != nil {
+		p.log().Error("finish job", "job", j.ID, "err", err)
+	}
+	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On && !store.IsSubKind(j.Kind) {
+		p.failedTwice(ctx, j)
+	}
+}
+
+// result is how job j ended, for the store.
+func (p *Pipeline) result(ctx context.Context, j *store.Job, run agentRun, st state.JobState, verdict, errMsg string) store.Result {
 	r := store.Result{State: st, CostUSD: run.cost, Verdict: verdict, Error: errMsg}
 	if run.res != nil {
 		r.TokensIn, r.TokensOut = run.res.TokensIn, run.res.TokensOut
@@ -1094,12 +1130,7 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: j.ItemID, JobID: &j.ID, Type: "budget_exceeded",
 			Reason: fmt.Sprintf("job cost $%.2f over its $%.2f budget", run.cost, j.BudgetUSD)}), "AddEvent")
 	}
-	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
-		p.log().Error("finish job", "job", j.ID, "err", err)
-	}
-	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On {
-		p.failedTwice(ctx, j)
-	}
+	return r
 }
 
 func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
@@ -1159,6 +1190,10 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runLearn(ctx, j)
 	case "groom":
 		err = p.runGroom(ctx, j)
+	case store.KindVerify, store.KindParallelCritic:
+		// Only ever run inside a review, which starts its own again.
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "runs only inside the review that started it")
+		return
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -1180,7 +1215,8 @@ type PromptData struct {
 	Install         string   // the repo's install command, if any
 	Checks          []string // the repo's required gate commands
 	Coverage        bool     // a coverage floor holds the change
-	Findings        string
+	Findings        string   // a fix round's findings, or the verifier's, fenced
+	AnswerIDs       []string // the findings a fix round's builder answers
 	PreviousFailure string
 	Gates           string
 	Features        string   // the change's blast radius, when the repo has a feature map
@@ -1189,6 +1225,12 @@ type PromptData struct {
 	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
 	Fence           string         // a code fence the diff cannot close
+	Round           int            // the review round
+	Earlier         string         // a re-review's open and earlier findings, fenced
+	Since           string         // a re-review: the commit Diff starts from, the one last reviewed
+	Context         string         // a re-review: the whole change, when small
+	ContextFence    string         // a fence Context cannot close
+	ContextFiles    string         // a re-review: the whole change's files, fenced, when Context is too big
 	Members         []PromptMember // a workspace's repos, side by side in the checkout
 	Reasons         []string       // why the orchestrator runs
 	Summary         bool           // the orchestrator writes the daily summary

@@ -281,8 +281,15 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 		var v verdict.Review
 		if verdict.Parse([]byte(lastReview.Verdict), &v) == nil {
 			arm.Review = v.Decision
-			for _, f := range v.Findings {
-				arm.Findings = append(arm.Findings, fmt.Sprintf("%s %s:%d %s", f.Severity, f.File, f.Line, f.Claim))
+			for i, f := range v.Findings {
+				s := fmt.Sprintf("%s %s:%d %s", f.Severity, f.File, f.Line, f.Claim)
+				if f.ID != "" {
+					s = f.ID + " " + s
+				}
+				if !v.BlocksOn(i) {
+					s += " (does not block)"
+				}
+				arm.Findings = append(arm.Findings, s)
 			}
 		}
 	}

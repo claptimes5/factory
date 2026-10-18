@@ -29,10 +29,19 @@ routing:
   review:            {harness: codex,  model: gpt-6.1-sol}
   review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}
   # review.medium_risk: {harness: codex, model: gpt-6.1-sol, effort: medium}
+  # Checks each blocking finding before it blocks; cheap, and never a builder's model.
+  verify:            {harness: codex,  model: gpt-6-luna}
   # Cheaper low-risk review: review: {harness: codex, model: gpt-6-luna}
   # Any entry may name a skill set: a folder under skills/ mounted read-only
   # as the worker's skills directory, e.g.
   #   implement.M: {harness: claude, model: sonnet, skills: baseline}
+
+# How review checks itself; see docs/configuration.md#how-review-checks-itself.
+# review:
+#   verify: true              # a verifier rules on each blocking finding; only confirmed ones block
+#   paired_high_risk: false   # high risk: the reviewer and the critic read the change side by side
+#   incremental: true         # after round one, review only what changed since the last review
+#   context_bytes: 20000      # a re-review also gets the whole diff when it's this small, else a file list
 
 escalation:
   implement: [haiku, sonnet, opus]
@@ -63,6 +72,7 @@ budgets:
   per_job: {XS: 0.5, S: 2, M: 6, L: 15}
   triage: 0.5
   review: 3
+  verify: 0.5                 # per verifier run
   daily_total: 60
   concurrent_jobs: 3
   awaiting_human_max: 5

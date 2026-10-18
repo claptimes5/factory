@@ -22,6 +22,7 @@ type gatedHarness struct {
 	one      bool   // runs one job at a time
 	why      string // why it can't sign in
 	signOuts int    // runs to fail as signed out
+	stage    string // only runs of this stage sign out, if set
 	before   func() // runs as a signed-out run ends
 }
 
@@ -34,7 +35,7 @@ func (g *gatedHarness) Unavailable() string {
 
 func (g *gatedHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<- harness.Event) (*harness.Result, error) {
 	g.mu.Lock()
-	if g.signOuts > 0 {
+	if g.signOuts > 0 && (g.stage == "" || g.stage == req.Stage) {
 		g.signOuts--
 		g.why = "Codex's ChatGPT sign-in has expired. Run `factory codex-login` again."
 		g.mu.Unlock()

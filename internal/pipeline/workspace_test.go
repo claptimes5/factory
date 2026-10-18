@@ -82,7 +82,7 @@ func TestWorkspaceChange(t *testing.T) {
 	// Round one changes both repos and is blocked; the fix round changes
 	// only the app, so the API keeps round one's commit.
 	w.claude.builds = []func(string) error{bothBuild, webBuild("calls Add, checked\n")}
-	w.codex.reviews = []string{block, pass}
+	w.codex.reviews = []string{block, resolveF1}
 
 	if err := w.p.Drain(ctx); err != nil {
 		t.Fatal(err)

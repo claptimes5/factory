@@ -22,6 +22,8 @@ export function MetricsScreen() {
         <Stat label="First-pass rate" value={pct(r.first_pass_rate)} />
         <Stat label="Escalation rate" value={pct(r.escalation_rate)} />
         <Stat label="Review escapes" value={pct(r.review_escape_rate)} hint="Reviewer-passed PRs a human changed or closed" />
+        <Stat label="Reviewer precision" value={pct(r.review_precision)} hint="Blocking findings that led to a fix" />
+        <Stat label="Rounds to pass" value={r.rounds_to_pass < 0 ? "–" : r.rounds_to_pass.toFixed(1)} hint="Review rounds an item took before its review passed" />
         <Stat label="Spent this week" value={money(sp.week_usd)} />
         <Stat label="Merged / items" value={`${r.merged} / ${r.items}`} />
       </div>
@@ -43,6 +45,11 @@ export function MetricsScreen() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Table title="Cost per PR by size" rows={r.by_complexity.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Size", "Merged", "Per PR"]} />
         <Table title="Cost per PR by model" rows={r.by_model.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Model", "Merged", "Per PR"]} />
+        <Table
+          title="Reviewer precision"
+          rows={r.precision_by_reviewer.map((x) => [x.key, `${x.fixed} / ${x.findings}`, String(x.refuted), pct(x.precision)])}
+          head={["Reviewer", "Fixed", "Refuted", "Precision"]}
+        />
         <Table title="Spend by model (all time)" rows={sp.by_model.map((x) => [x.model, money(x.cost_usd)])} head={["Model", "Spend"]} />
         {sp.usage.length > 0 && (
           <Table
@@ -54,7 +61,7 @@ export function MetricsScreen() {
       </div>
       <p className="text-xs text-muted-foreground">
         Human time: items sat {r.awaiting_human_hours.toFixed(1)} h awaiting review in total ({r.awaiting_human_mean_hours.toFixed(1)} h on average).
-        Reviewer blocks: {r.review_blocks}.
+        Reviewer blocks: {r.review_blocks}. The verifier refuted {pct(r.verifier_refute_rate)} of the findings it checked.
       </p>
       {sp.estimates.compared > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="estimate-accuracy">

@@ -79,7 +79,7 @@ CREATE TABLE dependencies (
 CREATE TABLE jobs (                -- one agent run
   id            INTEGER PRIMARY KEY,
   item_id       INTEGER REFERENCES work_items(id),  -- NULL for orchestrator runs
-  kind          TEXT NOT NULL,     -- orchestrate|triage|spec|implement|review|verify
+  kind          TEXT NOT NULL,     -- orchestrate|triage|implement|review|critic|verify|...
   state         TEXT NOT NULL,     -- queued|running|succeeded|failed|cancelled|timed_out
   harness       TEXT NOT NULL,     -- claude|codex
   model         TEXT NOT NULL,
@@ -251,16 +251,20 @@ A PR reaches a human only after deterministic gates pass and a different model, 
 {
   "decision": "pass | block | questions",
   "findings": [
-    {"severity": "critical|major|minor", "file": "...", "line": 0,
+    {"severity": "critical|major|minor|pre-existing", "file": "...", "line": 0,
      "claim": "...", "evidence": "..."}
   ],
+  "earlier": [{"id": "F1", "ruling": "resolved|upheld|withdrawn", "reason": "..."}],
   "challenged_assumptions": ["..."]
 }
 ```
 
-- `block` or any `critical` finding sends the job back to implement with the findings attached.
+- `block` (on its critical and major findings, or its minor ones alone) or any `critical` finding sends the job back to implement with the findings attached. A `pre-existing` finding never blocks.
+- **Verified before it blocks.** Each blocking finding first goes to a cheaper verifier (`routing.verify`, never a builder's model), which confirms or refutes it against the code. Only confirmed findings block; refuted ones stay as notes on the PR. A verifier that can't run (budget, error, no ruling) fails safe: the finding blocks.
+- **Tracked to its end.** Every finding gets an id that holds across rounds. The builder answers each blocking one (`fixed`, `wrong`, `out_of_scope`); the next review sees the answers and rules on each (`earlier`), and an upheld finding blocks again. Findings and outcomes live in `review_findings`.
+- **Re-review what changed.** From round two, a reviewer reads the diff since the commit it last reviewed, with its open findings, and the whole change as context only when small.
 - At most two fix-and-review rounds. A third block parks the item for a human.
-- `high` risk items also get a Claude critic pass, so two independent reviewers see them. `medium` (raised by the feature map) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
+- `high` risk items also get a Claude critic pass, so two independent reviewers see them (side by side with `review.paired_high_risk`). `medium` (raised by the feature map) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
 
 **4. Hidden scenarios.** A `scenarios/` folder outside the builder's checkout holds end-to-end checks (HTTP, CLI, or Playwright). The verify stage runs them; builders never see their contents, only pass/fail.
 
@@ -372,7 +376,8 @@ The number that matters is cost per merged PR; everything else explains it.
 - Cost per merged PR, by complexity tier and by model.
 - First-pass rate: share of implement jobs that pass gates and review without a retry.
 - Escalation rate: share of items that needed a higher model tier.
-- Reviewer value: share of `block` decisions a human later agreed with (PR changed or closed).
+- Reviewer value: review escapes (passed PRs a human changed or closed), and reviewer precision: the share of blocking findings that led to a fix, per reviewer route and model.
+- Rounds to pass: review rounds per item that passed review.
 - Human time proxy: hours items sat in `awaiting_human`.
 
 **Evals (replay set)**

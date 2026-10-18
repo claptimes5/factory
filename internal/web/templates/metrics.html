@@ -7,8 +7,13 @@
 <tr><td>Escalation rate</td><td><b>{{pct .Escalation}}</b></td><td class="mut">items that needed a higher model tier</td></tr>
 <tr><td>Reviewer blocks</td><td><b>{{.ReviewBlocks}}</b></td><td class="mut">fix rounds the reviewer sent back</td></tr>
 <tr><td>Review escapes</td><td><b>{{pct .ReviewEscapes}}</b></td><td class="mut">reviewer-passed PRs you changed before merging, or closed</td></tr>
+<tr><td>Reviewer precision</td><td><b>{{pct .ReviewPrecision}}</b></td><td class="mut">blocking findings that led to a fix</td></tr>
+<tr><td>Verifier refuted</td><td><b>{{pct .VerifierRefuted}}</b></td><td class="mut">checked findings the verifier refuted, so they didn't block</td></tr>
+<tr><td>Rounds to pass</td><td><b>{{rounds .RoundsToPass}}</b></td><td class="mut">review rounds an item took before its review passed</td></tr>
 <tr><td>Time awaiting you</td><td><b>{{hours .AwaitingHours}}</b></td><td class="mut">{{hours .AwaitingMeanHours}} per review on average</td></tr>
 </table>
+<h2>Reviewer precision by reviewer</h2>
+<table>{{range .Precision}}<tr><td>{{.Key}}</td><td>{{pct .Precision}}</td><td class="mut">{{.Fixed}} fixed, {{.Refuted}} refuted, of {{.Findings}} blocking findings</td></tr>{{else}}<tr><td class="mut">No settled findings yet.</td></tr>{{end}}</table>
 <h2>Cost per merged PR by complexity</h2>
 <table>{{range .ByComplexity}}<tr><td>{{.Key}}</td><td>{{money .PerPR}}</td><td class="mut">{{.Merged}} merged</td></tr>{{else}}<tr><td class="mut">Nothing merged yet.</td></tr>{{end}}</table>
 <h2>Cost per merged PR by the model that landed it</h2>

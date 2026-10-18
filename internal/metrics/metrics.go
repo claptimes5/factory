@@ -41,6 +41,16 @@ type Report struct {
 	// reviewer-passed PRs a human changed before merging, or closed.
 	ReviewBlocks  int     `json:"review_blocks"`
 	ReviewEscapes float64 `json:"review_escape_rate"`
+	// ReviewPrecision is the share of settled blocking findings that led
+	// to a fix: not refuted by the verifier, answered fixed by the builder,
+	// and not upheld by a later review. Precision is the same per reviewer.
+	ReviewPrecision float64     `json:"review_precision"`
+	Precision       []Precision `json:"precision_by_reviewer"`
+	// VerifierRefuted is the share of checked findings the verifier refuted.
+	VerifierRefuted float64 `json:"verifier_refute_rate"`
+	// RoundsToPass is the mean number of review rounds an item that passed
+	// review took, 1 for a first-round pass; -1 with none.
+	RoundsToPass float64 `json:"rounds_to_pass"`
 	// AwaitingHours is the total and mean time items sat in awaiting_human.
 	AwaitingHours     float64 `json:"awaiting_human_hours"`
 	AwaitingMeanHours float64 `json:"awaiting_human_mean_hours"`
@@ -79,6 +89,16 @@ func rate(n, d int) float64 {
 		return -1
 	}
 	return float64(n) / float64(d)
+}
+
+// Precision is how often one reviewer's blocking findings led to a fix.
+// Key is its route and harness/model, as "review codex/gpt-6.1-sol".
+type Precision struct {
+	Key       string  `json:"key"`
+	Findings  int     `json:"findings"` // settled blocking findings it raised
+	Fixed     int     `json:"fixed"`
+	Refuted   int     `json:"refuted"` // of those, ones the verifier refuted
+	Precision float64 `json:"precision"`
 }
 
 // Slice is how the builds of one size, or that started on one model, went.
@@ -139,6 +159,16 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 	byCx, byModel := map[string]*Group{}, map[string]*Group{}
 	var implemented, firstPass, escalated, passedPRs, escapes, awaitingStays int
 	weeks := map[string]*Week{}
+	findings, err := st.AllFindings(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	byItem := map[int64][]store.ReviewFinding{}
+	for _, f := range findings {
+		byItem[f.ItemID] = append(byItem[f.ItemID], f)
+	}
+	prec := map[string]*Precision{}
+	var settled, fixed, checked, refuted, passedReview, rounds int
 	week := func(ts string) *Week {
 		k := weekOf(ts)
 		if k == "" {
@@ -187,6 +217,37 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 					r.ReviewBlocks++
 				}
 			}
+		}
+		// Precision: a finding is settled once the verifier refuted it, a
+		// later review ruled on it, or the item stopped being worked on.
+		active := it.Stage == state.Triage || it.Stage == state.Ready || it.Stage == state.Implementing || it.Stage == state.Reviewing || it.Stage == state.Blocked
+		for _, f := range byItem[it.ID] {
+			if f.Check == verdict.Confirmed || f.Check == verdict.Refuted || f.Confirmed {
+				checked++
+				if f.Check == verdict.Refuted {
+					refuted++
+				}
+			}
+			if !f.Blocking || active && f.Check != verdict.Refuted && f.Ruling == "" {
+				continue
+			}
+			k := f.Route + " " + f.Harness + "/" + f.Model
+			if prec[k] == nil {
+				prec[k] = &Precision{Key: k}
+			}
+			settled++
+			prec[k].Findings++
+			switch {
+			case f.Outcome == store.OutcomeFixed:
+				fixed++
+				prec[k].Fixed++
+			case f.Check == verdict.Refuted:
+				prec[k].Refuted++
+			}
+		}
+		if n, ok := roundsToPass(jobs, it); ok {
+			passedReview++
+			rounds += n
 		}
 		cx := it.Complexity
 		if cx == "" {
@@ -311,6 +372,18 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 	r.FirstPass = rate(firstPass, implemented)
 	r.Escalation = rate(escalated, implemented)
 	r.ReviewEscapes = rate(escapes, passedPRs)
+	r.ReviewPrecision = rate(fixed, settled)
+	r.VerifierRefuted = rate(refuted, checked)
+	r.RoundsToPass = -1
+	if passedReview > 0 {
+		r.RoundsToPass = float64(rounds) / float64(passedReview)
+	}
+	r.Precision = []Precision{}
+	for _, x := range prec {
+		x.Precision = rate(x.Fixed, x.Findings)
+		r.Precision = append(r.Precision, *x)
+	}
+	sort.Slice(r.Precision, func(a, b int) bool { return r.Precision[a].Key < r.Precision[b].Key })
 	if awaitingStays > 0 {
 		r.AwaitingMeanHours = r.AwaitingHours / float64(awaitingStays)
 	}
@@ -338,6 +411,36 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 		b.ParkReasons = b.ParkReasons[:8]
 	}
 	return r, b, nil
+}
+
+// roundsToPass counts the review rounds of an item's latest run (since its
+// latest triage) that ended in a pass: one, plus each blocking review or
+// critic verdict before it. ok is false when no review passed it.
+func roundsToPass(jobs []*store.Job, it *store.WorkItem) (int, bool) {
+	start := 0
+	for i, j := range jobs { // oldest first
+		if j.Kind == "triage" {
+			start = i + 1
+		}
+	}
+	n, passed := 1, false
+	for _, j := range jobs[start:] {
+		if j.Kind != "review" && j.Kind != "critic" || j.State != state.Succeeded {
+			continue
+		}
+		var v verdict.Review
+		if verdict.Parse([]byte(j.Verdict), &v) != nil {
+			continue
+		}
+		if v.Blocks() {
+			n++
+			passed = false
+		} else if v.Decision != "questions" { // a pass, or a block the verifier refuted
+			passed = true
+		}
+	}
+	reached := it.Stage == state.AwaitingHuman || it.Stage == state.Done
+	return n, passed && reached
 }
 
 func slice(m map[string]*Slice, k string) *Slice {

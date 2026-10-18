@@ -27,11 +27,12 @@ Each repo can override the gates (see
 Set `proves_fix: none`, `coverage: none` or `scenarios_dir: none` to turn
 one off for a repo.
 
-Then the reviewer reads the issue, the diff and the gate results. A block
-sends the findings back to the builder, for at most `max_review_rounds`
-fix rounds (2); a third block parks the item. A malformed review retries
-once, then parks, so a broken reviewer never consumes a fix round or
-passes code.
+Then the reviewer reads the issue, the diff and the gate results. Before
+a finding blocks, a second, cheaper model checks it (see
+[Review findings](#review-findings)). A block sends the findings back to
+the builder, for at most `max_review_rounds` fix rounds (2); a third block
+parks the item. A malformed review retries once, then parks, so a broken
+reviewer never consumes a fix round or passes code.
 
 ## Test proves fix
 
@@ -116,6 +117,80 @@ its risk.
 Merging is yours at every level. To make GitHub enforce it, give the paths
 behind your high-risk features a CODEOWNERS entry and require code owner
 review on the base branch.
+
+## Review findings
+
+Each finding the reviewer (or critic) raises gets an id, `F1`, `F2` and so
+on, that it keeps for the rest of the item's rounds. Its severity says
+whether it can block:
+
+| Severity | Blocks |
+| --- | --- |
+| `critical` | Always, whatever the reviewer decided. |
+| `major` | When the reviewer decides `block`. |
+| `minor` | Only when the reviewer blocks on minor findings alone. |
+| `pre-existing` | Never. It's a real problem the change didn't introduce, kept as a note. |
+
+That's judged once, when the finding is raised, against the decision of
+the reviewer who raised it, and kept on the finding. So a critic's block
+in a paired review doesn't make the reviewer's passing notes block, and
+a round that blocks only because it upheld an earlier finding doesn't
+turn its new notes into blocks. A finding carried from an earlier round
+always blocks.
+
+A reviewer that blocks without raising a finding blocks the round, with
+nothing to verify. That holds when other findings join it: an earlier
+round's carried into this one, or, in a paired review, the other side's
+notes.
+
+**Verified before it blocks.** Every finding that would block goes to the
+verifier (`routing.verify`, a cheap model), with the issue, the diff and
+a read-only checkout. It confirms each one or refutes it, with a reason;
+it's told to refute only what it can show is wrong. Only confirmed
+findings block. A refuted one is kept as a note: the builder sees it if
+the round blocks anyway, and the PR lists it under "Reviewer notes". If
+the verifier can't run (budget, an error, no ruling on a finding), the
+finding blocks: the verifier can only take a block away, never pass code
+the reviewer would have stopped.
+
+**Answered in the fix round.** The builder is shown the blocking findings
+with their ids and the verifier's reasons, fenced as text to check rather
+than instructions, and answers each in its verdict: `fixed`, `wrong` (with
+why) or `out_of_scope` (with why). One it leaves out is recorded as
+unanswered.
+
+**Ruled on by the next review.** The next round's reviewer sees its open
+findings with the builder's answers, also fenced, and rules on each:
+`resolved`, `upheld` (it blocks again, with the same id, and is verified
+again) or `withdrawn` (the builder was right). One it doesn't rule on
+stands as upheld, with "the review didn't rule on it" as its evidence:
+only a ruling lifts a block. Of two rulings on one finding (a paired
+review's reviewer and critic, say), an upheld one wins. It's told not to raise
+again what was already raised or refuted. It reviews the diff since the
+commit it last reviewed, with the whole change as context when that's
+small (see [How review checks itself](configuration.md#how-review-checks-itself)).
+A workspace change is reviewed whole each round.
+
+Every finding and how it ended is kept in the database, so the metrics
+can say how often a reviewer's findings were worth a round.
+
+**To revisit after real use.** These defaults were picked before any
+real runs, and are to be looked at again once the metrics have data:
+- The verifier confirms a finding when it can't tell, so a finding it's
+  unsure of still blocks. That's safe, but a light filter; a stricter
+  verifier would refute more.
+- `review.paired_high_risk` is off: a critic beside the reviewer costs a
+  run on every high-risk round.
+- A finding the builder doesn't answer is recorded as unanswered and the
+  build goes on; it could fail the round instead.
+- A refuted finding goes on the list of what not to raise again, so one
+  wrong refutation sticks for the rest of the item's rounds.
+- A `withdrawn` or `resolved` ruling lifts a block the verifier confirmed,
+  with no second check: the reviewer's word alone.
+- The verifier is a cheaper model than the reviewer and reads untrusted
+  text (the diff, the issue, the findings). It is fenced, and all it can
+  do is refute, but refuting is removing a block: a verifier talked into
+  refuting passes code the reviewer stopped.
 
 ## Feature map
 
@@ -241,11 +316,20 @@ still get none.
 - first-pass rate and escalation rate;
 - reviewer blocks;
 - review escapes: passed PRs you changed before merging, or closed;
+- reviewer precision: the share of blocking findings that led to a fix
+  (not refuted by the verifier, answered `fixed` and not upheld by a
+  later review), overall and per reviewer route and model. A finding
+  counts once it's settled: refuted, ruled on by a later review, or its
+  item has left the build loop;
+- the share of checked findings the verifier refuted;
+- rounds to pass: the review rounds an item that passed review took, 1
+  for a first-round pass;
 - hours spent awaiting you.
 
-Reviewer value is measured as review escapes, since blocked versions never
-reach you and so can't be judged. The dashboard's Spend screen shows the
-same numbers per week.
+Escapes say what the reviewer missed; precision says how much of what it
+raised was worth a round. The dashboard's Spend screen shows them side by
+side, with precision per reviewer, and `factory status` prints them on
+its `review` line.
 
 ## The replay set
 
@@ -253,7 +337,8 @@ same numbers per week.
 `evals/<name>/accept/` holds the hidden acceptance files. `factory eval`
 runs every case through the real pipeline against a private copy of the
 repo and an in-memory GitHub, so nothing is pushed or posted. Then it runs
-`accept` on the result. With `-baseline`, it fails if the candidate config
+`accept` on the result. Each case also reports its review rounds and its
+blocking findings (and how many the verifier refuted). With `-baseline`, it fails if the candidate config
 is worse. See [`evals/README.md`](../evals/README.md) and the
 [commands](using.md#commands).
 

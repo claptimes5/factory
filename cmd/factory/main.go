@@ -37,6 +37,7 @@ import (
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/mcp"
+	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
@@ -565,6 +566,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if limits, _ := st.Limits(ctx); len(limits) > 0 {
 		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
 	}
+	if rep, err := metrics.Compute(ctx, st); err == nil {
+		fmt.Fprintf(w, "review:\t%s\n", reviewLine(rep))
+	}
 	// From this command's own settings, which are the daemon's unless its
 	// environment overrides factory.env.
 	if s := codexSignIn(cfg); s != "" {
@@ -590,6 +594,22 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// reviewLine is status's line on how review is doing: escapes, the
+// precision of its blocking findings and the rounds an item takes.
+func reviewLine(r *metrics.Report) string {
+	pct := func(v float64) string {
+		if v < 0 {
+			return "-"
+		}
+		return fmt.Sprintf("%.0f%%", v*100)
+	}
+	rounds := "-"
+	if r.RoundsToPass >= 0 {
+		rounds = fmt.Sprintf("%.1f", r.RoundsToPass)
+	}
+	return fmt.Sprintf("escape rate %s, precision %s, verifier refuted %s, rounds to pass %s", pct(r.ReviewEscapes), pct(r.ReviewPrecision), pct(r.VerifierRefuted), rounds)
 }
 
 // estimateCell is an item's cost estimate for status: its range, and

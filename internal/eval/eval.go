@@ -85,18 +85,26 @@ type Result struct {
 	CostUSD float64 `json:"cost_usd"`
 	Seconds float64 `json:"seconds"`
 	Jobs    int     `json:"jobs"`
+	// Rounds is how many review rounds the case took (0 when it never
+	// reached review); Findings and Refuted count its blocking findings
+	// and the ones the verifier refuted.
+	Rounds   int `json:"review_rounds"`
+	Findings int `json:"blocking_findings"`
+	Refuted  int `json:"refuted_findings"`
 }
 
 // Report is the whole run.
 type Report struct {
-	Config      string   `json:"config"`
-	Cases       int      `json:"cases"`
-	Passed      int      `json:"passed"`
-	PassRate    float64  `json:"pass_rate"`
-	CostUSD     float64  `json:"cost_usd"`
-	CostPerPass float64  `json:"cost_per_pass_usd"` // total cost / passes; 0 when none passed
-	Seconds     float64  `json:"seconds"`
-	Results     []Result `json:"results"`
+	Config      string  `json:"config"`
+	Cases       int     `json:"cases"`
+	Passed      int     `json:"passed"`
+	PassRate    float64 `json:"pass_rate"`
+	CostUSD     float64 `json:"cost_usd"`
+	CostPerPass float64 `json:"cost_per_pass_usd"` // total cost / passes; 0 when none passed
+	Seconds     float64 `json:"seconds"`
+	// MeanRounds is the mean review rounds of the cases that were reviewed.
+	MeanRounds float64  `json:"mean_review_rounds"`
+	Results    []Result `json:"results"`
 }
 
 // Options is what a run needs from the daemon's wiring.
@@ -142,7 +150,12 @@ func Run(ctx context.Context, o Options, cases []Case) (*Report, error) {
 	}
 	wg.Wait()
 	rep := &Report{Cases: len(cases), Results: results}
+	reviewed := 0
 	for _, r := range results {
+		if r.Rounds > 0 {
+			reviewed++
+			rep.MeanRounds += float64(r.Rounds)
+		}
 		rep.CostUSD += r.CostUSD
 		rep.Seconds += r.Seconds
 		if r.Passed {
@@ -154,6 +167,9 @@ func Run(ctx context.Context, o Options, cases []Case) (*Report, error) {
 	}
 	if rep.Passed > 0 {
 		rep.CostPerPass = rep.CostUSD / float64(rep.Passed)
+	}
+	if reviewed > 0 {
+		rep.MeanRounds /= float64(reviewed)
 	}
 	return rep, ctx.Err()
 }
@@ -216,6 +232,19 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	res.Jobs = len(jobs)
 	for _, j := range jobs {
 		res.CostUSD += j.CostUSD
+		if j.Kind == "review" && j.State == state.Succeeded {
+			res.Rounds++
+		}
+	}
+	if fs, err := st.ItemFindings(ctx, it.ID, 0); err == nil {
+		for _, f := range fs {
+			if f.Blocking {
+				res.Findings++
+				if f.Outcome == store.OutcomeRefuted {
+					res.Refuted++
+				}
+			}
+		}
 	}
 	res.Stage = string(it.Stage)
 	if it.Stage != state.AwaitingHuman {
@@ -346,16 +375,17 @@ func Compare(cur, base *Report) []string {
 // Table renders a report for the terminal.
 func (r *Report) Table() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-24s %-6s %-16s %9s %8s  %s\n", "CASE", "PASS", "STAGE", "COST", "TIME", "REASON")
+	fmt.Fprintf(&b, "%-24s %-6s %-16s %9s %8s %6s %8s  %s\n", "CASE", "PASS", "STAGE", "COST", "TIME", "ROUNDS", "FINDINGS", "REASON")
 	for _, x := range r.Results {
 		pass := "no"
 		if x.Passed {
 			pass = "yes"
 		}
-		fmt.Fprintf(&b, "%-24s %-6s %-16s %9s %7.0fs  %s\n", x.Case, pass, x.Stage, fmt.Sprintf("$%.2f", x.CostUSD), x.Seconds, firstLine(x.Reason))
+		fmt.Fprintf(&b, "%-24s %-6s %-16s %9s %7.0fs %6d %8s  %s\n", x.Case, pass, x.Stage, fmt.Sprintf("$%.2f", x.CostUSD), x.Seconds, x.Rounds,
+			fmt.Sprintf("%d (%d refuted)", x.Findings, x.Refuted), firstLine(x.Reason))
 	}
-	fmt.Fprintf(&b, "\npass rate %.0f%% (%d of %d) · cost $%.2f · cost per pass $%.2f · time %.0fs\n",
-		r.PassRate*100, r.Passed, r.Cases, r.CostUSD, r.CostPerPass, r.Seconds)
+	fmt.Fprintf(&b, "\npass rate %.0f%% (%d of %d) · cost $%.2f · cost per pass $%.2f · time %.0fs · review rounds %.1f\n",
+		r.PassRate*100, r.Passed, r.Cases, r.CostUSD, r.CostPerPass, r.Seconds, r.MeanRounds)
 	return b.String()
 }
 

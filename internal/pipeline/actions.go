@@ -121,6 +121,14 @@ func (p *Pipeline) cancel(ctx context.Context, actor string, jobID int64) error 
 	if j.State.Terminal() {
 		return fmt.Errorf("job %d is already %s", jobID, j.State)
 	}
+	if store.IsSubKind(j.Kind) {
+		// Cancelling the verifier alone would only make its findings block.
+		var in struct{ Within int64 }
+		if err := jsonUnmarshal(j.Input, &in); err != nil || in.Within == 0 {
+			return fmt.Errorf("job %d runs inside another job, which it doesn't name", jobID)
+		}
+		return p.cancel(ctx, actor, in.Within)
+	}
 	if err := p.stopJob(ctx, actor, j, "cancelled from the control room"); err != nil {
 		return err
 	}
@@ -144,6 +152,16 @@ func (p *Pipeline) stopJob(ctx context.Context, actor string, j *store.Job, reas
 	p.cancelled.Store(j.ID, true)
 	if c, ok := p.jobCancel.Load(j.ID); ok {
 		c.(context.CancelFunc)()
+	}
+	// And the verifier or paired critic it is running, if any.
+	if j.ItemID != nil {
+		if subs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: *j.ItemID, State: state.Running}); err == nil {
+			for _, s := range subs {
+				if store.IsSubKind(s.Kind) {
+					p.warn(p.Runner.Kill(ctx, p.containerName(s.ID)), "kill sub-job")
+				}
+			}
+		}
 	}
 	return p.Runner.Kill(ctx, p.containerName(j.ID))
 }
@@ -183,7 +201,8 @@ func (p *Pipeline) activeJob(ctx context.Context, itemID int64) (*store.Job, err
 		return nil, err
 	}
 	for _, j := range jobs {
-		if !j.State.Terminal() {
+		// A verifier or paired critic runs inside a review: that is the job.
+		if !j.State.Terminal() && !store.IsSubKind(j.Kind) {
 			return j, nil
 		}
 	}

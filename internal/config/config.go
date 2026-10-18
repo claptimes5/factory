@@ -311,14 +311,18 @@ type Config struct {
 	Grooming Grooming `yaml:"grooming"`
 	// Previews are the defaults and limits of each repo's preview.
 	Previews Previews `yaml:"previews"`
+	// Reviews says how review checks its own findings. See Reviews.
+	Reviews Reviews `yaml:"review"`
 
 	Budgets struct {
-		PerJob           map[string]float64 `yaml:"per_job"`
-		Triage           float64            `yaml:"triage"`
-		Review           float64            `yaml:"review"`
-		DailyTotal       float64            `yaml:"daily_total"`
-		ConcurrentJobs   int                `yaml:"concurrent_jobs"`
-		AwaitingHumanMax int                `yaml:"awaiting_human_max"`
+		PerJob map[string]float64 `yaml:"per_job"`
+		Triage float64            `yaml:"triage"`
+		Review float64            `yaml:"review"`
+		// Verify is dollars per verifier run; 0 uses budgets.triage.
+		Verify           float64 `yaml:"verify,omitempty"`
+		DailyTotal       float64 `yaml:"daily_total"`
+		ConcurrentJobs   int     `yaml:"concurrent_jobs"`
+		AwaitingHumanMax int     `yaml:"awaiting_human_max"`
 		// MinFreeDiskGB is the free space no new job starts without, on
 		// the data directory and wherever Docker stores containers;
 		// default 10, negative to turn the check off.
@@ -511,6 +515,7 @@ func (c *Config) defaults() {
 	c.sourcesDefaults()
 	c.groomingDefaults()
 	c.previewDefaults()
+	c.reviewDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -798,6 +803,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkSources()...)
 	errs = append(errs, c.checkGrooming()...)
 	errs = append(errs, c.checkPreviews()...)
+	errs = append(errs, c.checkReview()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}
@@ -1273,6 +1279,11 @@ func (c *Config) JobBudget(kind, complexity string) float64 {
 		return c.Budgets.Triage
 	case "review":
 		return c.Budgets.Review
+	case "verify":
+		if c.Budgets.Verify > 0 {
+			return c.Budgets.Verify
+		}
+		return c.Budgets.Triage
 	}
 	if v, ok := c.Budgets.PerJob[complexity]; ok {
 		return v

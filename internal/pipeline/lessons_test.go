@@ -194,7 +194,7 @@ func TestRepeatFindingsTriggerLearn(t *testing.T) {
 			for n := 1; n <= c.items; n++ {
 				e.addIssue(n)
 				e.claude.builds = append(e.claude.builds, build, build)
-				e.codex.reviews = append(e.codex.reviews, block, pass)
+				e.codex.reviews = append(e.codex.reviews, block, resolveF1)
 				e.poll(t)
 			}
 			if c.edit {

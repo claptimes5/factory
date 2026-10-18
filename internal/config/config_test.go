@@ -591,3 +591,36 @@ func TestTunable(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewSettings(t *testing.T) {
+	c := load(t)
+	if !c.Reviews.VerifyOn() || !c.Reviews.IncrementalOn() || c.Reviews.PairedHighRisk || c.Reviews.ContextBytes != 20000 || c.Timeout("verify") != 10*time.Minute {
+		t.Fatalf("defaults %+v", c.Reviews)
+	}
+	if r := c.VerifyRoute(); r.Harness != "codex" || r.Model != "gpt-6-luna" || c.JobBudget("verify", "") != 0.5 {
+		t.Fatalf("verify route %+v", r)
+	}
+	// Left out, it is triage's cheap tier, unless a builder runs on it:
+	// here triage's haiku builds S items, so it is the reviewer's.
+	delete(c.Routing, "verify")
+	if r := c.VerifyRoute(); r.Harness != "codex" || r.Model != "gpt-6.1-sol" {
+		t.Fatalf("default verify route %+v", r)
+	}
+	c.Routing["triage"] = Route{Harness: "codex", Model: "gpt-6-luna"}
+	if r := c.VerifyRoute(); r.Model != "gpt-6-luna" {
+		t.Fatalf("triage's tier %+v", r)
+	}
+	// Set to a model a builder can escalate to, it's refused.
+	c.Routing["verify"] = Route{Harness: "claude", Model: "sonnet"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "routing.verify checks findings with claude/sonnet") {
+		t.Fatalf("verify on a builder's model: %v", err)
+	}
+	c.Routing["verify"] = Route{Harness: "codex", Model: "gpt-6-luna"}
+	c.Budgets.Verify = 0
+	if c.JobBudget("verify", "") != c.Budgets.Triage {
+		t.Fatal("budgets.verify should default to budgets.triage")
+	}
+	if cr := c.CriticRoute(); cr.Model != "opus" || cr.Skills != "" {
+		t.Fatalf("critic %+v", cr)
+	}
+}

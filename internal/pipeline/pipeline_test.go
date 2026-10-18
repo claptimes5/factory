@@ -237,6 +237,10 @@ type fakeHarness struct {
 	nets    map[string][]string // Services of each call, by stage
 	learn   []string            // successive learn verdicts
 	images  [][]string          // Images of each review call
+	// verifies are successive verifier verdicts; with none scripted the
+	// verifier fails, and its findings block as unverified.
+	verifies []string
+	critics  []string // successive verdicts of a paired critic
 	// implVerdict replaces the builder's usual verdict.
 	implVerdict string
 }
@@ -309,6 +313,16 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, fmt.Errorf("no scripted learn %d", n)
 		}
 		res.Final = h.learn[n]
+	case "verify":
+		if n >= len(h.verifies) {
+			return nil, fmt.Errorf("no scripted verify %d", n)
+		}
+		res.Final = h.verifies[n]
+	case "parallel_critic":
+		if n >= len(h.critics) {
+			return nil, fmt.Errorf("no scripted paired critic %d", n)
+		}
+		res.Final = h.critics[n]
 	case "review", "critic":
 		h.images = append(h.images, req.Images)
 		if n >= len(h.reviews) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -236,7 +237,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 
 	work := agentDir(dir, parts, true)
 	data := PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(work, out)).Out,
-		Findings: in.Findings, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts),
+		Findings: in.Findings, AnswerIDs: in.FindingIDs, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts),
 		TextOnly: textOnly(it)}
 	for _, pt := range parts {
 		for _, f := range p.riskyFeatures(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA) {
@@ -364,6 +365,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	branch := j.Branch
 	p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Branch: &branch}), "UpdateItem")
+	p.recordAnswers(ctx, j, it, in.FindingIDs, v.Answers)
 	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
 	if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", line); err != nil {
 		return err
@@ -647,41 +649,101 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	diff = truncate(diff, 200_000)
-	// The control room's diff viewer shows exactly what the reviewer saw.
+	// The control room's diff viewer shows the whole change the reviewer
+	// judged, which a re-review reads part of (see incremental).
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
+	rr, err := p.round(ctx, j, it)
+	if err != nil {
+		return fail(agentRun{}, state.Failed, err.Error())
+	}
 	// The reviewer sees the issue, the diff and gate results only: never the
-	// builder's own summary.
+	// builder's own summary. In a re-review it also sees its open findings
+	// with the builder's answers, fenced, and reads what changed since.
 	work := agentDir(dir, parts, false)
 	var shots []PromptShot
 	if !ws {
 		shots = p.reviewShots(in.ImplementJob, out, p.Runner.Paths(specFor(work, out)).Out)
 	}
-	prompt, err := p.renderStep(j, "review", partRepos(parts), PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots})
+	data := PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff),
+		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(rr), Round: rr.n}
+	if !ws {
+		p.incremental(ctx, it, own, rr, diff, &data)
+	}
+	prompt, err := p.renderStep(j, "review", partRepos(parts), data)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("review")
+	// A critic that can't run now isn't paired: it follows the reviewer,
+	// as it would without paired_high_risk (see afterReview).
+	var critic func(bool) pairedRun
+	if p.paired(j, it) {
+		critic = p.startCritic(ctx, j, it, work, partRepos(parts), data)
+	}
 	x := agentExtras{repo: p.members(it)[0]}
 	for _, s := range shots {
 		x.images = append(x.images, s.Path)
 	}
 	run := p.runAgentWith(ctx, j, work, out, prompt, schema, p.Cfg.Timeout("review"), x)
+	var cr pairedRun
+	if critic != nil {
+		_, _, bad := runFailure(run)
+		signedOut := run.res != nil && run.res.SignedOut
+		cr = critic(!bad && !signedOut && ctx.Err() == nil)
+	}
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
 	}
+	// The critic couldn't sign in: the review waits for it as it would for
+	// its own harness, queued again without using a retry.
+	if cr.run.res != nil && cr.run.res.SignedOut {
+		res := *cr.run.res
+		res.Error = "the paired critic: " + res.Error
+		if run.res != nil {
+			res.TokensIn, res.TokensOut = run.res.TokensIn, run.res.TokensOut
+		}
+		held := run // the reviewer's run, which the job is charged for
+		held.res = &res
+		if p.requeueSignedOut(ctx, j, held) {
+			return nil
+		}
+	}
 	// Only the final message counts: a file in the checkout or the output
 	// directory could have been planted by the builder's code.
-	var v verdict.Review
-	if err := verdict.Parse([]byte(run.final), &v); err != nil {
+	v, err := verdict.ParseReview([]byte(run.final))
+	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
-	norm, _ := json.Marshal(v)
-	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
-	p.recordFindings(ctx, j, it, &v)
-	return p.afterReview(ctx, it, j.Kind, &v, in)
+	by := map[string]reviewer{"": {j.Kind, j.Route, j.Harness, j.Model}, "review": {j.Kind, j.Route, j.Harness, j.Model}}
+	checkable := true
+	switch {
+	case critic == nil:
+	case cr.skipped != "":
+		p.log().Info("review not paired", "job", j.ID, "why", cr.skipped)
+	case cr.err != "" || cr.v == nil:
+		return fail(run, state.Failed, "the paired critic: "+cr.err)
+	default:
+		by["critic"] = reviewer{"critic", cr.job.Route, cr.job.Harness, cr.job.Model}
+		v, checkable = pair(v, cr.v)
+	}
+	changed, err := p.settle(ctx, j, it, v, rr)
+	if err != nil {
+		return fail(run, state.Failed, err.Error())
+	}
+	if v.Decision != "questions" && p.Cfg.Reviews.VerifyOn() && checkable {
+		p.verifyFindings(ctx, j, it, v, work, diff, data)
+		if p.stopIfCancelled(ctx, j, it, run) {
+			return nil
+		}
+	}
+	if err := p.finishReview(ctx, j, it, run, v, rr, changed, by); err != nil {
+		return err
+	}
+	p.recordFindings(ctx, j, it, v)
+	return p.afterReview(ctx, it, j.Kind, v, in)
 }
 
 func short(sha string) string {
@@ -697,8 +759,9 @@ func (p *Pipeline) afterReview(ctx context.Context, it *store.WorkItem, kind str
 		return p.park(ctx, it, "The reviewer has questions it needs a human to answer:\n\n"+formatFindings(v))
 	case v.Blocks():
 		return p.reviewBlocked(ctx, it, v)
-	case kind == "review" && it.Risk == "high":
-		// High-risk items get a second, independent Claude critic.
+	case kind == "review" && it.Risk == "high" && !slices.Contains(v.Reviewers, "critic"):
+		// High-risk items get a second, independent Claude critic, unless
+		// it already read the change beside the reviewer.
 		return p.enqueueReview(ctx, it, "critic", 1, in)
 	}
 	is, err := p.issue(ctx, it)
@@ -723,8 +786,13 @@ func (p *Pipeline) reviewBlocked(ctx context.Context, it *store.WorkItem, v *ver
 	if err := p.Store.SetStage(ctx, it.ID, state.Implementing, "daemon", fmt.Sprintf("review blocked (round %d)", blocks)); err != nil {
 		return err
 	}
-	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, fmt.Sprintf("**Reviewer blocked round %d.** Sending it back to the builder.\n\n%s", blocks, findings)), "Comment")
-	_, err = p.enqueueImplement(ctx, it, 1, ImplementInput{Findings: findings, FixRound: true})
+	checked := ""
+	if v.Verified {
+		checked = " A second model checked each blocking finding against the code; the ones it refuted are notes."
+	}
+	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, fmt.Sprintf("**Reviewer blocked round %d.** Sending it back to the builder.%s\n\n%s", blocks, checked, findings)), "Comment")
+	text, ids := fixFindings(v)
+	_, err = p.enqueueImplement(ctx, it, 1, ImplementInput{Findings: text, FindingIDs: ids, FixRound: true})
 	return err
 }
 
@@ -749,27 +817,6 @@ func (p *Pipeline) countBlocks(ctx context.Context, itemID int64) (int, error) {
 		}
 	}
 	return n, nil
-}
-
-func formatFindings(v *verdict.Review) string {
-	var b strings.Builder
-	if len(v.Findings) == 0 {
-		b.WriteString("_No individual findings._\n")
-	}
-	for _, f := range v.Findings {
-		loc := f.File
-		if f.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", f.File, f.Line)
-		}
-		fmt.Fprintf(&b, "- **%s** `%s`: %s\n  Evidence: %s\n", f.Severity, loc, f.Claim, f.Evidence)
-	}
-	if len(v.ChallengedAssumptions) > 0 {
-		b.WriteString("\nChallenged assumptions:\n")
-		for _, a := range v.ChallengedAssumptions {
-			fmt.Fprintf(&b, "- %s\n", a)
-		}
-	}
-	return b.String()
 }
 
 // openPR opens (or refreshes) the draft PR carrying the evidence and hands
@@ -842,6 +889,9 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 	if in.Features != "" {
 		b.WriteString("## Blast radius\n\nWhat this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features + "\n")
 	}
+	if notes := p.passNotes(jobs); notes != "" {
+		b.WriteString("## Reviewer notes\n\nFindings that didn't block: minor ones, problems the change didn't introduce, and ones a second model checked and refuted.\n\n" + notes + "\n")
+	}
 	var total float64
 	b.WriteString("## Jobs\n\n| Job | Kind | Harness | Model | Skills | Attempt | State | Cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for i := len(jobs) - 1; i >= 0; i-- {
@@ -871,6 +921,42 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 		b.WriteString(humanFooter)
 	}
 	return b.String(), nil
+}
+
+// passNotes are the non-blocking findings of the reviews that passed the
+// item: its latest review, and the critic that followed it on a high-risk
+// item, each under its own heading when there are both.
+func (p *Pipeline) passNotes(jobs []*store.Job) string {
+	var review, critic string
+	seenCritic := false
+	for _, j := range jobs { // newest first
+		if j.Kind == "triage" {
+			break
+		}
+		if (j.Kind != "review" && j.Kind != "critic") || j.State != state.Succeeded {
+			continue
+		}
+		var v verdict.Review
+		notes := ""
+		if verdict.Parse([]byte(j.Verdict), &v) == nil {
+			notes = reviewNotes(&v)
+		}
+		if j.Kind == "critic" {
+			if !seenCritic { // the newest, which followed the review below
+				critic, seenCritic = notes, true
+			}
+			continue
+		}
+		review = notes
+		break
+	}
+	switch {
+	case review != "" && critic != "":
+		return "From the reviewer:\n\n" + review + "\nFrom the critic:\n\n" + critic
+	case review != "":
+		return review
+	}
+	return critic
 }
 
 // partRepos names the repos a change spans, in order.

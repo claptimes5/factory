@@ -25,6 +25,7 @@ change something by hand.
 - [Backlog grooming](#backlog-grooming)
 - [PR previews](#pr-previews)
 - [Claude-only review](#claude-only-review)
+- [How review checks itself](#how-review-checks-itself)
 
 The gates, the coverage floor, risk and the feature map are in
 [Quality](quality.md). The egress allowlist and the control room's address
@@ -348,7 +349,7 @@ get every member repo's instructions, each labeled with its repo.
 
 `routing` picks the harness, model and effort for each step: `triage`,
 `implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
-`review.high_risk`), `critic`, `orchestrate`, `tune` and `learn`. Triage rates each issue
+`review.high_risk`), `critic`, `verify`, `orchestrate`, `tune` and `learn`. Triage rates each issue
 `XS`, `S`, `M` or `L`, and the item builds on the matching
 `implement.<size>` entry.
 
@@ -361,10 +362,12 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - Text-only (`XS`) builds use `routing.implement.XS`, Haiku by default (see
   [Text-only changes](quality.md#text-only-changes)).
 - Larger builds start on Sonnet or Opus.
-- Reviews run on GPT-6.1 Sol.
+- Reviews run on GPT-6.1 Sol, and their blocking findings are checked by
+  GPT-6 Luna (`routing.verify`, see
+  [How review checks itself](#how-review-checks-itself)).
 
-The daemon refuses a config where a reviewer could run the same harness
-and model as the builder it reviews.
+The daemon refuses a config where a reviewer, or the verifier, could run
+the same harness and model as the builder it reviews.
 
 **Fast mode.** `fast: true` on a Claude route runs Claude Code's fast mode,
 which answers up to 2.5 times faster at a higher price per token:
@@ -466,8 +469,9 @@ values below are this repo's.
 | --- | --- |
 | `per_job` | Dollars per implement job, by size: `{XS: 0.5, S: 2, M: 6, L: 15}`. Without an `XS` entry, XS uses S's. |
 | `triage`, `review` | Dollars per triage or review job. |
+| `verify` | Dollars per verifier run, which checks a review's blocking findings (0.5 here; left out, `triage`'s). |
 | `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. |
-| `concurrent_jobs` | Jobs running at once (3). |
+| `concurrent_jobs` | Jobs running at once (3). A paired critic (`review.paired_high_risk`) runs inside its review and isn't counted. |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
@@ -864,3 +868,36 @@ needed before any PR opens. The critic that also reads high-risk diffs
 runs only after the reviewer approves and can only add a block. So it uses
 `routing.critic` (default: `implement.L`) even when that is the builder's
 model.
+
+## How review checks itself
+
+Three things keep the reviewer honest and the fix rounds short. All of
+them are on by default; the `review` block changes them:
+
+```yaml
+review:
+  verify: true              # a verifier rules on each blocking finding
+  paired_high_risk: false   # high risk: reviewer and critic side by side
+  incremental: true         # after round one, review what changed
+  context_bytes: 20000      # whole diff as context up to this size
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `verify` | `true` | Each blocking finding goes to the verifier, `routing.verify`, which confirms or refutes it against the code. Only a confirmed finding blocks; a refuted one stays on the PR as a note. If the verifier can't run (the daily budget can't cover `budgets.verify`, its harness is held or signed out, it fails, or it skips a finding), the finding blocks. `false` blocks on the reviewer's word, as before. |
+| `paired_high_risk` | `false` | A high-risk item's reviewer and critic read the change at the same time, instead of the critic after the reviewer passes it. The round blocks on any finding either raises that the verifier confirms. It costs a critic run on every high-risk round, but saves a round when the critic would have blocked. When the critic can't start (its harness is held or signed out, busy with another job it can't share a sign-in with, or the daily budget can't cover its `budgets.review` cap), the round isn't paired and the critic follows the reviewer as usual. The paired critic doesn't count toward `concurrent_jobs`: each high-risk review in progress can run one agent more than that allows. |
+| `incremental` | `true` | From round two, a reviewer gets the diff since the commit it last reviewed, with its open findings and the builder's answers, rather than the whole diff again. |
+| `context_bytes` | `20000` | A re-review also gets the whole diff, for context, when it's at most this many bytes; a bigger one is listed by file, which the reviewer can read in its checkout. |
+
+`routing.verify` should be cheap: it reads a few claims and the code
+around them. Left out, it's triage's harness and model, unless a builder
+can run on those (as Haiku can here, for S builds), and then the
+reviewer's. The daemon refuses a `routing.verify` a builder could run on,
+escalation included: a verifier never rules on its own build. Each
+verifier run is a job of its own, kind `verify`, with its own cost and
+log; so is a paired critic, kind `parallel_critic`. Both run inside the
+review that starts them and never wait in the queue. Cancelling one
+cancels its review.
+
+See [Review findings](quality.md#review-findings) for what happens to each
+finding.

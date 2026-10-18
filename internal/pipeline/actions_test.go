@@ -146,7 +146,7 @@ func TestImplementRetryResumesSession(t *testing.T) {
 		e.addIssue(95)
 		e.claude.builds = []func(string) error{badBuild, goodBuild, fix}
 		e.claude.noSess = gone
-		e.codex.reviews = []string{block, pass}
+		e.codex.reviews = []string{block, resolveF1}
 		e.p.Drain(ctx)
 		if st := e.item(t, 95).Stage; st != state.AwaitingHuman {
 			t.Fatalf("gone=%v: stage = %s", gone, st)

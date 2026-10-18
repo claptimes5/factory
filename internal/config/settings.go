@@ -86,11 +86,17 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			num("budgets.per_job.L", "Per L job", "The cap for one L build.", nil),
 			num("budgets.triage", "Per triage", "The cap for one triage job.", nil),
 			num("budgets.review", "Per review", "The cap for one review job.", nil),
+			num("budgets.verify", "Per verifier run", "The cap for one check of a review's blocking findings; left out, triage's applies.", nil),
 			bounded(num("budgets.pause_at_usage", "Pause at usage (%)", "Jobs wait once a subscription's usage window is this full.", 95), 1, 100),
 			bounded(num("budgets.confirm_over", "Ask before over", "Items whose cost estimate (p75) is over this many dollars wait for your OK before building; 0 is off.", 0), 0, 0),
 			bounded(num("budgets.fast_multiplier", "Fast mode multiplier", "Scales a job's cap when it runs in fast mode.", 2), 1, 0),
 		}},
 		{Name: "Models", Help: "Which harness and model run each step. A reviewer must differ from the builder in harness or model.", Settings: routes(root)},
+		{Name: "Review", Help: "How review checks its own findings.", Settings: []Setting{
+			{Path: []string{"review", "verify"}, Label: "Verify findings", Help: "A second model (routing.verify) checks each blocking finding; only confirmed ones block.", Kind: "bool", Default: true},
+			{Path: []string{"review", "paired_high_risk"}, Label: "Pair high-risk reviews", Help: "The reviewer and the critic read a high-risk change side by side, instead of one after the other.", Kind: "bool", Default: false},
+			{Path: []string{"review", "incremental"}, Label: "Re-review what changed", Help: "After round one, a reviewer reads the diff since its last review, with its open findings.", Kind: "bool", Default: true},
+		}},
 		{Name: "Escalation", Help: "What happens when a build fails its gates or review.", Settings: []Setting{
 			{Path: []string{"escalation", "implement"}, Label: "Model tiers", Help: "Models a failing build moves up through, cheapest first.", Kind: "list"},
 			integer("escalation.max_attempts_per_tier", "Attempts per tier", "Tries on each model before moving up a tier.", 2),

@@ -1235,12 +1235,21 @@ export interface components {
             can_attach: boolean;
         };
         Finding: {
-            /** @description critical, major, minor */
+            /** @description F1, F2, ...: the same across an item's review rounds */
+            id: string;
+            /** @description critical, major, minor, pre-existing */
             severity: string;
             file: string;
             line: number;
             claim: string;
             evidence: string;
+            /** @description review or critic in a paired review, else empty */
+            by: string;
+            /** @description The round blocks on it */
+            blocks: boolean;
+            /** @description The verifier's ruling: confirmed, refuted, unverified, or empty when it wasn't checked */
+            check: string;
+            check_reason: string;
         };
         Review: {
             job_id: number;
@@ -1368,6 +1377,15 @@ export interface components {
             /** @description 0..1, or -1 with no data */
             escalation_rate: number;
         };
+        Precision: {
+            /** @description The reviewer's route and harness/model */
+            key: string;
+            findings: number;
+            fixed: number;
+            refuted: number;
+            /** @description 0..1, or -1 with no data */
+            precision: number;
+        };
         Metrics: {
             items: number;
             merged: number;
@@ -1380,6 +1398,13 @@ export interface components {
             escalation_rate: number;
             review_blocks: number;
             review_escape_rate: number;
+            /** @description Share of settled blocking findings that led to a fix, 0..1, or -1 with no data */
+            review_precision: number;
+            precision_by_reviewer: components["schemas"]["Precision"][];
+            /** @description Share of checked findings the verifier refuted, 0..1, or -1 */
+            verifier_refute_rate: number;
+            /** @description Mean review rounds of items that passed review, or -1 */
+            rounds_to_pass: number;
             awaiting_human_hours: number;
             awaiting_human_mean_hours: number;
             weekly: components["schemas"]["Week"][];

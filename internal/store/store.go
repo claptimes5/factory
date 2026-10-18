@@ -465,6 +465,40 @@ func nullable(s string) any {
 	return s
 }
 
+// Sub-job kinds: agent runs a job makes on another route, inside its own
+// run (the verifier, a paired critic). Each is a job row of its own, so its
+// model, cost and log are on record, but it never sits in the queue.
+const (
+	KindVerify         = "verify"
+	KindParallelCritic = "parallel_critic"
+)
+
+// IsSubKind says whether jobs of this kind run only inside another job.
+func IsSubKind(kind string) bool { return kind == KindVerify || kind == KindParallelCritic }
+
+// StartSubJob records a sub-job as running from the start: the job it
+// runs inside holds the concurrency slot. Its input names that job.
+func (s *Store) StartSubJob(ctx context.Context, within int64, j Job) (*Job, error) {
+	j.Input = fmt.Sprintf(`{"within":%d}`, within)
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, started_at, base_sha, branch, input, route)
+			VALUES (?, ?, 'running', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.ItemID, j.Kind, j.Harness, j.Model, nullable(j.Effort), j.Priority, j.BudgetUSD, Now(), Now(),
+			nullable(j.BaseSHA), nullable(j.Branch), j.Input, nullable(j.Route))
+		if err != nil {
+			return err
+		}
+		id, _ = res.LastInsertId()
+		return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &id, Type: "job_claimed",
+			Data: fmt.Sprintf(`{"kind":%q,"harness":%q,"model":%q,"within":%d}`, j.Kind, j.Harness, j.Model, within)})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetJob(ctx, id)
+}
+
 // EnqueueJob inserts a queued job and returns its id.
 func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
 	id, _, err := s.enqueue(ctx, j, false, "")
@@ -783,31 +817,33 @@ func (s *Store) FinishJob(ctx context.Context, id int64, r Result) error {
 	if !r.State.Terminal() {
 		return fmt.Errorf("FinishJob needs a terminal state, got %s", r.State)
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		var from string
-		var item sql.NullInt64
-		if err := tx.QueryRow(`SELECT state, item_id FROM jobs WHERE id = ?`, id).Scan(&from, &item); err != nil {
+	return s.tx(ctx, func(tx *sql.Tx) error { return finishJob(tx, id, r) })
+}
+
+func finishJob(tx *sql.Tx, id int64, r Result) error {
+	var from string
+	var item sql.NullInt64
+	if err := tx.QueryRow(`SELECT state, item_id FROM jobs WHERE id = ?`, id).Scan(&from, &item); err != nil {
+		return err
+	}
+	if err := state.CheckJob(state.JobState(from), r.State); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE jobs SET state = ?, cost_usd = ?, tokens_in = ?, tokens_out = ?, verdict = ?, error = ?, finished_at = ? WHERE id = ?`,
+		string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), Now(), id); err != nil {
+		return err
+	}
+	if r.CostUSD > 0 {
+		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), r.CostUSD); err != nil {
 			return err
 		}
-		if err := state.CheckJob(state.JobState(from), r.State); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE jobs SET state = ?, cost_usd = ?, tokens_in = ?, tokens_out = ?, verdict = ?, error = ?, finished_at = ? WHERE id = ?`,
-			string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), Now(), id); err != nil {
-			return err
-		}
-		if r.CostUSD > 0 {
-			if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), r.CostUSD); err != nil {
-				return err
-			}
-		}
-		var itemID *int64
-		if item.Valid {
-			itemID = &item.Int64
-		}
-		return insertEvent(tx, Event{Actor: "daemon", ItemID: itemID, JobID: &id, Type: "job_finished", Reason: r.Error,
-			Data: fmt.Sprintf(`{"state":%q,"cost_usd":%g}`, r.State, r.CostUSD)})
-	})
+	}
+	var itemID *int64
+	if item.Valid {
+		itemID = &item.Int64
+	}
+	return insertEvent(tx, Event{Actor: "daemon", ItemID: itemID, JobID: &id, Type: "job_finished", Reason: r.Error,
+		Data: fmt.Sprintf(`{"state":%q,"cost_usd":%g}`, r.State, r.CostUSD)})
 }
 
 // RequeueRunning is the restart reconciliation: every running job whose
@@ -823,6 +859,11 @@ func (s *Store) RequeueRunning(ctx context.Context, alive func(*Job) bool) (int,
 			continue
 		}
 		err := s.tx(ctx, func(tx *sql.Tx) error {
+			if IsSubKind(j.Kind) {
+				// The job it ran inside runs again, and starts its own.
+				_, err := tx.Exec(`UPDATE jobs SET state = 'cancelled', error = 'daemon restart: the job it ran inside runs again', finished_at = ? WHERE id = ? AND state = 'running'`, Now(), j.ID)
+				return err
+			}
 			res, err := tx.Exec(`UPDATE jobs SET state = 'queued', started_at = NULL, container_id = NULL WHERE id = ? AND state = 'running'`, j.ID)
 			if err != nil {
 				return err
