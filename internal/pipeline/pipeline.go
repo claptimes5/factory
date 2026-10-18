@@ -891,12 +891,17 @@ type gateRun struct {
 	mounts  []runner.Mount // extra mounts (the scenarios directory)
 }
 
-// cacheEnv points package managers at the dependency cache mounted at
-// /cache, so installs are fast and what install fetches is there for the
-// gates after it.
-var cacheEnv = map[string]string{
-	"BUNDLE_PATH": "/cache/bundle", "npm_config_cache": "/cache/npm", "PIP_CACHE_DIR": "/cache/pip",
-	"GOMODCACHE": "/cache/go-mod", "YARN_CACHE_FOLDER": "/cache/yarn", "PNPM_STORE_DIR": "/cache/pnpm",
+// cacheEnv points package managers at the repo's dependency cache at
+// /cache. Install writes it and lives on across jobs, so it holds only
+// stores that check every package against the lockfile's hashes when read
+// (npm, pnpm): a job can't plant a package a later job would trust.
+var cacheEnv = map[string]string{"npm_config_cache": "/cache/npm", "PNPM_STORE_DIR": "/cache/pnpm"}
+
+// exportEnv keeps what install builds inside the export, where the gates
+// after it find it and the next commit's export starts without it.
+var exportEnv = map[string]string{
+	"BUNDLE_PATH": "vendor/bundle", "CARGO_HOME": "/work/.cargo-home", "COREPACK_HOME": "/work/.corepack",
+	"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
 }
 
 // gateExec runs one gate command in the repo's job image against an
@@ -918,13 +923,20 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 	}
 	mounts := g.mounts
 	if _, docker := p.Runner.(*runner.Docker); docker && g.repo != "" {
-		cache := filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "cache", strings.ReplaceAll(g.repo, "/", "__"))
-		if err := os.MkdirAll(cache, 0o755); err != nil {
-			return -1, "", err
-		}
-		mounts = append(slices.Clip(mounts), runner.Mount{Host: cache, Container: "/cache", ReadOnly: !g.install})
-		for k, v := range cacheEnv {
+		for k, v := range exportEnv {
 			env[k] = v
+		}
+		// Only repos with an install step use the cache; Go fetches its
+		// modules itself, into the container.
+		if rc.Gates.Install != "" {
+			cache := filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "cache", strings.ReplaceAll(g.repo, "/", "__"))
+			if err := os.MkdirAll(cache, 0o755); err != nil {
+				return -1, "", err
+			}
+			mounts = append(slices.Clip(mounts), runner.Mount{Host: cache, Container: "/cache", ReadOnly: !g.install})
+			for k, v := range cacheEnv {
+				env[k] = v
+			}
 		}
 	}
 	timeout := p.Cfg.Timeout("gates")

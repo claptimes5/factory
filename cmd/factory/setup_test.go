@@ -273,7 +273,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 	f.runCmd = func(_ io.Writer, name string, args ...string) error {
 		cmd := strings.Join(args, " ")
 		switch {
-		case strings.HasPrefix(cmd, "image inspect factory-job-o-api"):
+		case strings.HasPrefix(cmd, "image inspect factory-job-o__api"):
 			return errors.New("no such image")
 		case strings.HasPrefix(cmd, "build"):
 			built = append(built, cmd)
@@ -296,18 +296,39 @@ func TestSetupSuggestsChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	api, _ := cfg.RepoConf("o/api")
-	if api.Image != "factory-job-o-api:latest" || api.ImageFrom != "ruby:3.3-bookworm" || api.Gates.Install != "bundle install" || api.Gates.Commands["test"] != "bundle exec rspec" || api.Gates.ProvesFix != "" {
+	if api.Image != "factory-job-o__api:latest" || api.ImageFrom != "ruby:3.3.6-bookworm" || api.Gates.Install != "bundle install" || api.Gates.Commands["test"] != "bundle exec rspec" || api.Gates.ProvesFix != "" {
 		t.Fatalf("o/api = %+v %+v\n%s", api, api.Gates, out)
 	}
 	web, _ := cfg.RepoConf("o/web")
 	if web.Image != cfg.Runner.Image || strings.Join(web.Gates.Required, ",") != "test,build" || web.Gates.DiffGuard.MaxChangedLines == 0 {
 		t.Fatalf("o/web = %+v %+v", web, web.Gates)
 	}
-	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o-api:latest --build-arg BASE=ruby:3.3-bookworm ") {
+	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --build-arg BASE=ruby:3.3.6-bookworm ") {
 		t.Fatalf("built %q", built)
 	}
-	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o-api:latest") {
+	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o__api:latest") {
 		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// A repos list with blank lines and comments inside it is replaced whole.
+func TestWriteReposSkipsBlankLines(t *testing.T) {
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	y := strings.Replace(string(b), "repo: o/r", "repos:\n  - name: o/a\n    base_branch: dev\n\n# the frontend\n  - o/b\n\n", 1)
+	os.WriteFile(path, []byte(y), 0o644)
+	if err := setRepos(path, []string{"o/a"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.RepoNames(); !slices.Equal(got, []string{"o/a"}) {
+		t.Fatalf("repos = %v", got)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "\nbase_branch: main") {
+		t.Fatalf("lost what follows the list:\n%s", b)
 	}
 }
 

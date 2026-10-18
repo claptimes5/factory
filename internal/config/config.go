@@ -25,7 +25,8 @@ type Gates struct {
 	// Install runs first, on a writable export with the network on, to
 	// fetch dependencies (npm ci, bundle install). If it fails, nothing
 	// else runs.
-	Install  string            `yaml:"install,omitempty"`
+	Install string `yaml:"install,omitempty"`
+	// Required nil inherits the top level's; empty means no checks.
 	Required []string          `yaml:"required,omitempty"`
 	Commands map[string]string `yaml:"commands,omitempty"`
 	// ProvesFix runs the changed tests against the base code; it must
@@ -47,7 +48,7 @@ type Repo struct {
 	// Image is the job image for this repo's agents and gates; default
 	// runner.image. ImageFrom is the base `factory images` builds it on
 	// (for example ruby:3.4-bookworm), which then names it
-	// factory-job-<owner>-<name> unless Image says otherwise.
+	// factory-job-<owner>__<name> unless Image says otherwise.
 	Image     string `yaml:"image,omitempty"`
 	ImageFrom string `yaml:"image_from,omitempty"`
 	// Env is set in this repo's agent and gate containers, on top of the
@@ -58,6 +59,26 @@ type Repo struct {
 	// commands replace the top level's. install, proves_fix or scenarios_dir "none"
 	// turns one off.
 	Gates *Gates `yaml:"gates,omitempty"`
+}
+
+// MarshalYAML writes Required even when it is empty but not nil, since an
+// empty list (no checks) and a missing one (inherit) differ.
+func (g Gates) MarshalYAML() (any, error) {
+	out := struct {
+		Install      string            `yaml:"install,omitempty"`
+		Required     *[]string         `yaml:"required,omitempty"`
+		Commands     map[string]string `yaml:"commands,omitempty"`
+		ProvesFix    string            `yaml:"proves_fix,omitempty"`
+		ScenariosDir string            `yaml:"scenarios_dir,omitempty"`
+		DiffGuard    any               `yaml:"diff_guard,omitempty"`
+	}{Install: g.Install, Commands: g.Commands, ProvesFix: g.ProvesFix, ScenariosDir: g.ScenariosDir}
+	if g.Required != nil {
+		out.Required = &g.Required
+	}
+	if g.DiffGuard.MaxChangedLines != 0 || g.DiffGuard.ProtectedPaths != nil {
+		out.DiffGuard = g.DiffGuard
+	}
+	return out, nil
 }
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
@@ -279,6 +300,8 @@ func (c *Config) defaults() {
 	}
 }
 
+var reservedEnv = map[string]bool{"HOME": true, "PATH": true, "USER": true}
+
 var harnesses = map[string]bool{"claude": true, "codex": true}
 
 // Validate checks the rules in SPEC.md, including that a reviewer never runs
@@ -367,6 +390,31 @@ func (c *Config) Validate() error {
 	default:
 		bad("runner.kind must be docker or local")
 	}
+	// One image tag built on two bases would give one repo the other's
+	// toolchain.
+	from := map[string]string{}
+	for _, n := range c.RepoNames() {
+		r, _ := c.RepoConf(n)
+		base := r.ImageFrom
+		if base == "" && r.Image != c.Runner.Image {
+			continue // an image you build yourself
+		}
+		if prev, ok := from[r.Image]; ok && prev != base {
+			bad("repos share the image %s but name different bases for it (%q and %q); give one its own image", r.Image, prev, base)
+		}
+		from[r.Image] = base
+	}
+	envs := []map[string]string{c.Env}
+	for _, r := range c.Repos {
+		envs = append(envs, r.Env)
+	}
+	for _, e := range envs {
+		for k := range e {
+			if reservedEnv[k] || strings.HasPrefix(k, "DOCKER_") {
+				bad("env can't set %s: the factory sets it, or the docker command reads it", k)
+			}
+		}
+	}
 	// A required gate without a command is allowed here: it reports
 	// MISCONFIGURED at run time and fails the job, so the gap is visible.
 	return errors.Join(errs...)
@@ -401,7 +449,7 @@ func (c *Config) resolve(r Repo) Repo {
 		r.BaseBranch = c.BaseBranch
 	}
 	if r.Image == "" && r.ImageFrom != "" {
-		r.Image = "factory-job-" + strings.ToLower(strings.ReplaceAll(r.Name, "/", "-")) + ":latest"
+		r.Image = "factory-job-" + strings.ToLower(strings.ReplaceAll(r.Name, "/", "__")) + ":latest"
 	}
 	if r.Image == "" {
 		r.Image = c.Runner.Image

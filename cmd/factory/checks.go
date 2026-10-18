@@ -55,6 +55,9 @@ func setupChecks(ctx context.Context, p *prompter, cfgPath string, cfg *config.C
 		}
 		if gates == nil && s.ImageFrom == "" {
 			p.say("%s is %s; the top-level checks fit it.", r.Name, s.Stack)
+			for _, n := range s.Notes {
+				p.say("  Note: %s", n)
+			}
 			continue
 		}
 		p.say("\n%s looks like %s. Suggested setup:", r.Name, s.Stack)

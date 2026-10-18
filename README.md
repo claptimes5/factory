@@ -395,7 +395,7 @@ For a Rails API and a Vite frontend it writes something like:
 ```yaml
 repos:
   - name: you/api
-    image_from: ruby:3.3-bookworm   # ./factory images builds factory-job-you-api on it
+    image_from: ruby:3.3.6-bookworm # ./factory images builds factory-job-you__api on it
     gates:
       install: bundle install
       required: [lint, test]
@@ -413,10 +413,12 @@ repos:
 - **`install`** runs first on each commit's export, with the network on.
   If it fails, nothing else runs. The builder is told to run it too, along
   with the repo's own check commands.
-- **Dependency cache.** Install and the gates after it get a per-repo cache
-  at `/cache` (in `data/cache/<owner>__<name>`), so `npm ci` and `bundle
-  install` are fast after the first run. Only install may write to it.
-  Delete the folder to start clean.
+- **Dependency cache.** A repo with an install step gets a cache at
+  `/cache` (in `data/cache/<owner>__<name>`) for npm and pnpm, whose stores
+  check every package against the lockfile's hashes, so one job can't plant
+  a package a later job trusts. Only install may write to it. Gems
+  (`vendor/bundle`), Python virtualenvs and Cargo's home are built inside
+  each commit's export instead, so they start fresh every time.
 - **`image_from`** is the base for the repo's job image: any Debian or
   Ubuntu image with the toolchain. `./factory images` builds the missing
   images (`--rebuild` rebuilds them all). An `image` with no `image_from`
@@ -472,7 +474,10 @@ The builder runs arbitrary code, so nothing it writes is trusted:
   gates verified. The token reaches git through `GIT_ASKPASS` for that one
   command; it is never on a command line, on disk, or in a container.
 - **Gates run on an export** of that commit, a copy apart from the daemon's
-  repository, so code under test cannot change what gets pushed.
+  repository, so code under test cannot change what gets pushed. Checks
+  may add files there (dependencies, build output), but a check that edits
+  or deletes the commit's own files fails, so it can't get around the diff
+  guard by rewriting a lint config or removing a test at run time.
 - **Reviewers only count their final message.** A verdict file anywhere is
   ignored, and Claude's read-only runs ignore the checkout's settings, hooks
   and MCP servers. The diff guard also protects files that steer agents

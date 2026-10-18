@@ -108,11 +108,18 @@ func (p *Pipeline) runScenarios(ctx context.Context, repo string, jobID int64, g
 	return out
 }
 
-// Check runs one command against a checkout the way gates do, in the
-// repo's job image. `factory eval` uses it for acceptance tests.
+// Check runs one command against a checkout the way gates do: in the
+// repo's job image, after its install step. `factory eval` uses it for
+// acceptance tests.
 func (p *Pipeline) Check(ctx context.Context, repo, dir, command string) (int, string, error) {
 	if err := os.MkdirAll(p.jobDir(0), 0o755); err != nil {
 		return -1, "", err
+	}
+	if install := p.repoConf(repo).Gates.Install; install != "" {
+		code, out, err := p.gateExec(ctx, 0, dir, install, gateRun{repo: repo, install: true})
+		if err != nil || code != 0 {
+			return code, "install failed:\n" + out, err
+		}
 	}
 	return p.gateExec(ctx, 0, dir, command, gateRun{repo: repo})
 }

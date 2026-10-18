@@ -2,7 +2,7 @@
 # Build: docker build -t factory-job:latest deploy/job-image
 # For another stack, build it on that stack's Debian or Ubuntu image (this
 # is what `factory images` does for a repo's image_from):
-#   docker build --build-arg BASE=ruby:3.4-bookworm -t factory-job-you-api deploy/job-image
+#   docker build --build-arg BASE=ruby:3.4-bookworm -t factory-job-you__api deploy/job-image
 ARG BASE=golang:1.27-bookworm
 FROM ${BASE}
 # Devcontainer images often switch to a non-root user; installs need root.
@@ -37,6 +37,9 @@ RUN if [ "$PLAYWRIGHT" = 1 ]; then \
       && chmod -R a+rX /opt/pw-browsers \
       && npm cache clean --force && rm -rf /var/lib/apt/lists/*; \
     fi
+
+# Rust images come with the minimal profile, which lacks clippy and rustfmt.
+RUN if command -v rustup >/dev/null; then rustup component add clippy rustfmt; fi
 
 RUN if command -v go >/dev/null; then \
       curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \

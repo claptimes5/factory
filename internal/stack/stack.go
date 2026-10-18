@@ -70,7 +70,11 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 		add("build", "cargo build")
 	}
 	if has("package.json") {
-		if st := node(s, read, has, add); st != "" {
+		if s.Go {
+			// The Go gates come from the top level; this doesn't add the
+			// frontend's to them.
+			s.Notes = append(s.Notes, "It also has a package.json. Only the Go code is checked; add the frontend's install and commands to its gates to check it too.")
+		} else if st := node(s, read, has, add); st != "" {
 			stacks = append(stacks, st)
 		}
 	}
@@ -115,18 +119,31 @@ func ruby(s *Suggestion, read func(string) string, has func(string) bool, add fu
 
 func python(s *Suggestion, read func(string) string, has func(string) bool, add func(string, string)) string {
 	s.ImageFrom = "python:" + version(read(".python-version"), "3.13") + "-bookworm"
-	deps := read("pyproject.toml") + read("requirements.txt") + read("requirements-dev.txt")
+	pyproject := read("pyproject.toml")
+	deps := pyproject + read("requirements.txt") + read("requirements-dev.txt")
 	// Dependencies go in a virtualenv inside the checkout, so the gates
 	// after install see them.
 	install := "python -m venv .venv && .venv/bin/pip install"
+	pkg := strings.Contains(pyproject, "[build-system]")
 	switch {
-	case has("pyproject.toml"):
+	case has("uv.lock"):
+		install = "python -m venv .venv && .venv/bin/pip install uv && .venv/bin/uv sync --frozen --all-groups"
+	case strings.Contains(pyproject, "[dependency-groups]"):
+		// Dev tools in dependency groups need pip 25.1 or later.
+		install += " --upgrade pip && .venv/bin/pip install --group dev"
+		if pkg {
+			install += " -e ."
+		}
+	case pkg:
 		install += " -e '.[dev,test]'"
-	default:
+	case has("requirements.txt"):
 		install += " -r requirements.txt"
+	default:
+		s.Notes = append(s.Notes, "Its pyproject.toml has no [build-system], so it can't be installed as a package; set the install step yourself.")
+		install = "python -m venv .venv"
 	}
-	if has("requirements-dev.txt") {
-		install += " -r requirements-dev.txt"
+	if has("requirements-dev.txt") && !has("uv.lock") {
+		install += " && .venv/bin/pip install -r requirements-dev.txt"
 	}
 	s.Install = install
 	if strings.Contains(deps, "ruff") {
@@ -156,7 +173,11 @@ func node(s *Suggestion, read func(string) string, has func(string) bool, add fu
 	case has("pnpm-lock.yaml"):
 		run, install = "corepack pnpm run", "corepack pnpm install --frozen-lockfile"
 	case has("yarn.lock"):
-		run, install = "corepack yarn run", "corepack yarn install --immutable"
+		// Yarn 2+ lockfiles start with __metadata; yarn 1 has its own flag.
+		run, install = "corepack yarn run", "corepack yarn install --frozen-lockfile"
+		if strings.Contains(read("yarn.lock"), "__metadata:") {
+			install = "corepack yarn install --immutable"
+		}
 	case !has("package-lock.json"):
 		install = "npm install"
 	}
@@ -266,13 +287,14 @@ func stripComments(s string) string {
 }
 
 // version turns a .ruby-version or .python-version ("ruby-3.3.6",
-// "3.12.1") into an image tag's major.minor, or def.
+// "3.12") into an image tag, or def. A patch version is kept: a Gemfile
+// can pin it, and the official images tag every release.
 func version(file, def string) string {
 	v := strings.TrimSpace(file)
 	if i := strings.LastIndex(v, "-"); i >= 0 {
 		v = v[i+1:]
 	}
-	m := regexp.MustCompile(`^(\d+\.\d+)`).FindString(v)
+	m := regexp.MustCompile(`^\d+\.\d+(\.\d+)?`).FindString(v)
 	if m == "" {
 		return def
 	}

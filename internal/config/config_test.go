@@ -1,6 +1,7 @@
 package config
 
 import (
+	"gopkg.in/yaml.v3"
 	"os"
 	"regexp"
 	"strings"
@@ -128,5 +129,39 @@ func TestReviewRouteByRisk(t *testing.T) {
 	c := load(t)
 	if c.Review("high").Effort != "high" || c.Review("low").Effort != "" {
 		t.Fatal("high risk should use review.high_risk")
+	}
+}
+
+func TestGatesRoundTrip(t *testing.T) {
+	for _, req := range [][]string{nil, {}, {"test"}} {
+		b, err := yaml.Marshal(Repo{Name: "o/r", Gates: &Gates{Install: "npm ci", Required: req, Commands: map[string]string{"test": "npm test"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r Repo
+		if err := yaml.Unmarshal(b, &r); err != nil {
+			t.Fatal(err)
+		}
+		if (r.Gates.Required == nil) != (req == nil) || len(r.Gates.Required) != len(req) || r.Gates.Install != "npm ci" || r.Gates.Commands["test"] != "npm test" {
+			t.Errorf("%v round-tripped as %+v:\n%s", req, r.Gates, b)
+		}
+	}
+}
+
+func TestRepoImagesAndEnvAreChecked(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	for name, c := range map[string]struct{ repos, err string }{
+		"two bases":   {"repos:\n  - {name: o/a, image: shared, image_from: ruby:3.4-bookworm}\n  - {name: o/b, image: shared, image_from: python:3.13-bookworm}\n", "different bases"},
+		"default too": {"repos:\n  - o/a\n  - {name: o/b, image: factory-job:latest, image_from: ruby:3.4-bookworm}\n", "different bases"},
+		"own image":   {"repos:\n  - {name: o/a, image: mine}\n  - {name: o/b, image: mine}\n", ""},
+		"home":        {"repos:\n  - {name: o/a, env: {HOME: /x}}\n", "can't set HOME"},
+		"docker host": {"env: {DOCKER_HOST: tcp://x}\nrepos: [o/a]\n", "can't set DOCKER_HOST"},
+		"fine":        {"env: {RAILS_ENV: test}\nrepos: [o/a]\n", ""},
+	} {
+		_, err := Parse([]byte(c.repos + base))
+		if (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
 	}
 }

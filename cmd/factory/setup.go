@@ -594,8 +594,8 @@ func setRepos(path string, names []string) error {
 }
 
 // writeRepos replaces the config's top-level repo: or repos: entry, and
-// whatever belongs to it, with repos. The rest of the file, comments
-// included, stays as it is.
+// whatever belongs to it, with repos. Comments inside that entry are
+// dropped; the rest of the file, comments included, stays as it is.
 func writeRepos(path string, repos []config.Repo) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -630,7 +630,9 @@ func writeRepos(path string, repos []config.Repo) error {
 		}
 		found = true
 		out.WriteString(block)
-		for i+1 < len(lines) && (strings.HasPrefix(lines[i+1], " ") || strings.HasPrefix(lines[i+1], "\t") || strings.HasPrefix(lines[i+1], "-")) {
+		// Skip the entry's own lines, and blank or comment lines between
+		// them, up to the next top-level key.
+		for i+1 < len(lines) && continues(lines[i+1:]) {
 			i++
 		}
 	}
@@ -638,6 +640,20 @@ func writeRepos(path string, repos []config.Repo) error {
 		return fmt.Errorf("%s has no repo: line to update", path)
 	}
 	return writeConfig(path, []byte(out.String()))
+}
+
+// continues reports whether lines[0] still belongs to the YAML entry
+// above it: it is indented or a "- item", or it is blank or a comment
+// with such a line after it.
+func continues(lines []string) bool {
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		return strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") || strings.HasPrefix(l, "-")
+	}
+	return false
 }
 
 // setYAML rewrites one top-level `key: value` line of the config file,

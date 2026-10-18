@@ -245,14 +245,19 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 }
 
 // verify runs the deterministic checks on the commit under test: the diff
-// guard on the daemon's repository, then the gates and the test-proves-fix
-// check on read-only exports.
+// guard on the daemon's repository, then install, the gates and the
+// test-proves-fix check on exports, with a check after each that the
+// commit's files are untouched.
 func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head string) ([]gates.Result, error) {
 	g := p.repoConf(it.Repo).Gates
 	results := []gates.Result{gates.DiffGuard(ctx, ws.Repo, base, head, gates.Guard{
 		MaxChangedLines: g.DiffGuard.MaxChangedLines, ProtectedPaths: g.DiffGuard.ProtectedPaths})}
 	gateDir := filepath.Join(p.jobDir(jobID), "gate")
 	if err := p.git(it.Repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
+		return nil, err
+	}
+	snap, err := takeSnapshot(gateDir)
+	if err != nil {
 		return nil, err
 	}
 	if g.Install != "" {
@@ -263,13 +268,21 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 			r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
 		case code != 0:
 			r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
+		default:
+			if note := snap.tamperNote(gateDir); note != "" {
+				r.Status, r.Detail = gates.Fail, note
+			}
 		}
 		if results = append(results, r); r.Status != gates.Pass {
 			return results, nil // nothing else can run without the dependencies
 		}
 	}
 	results = append(results, gates.Run(ctx, g.Required, g.Commands, func(ctx context.Context, cmd string) (int, string, error) {
-		return p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: it.Repo})
+		code, out, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: it.Repo})
+		if note := snap.tamperNote(gateDir); err == nil && note != "" {
+			return 1, out + "\n\nfactory: " + note, nil
+		}
+		return code, out, err
 	})...)
 	if g.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, it, g.ProvesFix, ws.Repo, base, head))
@@ -278,6 +291,9 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 	// already passes everything else.
 	if gates.Passed(results) {
 		results = append(results, p.runScenarios(ctx, it.Repo, jobID, gateDir, g.ScenariosDir)...)
+		if note := snap.tamperNote(gateDir); note != "" {
+			results = append(results, gates.Result{Gate: "scenarios", Status: gates.Fail, Detail: "a hidden scenario run: " + note})
+		}
 	}
 	return results, nil
 }

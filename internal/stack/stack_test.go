@@ -43,7 +43,7 @@ func TestRailsAndVite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if api.Stack != "Ruby on Rails" || api.ImageFrom != "ruby:3.3-bookworm" || api.Install != "bundle install" {
+	if api.Stack != "Ruby on Rails" || api.ImageFrom != "ruby:3.3.6-bookworm" || api.Install != "bundle install" {
 		t.Fatalf("rails: %+v", api)
 	}
 	if strings.Join(api.Required, ",") != "lint,test" || api.Commands["test"] != "bin/rails db:prepare test" {
@@ -79,8 +79,19 @@ func TestOtherStacks(t *testing.T) {
 		"go":      {fakeFiles{"go.mod": "module x"}, "Go |  |  | "},
 		"nothing": {fakeFiles{"README.md": "hi"}, ""},
 		"python": {fakeFiles{"pyproject.toml": "[project.optional-dependencies]\ndev = [\"pytest\", \"ruff\"]", ".python-version": "3.12.4"},
-			"Python | python:3.12-bookworm | python -m venv .venv && .venv/bin/pip install -e '.[dev,test]' | lint test"},
-		"rust": {fakeFiles{"Cargo.toml": "[package]"}, "Rust | rust:1-bookworm | cargo fetch | lint test build"},
+			"Python | python:3.12.4-bookworm | python -m venv .venv | lint test"},
+		"python package": {fakeFiles{"pyproject.toml": "[build-system]\n[project.optional-dependencies]\ndev = [\"pytest\"]"},
+			"Python | python:3.13-bookworm | python -m venv .venv && .venv/bin/pip install -e '.[dev,test]' | test"},
+		"python groups": {fakeFiles{"pyproject.toml": "[dependency-groups]\ndev = [\"pytest\"]"},
+			"Python | python:3.13-bookworm | python -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install --group dev | test"},
+		"uv": {fakeFiles{"pyproject.toml": "[dependency-groups]\ndev = [\"ruff\"]", "uv.lock": ""},
+			"Python | python:3.13-bookworm | python -m venv .venv && .venv/bin/pip install uv && .venv/bin/uv sync --frozen --all-groups | lint"},
+		"yarn1": {fakeFiles{"package.json": `{"scripts":{"lint":"eslint"}}`, "yarn.lock": "# yarn lockfile v1\n"},
+			"Node |  | corepack yarn install --frozen-lockfile | lint"},
+		"yarn berry": {fakeFiles{"package.json": `{}`, "yarn.lock": "__metadata:\n  version: 8\n"},
+			"Node |  | corepack yarn install --immutable | "},
+		"go and node": {fakeFiles{"go.mod": "module x", "package.json": `{"scripts":{"build":"vite build"}}`}, "Go |  |  | "},
+		"rust":        {fakeFiles{"Cargo.toml": "[package]"}, "Rust | rust:1-bookworm | cargo fetch | lint test build"},
 		"pnpm": {fakeFiles{"package.json": `{"scripts":{"typecheck":"tsc","test":"echo \"Error: no test specified\" && exit 1"}}`, "pnpm-lock.yaml": ""},
 			"Node |  | corepack pnpm install --frozen-lockfile | types"},
 		"devcontainer": {fakeFiles{"package.json": `{}`, ".devcontainer/devcontainer.json": "{\n  // the image\n  \"image\": \"mcr.microsoft.com/devcontainers/typescript-node:22\", /* x */\n}\n"},
@@ -101,7 +112,7 @@ func TestOtherStacks(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	for in, want := range map[string]string{"ruby-3.3.6\n": "3.3", "3.12": "3.12", "": "9.9", "system": "9.9"} {
+	for in, want := range map[string]string{"ruby-3.3.6\n": "3.3.6", "3.12": "3.12", "3.12.4rc1": "3.12.4", "": "9.9", "system": "9.9"} {
 		if got := version(in, "9.9"); got != want {
 			t.Errorf("version(%q) = %s", in, got)
 		}
