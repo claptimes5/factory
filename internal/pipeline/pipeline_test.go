@@ -407,6 +407,103 @@ func TestGateFailureRetriesWithFailure(t *testing.T) {
 	}
 }
 
+// Install runs before the other gates, and nothing else runs when it fails.
+func TestInstallRunsFirst(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Gates.Install = `grep -q "func Add" add.go && touch deps-installed`
+	e.p.Cfg.Gates.Commands["test"] = "test -f deps-installed"
+	e.addIssue(2)
+	e.claude.builds = []func(string) error{badBuild, goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	if it.Stage != state.AwaitingHuman {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	names := func(id int64) string {
+		gr, _ := e.p.Store.GateResults(ctx, id)
+		var out []string
+		for _, g := range gr {
+			out = append(out, g.Gate+":"+g.Status)
+		}
+		return strings.Join(out, ",")
+	}
+	if pr := e.claude.prompts["implement"][0]; !strings.Contains(pr, "`grep -q \"func Add\" add.go && touch deps-installed`, then run") || !strings.Contains(pr, "- `test -f deps-installed`") {
+		t.Fatalf("the builder isn't told the repo's checks:\n%s", pr)
+	}
+	if got := names(jobs[1].ID); got != "diff_guard:pass,install:fail" {
+		t.Fatalf("failed attempt gates = %s", got)
+	}
+	if got := names(jobs[0].ID); !strings.Contains(got, "install:pass") || !strings.Contains(got, "test:pass") {
+		t.Fatalf("passing attempt gates = %s", got)
+	}
+}
+
+// A check that edits or deletes the commit's own files fails, even if its
+// command exits 0: the diff guard never saw that change.
+func TestChecksMayNotEditTheCommit(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Gates.Commands["types"] = "rm -f go.mod; true"
+	e.addIssue(2)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild, goodBuild, goodBuild}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	gr, _ := e.p.Store.GateResults(ctx, jobs[len(jobs)-1].ID)
+	var detail string
+	for _, g := range gr {
+		if g.Gate == "types" && g.Status == "fail" {
+			detail = g.Detail
+		}
+	}
+	if !strings.Contains(detail, "changed the commit's own files (go.mod (deleted))") {
+		t.Fatalf("gate results = %+v", gr)
+	}
+}
+
+// Gates run in the repo's image with its env. Only a repo with an install
+// step gets the dependency cache, and only install may write it.
+func TestGateContainers(t *testing.T) {
+	e := setup(t)
+	log := filepath.Join(t.TempDir(), "docker.log")
+	bin := filepath.Join(t.TempDir(), "docker")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\necho \"DB=$DATABASE_URL BUNDLE=$BUNDLE_PATH NPM=$npm_config_cache\" >> "+log+"\n"), 0o755)
+	e.p.Runner, e.p.GateExec = &runner.Docker{Bin: bin}, nil
+	e.p.Cfg.Repos = []config.Repo{
+		{Name: "o/r", ImageFrom: "ruby:3.4-bookworm", Env: map[string]string{"DATABASE_URL": "postgres://db/test"}, Gates: &config.Gates{Install: "bundle install"}},
+		{Name: "o/go"},
+	}
+	ctx := context.Background()
+	os.MkdirAll(e.p.jobDir(1), 0o755)
+	for _, g := range []gateRun{{repo: "o/r", install: true}, {repo: "o/r"}, {repo: "o/go"}} {
+		if _, _, err := e.p.gateExec(ctx, 1, t.TempDir(), "true", g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("docker calls:\n%s", b)
+	}
+	cache := filepath.Join(e.p.Cfg.Path(e.p.Cfg.DataDir), "cache", "o__r") + ":/cache"
+	for i, c := range []struct{ mount, image, env string }{
+		{cache + " ", " factory-job-o__r:latest ", "DB=postgres://db/test BUNDLE=vendor/bundle NPM=/cache/npm"},
+		{cache + ":ro ", " factory-job-o__r:latest ", "DB=postgres://db/test BUNDLE=vendor/bundle NPM=/cache/npm"},
+		{"", " " + e.p.Cfg.Runner.Image + " ", "DB= BUNDLE=vendor/bundle NPM="},
+	} {
+		run := lines[2*i]
+		if (c.mount == "") == strings.Contains(run, ":/cache") || !strings.Contains(run, c.mount) || !strings.Contains(run, c.image) {
+			t.Errorf("call %d = %s", i, run)
+		}
+		if lines[2*i+1] != c.env {
+			t.Errorf("env %d = %s", i, lines[2*i+1])
+		}
+	}
+}
+
 // Failures escalate one model tier, then park.
 func TestEscalationThenPark(t *testing.T) {
 	ctx := context.Background()

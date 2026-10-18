@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,7 +155,7 @@ func (p *Pipeline) repoConf(repo string) config.Repo {
 	if r, ok := p.Cfg.RepoConf(repo); ok {
 		return r
 	}
-	return config.Repo{Name: repo, BaseBranch: p.Cfg.BaseBranch, Gates: &p.Cfg.Gates}
+	return config.Repo{Name: repo, BaseBranch: p.Cfg.BaseBranch, Gates: &p.Cfg.Gates, Image: p.Cfg.Runner.Image, Env: p.Cfg.Env}
 }
 
 // ref names an issue for people: #12 with one repo, owner/name#12 with several.
@@ -639,12 +640,13 @@ type agentRun struct {
 
 // runAgent runs one harness invocation for a job, streams its events to the
 // job log (scrubbed of secrets) and returns the outcome.
-func (p *Pipeline) runAgent(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, readOnly bool, timeout time.Duration) agentRun {
-	return p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, agentExtras{writable: !readOnly})
+func (p *Pipeline) runAgent(ctx context.Context, repo string, j *store.Job, workdir, outDir, prompt, schema string, readOnly bool, timeout time.Duration) agentRun {
+	return p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, agentExtras{repo: repo, writable: !readOnly})
 }
 
 // agentExtras are the less common knobs of an agent run.
 type agentExtras struct {
+	repo       string // picks the image and env; "" for the orchestrator
 	writable   bool
 	sessionDir string // keeps Claude sessions across an item's jobs
 	resume     string // the session to continue
@@ -666,6 +668,14 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	}
 	defer lf.Close()
 	secrets := p.Secrets[j.Harness]
+	rc := p.repoConf(x.repo)
+	env := map[string]string{}
+	for k, v := range rc.Env {
+		env[k] = v
+	}
+	for k, v := range secrets {
+		env[k] = v
+	}
 	events := make(chan harness.Event, 256)
 	done := make(chan struct{})
 	go func() {
@@ -680,7 +690,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	res, err := h.Run(ctx, harness.RunRequest{
 		Name: p.containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
-		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: secrets, Timeout: timeout, Image: p.Cfg.Runner.Image,
+		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image,
 		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume,
 	}, events)
 	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
@@ -844,6 +854,8 @@ type PromptData struct {
 	Repos           []string // the orchestrator's repos when there are several
 	Issue           github.Issue
 	OutDir          string
+	Install         string   // the repo's install command, if any
+	Checks          []string // the repo's required gate commands
 	Findings        string
 	PreviousFailure string
 	Gates           string
@@ -871,9 +883,30 @@ func (p *Pipeline) render(stage string, d PromptData) (string, error) {
 	return buf.String(), nil
 }
 
-// gateExec runs one gate command in the job image against a read-only
-// export of the commit under test.
-func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command string) (int, string, error) {
+// gateRun says how a gate command runs.
+type gateRun struct {
+	repo    string         // picks the image, env and dependency cache
+	install bool           // the install step: the only one that may write the cache
+	noNet   bool           // no network at all (hidden scenarios)
+	mounts  []runner.Mount // extra mounts (the scenarios directory)
+}
+
+// cacheEnv points package managers at the repo's dependency cache at
+// /cache. Install writes it and lives on across jobs, so it holds only
+// stores that check every package against the lockfile's hashes when read
+// (npm, pnpm): a job can't plant a package a later job would trust.
+var cacheEnv = map[string]string{"npm_config_cache": "/cache/npm", "PNPM_STORE_DIR": "/cache/pnpm"}
+
+// exportEnv keeps what install builds inside the export, where the gates
+// after it find it and the next commit's export starts without it.
+var exportEnv = map[string]string{
+	"BUNDLE_PATH": "vendor/bundle", "CARGO_HOME": "/work/.cargo-home", "COREPACK_HOME": "/work/.corepack",
+	"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+}
+
+// gateExec runs one gate command in the repo's job image against an
+// export of the commit under test, kept apart from what gets pushed.
+func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command string, g gateRun) (int, string, error) {
 	if p.GateExec != nil {
 		return p.GateExec(ctx, workdir, command)
 	}
@@ -883,9 +916,34 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 		return -1, "", err
 	}
 	defer os.RemoveAll(outDir)
+	rc := p.repoConf(g.repo)
+	env := map[string]string{}
+	for k, v := range rc.Env {
+		env[k] = v
+	}
+	mounts := g.mounts
+	if _, docker := p.Runner.(*runner.Docker); docker && g.repo != "" {
+		for k, v := range exportEnv {
+			env[k] = v
+		}
+		// Only repos with an install step use the cache; Go fetches its
+		// modules itself, into the container.
+		if rc.Gates.Install != "" {
+			cache := filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "cache", strings.ReplaceAll(g.repo, "/", "__"))
+			if err := os.MkdirAll(cache, 0o755); err != nil {
+				return -1, "", err
+			}
+			mounts = append(slices.Clip(mounts), runner.Mount{Host: cache, Container: "/cache", ReadOnly: !g.install})
+			for k, v := range cacheEnv {
+				env[k] = v
+			}
+		}
+	}
+	timeout := p.Cfg.Timeout("gates")
 	code, err := p.Runner.Run(ctx, runner.Spec{
-		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: p.Cfg.Runner.Image, ReadOnly: true,
-		Workdir: workdir, OutDir: outDir, Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: p.Cfg.Timeout("gates"),
+		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: rc.Image,
+		Workdir: workdir, OutDir: outDir, Mounts: mounts, Env: env, NoNetwork: g.noNet,
+		Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: timeout,
 	}, &out)
 	return code, out.String(), err
 }

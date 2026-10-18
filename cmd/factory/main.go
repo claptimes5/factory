@@ -49,7 +49,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -77,6 +77,14 @@ func run(args []string) error {
 	if fs.Arg(0) == "setup" {
 		// Setup waits on the terminal, so Ctrl-C ends it at once (see newPrompter).
 		return setup(context.Background(), *cfgPath, cfg, *envPath, newPrompter())
+	}
+	if fs.Arg(0) == "images" {
+		// Build the job images: the missing ones, or all with --rebuild.
+		force := fs.NArg() == 2 && fs.Arg(1) == "--rebuild"
+		if fs.NArg() > 2 || (fs.NArg() == 2 && !force) {
+			return usage()
+		}
+		return buildImages(os.Stdout, cfg, force)
 	}
 	if err := loadEnvFile(*envPath); err != nil {
 		return err
@@ -276,11 +284,19 @@ func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) 
 	if cfg.Runner.Kind != "docker" {
 		return
 	}
-	if err := exec.CommandContext(ctx, "docker", "image", "inspect", cfg.Runner.Image).Run(); err != nil {
-		msg := fmt.Sprintf("Job image %s is missing or Docker is down: %v", cfg.Runner.Image, err)
-		slog.Error(msg)
-		if p.Notify != nil {
-			p.Notify(ctx, msg)
+	seen := map[string]bool{}
+	for _, n := range cfg.RepoNames() {
+		r, _ := cfg.RepoConf(n)
+		if seen[r.Image] {
+			continue
+		}
+		seen[r.Image] = true
+		if err := exec.CommandContext(ctx, "docker", "image", "inspect", r.Image).Run(); err != nil {
+			msg := fmt.Sprintf("Job image %s (for %s) is missing or Docker is down: %v. Build it with ./factory images", r.Image, n, err)
+			slog.Error(msg)
+			if p.Notify != nil {
+				p.Notify(ctx, msg)
+			}
 		}
 	}
 }

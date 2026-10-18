@@ -224,7 +224,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	if err := overlay(filepath.Join(c.Dir, "accept"), check); err != nil {
 		return res, err
 	}
-	code, out, err := p.Check(ctx, check, c.Accept)
+	code, out, err := p.Check(ctx, rc.Name, check, c.Accept)
 	switch {
 	case err != nil:
 		res.Reason = "acceptance could not run: " + err.Error()

@@ -248,7 +248,19 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 4. Claude (writes the code)")
+	if client != nil {
+		p.say("\n== 4. Checks for each repo")
+		p.say("Each repo's changes must pass its checks (install, lint, test, build) before review.")
+		if err := setupChecks(ctx, p, cfgPath, cfg, client); err != nil {
+			return err
+		}
+	}
+	if cfg.Runner.Kind == "docker" {
+		p.say("\n== 5. Job images")
+		setupImages(p, cfg)
+	}
+
+	p.say("\n== 6. Claude (writes the code)")
 	p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
 	p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
 	for {
@@ -279,7 +291,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 
 	if usesHarness(cfg, "codex") {
-		p.say("\n== 5. OpenAI (reviews the code)")
+		p.say("\n== 7. OpenAI (reviews the code)")
 		p.say("factory.yaml has Codex review Claude's work. Paste an API key from")
 		p.say("https://platform.openai.com/api-keys. A ChatGPT plan isn't needed.")
 		p.say("No OpenAI account? Leave it empty and see \"Claude-only review\" in the README.")
@@ -293,7 +305,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 6. Phone notifications (optional)")
+	p.say("\n== 8. Phone notifications (optional)")
 	p.say("An ntfy topic URL (https://ntfy.sh/<topic>), or a Slack or Discord webhook URL.")
 	for {
 		// Webhook URLs work as passwords, so this is read like a key.
@@ -485,25 +497,32 @@ func checkDocker(p *prompter, cfg *config.Config) error {
 		}
 	}
 	p.say("Docker works.")
-	if runCmd(io.Discard, "docker", "image", "inspect", cfg.Runner.Image) == nil {
-		p.say("The job image %s is built.", cfg.Runner.Image)
-		return nil
-	}
-	p.say("Jobs run in the image %s, which isn't built yet. Building it takes a few minutes.", cfg.Runner.Image)
-	if !p.yes("Build it now?", true) {
-		p.say("Build it later with: docker build -t %s deploy/job-image", cfg.Runner.Image)
-		return nil
-	}
-	dir := cfg.Path("deploy/job-image")
-	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
-		p.say("Can't find %s next to the config. Build it from the factory's checkout with:", dir)
-		p.say("    docker build -t %s deploy/job-image", cfg.Runner.Image)
-		return nil
-	}
-	if err := runCmd(p.out, "docker", "build", "-t", cfg.Runner.Image, dir); err != nil {
-		p.say("The build failed: %v. Fix it and run `factory setup` again.", err)
-	}
 	return nil
+}
+
+// setupImages builds the job images that aren't built yet.
+func setupImages(p *prompter, cfg *config.Config) {
+	var missing []jobImage
+	for _, im := range jobImages(cfg) {
+		if runCmd(io.Discard, "docker", "image", "inspect", im.tag) != nil {
+			missing = append(missing, im)
+		}
+	}
+	if len(missing) == 0 {
+		p.say("The job images are built.")
+		return
+	}
+	for _, im := range missing {
+		p.say("Jobs for %s run in the image %s, which isn't built yet.", joinAnd(im.repos), im.tag)
+	}
+	p.say("Building takes a few minutes per image.")
+	if !p.yes("Build now?", true) {
+		p.say("Build them later with: ./factory images")
+		return
+	}
+	if err := buildImages(p.out, cfg, false); err != nil {
+		p.say("%v. Fix it and run `./factory images` (or setup) again.", err)
+	}
 }
 
 // checkBaseBranches compares each repo's base branch in factory.yaml with
@@ -554,31 +573,51 @@ func parseRepoList(in string) ([]string, error) {
 	return names, nil
 }
 
-// setRepos writes the repo list to the config: `repo: x` for one, or
-// `repos: [x, y]`. A repos: list with per-repo settings is left alone.
+// setRepos changes which repos the config lists, keeping the settings
+// of the ones that stay.
 func setRepos(path string, names []string) error {
 	cur, err := config.Load(path)
 	if err != nil {
 		return err
 	}
-	for _, r := range cur.Repos {
-		if r.BaseBranch != "" || r.Gates != nil {
-			return fmt.Errorf("%s gives %s settings of its own; change its repos: list there and run setup again", path, r.Name)
+	repos := make([]config.Repo, len(names))
+	for i, n := range names {
+		repos[i] = config.Repo{Name: n}
+		for _, r := range cur.Repos {
+			if strings.EqualFold(r.Name, n) {
+				repos[i] = r
+				repos[i].Name = n
+			}
 		}
 	}
+	return writeRepos(path, repos)
+}
+
+// writeRepos replaces the config's top-level repo: or repos: entry, and
+// whatever belongs to it, with repos. Comments inside that entry are
+// dropped; the rest of the file, comments included, stays as it is.
+func writeRepos(path string, repos []config.Repo) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	block := "repo: " + names[0] + "\n"
-	if len(names) > 1 {
+	var block string
+	if bare, _ := repos[0].MarshalYAML(); len(repos) == 1 && bare == repos[0].Name {
+		block = "repo: " + repos[0].Name + "\n"
+	} else {
+		var buf bytes.Buffer
+		enc := yaml.NewEncoder(&buf)
+		enc.SetIndent(2)
+		if err := enc.Encode(repos); err != nil {
+			return err
+		}
 		block = "repos:\n"
-		for _, n := range names {
-			block += "  - " + n + "\n"
+		for _, l := range strings.SplitAfter(strings.TrimRight(buf.String(), "\n")+"\n", "\n") {
+			if l != "" {
+				block += "  " + l
+			}
 		}
 	}
-	// Replace the top-level repo: or repos: line and whatever belongs to
-	// it: indented lines and "- item" lines of a block list.
 	lines := strings.SplitAfter(string(b), "\n")
 	var out strings.Builder
 	found := false
@@ -591,7 +630,9 @@ func setRepos(path string, names []string) error {
 		}
 		found = true
 		out.WriteString(block)
-		for i+1 < len(lines) && (strings.HasPrefix(lines[i+1], " ") || strings.HasPrefix(lines[i+1], "\t") || strings.HasPrefix(lines[i+1], "-")) {
+		// Skip the entry's own lines, and blank or comment lines between
+		// them, up to the next top-level key.
+		for i+1 < len(lines) && continues(lines[i+1:]) {
 			i++
 		}
 	}
@@ -599,6 +640,20 @@ func setRepos(path string, names []string) error {
 		return fmt.Errorf("%s has no repo: line to update", path)
 	}
 	return writeConfig(path, []byte(out.String()))
+}
+
+// continues reports whether lines[0] still belongs to the YAML entry
+// above it: it is indented or a "- item", or it is blank or a comment
+// with such a line after it.
+func continues(lines []string) bool {
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		return strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") || strings.HasPrefix(l, "-")
+	}
+	return false
 }
 
 // setYAML rewrites one top-level `key: value` line of the config file,

@@ -102,7 +102,8 @@ sudo deploy/upgrade.sh /tmp/factory.new
 
 `factory setup` is the easy way. If you'd rather do each step yourself:
 
-1. **Build the job image:** `docker build -t factory-job:latest deploy/job-image`.
+1. **Build the job images:** `./factory images` (the default one is
+   `docker build -t factory-job:latest deploy/job-image`).
 2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
    access is limited to one repo and a few permissions you choose.
    ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app))
@@ -383,6 +384,49 @@ A repo's `gates` override the top-level ones field by field. Its
 the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
 `scenarios_dir: none` to turn one off for that repo.
 
+### Each repo's toolchain and checks
+
+`factory setup` reads each repo's files and suggests checks and a job image
+for its stack: Rails, Ruby, Node (Vite, Next.js, React), Python, Rust or Go.
+If the repo has a dev container with an `image`, the job image is built on
+that. You confirm each suggestion, and setup writes it to `factory.yaml`.
+For a Rails API and a Vite frontend it writes something like:
+
+```yaml
+repos:
+  - name: you/api
+    image_from: ruby:3.3.6-bookworm # ./factory images builds factory-job-you__api on it
+    gates:
+      install: bundle install
+      required: [lint, test]
+      commands: {lint: bundle exec rubocop, test: bin/rails db:prepare test}
+      proves_fix: none              # the proves-fix check is Go-only for now
+  - name: you/web                   # Node is in the default image
+    env: {VITE_API_URL: http://localhost:3000}
+    gates:
+      install: npm ci
+      required: [lint, test, build]
+      commands: {lint: npm run lint, test: CI=true npm run test, build: npm run build}
+      proves_fix: none
+```
+
+- **`install`** runs first on each commit's export, with the network on.
+  If it fails, nothing else runs. The builder is told to run it too, along
+  with the repo's own check commands.
+- **Dependency cache.** A repo with an install step gets a cache at
+  `/cache` (in `data/cache/<owner>__<name>`) for npm and pnpm, whose stores
+  check every package against the lockfile's hashes, so one job can't plant
+  a package a later job trusts. Only install may write to it. Gems
+  (`vendor/bundle`), Python virtualenvs and Cargo's home are built inside
+  each commit's export instead, so they start fresh every time.
+- **`image_from`** is the base for the repo's job image: any Debian or
+  Ubuntu image with the toolchain. `./factory images` builds the missing
+  images (`--rebuild` rebuilds them all). An `image` with no `image_from`
+  is one you build yourself; it needs the agent CLIs, so start it from
+  `deploy/job-image/Dockerfile` with `--build-arg BASE=...`.
+- **`env`** is set in the repo's agent and gate containers (top-level `env`
+  applies to every repo). Agents can read it, so it is not for secrets.
+
 `repo: you/api` is the short form for one repo. With a GitHub App, install
 it on every repo (setup walks you through this). Repos under different
 accounts need the app to be public, which setup sets up for you; anyone
@@ -429,8 +473,11 @@ The builder runs arbitrary code, so nothing it writes is trusted:
 - **The daemon pushes, not the builder,** and pushes exactly the commit the
   gates verified. The token reaches git through `GIT_ASKPASS` for that one
   command; it is never on a command line, on disk, or in a container.
-- **Gates run on a read-only export** of that commit, so code under test
-  cannot change what gets pushed.
+- **Gates run on an export** of that commit, a copy apart from the daemon's
+  repository, so code under test cannot change what gets pushed. Checks
+  may add files there (dependencies, build output), but a check that edits
+  or deletes the commit's own files fails, so it can't get around the diff
+  guard by rewriting a lint config or removing a test at run time.
 - **Reviewers only count their final message.** A verdict file anywhere is
   ignored, and Claude's read-only runs ignore the checkout's settings, hooks
   and MCP servers. The diff guard also protects files that steer agents
