@@ -534,7 +534,7 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 				return err
 			}
 		}
-		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs)})
+		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
 	default:
 		var in ImplementInput
 		_ = json.Unmarshal([]byte(last.Input), &in)
@@ -613,6 +613,7 @@ type ReviewInput struct {
 	ImplementJob int64  `json:"implement_job"`
 	Head         string `json:"head"` // the commit the gates verified
 	Gates        string `json:"gates"`
+	Features     string `json:"features,omitempty"` // the blast radius, from the feature map
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
@@ -806,7 +807,7 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		return
 	}
 	defer func() {
-		for _, d := range []string{"repo", "repos", "work", "gate", "proves"} {
+		for _, d := range []string{"repo", "repos", "work", "gate", "proves", "feature-base"} {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()
@@ -869,6 +870,7 @@ type PromptData struct {
 	Findings        string
 	PreviousFailure string
 	Gates           string
+	Features        string // the change's blast radius, when the repo has a feature map
 	Diff            string
 	Fence           string   // a code fence the diff cannot close
 	Reasons         []string // why the orchestrator runs

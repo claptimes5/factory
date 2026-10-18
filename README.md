@@ -414,6 +414,46 @@ Two differences from GitHub: GitLab doesn't record why an issue was closed,
 so the readiness check never files a gap again once its issue is closed.
 The dashboard's CI panel shows the commit's pipeline jobs.
 
+### Feature map
+
+A feature map, `features.yaml` at the repo root, lists what the product
+does, where each feature lives and what proves it works:
+
+```yaml
+features:
+  - name: Login
+    description: Sign in with email and password
+    paths: [app/controllers/sessions_controller.rb, app/views/sessions/, "app/models/user*.rb"]
+    tests: [spec/system/login_spec.rb, spec/models/user_spec.rb]
+    check: bundle exec rspec spec/system/login_spec.rb   # optional: runs just its tests
+    risk: high                                            # optional: low, medium or high
+  - name: Billing
+    paths: [app/services/billing/]
+    tests: []                                             # none yet; say so rather than leave it out
+```
+
+A path is a file, a directory (with or without a trailing `/`), or a glob
+matched against the whole path (`*` stops at `/`; there is no `**`, so
+use a directory for a tree).
+When a change touches a feature, through its code or its tests:
+
+- its `check` runs as a gate, `feature:<name>`, after the required checks
+  (once per distinct command). A check that fails on the base branch too
+  doesn't block the change if it fails the same way (same exit code,
+  after the same install); the PR marks it as failing on the base branch;
+- the reviewer and the PR get the **blast radius**: each feature touched,
+  its risk, the files that touch it and what proves it, plus any changed
+  files the map doesn't cover;
+- a feature's `risk` raises the item's: a change to a `high` feature is
+  reviewed as high risk (with the critic), whatever triage said.
+
+The map is read from the base branch, never from the change, so a builder
+can't shrink its own blast radius. Builders are asked to keep it up to
+date when they add or move a feature; those edits count once merged. The
+readiness check reports how much of the code the map covers, entries that
+point at nothing, and features with no tests, and files the work to fix
+each.
+
 ### How ready a repo is
 
 The factory can only prove its changes work as far as the repo's checks

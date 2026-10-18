@@ -5,8 +5,9 @@ Rules:
 2. Keep the change focused on the issue. Do not edit `.github/`, `factory.yaml`, `prompts/`, or lint configuration. Do not delete, rename, or skip tests, and do not add `//nolint`.
 3. {{if .Install}}Install the dependencies with `{{.Install}}`, then run{{else}}Run{{end}} these checks yourself before you finish. The factory re-runs them independently and ignores your claims.{{range .Checks}}
    - `{{.}}`{{end}}
-4. Commit your work with `git commit` (do not push). Stop after the commit.
-5. Finally, write `{{.OutDir}}/verdict.json` with exactly these fields:
+4. If the repo has a `features.yaml`, keep it true: when you add a user-facing feature, or move the code or tests of one, update its entry (`paths`, `tests`). The factory reads the map from the base branch to decide what your change touches, so edits to it take effect after merge.
+5. Commit your work with `git commit` (do not push). Stop after the commit.
+6. Finally, write `{{.OutDir}}/verdict.json` with exactly these fields:
    `{"status": "done" | "blocked", "summary": "<what you changed>", "tests_added": ["<TestName>", ...], "blocker": "<why, if blocked, else empty>"}`
 
 Issue #{{.Issue.Number}}: {{.Issue.Title}}

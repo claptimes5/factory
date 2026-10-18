@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/features"
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -246,12 +247,12 @@ func Assess(ctx context.Context, in Input) *Report {
 				Body: "Add a small end-to-end suite (Playwright for a web frontend, system or request specs for a Rails app, an HTTP-level test for an API) covering the two or three flows users depend on most. Run it from the test command or add it as its own check in factory.yaml. Keep it under a few minutes and free of external services."}})
 	}
 	if featureMap(files) {
-		r.add(Finding{Level: Good, Area: "feature map", Title: "Has a feature map"})
+		r.mapHealth(in.Dir, files)
 	} else {
 		r.add(Finding{Level: Gap, Area: "feature map", Title: "No feature map",
 			Detail: "A feature map lists what the product does, where each feature lives and which tests prove it. The factory uses it to pick what to verify for a change and to show the reviewer its blast radius.",
 			Issue: &Issue{Key: "feature-map", Title: "Start a feature map",
-				Body: "Create `features.yaml` at the repo root listing the product's user-facing features. For each: `name`, a one-line `description`, `paths` (the files or directories that implement it) and `tests` (the test files that prove it). Cover the main features first; mark any feature with no tests with `tests: []` rather than leaving it out."}})
+				Body: "Create `features.yaml` at the repo root listing the product's user-facing features, under `features:`. For each: `name`, a one-line `description`, `paths` (the files, directories ending in `/`, or globs that implement it), `tests` (the test files that prove it), and where it's cheap, `check` (a command that runs just those tests) and `risk` (`low`, `medium` or `high`; high for auth, payments, data loss). Cover the main features first; mark any feature with no tests with `tests: []` rather than leaving it out."}})
 	}
 	if ci(files) {
 		r.add(Finding{Level: Good, Area: "ci", Title: "CI runs on the repo"})
@@ -339,13 +340,17 @@ func orderGates(required []string) []string {
 	return out
 }
 
+// skipDirs hold dependencies and build output, not the repo's own code.
+var skipDirs = map[string]bool{"node_modules": true, "vendor": true, ".venv": true, ".git": true,
+	"dist": true, "build": true, "target": true, "coverage": true, ".next": true, "__pycache__": true}
+
 func listFiles(dir string) []string {
 	var out []string
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == "vendor" || d.Name() == ".venv" || d.Name() == ".git") {
+		if d.IsDir() && skipDirs[d.Name()] {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() {
@@ -381,6 +386,62 @@ func e2e(files []string) bool {
 			strings.HasPrefix(f, "test/system/") || strings.HasPrefix(f, "test/integration/") ||
 			strings.HasSuffix(f, ".feature")
 	})
+}
+
+// mapHealth checks a feature map against the repo: it must parse, cover
+// most of the code, point at files that exist and name tests for each
+// feature.
+func (r *Report) mapHealth(dir string, files []string) {
+	var raw []byte
+	for _, name := range features.Files {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			raw = b
+			break
+		}
+	}
+	if raw == nil {
+		// A map in another form (features.md, docs/features): it helps
+		// people, but the factory can't read it.
+		r.add(Finding{Level: Good, Area: "feature map", Title: "Has a feature map"})
+		r.add(Finding{Level: Gap, Area: "feature map", Title: "The feature map isn't in features.yaml",
+			Detail: "The factory reads features.yaml to find a change's blast radius and run the checks that prove it.",
+			Issue: &Issue{Key: "feature-map", Title: "Move the feature map to features.yaml",
+				Body: "Write the existing feature map as `features.yaml` at the repo root, under `features:`, with `name`, `description`, `paths`, `tests` and, where cheap, `check` and `risk` for each feature. Keep the old file only if people read it, and say in it that features.yaml is the source of truth."}})
+		return
+	}
+	m, err := features.Parse(raw)
+	if err != nil {
+		r.add(Finding{Level: Gap, Area: "feature map", Title: "The feature map doesn't parse",
+			Detail: fence(err.Error()),
+			Issue: &Issue{Key: "feature-map-parse", Title: "Fix features.yaml so it parses",
+				Body: "The factory can't read `features.yaml`:\n\n" + fence(err.Error()) + "\nFix it without dropping features. Each feature needs `name` and `paths`; `risk` is low, medium or high."}})
+		return
+	}
+	h := m.Check(files)
+	pct := 100
+	if h.Code > 0 {
+		pct = h.Covered * 100 / h.Code
+	}
+	if pct >= 70 {
+		r.add(Finding{Level: Good, Area: "feature map", Title: fmt.Sprintf("Feature map covers %d%% of the code, in %d features", pct, len(m.Features))})
+	} else {
+		r.add(Finding{Level: Gap, Area: "feature map", Title: fmt.Sprintf("Feature map covers %d%% of the code", pct),
+			Detail: "A change to code the map doesn't cover has no known blast radius, so the reviewer can't tell what it might break.",
+			Issue: &Issue{Key: "feature-map-coverage", Title: "Map the rest of the code in features.yaml",
+				Body: fmt.Sprintf("`features.yaml` covers %d of %d source files. Add the features the rest implement, or add their files to the features they belong to. Shared code can belong to several features.", h.Covered, h.Code)}})
+	}
+	if len(h.Stale) > 0 {
+		r.add(Finding{Level: Gap, Area: "feature map", Title: fmt.Sprintf("%d feature map entries point at nothing", len(h.Stale)),
+			Detail: "These paths or tests match no file:\n\n" + fence(strings.Join(h.Stale, "\n")),
+			Issue: &Issue{Key: "feature-map-stale", Title: "Fix stale paths in features.yaml",
+				Body: "These entries in `features.yaml` match no file, so changes there aren't traced:\n\n" + fence(strings.Join(h.Stale, "\n")) + "\nPoint each at where the code or test now lives, or remove it if the feature is gone."}})
+	}
+	if len(h.Untested) > 0 {
+		r.add(Finding{Level: Gap, Area: "feature map", Title: fmt.Sprintf("%d features have no tests: %s", len(h.Untested), strings.Join(h.Untested, ", ")),
+			Detail: "A change to these can only be checked by reading it.",
+			Issue: &Issue{Key: "feature-tests", Title: "Add tests for the untested features",
+				Body: "These features in `features.yaml` have no tests: " + strings.Join(h.Untested, ", ") + ".\n\nFor each, add tests of its main behavior and list them under its `tests`. Start with the riskiest."}})
+	}
 }
 
 func featureMap(files []string) bool {

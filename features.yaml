@@ -1,0 +1,73 @@
+# The factory's own feature map: what it does, where each part lives and
+# what proves it. See "Feature map" in README.md.
+features:
+  - name: Intake and triage
+    description: Picks up labeled issues, sizes them and routes them to a model tier
+    paths: [internal/pipeline/pipeline.go, internal/state/, prompts/triage.md]
+    tests: [internal/pipeline/pipeline_test.go, internal/state/]
+    check: go test ./internal/pipeline/ ./internal/state/
+    risk: medium
+  - name: Build, verify and review
+    description: Runs the builder, the gates, proves-fix, feature checks and the adversarial review, then opens the draft PR
+    paths: [internal/pipeline/stages.go, internal/pipeline/features.go, internal/pipeline/scenarios.go, internal/pipeline/tamper.go,
+            internal/gates/, internal/verdict/, internal/features/, prompts/implement.md, prompts/review.md]
+    tests: [internal/pipeline/pipeline_test.go, internal/pipeline/features_test.go, internal/pipeline/scenarios_test.go,
+            internal/gates/gates_test.go, internal/verdict/, internal/features/features_test.go]
+    check: go test ./internal/pipeline/ ./internal/gates/ ./internal/verdict/ ./internal/features/
+    risk: high
+  - name: Git and isolation
+    description: The daemon's own clones, exports, askpass credentials and job containers
+    paths: [internal/pipeline/git.go, internal/runner/, internal/harness/, deploy/]
+    tests: [internal/pipeline/pipeline_test.go, internal/runner/runner_test.go, internal/harness/]
+    check: go test ./internal/pipeline/ ./internal/runner/ ./internal/harness/
+    risk: high
+  - name: Orchestrator
+    description: Plans epics and steers the queue through the factory MCP tools
+    paths: [internal/pipeline/orchestrator.go, internal/pipeline/actions.go, internal/mcp/, prompts/orchestrate.md]
+    tests: [internal/pipeline/orchestrator_test.go, internal/pipeline/actions_test.go, internal/mcp/]
+    check: go test ./internal/pipeline/ ./internal/mcp/
+    risk: medium
+  - name: GitHub and GitLab
+    description: Issues, labels, PRs and merge requests on each repo's host, and the GitHub App
+    paths: [internal/github/, internal/gitlab/, cmd/factory/forge.go, cmd/factory/ghapp.go]
+    tests: [internal/github/github_test.go, internal/gitlab/gitlab_test.go, cmd/factory/forge_test.go]
+    check: go test ./internal/github/ ./internal/gitlab/ ./cmd/factory/
+    risk: high
+  - name: Configuration
+    description: factory.yaml, several repos, per-repo gates, images and env
+    paths: [internal/config/, factory.yaml]
+    tests: [internal/config/config_test.go]
+    check: go test ./internal/config/
+    risk: medium
+  - name: Setup and readiness
+    description: Guided setup, stack detection, job images and the readiness check
+    paths: [cmd/factory/setup.go, cmd/factory/checks.go, cmd/factory/readiness.go, cmd/factory/envfile.go, internal/stack/, internal/readiness/]
+    tests: [cmd/factory/setup_test.go, cmd/factory/readiness_test.go, internal/stack/stack_test.go, internal/readiness/readiness_test.go]
+    check: go test ./cmd/factory/ ./internal/stack/ ./internal/readiness/
+    risk: medium
+  - name: Commands
+    description: The factory CLI (serve, run-once, status, pull, backup and the rest)
+    paths: [cmd/factory/main.go]
+    tests: [cmd/factory/main_test.go]
+    check: go test ./cmd/factory/
+  - name: Store and metrics
+    description: SQLite state of items, jobs, events and costs, and the metrics built on it
+    paths: [internal/store/, internal/metrics/]
+    tests: [internal/store/, internal/pipeline/metrics_test.go]
+    check: go test ./internal/store/ ./internal/pipeline/
+    risk: medium
+  - name: Dashboard
+    description: The control room and the React dashboard with its API
+    paths: [internal/web/, web/src/, web/vite.config.ts, web/playwright.config.ts]
+    tests: [internal/web/api_test.go, internal/web/web_test.go, internal/web/cache_test.go, web/e2e/]
+    check: go test ./internal/web/
+  - name: Evals and comparisons
+    description: Replays issue cases against skill sets and models
+    paths: [internal/eval/, internal/compare/, evals/, skills/]
+    tests: [internal/eval/, internal/compare/]
+    check: go test ./internal/eval/ ./internal/compare/
+  - name: Notifications
+    description: Phone notifications through ntfy, Slack or Discord
+    paths: [internal/notify/]
+    tests: [internal/notify/]
+    check: go test ./internal/notify/
