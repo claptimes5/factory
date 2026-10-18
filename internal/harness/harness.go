@@ -79,6 +79,9 @@ type Result struct {
 	ExitCode     int
 	SessionID    string // the CLI's session, for a later Resume
 	Limits       []Limit
+	// SignedOut is set when the CLI couldn't sign in (Codex on a ChatGPT
+	// plan): the run failed through no fault of the task.
+	SignedOut bool
 }
 
 // setLimit replaces the reading for l's window.
@@ -116,6 +119,18 @@ type cliHarness struct {
 
 func (h *cliHarness) Name() string { return h.name }
 
+func (h *cliHarness) OneAtATime() bool {
+	g, ok := h.a.(Gated)
+	return ok && g.OneAtATime()
+}
+
+func (h *cliHarness) Unavailable() string {
+	if g, ok := h.a.(Gated); ok {
+		return g.Unavailable()
+	}
+	return ""
+}
+
 func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Event) (*Result, error) {
 	if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
 		return nil, err
@@ -145,6 +160,14 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 		return nil, err
 	}
 	spec.Cmd = cmd
+	after := func(*Result) {}
+	if pa, ok := h.a.(interface {
+		prepare(ctx context.Context, req RunRequest, p runner.Paths, spec *runner.Spec) (func(*Result), error)
+	}); ok {
+		if after, err = pa.prepare(ctx, req, paths, &spec); err != nil {
+			return nil, err
+		}
+	}
 	pr, pw := io.Pipe()
 	spec.Stdin = stringsReader(req.Prompt)
 
@@ -181,6 +204,7 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	}); ok && req.CaptureLimits {
 		la.limitsAfter(req.OutDir, res)
 	}
+	after(res)
 	if runErr != nil {
 		return res, runErr
 	}

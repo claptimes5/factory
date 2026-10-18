@@ -39,7 +39,7 @@ and admin rights on the repo you want the factory to work on.
    | git | any recent | Worktrees and pushes. |
    | Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
    | A Claude API key or subscription token | | The builder and Claude reviewers. |
-   | An OpenAI API key | | Only if a reviewer uses Codex. |
+   | An OpenAI API key or a ChatGPT plan | | Only if a reviewer uses Codex. |
 
    You don't install Claude Code, Codex or Playwright: setup builds them
    into the job image. See [Setup](docs/setup.md#dependencies) for details.

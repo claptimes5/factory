@@ -20,7 +20,7 @@ it.
 | git | any recent | Worktrees and pushes. |
 | Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
 | A Claude API key or subscription token | | The builder and Claude reviewers. |
-| An OpenAI API key | | Only if a reviewer uses Codex. |
+| An OpenAI API key or a ChatGPT plan | | Only if a reviewer uses Codex. |
 
 You don't install Claude Code, Codex or Playwright yourself. They're pinned
 in the job image (`deploy/job-image/Dockerfile`), which setup builds. The
@@ -65,8 +65,11 @@ before moving on:
    factory's labels. On a server you reach over SSH, setup prints the
    `ssh -L` command that lets your own browser open the link.
 4. **Claude:** an API key, or a subscription token from `claude setup-token`.
-5. **OpenAI:** an API key for the Codex reviewer, only if `factory.yaml` uses
-   Codex. To skip it, see [Claude-only review](configuration.md#claude-only-review).
+5. **OpenAI:** only if `factory.yaml` uses Codex. It asks "API key or
+   ChatGPT plan?" and signs Codex in with an API key, a ChatGPT plan, or a
+   Business or Enterprise access token (see
+   [Codex on a ChatGPT plan](#codex-on-a-chatgpt-plan)). To skip it, see
+   [Claude-only review](configuration.md#claude-only-review).
 6. **Phone notifications** (optional): an ntfy, Slack or Discord URL.
 
 For GitLab repos it also asks for `GITLAB_TOKEN` and checks it against each
@@ -76,6 +79,54 @@ measuring [how ready each repo is](quality.md#how-ready-a-repo-is).
 Your answers go in `factory.env` next to `factory.yaml`, readable only by
 you, and every `factory` command loads it. Run `./factory setup` again any
 time to change something; it shows the saved answers as defaults.
+
+## Codex on a ChatGPT plan
+
+Codex can run on your ChatGPT plan (Plus, Pro, Business or Enterprise)
+instead of an OpenAI API key. Its jobs then use the plan's usage limits,
+not dollars. Choose it in `./factory setup`, or run:
+
+```sh
+./factory codex-login
+```
+
+This signs Codex in with a device code: it runs `codex login --device-auth`
+in the job image, and you open the link it shows and enter the code. If
+Codex on this machine is already signed in, it offers to copy that sign-in
+instead. If you copy it, run `codex login` here again afterward, so this
+machine and the factory don't share one sign-in. If Codex says device code
+sign-in is off, turn it on in ChatGPT's security settings (or ask your
+workspace admin).
+
+The sign-in is saved in `data/codex/auth.json`, readable only by you, and
+`factory.env` gets `FACTORY_CODEX_AUTH=chatgpt`. Restart the factory after
+switching. Each Codex job gets its own copy of the sign-in. Codex refreshes
+it about every 8 days, and the factory saves the new one back.
+
+Know the trade-offs before you choose it:
+
+- **OpenAI recommends API keys for automation.** The plan works, but it's
+  meant for a person at a terminal.
+- **Don't use it on public repos.** Anyone can put text in front of Codex
+  there, and the job holds your ChatGPT sign-in.
+- **Codex runs one job at a time.** Two jobs refreshing one sign-in at once
+  would break it, so the others wait in the queue. Claude jobs aren't
+  affected.
+- **If the sign-in stops working,** for example because it was used on
+  another machine, the job goes back in the queue without using a retry,
+  Codex jobs wait, and you're notified once. Run `./factory codex-login`
+  again; the running factory picks it up.
+
+`./factory status` shows the sign-in and when it was last refreshed. The
+plan's 5-hour and weekly usage show there and on the dashboard's **Spend**
+page, and Codex jobs wait when one is nearly used up (see
+[Subscription usage limits](configuration.md#budgets)).
+
+On ChatGPT Business or Enterprise you can use a Codex access token
+instead: choose it in setup, or put `CODEX_ACCESS_TOKEN` in `factory.env`
+([how to make one](https://learn.chatgpt.com/codex/enterprise/access-tokens)).
+Jobs then run side by side. When the token expires, Codex jobs wait until
+you put in a new one and restart the factory.
 
 ## Running it as a service
 
@@ -202,12 +253,15 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
    | `GITLAB_TOKEN` | GitLab repos (see [GitLab repos](configuration.md#gitlab-repos)) |
    | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` in its place | Claude |
    | `OPENAI_API_KEY`, or `CODEX_API_KEY` in its place | Codex |
+   | `FACTORY_CODEX_AUTH=chatgpt` | Codex on a ChatGPT plan, signed in with `factory codex-login`; API keys are then ignored |
+   | `CODEX_ACCESS_TOKEN` | Codex on a ChatGPT Business or Enterprise plan; wins over the two above |
    | `FACTORY_NOTIFY_URL` | Phone notifications (see [Notifications](using.md#notifications)) |
    | `FACTORY_WEB_PASSWORD` | A password for the control room (see [Control room login](security.md#control-room-login)) |
 
    Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
-   billed per use; a ChatGPT subscription is not needed. Without one, review
-   jobs fail and their items park. To run on Claude alone, see
+   billed per use, or on a ChatGPT plan (see
+   [Codex on a ChatGPT plan](#codex-on-a-chatgpt-plan)). Without either,
+   review jobs fail and their items park. To run on Claude alone, see
    [Claude-only review](configuration.md#claude-only-review).
 
 4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,

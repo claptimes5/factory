@@ -120,6 +120,7 @@ the command name to use other files.
 | Command | What it does |
 | --- | --- |
 | `factory setup` | Guided first-run setup: repo, Docker, GitHub App, labels, keys; saves `factory.env` |
+| `factory codex-login` | Sign Codex in to a ChatGPT plan, or again once its sign-in stops working (see [Codex on a ChatGPT plan](setup.md#codex-on-a-chatgpt-plan)) |
 | `factory images [--rebuild]` | Build the missing job images; `--rebuild` rebuilds them all |
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |

@@ -61,7 +61,16 @@ Nothing the builder writes is trusted:
   after the gates ran, the item parks.
 - **The model keys** reach each job container as env vars and are never
   written into a job's files. Agents can read `env`, so it is not for
-  secrets.
+  secrets. Claude jobs get `ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN`. Codex jobs get `OPENAI_API_KEY` and
+  `CODEX_API_KEY`, or on a ChatGPT plan no API key: `CODEX_ACCESS_TOKEN`,
+  or a copy of the plan's sign-in.
+- **The ChatGPT sign-in** (`data/codex/auth.json`, mode 0600) is copied
+  into each Codex job's own `CODEX_HOME`, under the job's output
+  directory, never the checkout, so a builder can't commit it. The daemon
+  saves back a copy Codex refreshed and deletes the job's copy when the
+  run ends. The agent in that job can read it, as it can read an API key,
+  so don't use a ChatGPT plan on public repos.
 
 ## Network: the egress allowlist
 

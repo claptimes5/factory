@@ -186,12 +186,13 @@ func (p *Pipeline) activeJob(ctx context.Context, itemID int64) (*store.Job, err
 	return nil, nil
 }
 
-// stopIfCancelled ends a job that was cancelled mid-run. It returns true
+// stopIfCancelled ends a job that was cancelled mid-run, or one whose
+// harness couldn't sign in (see requeueSignedOut). It returns true
 // when the caller must not retry. The job's own context may already be
 // cancelled, so the bookkeeping runs without it.
 func (p *Pipeline) stopIfCancelled(ctx context.Context, j *store.Job, it *store.WorkItem, run agentRun) bool {
 	if _, ok := p.cancelled.LoadAndDelete(j.ID); !ok {
-		return false
+		return p.requeueSignedOut(ctx, j, run)
 	}
 	ctx = context.WithoutCancel(ctx)
 	if cur, err := p.Store.GetJob(ctx, j.ID); err == nil && !cur.State.Terminal() {
