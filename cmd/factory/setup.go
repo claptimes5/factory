@@ -2,16 +2,21 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
@@ -37,6 +42,18 @@ type prompter struct {
 func newPrompter() *prompter {
 	p := &prompter{in: bufio.NewReader(os.Stdin), out: os.Stdout}
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		// Ctrl-C exits right away, turning echo back on if a hidden prompt
+		// had it off. Each section is saved as it finishes.
+		if st, err := term.GetState(fd); err == nil {
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+			go func() {
+				<-sig
+				_ = term.Restore(fd, st)
+				fmt.Fprintln(p.out, "\nStopped.")
+				os.Exit(130)
+			}()
+		}
 		p.hidden = func() (string, error) {
 			b, err := term.ReadPassword(fd)
 			fmt.Fprintln(p.out)
@@ -46,8 +63,17 @@ func newPrompter() *prompter {
 	return p
 }
 
+// errInputClosed stops setup when its input ends, so a closed or piped
+// stdin can't leave a "try again?" loop spinning.
+var errInputClosed = errors.New("input ended before setup finished; run `factory setup` in a terminal")
+
+type inputClosed struct{}
+
 func (p *prompter) line() string {
-	s, _ := p.in.ReadString('\n')
+	s, err := p.in.ReadString('\n')
+	if err != nil && s == "" {
+		panic(inputClosed{})
+	}
 	return strings.TrimSpace(s)
 }
 
@@ -69,13 +95,16 @@ func (p *prompter) ask(label, def string) string {
 // secret is ask without echo, showing only a hint of the saved value.
 func (p *prompter) secret(label, def string) string {
 	if def != "" {
-		fmt.Fprintf(p.out, "%s [saved %s, Enter keeps it, - clears it]: ", label, mask(def))
+		fmt.Fprintf(p.out, "%s [current %s, Enter keeps it, - clears it]: ", label, mask(def))
 	} else {
 		fmt.Fprintf(p.out, "%s: ", label)
 	}
 	s := ""
 	if p.hidden != nil {
-		s, _ = p.hidden()
+		var err error
+		if s, err = p.hidden(); err != nil {
+			panic(inputClosed{})
+		}
 		s = strings.TrimSpace(s)
 	} else {
 		s = p.line()
@@ -124,13 +153,27 @@ var runCmd = func(out io.Writer, name string, args ...string) error {
 // setup walks through everything the first run needs, checking each answer
 // as it goes, and saves the settings to envPath. Running it again keeps the
 // saved answers as defaults, so it is also how you change one.
-func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath string, p *prompter) error {
+func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath string, p *prompter) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(inputClosed); !ok {
+				panic(r)
+			}
+			p.say("")
+			err = errInputClosed
+		}
+	}()
+	if envPath, err = filepath.Abs(envPath); err != nil {
+		return err
+	}
 	vals, err := readEnvFile(envPath)
 	if err != nil {
 		return err
 	}
 	for _, k := range envKeys {
-		if _, ok := vals[k]; !ok {
+		// A GITHUB_TOKEN exported for other tools (gh, for one) is usually a
+		// broad personal token, so it is never picked up without asking.
+		if _, ok := vals[k]; !ok && k != "GITHUB_TOKEN" {
 			vals[k] = os.Getenv(k)
 		}
 	}
@@ -138,7 +181,8 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		return writeEnvFile(envPath, "# Written by `factory setup`. Values set in the environment override these.\n", envKeys, vals)
 	}
 	p.say("Factory setup. Your answers are saved to %s, readable only by you.", envPath)
-	p.say("Press Enter to keep a value shown in [brackets]. Ctrl-C stops without saving.")
+	p.say("Press Enter to keep a value shown in [brackets]. Each section is saved")
+	p.say("as you finish it; Ctrl-C stops, and running setup again starts from your answers.")
 
 	p.say("\n== 1. Repository")
 	for {
@@ -177,9 +221,10 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		if b, err := gh.DefaultBranch(ctx); err == nil && b != "" && b != cfg.BaseBranch {
 			if p.yes(fmt.Sprintf("%s's default branch is %s, but factory.yaml says %s. Use %s?", cfg.Repo, b, cfg.BaseBranch, b), true) {
 				if err := setYAML(cfgPath, "base_branch", b); err != nil {
-					return err
+					p.say("Couldn't update it: %v. Set base_branch in %s yourself.", err, cfgPath)
+				} else {
+					cfg.BaseBranch = b
 				}
-				cfg.BaseBranch = b
 			}
 		}
 		labels := pipeline.Labels(cfg.Intake.Label)
@@ -225,6 +270,9 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 		break
 	}
+	if err := save(); err != nil {
+		return err
+	}
 
 	if usesHarness(cfg, "codex") {
 		p.say("\n== 5. OpenAI (reviews the code)")
@@ -236,15 +284,16 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		if vals["OPENAI_API_KEY"] == "" {
 			p.say("Without it, reviews will fail until you add one or switch to Claude-only review.")
 		}
+		if err := save(); err != nil {
+			return err
+		}
 	}
 
 	p.say("\n== 6. Phone notifications (optional)")
 	p.say("An ntfy topic URL (https://ntfy.sh/<topic>), or a Slack or Discord webhook URL.")
 	for {
-		u := p.ask("Notification URL (Enter to skip, - to clear)", vals["FACTORY_NOTIFY_URL"])
-		if u == "-" {
-			u = ""
-		}
+		// Webhook URLs work as passwords, so this is read like a key.
+		u := p.secret("Notification URL (Enter to skip)", vals["FACTORY_NOTIFY_URL"])
 		if _, err := notify.New(u); err != nil {
 			p.say("%v", err)
 			continue
@@ -265,12 +314,14 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 // setupGitHub connects to GitHub one of three ways and checks that it can
 // read the repo. It returns nil if you chose to skip the check.
 func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[string]string, keyDir string) (*github.Client, error) {
-	def := "1"
-	switch {
-	case vals["FACTORY_GITHUB_APP_ID"] != "":
-		def = "2"
-	case vals["GITHUB_TOKEN"] != "":
-		def = "3"
+	def := func() string {
+		switch {
+		case vals["FACTORY_GITHUB_APP_ID"] != "":
+			return "2"
+		case vals["GITHUB_TOKEN"] != "":
+			return "3"
+		}
+		return "1"
 	}
 	p.say("The factory acts on GitHub through a GitHub App limited to this one repo.")
 	p.say("  1. Create a new app for me (recommended; takes about a minute in the browser)")
@@ -278,7 +329,7 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 	p.say("  3. Use a personal access token (only for a quick try)")
 	for {
 		var gh *github.Client
-		switch p.ask("Choose 1, 2 or 3", def) {
+		switch p.ask("Choose 1, 2 or 3", def()) {
 		case "1":
 			id, slug, keyPath, err := createApp(ctx, p, cfg, keyDir)
 			if err != nil {
@@ -339,12 +390,15 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 		p.say("That didn't work: %v", err)
 		if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "404") {
 			p.say("Check that the app or token has access to %s itself, not only to its owner.", cfg.Repo)
+			if vals["FACTORY_GITHUB_APP_ID"] != "" {
+				p.say("For the app: open its settings, Install App, the gear next to %s, and add %s.", strings.Split(cfg.Repo, "/")[0], cfg.Repo)
+				p.say("Then choose 2 to check again; that keeps the app you already have.")
+			}
 		}
 		if !p.yes("Try again?", true) {
 			p.say("Saving what you entered; run `factory setup` again to fix it.")
 			return nil, nil
 		}
-		def = ""
 	}
 }
 
@@ -380,7 +434,13 @@ func checkDocker(p *prompter, cfg *config.Config) error {
 		p.say("Build it later with: docker build -t %s deploy/job-image", cfg.Runner.Image)
 		return nil
 	}
-	if err := runCmd(p.out, "docker", "build", "-t", cfg.Runner.Image, cfg.Path("deploy/job-image")); err != nil {
+	dir := cfg.Path("deploy/job-image")
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+		p.say("Can't find %s next to the config. Build it from the factory's checkout with:", dir)
+		p.say("    docker build -t %s deploy/job-image", cfg.Runner.Image)
+		return nil
+	}
+	if err := runCmd(p.out, "docker", "build", "-t", cfg.Runner.Image, dir); err != nil {
 		p.say("The build failed: %v. Fix it and run `factory setup` again.", err)
 	}
 	return nil
@@ -397,7 +457,11 @@ func setYAML(path, key, value string) error {
 	if !re.Match(b) {
 		return fmt.Errorf("%s has no top-level %s: line to update", path, key)
 	}
-	out := re.ReplaceAllLiteral(b, []byte(key+": "+value))
+	quoted, err := yaml.Marshal(value)
+	if err != nil {
+		return err
+	}
+	out := re.ReplaceAllLiteral(b, append([]byte(key+": "), bytes.TrimSpace(quoted)...))
 	if _, err := config.Parse(out); err != nil {
 		return fmt.Errorf("updating %s: %w", path, err)
 	}
@@ -405,7 +469,11 @@ func setYAML(path, key, value string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, st.Mode().Perm())
+	tmp := path + ".setup-tmp"
+	if err := os.WriteFile(tmp, out, st.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func expandPath(p string) string {

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -74,8 +75,32 @@ func TestSetYAMLKeepsComments(t *testing.T) {
 	if !strings.Contains(string(b), "repo: octo/hello\n") || !strings.Contains(string(b), "# Factory configuration.") {
 		t.Fatalf("rewrite lost something:\n%.300s", b)
 	}
-	if err := setYAML(path, "repo", "not a repo: [x"); err == nil {
-		t.Fatal("a value that breaks the config must be refused")
+	if err := setYAML(path, "base_branch", "@odd"); err != nil {
+		t.Fatalf("a value YAML needs quoted: %v", err)
+	}
+	if cfg, err := config.Load(path); err != nil || cfg.BaseBranch != "@odd" {
+		t.Fatalf("base_branch = %v, %v", cfg, err)
+	}
+}
+
+func TestSetupStopsWhenInputEnds(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_from_gh")
+	srv := httptest.NewServer(&fakeGitHub{})
+	t.Cleanup(srv.Close)
+	oldAPI, oldRun := githubAPI, runCmd
+	githubAPI = srv.URL
+	runCmd = func(io.Writer, string, ...string) error { return errors.New("no docker") }
+	t.Cleanup(func() { githubAPI, runCmd = oldAPI, oldRun })
+	cfgPath := testConfig(t, "o/r")
+	cfg, _ := config.Load(cfgPath)
+	var b strings.Builder
+	p := &prompter{in: bufio.NewReader(strings.NewReader("\n")), out: &b}
+	err := setup(context.Background(), cfgPath, cfg, filepath.Join(t.TempDir(), "factory.env"), p)
+	if !errors.Is(err, errInputClosed) {
+		t.Fatalf("err = %v, want errInputClosed", err)
+	}
+	if strings.Contains(b.String(), "[3]") {
+		t.Fatal("an exported GITHUB_TOKEN must not become the default")
 	}
 }
 
@@ -99,7 +124,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		j(map[string]string{"type": "User"})
 	case r.URL.Path == "/app-manifests/CODE/conversions" && r.Method == "POST":
 		der := x509.MarshalPKCS1PrivateKey(f.key)
-		j(map[string]any{"id": 42, "slug": "factory-r-ab12", "html_url": "https://github.com/apps/factory-r-ab12",
+		j(map[string]any{"id": 42, "slug": "factory-r-ab12", "html_url": "https://github.com/apps/factory-r-ab12", "owner": map[string]string{"login": "o"},
 			"pem": string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}))})
 	case r.URL.Path == "/app/installations":
 		j([]map[string]any{{"id": 77, "account": map[string]string{"login": "someone-else"}}, {"id": 55, "account": map[string]string{"login": "O"}}})

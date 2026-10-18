@@ -49,19 +49,22 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	if org {
 		newURL = githubWeb + "/organizations/" + url.PathEscape(owner) + "/settings/apps/new"
 	}
-	host, _, _ := net.SplitHostPort(cfg.Web.Listen)
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	// Loopback only: whoever can load the page can finish the flow, so it
+	// must not be reachable from the network.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", "", "", err
 	}
 	defer func() { _ = ln.Close() }()
 	base := "http://" + ln.Addr().String()
 	state := randHex(16)
+	// GitHub caps app names at 34 characters.
+	short := strings.ToLower(name)
+	if len(short) > 21 {
+		short = strings.TrimRight(short[:21], "-_.")
+	}
 	manifest, _ := json.Marshal(map[string]any{
-		"name":                "factory-" + strings.ToLower(name) + "-" + randHex(2),
+		"name":                "factory-" + short + "-" + randHex(2),
 		"url":                 githubWeb + "/" + cfg.Repo,
 		"redirect_url":        base + "/callback",
 		"public":              false,
@@ -80,17 +83,39 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 		if st != state {
 			return nil, errors.New("that address is from a different setup run")
 		}
-		return github.ConvertManifest(ctx, githubAPI, code)
+		app, err := github.ConvertManifest(ctx, githubAPI, code)
+		if err == nil && !strings.EqualFold(app.Owner.Login, owner) {
+			return nil, fmt.Errorf("GitHub made the app under %s, not %s; delete it from its settings page and try again", app.Owner.Login, owner)
+		}
+		return app, err
+	}
+	// Refuse requests that didn't come to the loopback address itself, so a
+	// web page can't reach this server through DNS rebinding.
+	local := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != ln.Addr().String() {
+				http.Error(w, "wrong host", http.StatusForbidden)
+				return
+			}
+			h(w, r)
+		}
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /{$}", local(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = manifestPage.Execute(w, map[string]string{"Action": newURL + "?state=" + state, "Manifest": string(manifest), "Repo": cfg.Repo})
-	})
-	mux.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /callback", local(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		done := got != nil
+		mu.Unlock()
+		if done {
+			_, _ = io.WriteString(w, "<p>The app was already created. Go back to the terminal.</p>")
+			return
+		}
 		app, err := exchange(r.URL.Query().Get("code"), r.URL.Query().Get("state"))
 		mu.Lock()
-		if err == nil {
+		if err == nil && got == nil {
 			got = app
 		} else if got == nil {
 			bad = err
@@ -102,7 +127,7 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 			return
 		}
 		_, _ = io.WriteString(w, "<p>App created. Go back to the terminal for the next step.</p>")
-	})
+	}))
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() { _ = srv.Close() }()
@@ -112,6 +137,8 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 
 	p.say("Open this link in a browser on this machine and follow it:")
 	p.say("\n    %s/\n", base)
+	p.say("If this machine is a server you reach over SSH, first run this on your own")
+	p.say("computer, then open the link there:\n\n    ssh -L %d:127.0.0.1:%d <this server>\n", ln.Addr().(*net.TCPAddr).Port, ln.Addr().(*net.TCPAddr).Port)
 	p.say("GitHub shows a form for the new app with everything filled in. Click")
 	p.say("\"Create GitHub App\" at the bottom. You don't need to change anything.")
 	for {

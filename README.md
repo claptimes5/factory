@@ -46,7 +46,8 @@ before moving on:
    permissions the factory needs), then asks you to install it on the repo.
    It saves the app's key and finds the IDs itself, so you copy nothing by
    hand. It then confirms it can reach the repo and offers to create the
-   factory's labels.
+   factory's labels. On a server you reach over SSH, setup prints the
+   `ssh -L` command that lets your own browser open the link.
 4. **Claude:** an API key, or a subscription token from `claude setup-token`.
 5. **OpenAI:** an API key for the Codex reviewer, only if `factory.yaml` uses
    Codex (see [Claude-only review](#claude-only-review) to skip it).
@@ -81,6 +82,10 @@ sudo cp deploy/factory.service /etc/systemd/system/
 sudo systemctl enable --now factory
 journalctl -u factory -f     # follow its log
 ```
+
+The service reads `/opt/factory/factory.env`. If you set up an older
+version with `/etc/factory/env`, delete that file: values in it override
+the ones setup saves.
 
 To upgrade later, build the new binary somewhere else and hand it to
 `deploy/upgrade.sh`, which keeps the old one and rolls back on failure

@@ -75,9 +75,8 @@ func run(args []string) error {
 		*envPath = cfg.Path("factory.env")
 	}
 	if fs.Arg(0) == "setup" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return setup(ctx, *cfgPath, cfg, *envPath, newPrompter())
+		// Setup waits on the terminal, so Ctrl-C ends it at once (see newPrompter).
+		return setup(context.Background(), *cfgPath, cfg, *envPath, newPrompter())
 	}
 	if err := loadEnvFile(*envPath); err != nil {
 		return err

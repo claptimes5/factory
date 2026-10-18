@@ -218,7 +218,6 @@ func (c *Client) Comment(ctx context.Context, n int, body string) error {
 	return c.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", c.Repo, n), map[string]any{"body": body}, nil)
 }
 
-// BranchSHA returns a branch's head commit, or "" if it does not exist.
 // EnsureLabel creates a label unless one with that name exists, and reports
 // whether it created it. Existing labels are left as they are.
 func (c *Client) EnsureLabel(ctx context.Context, name, color, description string) (bool, error) {
@@ -233,6 +232,7 @@ func (c *Client) EnsureLabel(ctx context.Context, name, color, description strin
 	return err == nil, err
 }
 
+// BranchSHA returns a branch's head commit, or "" if it does not exist.
 func (c *Client) BranchSHA(ctx context.Context, branch string) (string, error) {
 	var r struct {
 		Commit struct {
@@ -405,6 +405,9 @@ type CreatedApp struct {
 	Slug    string `json:"slug"`
 	HTMLURL string `json:"html_url"`
 	PEM     string `json:"pem"`
+	Owner   struct {
+		Login string `json:"login"`
+	} `json:"owner"`
 }
 
 // ConvertManifest exchanges the code GitHub sends back after you create an
