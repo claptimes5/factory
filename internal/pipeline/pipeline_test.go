@@ -720,11 +720,14 @@ func TestEscalationThenPark(t *testing.T) {
 	}
 }
 
-// A reviewer block sends findings back; a third block parks.
+// A reviewer block sends findings back; a third block parks (with no
+// rethink: rethink_test.go has that).
 func TestReviewBlockRoundsThenPark(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
+	off := false
+	e.p.Cfg.Reviews.Rethink = &off
 	e.addIssue(4)
 	round := 0
 	fix := func(w string) error {

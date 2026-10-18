@@ -240,7 +240,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	work := agentDir(dir, parts, true)
 	data := PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(work, out)).Out,
 		Findings: in.Findings, AnswerIDs: in.FindingIDs, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts),
-		TextOnly: textOnly(it)}
+		TextOnly: textOnly(it), Rethink: in.Rethink}
 	for _, pt := range parts {
 		for _, f := range p.riskyFeatures(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA) {
 			if pt.folder != "" {
@@ -706,7 +706,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		shots = p.reviewShots(in.ImplementJob, out, p.Runner.Paths(specFor(work, out)).Out)
 	}
 	data := PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff),
-		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(revRound), Round: rr.n}
+		Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots, Earlier: earlierText(revRound), Round: rr.n, Rethought: rr.rethought}
 	// The repo's REVIEW.md, from the base branch: the change can't edit it.
 	gs := p.reviewGuides(ctx, parts)
 	data.Guide, data.GuideFile = gs.prompt(), gs.file()
@@ -871,7 +871,7 @@ func (p *Pipeline) reviewBlocked(ctx context.Context, it *store.WorkItem, v *ver
 	}
 	findings := formatFindings(v)
 	if blocks > p.Cfg.Escalation.MaxReviewRounds {
-		return p.park(ctx, it, fmt.Sprintf("The reviewer blocked this %d times. Latest findings:\n\n%s", blocks, findings))
+		return p.roundCap(ctx, it, v, blocks, findings)
 	}
 	if err := p.Store.SetStage(ctx, it.ID, state.Implementing, "daemon", fmt.Sprintf("review blocked (round %d)", blocks)); err != nil {
 		return err
@@ -882,12 +882,13 @@ func (p *Pipeline) reviewBlocked(ctx context.Context, it *store.WorkItem, v *ver
 	}
 	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, fmt.Sprintf("**Reviewer blocked round %d.** Sending it back to the builder.%s\n\n%s", blocks, checked, findings)), "Comment")
 	text, ids := fixFindings(v)
-	_, err = p.enqueueImplement(ctx, it, 1, ImplementInput{Findings: text, FindingIDs: ids, FixRound: true})
+	_, err = p.enqueueImplement(ctx, it, 1, ImplementInput{Findings: text, FindingIDs: ids, FixRound: true, Size: p.rethinkSize(ctx, it.ID)})
 	return err
 }
 
 // countBlocks counts blocking review and critic verdicts since the item's
-// latest triage, so a human retry starts with fresh rounds.
+// latest triage, so a human retry starts with fresh rounds, or since its
+// rethink, which gets rounds of its own.
 func (p *Pipeline) countBlocks(ctx context.Context, itemID int64) (int, error) {
 	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID})
 	if err != nil {
@@ -895,7 +896,7 @@ func (p *Pipeline) countBlocks(ctx context.Context, itemID int64) (int, error) {
 	}
 	n := 0
 	for _, j := range jobs { // newest first
-		if j.Kind == "triage" {
+		if j.Kind == "triage" || isRethink(j) {
 			break
 		}
 		if (j.Kind != "review" && j.Kind != "critic") || j.State != state.Succeeded {
@@ -966,7 +967,7 @@ func (p *Pipeline) passNotes(jobs []*store.Job) string {
 	var review, critic string
 	seenCritic := false
 	for _, j := range jobs { // newest first
-		if j.Kind == "triage" {
+		if j.Kind == "triage" || isRethink(j) {
 			break
 		}
 		if (j.Kind != "review" && j.Kind != "critic") || j.State != state.Succeeded {
