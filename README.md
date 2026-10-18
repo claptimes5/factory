@@ -417,7 +417,8 @@ A **blocker** means every job would fail, or pass for the wrong reason
 comes with an issue written for the factory's builder, so the first thing
 the factory does on a new repo can be making it verifiable. While a repo
 has blockers, `-queue` labels only those for the factory, since every other
-job would fail until they're fixed; the gaps are filed for later.
+job would fail until they're fixed; the gaps are filed for later, and the
+next `-queue` run after the blockers are fixed labels them too.
 
 Issues it files carry `factory:readiness`. Running it again skips a gap
 whose issue is still open or was closed as not planned, and files it again

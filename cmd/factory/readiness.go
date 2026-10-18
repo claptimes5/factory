@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -58,14 +59,22 @@ func marker(key string) string { return "<!-- factory-readiness: " + key + " -->
 // planIssues picks the report's findings that need an issue. It skips a
 // gap whose issue is still open, or was closed as not planned: someone
 // decided against it. A gap whose issue was closed as done is back, so it
-// is filed again.
-func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report) (todo []readiness.Finding, skipped int, err error) {
+// is filed again. Once the repo is ready, waiting are the open issues
+// filed without the intake label while it had blockers.
+func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report, intake string) (todo []readiness.Finding, waiting []int, skipped int, err error) {
 	if r.Incomplete {
-		return nil, 0, nil
+		return nil, nil, 0, nil
 	}
 	filed, err := gh.ListIssuesIn(ctx, pipeline.LabelReadiness, "all")
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
+	}
+	if r.Ready {
+		for _, o := range filed {
+			if o.State == "open" && untouched(o, intake) {
+				waiting = append(waiting, o.Number)
+			}
+		}
 	}
 	for _, f := range r.Findings {
 		if f.Issue == nil {
@@ -82,7 +91,7 @@ func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report) (to
 		}
 		todo = append(todo, f)
 	}
-	return todo, skipped, nil
+	return todo, waiting, skipped, nil
 }
 
 // fileIssues opens an issue for each finding. With queue they get the
@@ -103,6 +112,27 @@ func fileIssues(ctx context.Context, gh *github.Client, r *readiness.Report, tod
 		filed = append(filed, n)
 	}
 	return filed, nil
+}
+
+// untouched is an issue the check filed that nothing has picked up: its
+// only factory label is the check's own.
+func untouched(o github.Issue, intake string) bool {
+	if !strings.Contains(o.Body, "<!-- factory-readiness: ") {
+		return false
+	}
+	return !slices.ContainsFunc(o.Labels, func(l string) bool {
+		return l == intake || (strings.HasPrefix(l, "factory:") && l != pipeline.LabelReadiness)
+	})
+}
+
+// queueIssues gives issues the intake label.
+func queueIssues(ctx context.Context, gh *github.Client, issues []int, intake string) error {
+	for _, n := range issues {
+		if err := gh.AddLabels(ctx, n, intake); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // readinessPrefix keeps the check's containers apart from a running
@@ -161,7 +191,7 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if !ok {
 		return fmt.Errorf("no GitHub client")
 	}
-	todo, skipped, err := planIssues(ctx, gh, r)
+	todo, waiting, skipped, err := planIssues(ctx, gh, r, cfg.Intake.Label)
 	if err != nil {
 		return err
 	}
@@ -170,6 +200,13 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 		return err
 	}
 	fmt.Printf("Opened %d issue(s) on %s%s.\n", len(filed), repo, skippedNote(skipped))
+	if !queue || len(waiting) == 0 {
+		return nil
+	}
+	if err := queueIssues(ctx, gh, waiting, cfg.Intake.Label); err != nil {
+		return err
+	}
+	fmt.Printf("Labeled %d issue(s) filed earlier %s, now that the blockers are fixed.\n", len(waiting), cfg.Intake.Label)
 	return nil
 }
 
@@ -216,10 +253,15 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			p.say("%s: %v", repo, err)
 			continue
 		}
-		todo, skipped, err := planIssues(ctx, gh, r)
+		todo, waiting, skipped, err := planIssues(ctx, gh, r, cfg.Intake.Label)
 		if err != nil {
 			p.say("Couldn't list %s's issues: %v", repo, err)
 			continue
+		}
+		if len(waiting) > 0 && p.yes(fmt.Sprintf("%d issue(s) filed earlier wait on blockers that are now fixed. Label them %s so the factory starts on them?", len(waiting), cfg.Intake.Label), true) {
+			if err := queueIssues(ctx, gh, waiting, cfg.Intake.Label); err != nil {
+				p.say("Labeling them failed: %v", err)
+			}
 		}
 		if len(todo) == 0 {
 			p.say("Issues for these are already filed on %s.", repo)
@@ -242,7 +284,7 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		ask := fmt.Sprintf("Label them %s so the factory starts on them when it runs?", cfg.Intake.Label)
 		if !r.Ready {
-			ask = fmt.Sprintf("Label the blockers %s so the factory starts on them when it runs? The rest wait until they're fixed", cfg.Intake.Label)
+			ask = fmt.Sprintf("Label the blockers %s so the factory starts on them when it runs? The rest are filed for later", cfg.Intake.Label)
 		}
 		queue := p.yes(ask, true)
 		filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
@@ -251,6 +293,9 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			continue
 		}
 		p.say("Opened %d issue(s) on %s.", len(filed), repo)
+		if queue && !r.Ready {
+			p.say("Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", repo)
+		}
 	}
 }
 

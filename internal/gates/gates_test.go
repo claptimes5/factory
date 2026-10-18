@@ -117,7 +117,9 @@ func TestIsTest(t *testing.T) {
 		"pkg/test_utils.py": true, "features/login.feature": true, "tests/integration.rs": true, "cypress/e2e/login.cy.ts": true,
 		"pkg/features/kube_features.go": false, "internal/spec/parse.go": false, "src/features/auth/LoginForm.tsx": false,
 		"spec/openapi.yaml": false, "openapi.spec.json": false, "src/__tests__/__snapshots__/a.test.tsx.snap": false,
-		"spec/fixtures/users.yml": false, "test/README.md": false,
+		"spec/fixtures/users.yml": false, "test/README.md": false, "internal/test/helpers.go": true,
+		"test/foo.js": true, "spec/foo_spec.js": true, "spec/spec_helper.rb": true, "spec/support/auth.rb": true,
+		"test/test_helper.rb": true, "src/foo.snapshot.test.ts": true, "test/e2e/framework/util.go": true,
 		"main.go": false, "src/App.tsx": false, "app/models/user.rb": false, "lib/testing.rb": false, "contest.py": false,
 	} {
 		if IsTest(p) != want {

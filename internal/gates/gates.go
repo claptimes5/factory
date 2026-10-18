@@ -227,7 +227,7 @@ func IsTest(p string) bool {
 	if in("testdata") {
 		return true
 	}
-	if strings.Contains(base, ".snap") || in("__snapshots__") || in("fixtures") || in("__fixtures__") {
+	if ext == ".snap" || in("__snapshots__") || in("fixtures") || in("__fixtures__") {
 		return false
 	}
 	for _, suf := range []string{"_test.go", "_spec.rb", "_test.rb", "_test.py", ".feature"} {
@@ -244,12 +244,23 @@ func IsTest(p string) bool {
 		if len(parts) >= 3 && (parts[len(parts)-2] == "test" || parts[len(parts)-2] == "spec") {
 			return true
 		}
-		if in("__tests__") || in("cypress") || in("e2e") {
+		if in("__tests__") || in("cypress") {
 			return true
 		}
 	}
-	// Python and Rust keep tests in tests/.
-	return (ext == ".py" || ext == ".rs") && in("tests")
+	code := jsCode[ext] || ext == ".go" || ext == ".rb" || ext == ".py" || ext == ".rs"
+	switch {
+	case !code:
+		return false
+	case in("test") || in("tests") || in("e2e"):
+		// Helpers and suites (test/test_helper.rb, mocha's test/*.js,
+		// test/e2e/framework/util.go).
+		return true
+	case in("spec"):
+		// RSpec and Jasmine; a Go or Python spec/ package is usually code.
+		return ext == ".rb" || jsCode[ext]
+	}
+	return false
 }
 
 var jsCode = map[string]bool{".js": true, ".jsx": true, ".ts": true, ".tsx": true, ".mjs": true, ".cjs": true, ".vue": true, ".svelte": true}

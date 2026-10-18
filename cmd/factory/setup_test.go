@@ -121,6 +121,8 @@ type fakeGitHub struct {
 	report   *readiness.Report // what the readiness check finds; ready if nil
 	issues   []string          // path, title and labels of issues created
 	bodies   []string
+	filed    []map[string]any // issues the check filed before, if set
+	labeled  []string         // path and labels added to issues
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +142,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.issues = append(f.issues, r.URL.Path+" "+body.Title+" "+strings.Join(body.Labels, ","))
 		f.bodies = append(f.bodies, body.Body)
 		json.NewEncoder(w).Encode(map[string]int{"number": 100 + len(f.issues)})
+		return
+	}
+	if strings.Contains(r.URL.Path, "/issues/") && strings.HasSuffix(r.URL.Path, "/labels") && r.Method == "POST" {
+		var body struct{ Labels []string }
+		json.NewDecoder(r.Body).Decode(&body)
+		f.labeled = append(f.labeled, r.URL.Path+" "+strings.Join(body.Labels, ","))
+		w.Write([]byte("[]"))
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("labels") == "factory:readiness" && r.URL.Query().Get("state") == "all" && f.filed != nil {
+		json.NewEncoder(w).Encode(f.filed)
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("labels") == "factory:readiness" && r.URL.Query().Get("state") == "all" {
