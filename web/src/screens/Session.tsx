@@ -30,7 +30,7 @@ export function SessionScreen() {
             <>
               <span>/</span>
               <Link to={`/items/${itemId}`} className="hover:text-foreground">
-                #{item.data?.item.issue ?? itemId} {item.data?.item.title}
+                {item.data?.item.ref ?? `#${itemId}`} {item.data?.item.title}
               </Link>
             </>
           )}

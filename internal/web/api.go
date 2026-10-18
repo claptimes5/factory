@@ -27,6 +27,8 @@ import (
 // APIItem is a work item.
 type APIItem struct {
 	ID          int64  `json:"id"`
+	Repo        string `json:"repo"` // owner/name
+	Ref         string `json:"ref"`  // how to show the issue: #12, or owner/name#12 with several repos
 	Issue       int    `json:"issue"`
 	Title       string `json:"title"`
 	Stage       string `json:"stage"`
@@ -66,14 +68,15 @@ type APIBoard struct {
 
 // APIOverview is the header strip shown on every screen.
 type APIOverview struct {
-	Repo          string  `json:"repo"`
-	SpentTodayUSD float64 `json:"spent_today_usd"`
-	DailyCapUSD   float64 `json:"daily_cap_usd"`
-	Awaiting      int     `json:"awaiting"`
-	AwaitingCap   int     `json:"awaiting_cap"`
-	Running       int     `json:"running"`
-	Queued        int     `json:"queued"`
-	Version       string  `json:"version"`
+	Repo          string   `json:"repo"`  // the first repo, kept for older clients
+	Repos         []string `json:"repos"` // every repo the factory works on
+	SpentTodayUSD float64  `json:"spent_today_usd"`
+	DailyCapUSD   float64  `json:"daily_cap_usd"`
+	Awaiting      int      `json:"awaiting"`
+	AwaitingCap   int      `json:"awaiting_cap"`
+	Running       int      `json:"running"`
+	Queued        int      `json:"queued"`
+	Version       string   `json:"version"`
 }
 
 // APIJob is one job.
@@ -257,11 +260,12 @@ func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
 		ID: it.ID, Issue: it.IssueNumber, Title: it.Title, Stage: string(it.Stage), Complexity: it.Complexity,
 		Risk: it.Risk, Priority: it.Priority, ParentID: it.ParentID, Branch: it.Branch, PRNumber: it.PRNumber,
 		CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
-		IssueURL: fmt.Sprintf("https://github.com/%s/issues/%d", s.Repo, it.IssueNumber),
+		Repo: it.Repo, Ref: s.ref(it.Repo, it.IssueNumber),
+		IssueURL: fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
 		NeedsYou: it.Stage == state.AwaitingHuman || it.Stage == state.Parked,
 	}
 	if it.PRNumber > 0 {
-		a.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", s.Repo, it.PRNumber)
+		a.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)
 	}
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
@@ -387,7 +391,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, APIOverview{Repo: s.Repo, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
+	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
 		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v})
 }
 
@@ -468,7 +472,7 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Issue != nil {
 		ictx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if is, err := s.Issue(ictx, it.IssueNumber); err == nil {
+		if is, err := s.Issue(ictx, it.Repo, it.IssueNumber); err == nil {
 			d.IssueBody = is.Body
 		}
 		cancel()
@@ -511,7 +515,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	}
 	p := APIPRPanel{PRNumber: it.PRNumber, Checks: []APICheck{}, Gates: []APIGate{}}
 	if it.PRNumber > 0 {
-		p.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", s.Repo, it.PRNumber)
+		p.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)
 	}
 	for i := len(jobs) - 1; i >= 0; i-- {
 		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" {
@@ -534,7 +538,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.HeadSHA != "" && s.Checks != nil {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		runs, err := s.Checks(cctx, p.HeadSHA)
+		runs, err := s.Checks(cctx, it.Repo, p.HeadSHA)
 		cancel()
 		var he *github.HTTPError
 		switch {
@@ -761,14 +765,14 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 		n := APINotification{ItemID: &id, At: it.UpdatedAt}
 		if it.Stage == state.AwaitingHuman {
 			n.Kind = "ready_for_review"
-			n.Title = fmt.Sprintf("#%d is ready for your review", it.IssueNumber)
+			n.Title = s.ref(it.Repo, it.IssueNumber) + " is ready for your review"
 			n.Detail = it.Title
 			if it.PRNumber > 0 {
 				n.Detail = fmt.Sprintf("PR #%d: %s", it.PRNumber, it.Title)
 			}
 		} else {
 			n.Kind = "needs_input"
-			n.Title = fmt.Sprintf("#%d needs your input", it.IssueNumber)
+			n.Title = s.ref(it.Repo, it.IssueNumber) + " needs your input"
 			n.Detail = s.stageReason(ctx, it.ID, state.Parked)
 			if n.Detail == "" {
 				n.Detail = it.Title
@@ -848,6 +852,13 @@ func (s *Server) apiStream(w http.ResponseWriter, r *http.Request) {
 
 // IssueFunc reads an issue; CheckFunc lists CI checks on a commit.
 type (
-	IssueFunc func(ctx context.Context, n int) (*github.Issue, error)
-	CheckFunc func(ctx context.Context, sha string) ([]github.CheckRun, error)
+	IssueFunc func(ctx context.Context, repo string, n int) (*github.Issue, error)
+	CheckFunc func(ctx context.Context, repo, sha string) ([]github.CheckRun, error)
 )
+
+func firstOr(xs []string, def string) string {
+	if len(xs) > 0 {
+		return xs[0]
+	}
+	return def
+}

@@ -5,11 +5,11 @@
 {{if .AwaitFull}}<p class="msg warn">{{.AwaitCap}} PRs are waiting for you, so new implement jobs are paused.</p>{{end}}
 <h2>Ready for your review ({{len .Waiting}})</h2>
 {{if .Waiting}}<div class="wrap"><table><tr><th>Issue</th><th>PR</th><th>Title</th><th>Size</th><th>Risk</th></tr>
-{{range .Waiting}}<tr><td>{{template "issue" .IssueNumber}}</td><td>{{if .PRNumber}}{{template "pr" .PRNumber}}{{end}}</td><td><a href="/items/{{.ID}}">{{.Title}}</a></td><td>{{.Complexity}}</td><td>{{.Risk}}</td></tr>{{end}}
+{{range .Waiting}}<tr><td>{{template "issue" .}}</td><td>{{if .PRNumber}}{{template "pr" .}}{{end}}</td><td><a href="/items/{{.ID}}">{{.Title}}</a></td><td>{{.Complexity}}</td><td>{{.Risk}}</td></tr>{{end}}
 </table></div>{{else}}<p class="mut">Nothing waiting.</p>{{end}}
 <h2>Parked ({{len .Parked}})</h2>
 {{if .Parked}}<div class="wrap"><table><tr><th>Issue</th><th>Title</th><th>Why</th></tr>
-{{range .Parked}}<tr><td>{{template "issue" .Item.IssueNumber}}</td><td><a href="/items/{{.Item.ID}}">{{.Item.Title}}</a></td><td>{{short .Reason 300}}</td></tr>{{end}}
+{{range .Parked}}<tr><td>{{template "issue" .Item}}</td><td><a href="/items/{{.Item.ID}}">{{.Item.Title}}</a></td><td>{{short .Reason 300}}</td></tr>{{end}}
 </table></div>{{else}}<p class="mut">Nothing parked.</p>{{end}}
 <h2>Running now ({{len .Running}})</h2>
 {{range .Running}}<div class="card"><a href="/jobs/{{.ID}}">job {{.ID}}</a> · {{.Kind}} · {{.Harness}}/{{.Model}} · started {{since .StartedAt}}</div>{{else}}<p class="mut">Idle.</p>{{end}}

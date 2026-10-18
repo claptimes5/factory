@@ -55,7 +55,7 @@ func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	os.MkdirAll(filepath.Join(cmpDir, "5-run"), 0o755)
 	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.json"), []byte(`{"issue":5,"title":"Add it","arms":[{"skillset":"tdd","stage":"awaiting_human","cost_usd":1.5},{"skillset":"none","stage":"parked"}]}`), 0o644)
 	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.md"), []byte("# Skill comparison: <b>#5</b>"), 0o644)
-	s := &Server{Store: st, Actions: fa, Repo: "o/r", DailyCap: 60, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, CompareDir: cmpDir}
+	s := &Server{Store: st, Actions: fa, Repos: []string{"o/r"}, DailyCap: 60, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, CompareDir: cmpDir}
 	h, err := s.Handler()
 	if err != nil {
 		t.Fatal(err)

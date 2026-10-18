@@ -754,3 +754,63 @@ func TestAskPassIsPrivateAndConcurrent(t *testing.T) {
 		t.Fatalf("askpass printed %q: %v", out, err)
 	}
 }
+
+// Two repos with the same issue number are separate items, each built from
+// and opened against its own repo, with its own gates.
+func TestSeveralRepos(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	cfg, err := config.Parse([]byte(strings.Replace(testConfig, "repo: o/r\n", `repos:
+  - o/r
+  - name: o/web
+    gates: {required: [built], commands: {built: test -f add.go}}
+`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DataDir, cfg.PromptsDir, cfg.SkillsDir = e.p.Cfg.DataDir, e.p.Cfg.PromptsDir, e.p.Cfg.SkillsDir
+	e.p.Cfg = cfg
+	web := setup(t) // a second remote and GitHub
+	clients := map[string]RepoClients{
+		"o/r":   {GH: e.gh, Git: e.p.Git},
+		"o/web": {GH: web.gh, Git: web.p.Git},
+	}
+	e.p.ClientsFor = func(repo string) RepoClients { return clients[strings.ToLower(repo)] }
+	e.addIssue(1)
+	web.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild}
+	e.codex.reviews = []string{pass, pass}
+
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		repo   string
+		gh     *fakeGH
+		remote string
+	}{{"o/r", e.gh, e.remote}, {"o/web", web.gh, web.remote}} {
+		it, err := e.p.Store.ItemByIssue(ctx, c.repo, 1)
+		if err != nil || it.Stage != state.AwaitingHuman {
+			t.Fatalf("%s: %+v %v", c.repo, it, err)
+		}
+		if c.gh.prs["factory/issue-1"] == nil {
+			t.Fatalf("%s: no PR on its own GitHub", c.repo)
+		}
+		if got := git(t, c.remote, "log", "--format=%s", "-1", "factory/issue-1"); !strings.HasPrefix(got, "factory: #1") {
+			t.Fatalf("%s: branch head = %q", c.repo, got)
+		}
+		gates, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+		gs, _ := e.p.Store.GateResults(ctx, gates[0].ID)
+		names := []string{}
+		for _, g := range gs {
+			names = append(names, g.Gate)
+		}
+		want := "diff_guard,proves_fix,test,types"
+		if c.repo == "o/web" {
+			want = "built,diff_guard"
+		}
+		if strings.Join(names, ",") != want {
+			t.Fatalf("%s gates = %v, want %s", c.repo, names, want)
+		}
+	}
+}

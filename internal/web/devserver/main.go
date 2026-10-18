@@ -56,11 +56,11 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &web.Server{
-		Store: st, Actions: actions{}, Repo: "acme/widgets", DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
-		Issue: func(_ context.Context, n int) (*github.Issue, error) {
+		Store: st, Actions: actions{}, Repos: []string{"acme/widgets"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
+		Issue: func(_ context.Context, _ string, n int) (*github.Issue, error) {
 			return &github.Issue{Number: n, Body: fmt.Sprintf("Issue #%d.\n\nThe parser drops the last token when the input has no trailing newline.\n\nExpected: every token is kept.\nVerify: `go test ./parser`.", n)}, nil
 		},
-		Checks: func(_ context.Context, sha string) ([]github.CheckRun, error) {
+		Checks: func(_ context.Context, _, sha string) ([]github.CheckRun, error) {
 			return []github.CheckRun{
 				{Name: "test", Status: "completed", Conclusion: "success", URL: "https://example.com/ci/" + sha},
 				{Name: "lint", Status: "in_progress"},

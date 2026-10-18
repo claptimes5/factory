@@ -617,7 +617,10 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description the first repo; see repos */
             repo: string;
+            /** @description every repo the factory works on, as owner/name */
+            repos: string[];
             spent_today_usd: number;
             daily_cap_usd: number;
             awaiting: number;
@@ -628,6 +631,10 @@ export interface components {
         };
         Item: {
             id: number;
+            /** @description owner/name */
+            repo: string;
+            /** @description how to show the issue: #12, or owner/name#12 when there are several repos */
+            ref: string;
             issue: number;
             title: string;
             stage: components["schemas"]["Stage"];

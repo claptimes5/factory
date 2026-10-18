@@ -22,7 +22,7 @@ export function ItemScreen() {
           </Link>
           <span>/</span>
           <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
-            #{it.issue} <ExternalLink className="size-3" />
+            {it.ref} <ExternalLink className="size-3" />
           </a>
         </div>
         <h1 className="mt-1 flex flex-wrap items-center gap-2 text-lg font-semibold">

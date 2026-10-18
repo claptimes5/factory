@@ -44,7 +44,7 @@ type Actions interface {
 type Server struct {
 	Store    *store.Store
 	Actions  Actions
-	Repo     string
+	Repos    []string // owner/name of each repo the factory works on
 	DailyCap float64
 	AwaitCap int
 	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
@@ -63,6 +63,13 @@ type Server struct {
 	Exec       ExecFunc
 	tmpl       *template.Template
 	pollPeriod time.Duration
+}
+
+func (s *Server) ref(repo string, n int) string {
+	if len(s.Repos) > 1 {
+		return fmt.Sprintf("%s#%d", repo, n)
+	}
+	return fmt.Sprintf("#%d", n)
 }
 
 // Handler builds the HTTP handler.
@@ -89,7 +96,8 @@ func (s *Server) Handler() (http.Handler, error) {
 			}
 			return time.Since(t).Round(time.Second).String() + " ago"
 		},
-		"repo": func() string { return s.Repo },
+		// ref names an issue: #12, or owner/name#12 when there are several repos.
+		"ref": func(repo string, n int) string { return s.ref(repo, n) },
 		"pretty": func(raw string) string {
 			var v any
 			if json.Unmarshal([]byte(raw), &v) != nil {

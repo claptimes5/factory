@@ -33,9 +33,11 @@ import (
 // files laid over the factory's result before the acceptance command runs
 // (typically the known-good fix's tests). The builder never sees them.
 type Case struct {
-	Name    string `yaml:"-"`
-	Dir     string `yaml:"-"`
-	Repo    string `yaml:"repo"` // clone URL or path; default the configured repo
+	Name string `yaml:"-"`
+	Dir  string `yaml:"-"`
+	// Repo is a configured repo's owner/name (its gates and base branch
+	// apply), or a clone URL or path; default the first configured repo.
+	Repo    string `yaml:"repo"`
 	BaseSHA string `yaml:"base_sha"`
 	Title   string `yaml:"title"`
 	Body    string `yaml:"body"`
@@ -103,6 +105,8 @@ type Options struct {
 	Runner    runner.Runner
 	Secrets   map[string]map[string]string
 	Tokens    github.TokenSource // for cloning the source repository
+	// TokensFor, when set, gives the tokens for a configured repo instead.
+	TokensFor func(repo string) github.TokenSource
 	// GateExec overrides how gates and acceptance run (tests).
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
 	WorkDir  string // scratch space; each case gets a subdirectory
@@ -165,9 +169,14 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Intake.PollInterval = config.Duration{}
 	cfg.Orchestrator.On = false
-	base := cfg.BaseBranch
+	rc, known := o.Cfg.RepoConf(c.Repo)
+	if !known {
+		rc = o.Cfg.Primary()
+	}
+	cfg.Repos = []config.Repo{rc}
+	base := rc.BaseBranch
 	remote := filepath.Join(dir, "remote.git")
-	if err := freeze(ctx, o, c, remote, base); err != nil {
+	if err := freeze(ctx, o, c, rc.Name, known || c.Repo == "", remote, base); err != nil {
 		return res, err
 	}
 	st, err := store.Open(filepath.Join(dir, "eval.db"))
@@ -187,7 +196,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 		return res, err
 	}
 	res.Seconds = time.Since(start).Seconds()
-	it, err := st.ItemByIssue(ctx, cfg.Repo, 1)
+	it, err := st.ItemByIssue(ctx, rc.Name, 1)
 	if err != nil {
 		return res, err
 	}
@@ -228,12 +237,15 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 }
 
 // freeze makes a private bare remote whose base branch is the case's base.
-func freeze(ctx context.Context, o Options, c Case, remote, base string) error {
-	src := c.Repo
-	if src == "" {
-		src = "https://github.com/" + o.Cfg.Repo + ".git"
+func freeze(ctx context.Context, o Options, c Case, repo string, onGitHub bool, remote, base string) error {
+	src, tokens := c.Repo, o.Tokens
+	if onGitHub {
+		src = "https://github.com/" + repo + ".git"
+		if o.TokensFor != nil {
+			tokens = o.TokensFor(repo)
+		}
 	}
-	g := &pipeline.Git{RemoteURL: src, Tokens: o.Tokens, AskPassDir: filepath.Dir(remote)}
+	g := &pipeline.Git{RemoteURL: src, Tokens: tokens, AskPassDir: filepath.Dir(remote)}
 	if err := g.CloneBare(ctx, remote); err != nil {
 		return err
 	}

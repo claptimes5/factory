@@ -299,7 +299,9 @@ func (c *Client) UpdatePRBody(ctx context.Context, n int, body string) error {
 // AppTokens mints GitHub App installation tokens scoped to one repository
 // and caches each until shortly before it expires.
 type AppTokens struct {
-	AppID          string
+	AppID string
+	// InstallationID is the app's installation on the repo's owner. Left
+	// empty, it is looked up on first use.
 	InstallationID string
 	Key            *rsa.PrivateKey
 	Repo           string // owner/name: the token is scoped to this repo only
@@ -363,7 +365,17 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	_, name, _ := strings.Cut(a.Repo, "/")
+	owner, name, _ := strings.Cut(a.Repo, "/")
+	if a.InstallationID == "" {
+		id, err := a.FindInstallation(ctx, owner)
+		if err != nil {
+			return "", err
+		}
+		if id == "" {
+			return "", fmt.Errorf("github: the app is not installed on %s; install it and add %s", owner, a.Repo)
+		}
+		a.InstallationID = id
+	}
 	var r struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`

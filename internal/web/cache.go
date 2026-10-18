@@ -49,12 +49,21 @@ func newTTL[K comparable, V any](ttl time.Duration) *ttlCache[K, V] {
 
 // CachedIssue caches issue reads for ttl.
 func CachedIssue(f IssueFunc, ttl time.Duration) IssueFunc {
-	c := newTTL[int, *github.Issue](ttl)
-	return func(ctx context.Context, n int) (*github.Issue, error) { return c.get(ctx, n, f) }
+	type key struct {
+		repo string
+		n    int
+	}
+	c := newTTL[key, *github.Issue](ttl)
+	return func(ctx context.Context, repo string, n int) (*github.Issue, error) {
+		return c.get(ctx, key{repo, n}, func(ctx context.Context, k key) (*github.Issue, error) { return f(ctx, k.repo, k.n) })
+	}
 }
 
 // CachedChecks caches check runs per commit for ttl.
 func CachedChecks(f CheckFunc, ttl time.Duration) CheckFunc {
-	c := newTTL[string, []github.CheckRun](ttl)
-	return func(ctx context.Context, sha string) ([]github.CheckRun, error) { return c.get(ctx, sha, f) }
+	type key struct{ repo, sha string }
+	c := newTTL[key, []github.CheckRun](ttl)
+	return func(ctx context.Context, repo, sha string) ([]github.CheckRun, error) {
+		return c.get(ctx, key{repo, sha}, func(ctx context.Context, k key) ([]github.CheckRun, error) { return f(ctx, k.repo, k.sha) })
+	}
 }

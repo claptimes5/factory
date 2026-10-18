@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -17,8 +18,43 @@ func load(t *testing.T) *Config {
 
 func TestRepoConfigLoads(t *testing.T) {
 	c := load(t)
-	if c.Repo != "claptimes5/factory" || c.Budgets.ConcurrentJobs != 3 {
+	if names := c.RepoNames(); len(names) != 1 || names[0] != "claptimes5/factory" || c.Budgets.ConcurrentJobs != 3 {
 		t.Fatalf("unexpected: %+v", c)
+	}
+	if r, ok := c.RepoConf("ClapTimes5/Factory"); !ok || r.BaseBranch != "main" || r.Gates == nil || len(r.Gates.Required) == 0 {
+		t.Fatalf("repo settings: %+v %v", r, ok)
+	}
+}
+
+func TestSeveralRepos(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	y := regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAllString(string(b), `repos:
+  - o/api
+  - name: o/web
+    base_branch: develop
+    gates:
+      required: [test]
+      commands: {test: npm test}`)
+	c, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := c.RepoConf("o/api")
+	web, _ := c.RepoConf("o/web")
+	if api.BaseBranch != "main" || len(api.Gates.Required) < 2 {
+		t.Fatalf("o/api should take the defaults: %+v", api)
+	}
+	if web.BaseBranch != "develop" || web.Gates.Commands["test"] != "npm test" || web.Gates.DiffGuard.MaxChangedLines != 400 {
+		t.Fatalf("o/web: %+v", web.Gates)
+	}
+	for name, bad := range map[string]string{
+		"both forms":     "repo: o/x\n" + y,
+		"duplicate":      strings.Replace(y, "  - name: o/web", "  - O/API\n  - name: o/web", 1),
+		"not owner/name": strings.Replace(y, "  - o/api", "  - api", 1),
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
 	}
 }
 

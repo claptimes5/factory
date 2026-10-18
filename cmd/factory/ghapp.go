@@ -40,7 +40,9 @@ var appPermissions = map[string]string{
 // and GitHub sends back a code this exchanges for the app's ID and key.
 // It returns the app's ID, slug and the path the key was saved to.
 func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir string) (id, slug, keyPath string, err error) {
-	owner, name, _ := strings.Cut(cfg.Repo, "/")
+	// The app belongs to the first repo's owner.
+	first := cfg.RepoNames()[0]
+	owner, name, _ := strings.Cut(first, "/")
 	org, err := github.IsOrg(ctx, githubAPI, owner)
 	if err != nil {
 		return "", "", "", fmt.Errorf("looking up %s on GitHub: %w", owner, err)
@@ -64,14 +66,17 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 		short = strings.TrimRight(short[:21], "-_.")
 	}
 	manifest, _ := json.Marshal(map[string]any{
-		"name":                "factory-" + short + "-" + randHex(2),
-		"url":                 githubWeb + "/" + cfg.Repo,
-		"redirect_url":        base + "/callback",
-		"public":              false,
+		"name":         "factory-" + short + "-" + randHex(2),
+		"url":          githubWeb + "/" + first,
+		"redirect_url": base + "/callback",
+		// A private app installs only on its owner's account. Repos under
+		// other accounts need it public: anyone could install it, but only
+		// on their own repos, and its key stays with you.
+		"public":              len(owners(cfg)) > 1,
 		"default_permissions": appPermissions,
 		"default_events":      []string{},
 		// The factory polls GitHub, so the webhook stays off.
-		"hook_attributes": map[string]any{"url": githubWeb + "/" + cfg.Repo, "active": false},
+		"hook_attributes": map[string]any{"url": githubWeb + "/" + first, "active": false},
 	})
 
 	var (
@@ -103,7 +108,7 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", local(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = manifestPage.Execute(w, map[string]string{"Action": newURL + "?state=" + state, "Manifest": string(manifest), "Repo": cfg.Repo})
+		_ = manifestPage.Execute(w, map[string]string{"Action": newURL + "?state=" + state, "Manifest": string(manifest), "Repo": strings.Join(cfg.RepoNames(), ", ")})
 	}))
 	mux.HandleFunc("GET /callback", local(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -170,36 +175,51 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	}
 }
 
-// installApp waits for you to install the app on the repo's owner and
-// returns the installation ID.
+// installApp waits for you to install the app on each repo's owner and
+// returns the installation ID on the first repo's owner.
 func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slug, keyPath string) (string, error) {
-	owner, _, _ := strings.Cut(cfg.Repo, "/")
 	key, err := github.LoadAppKey(keyPath)
 	if err != nil {
 		return "", err
 	}
-	tokens := &github.AppTokens{AppID: appID, Key: key, Repo: cfg.Repo, BaseURL: githubAPI}
-	if id, err := tokens.FindInstallation(ctx, owner); err == nil && id != "" {
-		return id, nil
-	}
-	p.say("Now install the app on %s. Open:", cfg.Repo)
-	p.say("\n    %s/apps/%s/installations/new\n", githubWeb, slug)
-	p.say("Choose \"Only select repositories\", pick %s, and click Install.", cfg.Repo)
-	for {
-		p.ask("Press Enter here once it's installed", "")
-		id, err := tokens.FindInstallation(ctx, owner)
-		if err == nil && id != "" {
-			return id, nil
+	app := &github.AppTokens{AppID: appID, Key: key, BaseURL: githubAPI}
+	byOwner := owners(cfg)
+	for i := 0; ; i++ {
+		first, missing, err := installations(ctx, app, cfg.RepoNames())
+		if err == nil && len(missing) == 0 {
+			return first, nil
 		}
-		if err != nil {
+		switch {
+		case err != nil:
 			p.say("Couldn't check: %v", err)
-		} else {
-			p.say("It isn't installed on %s yet.", owner)
+		case i == 0:
+			p.say("Now install the app. Open:")
+			p.say("\n    %s/apps/%s/installations/new\n", githubWeb, slug)
+			for _, o := range missing {
+				p.say("Pick %s, choose \"Only select repositories\", select %s, and click Install.", o, strings.Join(byOwner[strings.ToLower(o)], " and "))
+			}
+			if len(missing) > 1 {
+				p.say("Then open the same link again for the next account.")
+			}
+			p.ask("Press Enter here once it's installed", "")
+			continue
+		default:
+			p.say("It isn't installed on %s yet.", strings.Join(missing, " or "))
 		}
 		if !p.yes("Check again?", true) {
 			return "", errors.New("app not installed")
 		}
 	}
+}
+
+// owners groups the configured repos by owner (lowercased).
+func owners(cfg *config.Config) map[string][]string {
+	m := map[string][]string{}
+	for _, r := range cfg.RepoNames() {
+		o, _, _ := strings.Cut(r, "/")
+		m[strings.ToLower(o)] = append(m[strings.ToLower(o)], r)
+	}
+	return m
 }
 
 func writePrivate(path, data string) error {

@@ -1,7 +1,7 @@
 # Factory configuration. Version-controlled; agents may not edit it.
 # See SPEC.md "Harness adapters and model routing" and "Budgets".
 
-repo: claptimes5/factory
+repo: claptimes5/factory     # or repos: [owner/a, owner/b]; see "Several repositories" in the README
 base_branch: main
 data_dir: ./data              # SQLite db, job logs, scratch workdirs
 
