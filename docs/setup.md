@@ -1,0 +1,231 @@
+# Setup
+
+This guide covers installing the factory, what `factory setup` does, running
+it as a service, upgrading, and doing every setup step by hand. For the
+short version, see the [Quickstart](../README.md#quickstart).
+
+You need a Linux machine (or [WSL2 on Windows](#windows-wsl2)) and admin
+rights on the GitHub repo you want the factory to work on.
+
+Starting a new project? Give [new-project.md](new-project.md) to whoever
+sets up the repo. It lists what a repo needs before the factory can work on
+it.
+
+## Dependencies
+
+| What | Version | Why |
+| --- | --- | --- |
+| Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
+| Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
+| git | any recent | Worktrees and pushes. |
+| Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
+| A Claude API key or subscription token | | The builder and Claude reviewers. |
+| An OpenAI API key | | Only if a reviewer uses Codex. |
+
+You don't install Claude Code, Codex or Playwright yourself. They're pinned
+in the job image (`deploy/job-image/Dockerfile`), which setup builds. The
+binary has no other runtime dependencies: SQLite is built in, so
+`CGO_ENABLED=0` works.
+
+Docker 28 or newer is needed for the [egress allowlist](security.md#network-the-egress-allowlist)
+and for [services](configuration.md#services-databases-and-the-like).
+
+## Install and run
+
+```sh
+git clone https://github.com/claptimes5/factory && cd factory
+CGO_ENABLED=0 go build -o factory ./cmd/factory
+./factory setup
+./factory serve
+```
+
+Then open the dashboard at http://127.0.0.1:8080/app/ and label an issue
+`factory:ready`.
+
+One thing setup can't do for you: **protect `main`**. In the repo's
+settings, require a pull request with your review and the `test` and `web`
+checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
+`factory.yaml`, `prompts/` and the lint config.
+
+## What setup asks for
+
+`factory setup` walks you through everything else and checks each answer
+before moving on:
+
+1. **Repositories:** which repos the factory works on, one or several. It
+   updates `factory.yaml`. For each repo it suggests checks and a job image
+   for its stack (see [Each repo's toolchain and checks](configuration.md#each-repos-toolchain-and-checks)).
+2. **Docker:** checks that Docker works for you, and offers to build the job
+   image the first time. This takes a few minutes.
+3. **GitHub:** creates a GitHub App for the factory. It gives you a link
+   that opens GitHub with the app already filled in, with only the
+   permissions the factory needs, then asks you to install it on the repo.
+   It saves the app's key and finds the IDs itself, so you copy nothing by
+   hand. It then confirms it can reach the repo and offers to create the
+   factory's labels. On a server you reach over SSH, setup prints the
+   `ssh -L` command that lets your own browser open the link.
+4. **Claude:** an API key, or a subscription token from `claude setup-token`.
+5. **OpenAI:** an API key for the Codex reviewer, only if `factory.yaml` uses
+   Codex. To skip it, see [Claude-only review](configuration.md#claude-only-review).
+6. **Phone notifications** (optional): an ntfy, Slack or Discord URL.
+
+For GitLab repos it also asks for `GITLAB_TOKEN` and checks it against each
+project (see [GitLab repos](configuration.md#gitlab-repos)). Setup ends by
+measuring [how ready each repo is](quality.md#how-ready-a-repo-is).
+
+Your answers go in `factory.env` next to `factory.yaml`, readable only by
+you, and every `factory` command loads it. Run `./factory setup` again any
+time to change something; it shows the saved answers as defaults.
+
+## Running it as a service
+
+To keep the factory running across reboots:
+
+1. Install it from a checkout in `/opt/factory`.
+2. Run it as a `factory` user that can use Docker.
+3. Run setup as that user. It gets its own settings and database there.
+
+```sh
+sudo useradd --system --create-home --groups docker factory
+sudo git clone https://github.com/claptimes5/factory /opt/factory
+sudo chown -R factory /opt/factory
+cd /opt/factory
+sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o factory ./cmd/factory
+sudo -u factory ./factory setup
+sudo cp deploy/factory.service /etc/systemd/system/
+sudo systemctl enable --now factory
+journalctl -u factory -f     # follow its log
+```
+
+The service reads `/opt/factory/factory.env`. If you set up an older
+version with `/etc/factory/env`, delete that file: values in it override
+the ones setup saves.
+
+## Upgrading
+
+Build the new binary somewhere else and hand it to `deploy/upgrade.sh`:
+
+```sh
+cd /opt/factory && sudo -u factory git pull
+sudo -u factory env CGO_ENABLED=0 "$(command -v go)" build -o /tmp/factory.new ./cmd/factory
+sudo deploy/upgrade.sh /tmp/factory.new
+```
+
+`sudo deploy/upgrade.sh NEW_BINARY` upgrades safely:
+
+1. It stops the daemon.
+2. It backs up the database.
+3. It swaps the binary, keeping the old one as `factory.old`.
+4. It migrates the database.
+5. It starts the daemon and watches the next job.
+
+If the migration fails, the daemon stops, or that next job fails before
+doing any work, it restores the old binary (and the database backup when
+the migration failed). It uses `factory last-job`, `factory wait-job` and
+`factory db-path` to do this.
+
+## Manual setup
+
+`factory setup` is the easy way. If you'd rather do each step yourself:
+
+1. **Build the job images:** `./factory images`. The default one is
+   `docker build -t factory-job:latest deploy/job-image`.
+
+2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
+   access is limited to one repo and a few permissions you choose
+   ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app)).
+
+   1. Open [New GitHub App](https://github.com/settings/apps/new). For a repo
+      owned by an organization, use
+      `https://github.com/organizations/<org>/settings/apps/new` instead.
+   2. **GitHub App name:** anything unique, such as `factory-<your-login>`.
+      **Homepage URL:** this repo's URL.
+   3. **Webhook:** untick **Active**. The factory polls GitHub, so it needs no
+      public URL.
+   4. **Repository permissions:** set these four and leave everything else
+      at *No access*. Metadata switches to *Read-only* by itself.
+
+      | Permission | Access | Used for |
+      | --- | --- | --- |
+      | Contents | Read and write | pushing `factory/*` branches |
+      | Issues | Read and write | reading issues, labels and comments |
+      | Pull requests | Read and write | opening and updating draft PRs |
+      | Checks | Read-only | the CI panel in the dashboard |
+
+      Leave **Workflows** at *No access*, so the factory can never edit its
+      own CI. An app made without *Checks* still works, but the dashboard's
+      CI panel stays empty until you add it (then accept the new permission
+      on the installation page).
+   5. **Where can this GitHub App be installed?** *Only on this account.*
+      Click **Create GitHub App**.
+   6. On the app's page, copy the **App ID** shown under *About*.
+   7. Scroll to **Private keys**, click **Generate a private key**, and keep
+      the downloaded `.pem` where only the daemon can read it
+      ([about keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)):
+
+      ```sh
+      sudo install -D -m 600 -o "$USER" ~/Downloads/<the-downloaded-file>.pem /etc/factory/app.pem
+      ```
+   8. In the app's left sidebar, click **Install App**, then **Install** next
+      to your account. Choose **Only select repositories**, pick the repo the
+      factory works on, and click **Install**
+      ([about installing](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app)).
+   9. You land on `https://github.com/settings/installations/<number>` (for
+      an organization, `https://github.com/organizations/<org>/settings/installations/<number>`).
+      That number is the **installation ID**. You can find it again later under
+      [Settings → Applications](https://github.com/settings/installations) →
+      *Configure*.
+
+   With several repos, install the app on every one. Repos under different
+   accounts need the app to be public (see [Several repositories](configuration.md#several-repositories)).
+
+3. **Save the settings** in `factory.env` next to `factory.yaml`, as plain
+   `NAME=value` lines with no comments after a value, and `chmod 600` it.
+
+   ```sh
+   FACTORY_GITHUB_APP_ID=123456
+   FACTORY_GITHUB_INSTALLATION_ID=7890123
+   FACTORY_GITHUB_APP_KEY=/etc/factory/app.pem
+   ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
+   ```
+
+   Every `factory` command loads it, and a variable already set in the
+   environment wins. The model keys reach each job container as env vars
+   and are never written into a job's files. Use `-env PATH` or
+   `FACTORY_ENV_FILE` to keep the file elsewhere.
+
+   | Variable | What it's for |
+   | --- | --- |
+   | `FACTORY_GITHUB_APP_ID`, `FACTORY_GITHUB_INSTALLATION_ID`, `FACTORY_GITHUB_APP_KEY` | The GitHub App: its ID, the installation ID, and the path to its `.pem` key |
+   | `GITHUB_TOKEN` | A personal access token instead of the app, for a quick local try |
+   | `GITLAB_TOKEN` | GitLab repos (see [GitLab repos](configuration.md#gitlab-repos)) |
+   | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` in its place | Claude |
+   | `OPENAI_API_KEY`, or `CODEX_API_KEY` in its place | Codex |
+   | `FACTORY_NOTIFY_URL` | Phone notifications (see [Notifications](using.md#notifications)) |
+   | `FACTORY_WEB_PASSWORD` | A password for the control room (see [Control room login](security.md#control-room-login)) |
+
+   Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
+   billed per use; a ChatGPT subscription is not needed. Without one, review
+   jobs fail and their items park. To run on Claude alone, see
+   [Claude-only review](configuration.md#claude-only-review).
+
+4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,
+   `factory:retry` and `factory:awaiting-you`.
+   `scripts/setup-labels.sh <owner>/<repo>` does it with `gh`.
+
+5. **Set a spend alert** on both API accounts. The daemon also enforces its
+   own [budgets](configuration.md#budgets).
+
+## Windows (WSL2)
+
+1. Run the daemon inside a WSL2 distro with Docker available there (Docker
+   Desktop's WSL integration, or Docker Engine in WSL).
+2. Keep the repo and `data/` under the Linux home rather than `/mnt/c`.
+3. Open `http://localhost:8080/app/` in a Windows browser: WSL2 forwards
+   localhost. If that forwarding is unreliable, set
+   `networkingMode=mirrored` in `.wslconfig`.
+
+The `factory` CLI runs inside WSL. WSL counts as a Linux host for the
+egress allowlist. The disk space check also watches the Windows drive under
+WSL's virtual disks (see [Disk space](configuration.md#disk-space)).

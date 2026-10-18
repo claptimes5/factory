@@ -51,7 +51,7 @@ Some notes for each stack:
   floor and has to come with a test that fails without the fix, so start
   with well-tested packages.
 - **A database or other service:** declare it under the repo's `services`
-  in `factory.yaml` (see the README), and make the tests read its address
+  in `factory.yaml` (see [Services](configuration.md#services-databases-and-the-like)), and make the tests read its address
   from an environment variable.
 
 ## Feature map

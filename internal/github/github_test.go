@@ -97,7 +97,7 @@ func TestAppTokenScopedAndCached(t *testing.T) {
 		if len(body.Repositories) != 1 || body.Repositories[0] != "r" {
 			t.Errorf("token must be scoped to one repo, got %v", body.Repositories)
 		}
-		// Every permission asked for must be one the README tells you to grant,
+		// Every permission asked for must be one docs/setup.md tells you to grant,
 		// or GitHub refuses the token outright.
 		want := map[string]string{"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read", "checks": "read"}
 		if !maps.Equal(body.Permissions, want) {

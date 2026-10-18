@@ -1,0 +1,350 @@
+# Configuration
+
+Everything lives in [`factory.yaml`](../factory.yaml): routing per stage,
+escalation tiers, timeouts, budgets, Codex token pricing, gate commands and
+the diff guard. Stage prompts are in [`prompts/`](../prompts). Secrets and
+keys go in `factory.env` instead (see [Manual setup](setup.md#manual-setup)).
+
+`factory setup` writes most of this for you. Read on when you want to
+change something by hand.
+
+- [Several repositories](#several-repositories)
+- [Workspaces: one change across repos](#workspaces-one-change-across-repos)
+- [GitLab repos](#gitlab-repos)
+- [Each repo's toolchain and checks](#each-repos-toolchain-and-checks)
+- [Services: databases and the like](#services-databases-and-the-like)
+- [Disk space](#disk-space)
+- [Skill sets](#skill-sets)
+- [Models and escalation](#models-and-escalation)
+- [Budgets](#budgets)
+- [Claude-only review](#claude-only-review)
+
+The gates, the coverage floor, risk and the feature map are in
+[Quality](quality.md). The egress allowlist and the control room's address
+are in [Security](security.md).
+
+## Several repositories
+
+One factory can work on several repos. Each is worked on separately: its
+own issues, branches, PRs and checks. They share the queue, the budgets,
+the models and the dashboard, which can filter by repo.
+
+```yaml
+repos:
+  - you/api                     # takes the top-level base_branch and gates
+  - name: you/web
+    base_branch: develop
+    gates:                      # overrides the top-level gates for this repo
+      required: [types, test]
+      commands: {types: npm run typecheck, test: npm test}
+```
+
+`repo: you/api` is the short form for one repo.
+
+A repo's `gates` override the top-level ones field by field. Its
+`commands` replace the top-level commands. Anything it leaves out, such as
+the diff guard or `proves_fix`, is inherited. Set `proves_fix: none`,
+`coverage: none` or `scenarios_dir: none` to turn one off for that repo.
+
+With a GitHub App, install it on every repo (setup walks you through
+this). Repos under different accounts need the app to be public, which
+setup sets up for you. Anyone could then install it, but only on their own
+repos, and its private key stays with you.
+
+The orchestrator sees every repo and names one when it opens an issue.
+With several repos, name an issue on the command line as `owner/name#12`.
+
+## Workspaces: one change across repos
+
+Some repos change together, like a Rails API and the React app that calls
+it. Put them in a workspace and an issue in either one becomes a single
+change across both:
+
+```yaml
+repos: [you/api, you/web]
+workspaces:
+  shop: [you/api, you/web]      # the order their PRs merge in
+```
+
+- **One branch, every repo.** The builder gets every repo of the workspace
+  checked out side by side, `api/` and `web/`, on one branch named for the
+  issue (`factory/web-12` for `you/web#12`), and is told each repo's checks.
+- **Gates per repo.** The gates run in each repo the change touches, in
+  that repo's own image and with its own commands, feature map and
+  scenarios. Their results are named for the repo: `api: test`,
+  `web: build`.
+- **One review.** The reviewer reads one diff across the repos, every path
+  under its repo's folder, and is asked to check the repos still agree.
+- **A PR per repo.** Each repo the change touches gets its own draft PR.
+  The PRs link to each other and list the order to merge them in. Only the
+  one that merges last closes the issue, so it stays open until the whole
+  change is in.
+- **Done when all merge.** The item waits on you once every repo passes,
+  and is done when every PR is merged. A PR closed without merging parks it.
+
+The builder and reviewer run in the first repo's image with its `env`, so
+that image needs every member's toolchain (Ruby and Node, say). Services
+of all the members start together; where two name a service the same, the
+first repo's wins. Triage reads only the issue's own repo.
+
+## GitLab repos
+
+Repos can be on GitLab, gitlab.com or self-hosted, alongside GitHub ones.
+Name them by host and path:
+
+```yaml
+repos:
+  - you/api                          # GitHub
+  - gitlab.com/team/web              # gitlab.com
+  - git.example.com/platform/infra/deploy   # self-hosted, nested groups
+```
+
+A group with a dot in its name needs `host:` set, as in
+`{name: my.team/web, host: gitlab.com}`.
+
+The factory works them the same way: it picks up issues labeled
+`factory:ready` and opens a draft merge request for each.
+
+**The token.** The factory reaches GitLab with `GITLAB_TOKEN`, which
+`factory setup` asks for and checks against each project.
+
+- A project access token limits it to one project. For several, use a
+  group access token or a personal token for a bot account.
+- The token needs the `api` and `write_repository` scopes.
+- It needs the Developer role, or Maintainer if Developers can't push to
+  the base branch.
+
+**CI.** On GitLab a pushed branch runs its own `.gitlab-ci.yml` with the
+project's runners and CI variables. So builders may never change
+`.gitlab-ci.yml` or `.gitlab/`: the diff guard adds both for every GitLab
+repo.
+
+**Differences from GitHub:**
+
+- GitLab doesn't record why an issue was closed, so the readiness check
+  never files a gap again once its issue is closed.
+- The dashboard's CI panel shows the commit's pipeline jobs.
+- To start work, a person needs Developer or higher (see
+  [Who can start work](security.md#who-can-start-work)).
+- Each repo's own self-hosted GitLab is added to the egress allowlist for
+  you.
+
+## Each repo's toolchain and checks
+
+`factory setup` reads each repo's files and suggests checks and a job image
+for its stack: Rails, Ruby, Node (Vite, Next.js, React), Python, Rust or Go.
+If the repo has a dev container with an `image`, the job image is built on
+that. You confirm each suggestion, and setup writes it to `factory.yaml`.
+For a Rails API and a Vite frontend it writes something like:
+
+```yaml
+repos:
+  - name: you/api
+    image_from: ruby:3.3.6-bookworm # ./factory images builds factory-job-you__api on it
+    gates:
+      install: bundle install
+      required: [lint, test]
+      commands: {lint: bundle exec rubocop, test: bin/rails db:prepare test}
+      proves_fix: none              # the proves-fix and coverage checks are Go-only for now
+      coverage: none
+  - name: you/web                   # Node is in the default image
+    env: {VITE_API_URL: http://localhost:3000}
+    gates:
+      install: npm ci
+      required: [lint, test, build]
+      commands: {lint: npm run lint, test: CI=true npm run test, build: npm run build}
+      proves_fix: none
+      coverage: none
+```
+
+| Key | What it does |
+| --- | --- |
+| `install` | Runs first on each commit's export, with the network on. If it fails, nothing else runs. The builder is told to run it too, along with the repo's own check commands. |
+| `image_from` | The base for the repo's job image: any Debian or Ubuntu image with the toolchain. `./factory images` builds the missing images (`--rebuild` rebuilds them all). |
+| `image` | An image you build yourself, when there's no `image_from`. It needs the agent CLIs, so start it from `deploy/job-image/Dockerfile` with `--build-arg BASE=...`. |
+| `env` | Set in the repo's agent and gate containers. A top-level `env` applies to every repo. Agents can read it, so it is not for secrets. |
+
+**Dependency cache.** A repo with an install step gets a cache at `/cache`
+(in `data/cache/<owner>__<name>`) for npm and pnpm. Their stores check
+every package against the lockfile's hashes, so one job can't plant a
+package a later job trusts. Only install may write to it. Gems
+(`vendor/bundle`), Python virtualenvs and Cargo's home are built inside
+each commit's export instead, so they start fresh every time.
+
+## Services: databases and the like
+
+When a repo's tests need a database, cache or queue, list it under the
+repo (or at the top level, for every repo). The factory starts it for each
+build and check:
+
+```yaml
+repos:
+  - name: you/api
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: factory}
+        ready: pg_isready -U postgres     # run until it succeeds, before anything else
+      redis: {image: redis:7, ready: redis-cli ping}
+    env:
+      DATABASE_URL: postgres://postgres:factory@postgres:5432/api_test
+      REDIS_URL: redis://redis:6379
+```
+
+How services behave:
+
+- **Reach a service by its name** as the host.
+- **Each job gets a fresh set.** Every implement job, and the readiness
+  check, gets its own set on a private network that has no way out.
+  `factory eval` gets a set too.
+- **Who joins.** The builder and every check join that network; reviewers
+  don't. Hidden scenarios join it as well, but they still reach nothing
+  else.
+- **Cleanup.** The services are removed when the job ends, and the daemon
+  clears any that a crash left behind.
+- **Each job starts empty.** Create the test database in the install step
+  (for example `bin/rails db:prepare`).
+- **Checks share data within a job.** The builder and every check share
+  one set, so data one check writes is there for the next. Tests that
+  clean up after themselves (a transaction per test) keep that from
+  mattering.
+
+Services need the docker runner on Docker 28 or newer, and can't be used
+with `network: host`. Don't put secrets in their `env`, since it goes on
+the docker command line.
+
+If a check fails because it can't connect to a database and the repo has
+no services, the readiness check says so. It suggests the services to add,
+read from the repo's `docker-compose.yml` or `config/database.yml`, instead
+of filing an issue for a builder, who can't edit `factory.yaml`.
+
+## Disk space
+
+Each job checks out the repo, installs its dependencies and runs in a
+container. A full disk fails jobs halfway, usually during install, where it
+looks like the builder's fault. So while jobs are waiting, the daemon
+checks free space at most once a minute. It starts no build while any of
+these has less than `budgets.min_free_disk_gb` (default 10; a negative
+value turns the check off):
+
+- **The data directory.**
+- **Where Docker stores containers.** For an engine on this machine, that's
+  its data root. Docker Desktop keeps its disk in its own VM, and a remote
+  engine (`DOCKER_HOST` or a docker context) is on another machine. For
+  those the daemon asks a short-lived container, using a job image already
+  on the machine; it never pulls one.
+- **Under WSL, the Windows drive** holding WSL's and Docker Desktop's
+  virtual disks (`runner.wsl_drive`, default `/mnt/c`). Inside WSL, `df`
+  shows the virtual disk's full size, not what's left on the drive under
+  it.
+
+While builds are stopped:
+
+- You're told once when builds stop, and again when they start.
+- They start again only at the limit plus 10% (at least 2 GB), so a disk
+  hovering at the limit doesn't stop and start them over and over.
+- If Docker can't be measured, they stay stopped.
+- The control room shows a banner.
+- `factory run-once`, `eval` and `compare` fail with "low on disk" rather
+  than report jobs that never ran.
+- The orchestrator still runs, since it writes next to nothing.
+
+## Skill sets
+
+A skill set is a folder under `skills/` holding Claude Code skills
+(`<skill>/SKILL.md`). Name it on any routing entry and the daemon mounts it
+read-only as the worker's `~/.claude/skills` (and `~/.codex/skills`):
+
+```yaml
+routing:
+  implement.M: {harness: claude, model: sonnet, skills: tdd-strict}
+```
+
+Every job records the skill set it ran with. `factory status` shows it,
+and so does the PR's job table.
+
+To try two skill sets on the same issue, use
+[`factory compare`](using.md#comparing-skill-sets).
+
+## Models and escalation
+
+`routing` picks the harness and model for each stage, such as
+`implement.S` or `review`. Triage rates each issue `XS`, `S`, `M` or `L`,
+and the item builds on the matching `implement.<size>` entry.
+
+The defaults lean on the cheap models where a miss is cheap to retry:
+
+- Small builds start on Haiku 5.5 and climb to Sonnet, then Opus, after two
+  failed attempts at a tier (`escalation.max_attempts_per_tier`, 2 by
+  default). The tiers are `escalation.implement`. After the last tier, the
+  item parks.
+- Text-only (`XS`) builds use `routing.implement.XS`, Haiku by default (see
+  [Text-only changes](quality.md#text-only-changes)).
+- Larger builds start on Sonnet or Opus.
+- Reviews run on GPT-6.1 Sol.
+
+The daemon refuses a config where a reviewer could run the same harness
+and model as the builder it reviews.
+
+**Session resume.** With the Docker runner, an implement retry on the same
+model continues the previous attempt's Claude session. This is best
+effort: a missing session starts fresh.
+
+**Pricing.** Claude Code reports its own cost. Codex reports only tokens,
+which the daemon prices from `pricing`, cached input included. Keep those
+prices current when OpenAI changes them.
+
+## Budgets
+
+The daemon enforces its own caps, under `budgets` in `factory.yaml`. The
+values below are this repo's.
+
+| Key | What it caps |
+| --- | --- |
+| `per_job` | Dollars per implement job, by size: `{XS: 0.5, S: 2, M: 6, L: 15}`. Without an `XS` entry, XS uses S's. |
+| `triage`, `review` | Dollars per triage or review job. |
+| `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. |
+| `concurrent_jobs` | Jobs running at once (3). |
+| `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
+| `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
+
+The orchestrator's spend has its own caps, `orchestrator.run_budget` per
+run and `orchestrator.daily_budget` per day, which don't count against the
+build budget. `factory compare` arms split what's left of today's budget.
+
+Set a spend alert on both API accounts as well. Spend from a job killed
+mid-run is not recorded (the CLIs report cost only at the end), so the
+daily cap can undercount after a crash.
+
+## Claude-only review
+
+By default Codex reviews what Claude builds, so the reviewer is never the
+model that wrote the code. If you only have Claude, a different Claude
+model can review instead.
+
+The rule: the reviewer's model must differ from every model the builder
+can reach, including the tiers a retry escalates to. So a reviewer on Opus
+means Opus cannot be a build tier. Claude models compare by family, so
+`claude-sonnet-4-5` counts as `sonnet`.
+
+Change these entries in `factory.yaml` and leave the rest:
+
+```yaml
+routing:
+  implement.S:       {harness: claude, model: haiku}
+  implement.M:       {harness: claude, model: sonnet}
+  implement.L:       {harness: claude, model: sonnet}
+  review:            {harness: claude, model: opus}
+  # drop review.high_risk, or point it at opus (or fable) too
+escalation:
+  implement: [haiku, sonnet]
+```
+
+No OpenAI key is needed once no route names `codex`.
+
+This is weaker than cross-vendor review: two models from one family tend
+to share blind spots. The rule covers the reviewer, whose approval is
+needed before any PR opens. The critic that also reads high-risk diffs
+runs only after the reviewer approves and can only add a block. So it uses
+`routing.critic` (default: `implement.L`) even when that is the builder's
+model.
