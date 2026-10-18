@@ -117,3 +117,20 @@ func TestFeatureCheckRedOnBase(t *testing.T) {
 		t.Fatalf("PR body:\n%s", body)
 	}
 }
+
+// The base gets the change's install step before the check reruns there,
+// so a check that only fails for want of dependencies isn't excused.
+func TestFeatureCheckBaseGetsInstall(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok",
+		"test -f .installed || exit 3; test ! -f add.go || exit 3", 1)})
+	e.p.Cfg.Gates.Install = "touch .installed"
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, goodBuild, goodBuild, goodBuild}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if it := e.item(t, 1); it.Stage == state.AwaitingHuman {
+		t.Fatalf("a real failure was excused as red on base: %+v", it)
+	}
+}

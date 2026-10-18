@@ -63,19 +63,18 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 		r, done := ran[cmd]
 		if !done {
 			r = p.featureCheck(ctx, jobID, it.Repo, gateDir, cmd, snap)
-			if r.Status == gates.Fail {
-				// A check that fails on the base branch too isn't this
-				// change's to fix; the builder can't change the map, so it
-				// would block every change to the feature.
+			if r.Status == gates.Fail && r.code > 0 {
+				// A check that fails the same way on the base branch isn't
+				// this change's to fix, and the builder can't change the
+				// map, so it would block every change to the feature. The
+				// base gets the same install as the change, so missing
+				// dependencies don't pass for a red base.
 				if baseDir == "" {
-					baseDir = filepath.Join(p.jobDir(jobID), "feature-base")
-					if err := p.git(it.Repo).Export(ctx, ws.Repo, base, baseDir); err != nil {
-						baseDir = "-"
-					}
+					baseDir = p.baseExport(ctx, jobID, it.Repo, ws.Repo, base)
 				}
-				if baseDir != "-" {
-					if code, _, err := p.gateExec(ctx, jobID, baseDir, cmd, gateRun{repo: it.Repo}); err == nil && code != 0 {
-						r = checkResult{Result: gates.Result{Status: gates.Pass, Detail: "fails on the base branch too, so it isn't counted against this change\n\n" + r.Detail}, baseRed: true}
+				if baseDir != "" && baseDir != "-" {
+					if code, _, err := p.gateExec(ctx, jobID, baseDir, cmd, gateRun{repo: it.Repo}); err == nil && code == r.code {
+						r = checkResult{Result: gates.Result{Status: gates.Pass, Detail: "fails the same way on the base branch, so it isn't counted against this change\n\n" + r.Detail}, baseRed: true}
 					}
 				}
 			}
@@ -88,10 +87,26 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 	return results, b
 }
 
+// baseExport exports the base commit and installs its dependencies, for
+// rerunning a failing check there; "-" when that can't be done.
+func (p *Pipeline) baseExport(ctx context.Context, jobID int64, repo, repoDir, base string) string {
+	dir := filepath.Join(p.jobDir(jobID), "feature-base")
+	if err := p.git(repo).Export(ctx, repoDir, base, dir); err != nil {
+		return "-"
+	}
+	if install := p.repoConf(repo).Gates.Install; install != "" {
+		if code, _, err := p.gateExec(ctx, jobID, dir, install, gateRun{repo: repo, install: true}); err != nil || code != 0 {
+			return "-"
+		}
+	}
+	return dir
+}
+
 // featureCheck runs one feature's check on the export under test.
 func (p *Pipeline) featureCheck(ctx context.Context, jobID int64, repo, gateDir, cmd string, snap snapshot) checkResult {
 	r := checkResult{Result: gates.Result{Status: gates.Pass}}
 	code, out, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: repo})
+	r.code = code
 	switch {
 	case err != nil:
 		r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
@@ -99,8 +114,11 @@ func (p *Pipeline) featureCheck(ctx context.Context, jobID int64, repo, gateDir,
 		r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
 	default:
 		if note := snap.tamperNote(gateDir); note != "" {
-			r.Status, r.Detail = gates.Fail, note
+			r.Status, r.Detail, r.code = gates.Fail, note, 0
 		}
+	}
+	if err != nil {
+		r.code = 0
 	}
 	return r
 }
@@ -109,6 +127,7 @@ func (p *Pipeline) featureCheck(ctx context.Context, jobID int64, repo, gateDir,
 // the base branch as well.
 type checkResult struct {
 	gates.Result
+	code    int // the exit code; 0 if it couldn't run or was tampered with
 	baseRed bool
 }
 

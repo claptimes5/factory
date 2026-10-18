@@ -439,7 +439,8 @@ When a change touches a feature, through its code or its tests:
 
 - its `check` runs as a gate, `feature:<name>`, after the required checks
   (once per distinct command). A check that fails on the base branch too
-  doesn't block the change; the PR says it fails, as on the base branch;
+  doesn't block the change if it fails the same way (same exit code,
+  after the same install); the PR marks it as failing on the base branch;
 - the reviewer and the PR get the **blast radius**: each feature touched,
   its risk, the files that touch it and what proves it, plus any changed
   files the map doesn't cover;

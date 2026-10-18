@@ -807,7 +807,7 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		return
 	}
 	defer func() {
-		for _, d := range []string{"repo", "repos", "work", "gate", "proves"} {
+		for _, d := range []string{"repo", "repos", "work", "gate", "proves", "feature-base"} {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()

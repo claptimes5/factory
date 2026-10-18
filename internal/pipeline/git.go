@@ -266,12 +266,13 @@ func (g *Git) FileAt(ctx context.Context, repo, sha, path string) (string, bool,
 // ChangedFiles lists paths changed between two commits.
 func (g *Git) ChangedFiles(ctx context.Context, repo, from, to string) ([]string, error) {
 	// -z: raw paths, never C-quoted (a quoted name matches no feature).
-	out, err := g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--name-only", "--no-renames", "-z", from, to)
-	if err != nil {
+	// Written to a buffer, so run doesn't trim a path's leading space.
+	var out strings.Builder
+	if _, err := g.run(ctx, repo, &out, "diff", "--no-ext-diff", "--name-only", "--no-renames", "-z", from, to); err != nil {
 		return nil, err
 	}
 	var files []string
-	for _, f := range strings.Split(out, "\x00") {
+	for _, f := range strings.Split(out.String(), "\x00") {
 		if f != "" {
 			files = append(files, f)
 		}
