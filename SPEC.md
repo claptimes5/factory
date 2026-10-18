@@ -399,6 +399,8 @@ The number that matters is cost per merged PR; everything else explains it.
 - `factory eval --config <routing.yaml>` runs them all in sandboxes and reports pass rate, cost, and time.
 - Run it before changing any model, prompt, skill, or routing threshold. A change that lowers pass rate or raises cost per pass is rejected.
 
+**Old-bug hunting.** Off by default (`hunt`). When the queue is empty and its own daily budget and the build budget allow, a lowest-priority read-only `hunt` job (`routing.hunt`, the reviewer's model by default) reviews one feature-map area of a repo's base branch, rotating by risk and time since last hunted (kept in `marks`), and answers a fixed JSON list of at most `hunt.max_findings` concrete bugs (file, line, what fails, how to reproduce, severity). The daemon drops findings outside the area or the file, deduplicates them against every finding filed before (same file and title, or within 5 lines in the file; recorded in `hunt_filed` events, which outlive the issue), and files each, within `hunt.daily_issue_cap`, through the sources' machinery as a `factory:from-hunt` issue waiting for approval, its text fenced.
+
 **Tuning loop.** Monthly, the orchestrator reads these metrics and proposes routing or prompt changes as a PR to `factory.yaml`. A human approves it like any other PR.
 
 ## M0 Bootstrap: a factory that builds itself

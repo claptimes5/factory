@@ -226,6 +226,9 @@ func run(args []string) error {
 		if err := p.CheckSecurityPrompt(); err != nil {
 			return err
 		}
+		if err := p.CheckHuntPrompt(); err != nil {
+			return err
+		}
 		if cmd == "serve" {
 			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
 				return err
@@ -594,6 +597,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		fmt.Fprintln(w, l)
 	}
 	for _, l := range groomLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
+	for _, l := range huntLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
 	for _, l := range autoMergeLines(ctx, st, cfg) {

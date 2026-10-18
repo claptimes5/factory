@@ -61,6 +61,7 @@ func Labels(intake string) []Label {
 		{LabelFromSentry, "362d59", "Factory: filed from a Sentry error; add " + intake + " to build it"},
 		{LabelFromDependabot, "0366d6", "Factory: filed from a Dependabot alert; add " + intake + " to build it"},
 		{LabelFromTODO, "c5def5", "Factory: filed from a TODO comment; add " + intake + " to build it"},
+		{LabelFromHunt, "c5def5", "Factory: filed by an old-bug hunt; add " + intake + " to build it"},
 		{LabelDuplicateQ, "cfd3d7", "Factory: grooming thinks this is a duplicate; add " + LabelClose + " to close it, or remove to dismiss"},
 		{LabelStaleQ, "cfd3d7", "Factory: grooming thinks this is stale; add " + LabelClose + " to close it, or remove to dismiss"},
 		{LabelSplitQ, "cfd3d7", "Factory: grooming thinks this is too big; add " + LabelSplit + " to split it, or remove to dismiss"},
@@ -185,6 +186,7 @@ type Pipeline struct {
 	healthAt    time.Time // when main's CI was last read
 	groomDue    time.Time // when the grooming cadence last fired
 	groomHeld   string    // day a due grooming run waited for budget, to notify once
+	huntHeld    string    // day a due hunt waited for budget, to notify once
 	// groomChildAt is when sub-issues waiting for approval were last checked.
 	groomChildAt time.Time
 	// groomPollAt is when the labels of flagged issues were last read.
@@ -435,6 +437,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	p.healthTrigger(ctx, time.Now())
 	p.sourcesTrigger(ctx, time.Now(), async)
 	p.groomTrigger(ctx, time.Now())
+	p.huntTrigger(ctx, time.Now())
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
 		if errors.Is(err, ErrDiskLow) && async {
@@ -497,13 +500,17 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if !slices.Contains(except, "tune") && p.tuneBudget(ctx) != "" {
 		except = append(except, "tune")
 	}
+	// A hunt waits for its own daily budget and the build budget.
+	if p.huntBudget(ctx) != "" {
+		except = append(except, "hunt")
+	}
 	if msg := p.diskLow(ctx); msg != "" {
 		if !p.diskHalt {
 			p.diskHalt = true
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -1221,6 +1228,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runLearn(ctx, j)
 	case "groom":
 		err = p.runGroom(ctx, j)
+	case "hunt":
+		err = p.runHunt(ctx, j)
 	case store.KindVerify, store.KindParallelCritic, store.KindSecurity:
 		// Only ever run inside a review, which starts its own again.
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "runs only inside the review that started it")

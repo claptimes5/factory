@@ -284,6 +284,13 @@ real runs, and are to be looked at again once the metrics have data:
   change, since its high-risk features can't be ruled out.
 - A security finding the verifier refutes stops blocking. The PR says so
   and won't merge itself, but a person has to read it.
+- Old-bug hunting is off, and its findings aren't put to the verifier
+  before they're filed: a person approves each issue anyway. If too many
+  are closed unbuilt, a verifier pass, or a stricter prompt, comes next.
+- A hunt's finding counts as filed before when its file and title match
+  one, or it's within 5 lines of one in the same file: two real bugs that
+  close together are filed one at a time at best, and the same bug moved
+  further by edits, and worded anew, can come back.
 
 ## Security pass
 
@@ -395,6 +402,9 @@ tests include no property-based or fuzz test. It files the work to fix
 each.
 
 This repo's own map is [`features.yaml`](../features.yaml).
+
+The map also steers [old-bug hunting](using.md#hunting-for-old-bugs),
+which reviews one feature at a time, riskiest and longest-unhunted first.
 
 ## How ready a repo is
 

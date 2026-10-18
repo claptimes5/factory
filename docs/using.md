@@ -690,6 +690,37 @@ closes nothing that scan), and doesn't clone while the disk is low.
 `factory status` shows each source's last read of each repo, what it found
 and the issues it has open.
 
+## Hunting for old bugs
+
+With [`hunt.enabled`](configuration.md#old-bug-hunting) on, the factory
+spends its idle time reading code it has already shipped. Once a day (by
+default), when no other job is queued or running and the budget allows, a
+hunt job checks out one repo's base branch read-only and reviews **one
+area** of its [feature map](quality.md#feature-map). It goes round the
+areas: never-hunted ones first, riskiest first, then the one hunted
+longest ago, with a `high` area coming round three times as often as a
+`low` one.
+
+The hunt reports only concrete bugs it's confident of, each with the file
+and line, what fails and how to make it fail, and a severity; style,
+refactors and missing tests are out. The factory drops any finding whose
+file isn't in the area or on the base branch, or whose line isn't in the
+file, keeps the most severe `hunt.max_findings` (3), and files each as an
+issue labeled `factory:from-hunt`, like the
+[sources'](#issues-from-sentry-dependabot-and-todos): **never built on its
+own**, it waits for someone with write access to add `factory:ready`. The
+model's words are fenced in the issue as an unchecked report, beside the
+lines of code it points at, and the builder is asked to prove the bug
+with a failing test before fixing it.
+
+A finding is filed once. Every finding filed is remembered, whatever
+became of its issue: a later hunt's finding with the same file and title
+(ignoring case and spacing), or in the same file within 5 lines of one, is
+dropped, and each hunt is shown the titles of the area's earlier findings,
+open or closed, as already reported or rejected. Closing a hunt's issue is how you say
+no. `factory status` shows how many hunts ran per repo and how many
+issues they filed.
+
 ## Backlog grooming
 
 With [`grooming.every`](configuration.md#backlog-grooming) set (weekly is

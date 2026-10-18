@@ -49,6 +49,8 @@ func SourceLabel(src string) string {
 		return LabelFromSentry
 	case SourceDependabot:
 		return LabelFromDependabot
+	case SourceHunt:
+		return LabelFromHunt
 	}
 	return LabelFromTODO
 }
@@ -60,6 +62,8 @@ func sourceTitle(src string) string {
 		return "Sentry"
 	case SourceDependabot:
 		return "Dependabot"
+	case SourceHunt:
+		return "Old-bug hunt"
 	}
 	return "TODOs"
 }
@@ -364,7 +368,7 @@ func (p *Pipeline) prepare(ctx context.Context, src, repo string, sc *scan, trac
 			pr.onForge[m[2]] = is
 		}
 	}
-	room, err := p.capRoom(ctx, repo)
+	room, err := p.capRoom(ctx, src, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -388,11 +392,19 @@ func (p *Pipeline) prepare(ctx context.Context, src, repo string, sc *scan, trac
 	return pr, nil
 }
 
-// capRoom is how many more issues the sources may file for a repo today.
-func (p *Pipeline) capRoom(ctx context.Context, repo string) (int, error) {
+// capRoom is how many more issues a source may file for a repo today.
+// Hunts have their own cap, and don't count toward the sources'.
+func (p *Pipeline) capRoom(ctx context.Context, src, repo string) (int, error) {
 	since := time.Now().UTC().Format("2006-01-02") + "T00:00:00"
+	hunted, err := p.Store.CountEventsFor(ctx, "hunt_filed", repo, since)
+	if err != nil {
+		return 0, err
+	}
+	if src == SourceHunt {
+		return max(0, p.Cfg.Hunt.DailyIssueCap-hunted), nil
+	}
 	n, err := p.Store.CountEventsFor(ctx, "source_filed", repo, since)
-	return max(0, p.Cfg.Sources.DailyIssueCap-n), err
+	return max(0, p.Cfg.Sources.DailyIssueCap-(n-hunted)), err
 }
 
 // fileFindings closes the issues whose findings went away, takes back
@@ -412,7 +424,7 @@ func (p *Pipeline) fileFindings(ctx context.Context, src, repo string, tracked [
 	}
 	for _, f := range pr.file {
 		// Checked again under the lock: another read may have filed since.
-		if room, err := p.capRoom(ctx, repo); err != nil || room == 0 {
+		if room, err := p.capRoom(ctx, src, repo); err != nil || room == 0 {
 			pr.held++
 			if err != nil {
 				return err
@@ -437,13 +449,16 @@ func (p *Pipeline) fileFindings(ctx context.Context, src, repo string, tracked [
 		p.notify(ctx, fmt.Sprintf("Filed %s from %s. It waits for you: add `%s` to build it.", p.ref(repo, num), sourceFrom(src), p.Cfg.Intake.Label))
 	}
 	if pr.held > 0 {
-		return p.capHeld(ctx, repo, pr.held)
+		return p.capHeld(ctx, src, repo, pr.held)
 	}
 	return nil
 }
 
 // capHeld says, once a day per repo, that the cap held issues back.
-func (p *Pipeline) capHeld(ctx context.Context, repo string, held int) error {
+func (p *Pipeline) capHeld(ctx context.Context, src, repo string, held int) error {
+	if src == SourceHunt {
+		return nil // the hunt says so itself, and hunts the area again
+	}
 	since := time.Now().UTC().Format("2006-01-02") + "T00:00:00"
 	if n, err := p.Store.CountEventsFor(ctx, "source_capped", repo, since); err != nil || n > 0 {
 		return err
@@ -461,6 +476,8 @@ func sourceFrom(src string) string {
 		return "Sentry"
 	case SourceDependabot:
 		return "a Dependabot alert"
+	case SourceHunt:
+		return "an old-bug hunt"
 	}
 	return "a TODO comment"
 }

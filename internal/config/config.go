@@ -355,6 +355,9 @@ type Config struct {
 	// Sources file issues from Sentry, Dependabot and TODO comments, for
 	// you to approve. See Sources.
 	Sources Sources `yaml:"sources"`
+	// Hunt reviews one feature area at a time for old bugs, and files
+	// them for you to approve. See Hunt.
+	Hunt Hunt `yaml:"hunt"`
 	// Grooming flags duplicate, stale and too-big issues on a cadence, for
 	// you to confirm. See Grooming.
 	Grooming Grooming `yaml:"grooming"`
@@ -578,6 +581,7 @@ func (c *Config) defaults() {
 	c.previewDefaults()
 	c.reviewDefaults()
 	c.riskDefaults()
+	c.huntDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -879,6 +883,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkReview()...)
 	errs = append(errs, c.checkRisk()...)
 	errs = append(errs, c.checkSecurity()...)
+	errs = append(errs, c.checkHunt()...)
 	switch c.PR.CheckOutput {
 	case "", CheckOutputPrivate, CheckOutputAlways, CheckOutputNever:
 	default:

@@ -847,6 +847,41 @@ grooming:
 won't start without `prompts/groom.md`. `factory eval` and
 `factory compare` never groom.
 
+## Old-bug hunting
+
+When the factory has nothing else to do, it can review one area of a
+repo's [feature map](quality.md#feature-map) at a time for bugs already
+in the code, and file what it finds for you to approve (see
+[Hunting for old bugs](using.md#hunting-for-old-bugs)). It's off unless
+you turn it on, since it spends on its own schedule:
+
+```yaml
+hunt:
+  enabled: true
+  every: 24h          # at least 1h
+  budget: 3           # dollars per hunt; left out, budgets.review
+  daily_budget: 3     # dollars on hunts a day; left out, one hunt's budget
+  max_findings: 3     # issues one hunt files at most, up to 10
+  daily_issue_cap: 3  # issues hunts file per repo a day; left out, max_findings
+  # repos: [acme/api] # default: every repo
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` | Turns hunting on. |
+| `every` | `24h` | How often a hunt may start, at least `1h`. The first starts as soon as the factory is idle; the clock survives restarts. A hunt starts only while no other job is queued or running, and is queued behind every other kind. |
+| `budget` | `budgets.review` | Dollars per hunt. |
+| `daily_budget` | `budget` | What hunts may spend a day. A hunt also counts toward `budgets.daily_total`, and starts only when a whole hunt's `budget` still fits in both. |
+| `max_findings` | `3` | The most issues one hunt files; the most severe go first. |
+| `daily_issue_cap` | `max_findings` | How many issues hunts may file per repo a day, apart from `sources.daily_issue_cap`. Findings it holds back aren't lost: the area counts as not hunted, and comes round again next. |
+| `repos` | every repo | Which repos. Each hunt takes the repo hunted longest ago. |
+
+`routing.hunt` picks its model; left out, it's the reviewer's
+(`routing.review`'s harness, model and effort). `timeouts.hunt` is 20
+minutes by default. With hunting on, the daemon won't start without
+`prompts/hunt.md`. A repo with no `features.yaml` isn't hunted.
+`factory eval` and `factory compare` never hunt.
+
 ## PR previews
 
 For a web app, the factory can screenshot the pages a change touches once
