@@ -1,7 +1,7 @@
 # Factory configuration. Version-controlled; agents may not edit it.
 # See SPEC.md "Harness adapters and model routing" and "Budgets".
 
-repo: claptimes5/factory     # or repos: [owner/a, owner/b]; see "Several repositories" in the README
+repo: claptimes5/factory     # or a repos: list; see "Several repositories" in the README
 base_branch: main
 data_dir: ./data              # SQLite db, job logs, scratch workdirs
 
@@ -67,6 +67,7 @@ pricing:
 # Deterministic gates, run by the daemon in the job container after the
 # builder stops. A required gate with no command is MISCONFIGURED and fails.
 gates:
+  # install: npm ci          # runs first, with the network on; see the README
   required: [types, lint, test, build]
   commands:
     types: go vet ./...

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -114,12 +115,18 @@ type fakeGitHub struct {
 	created  []string
 	manifest map[string]any
 	auth     []string
+	files    map[string]map[string]string // repo -> path -> contents
+	runCmd   func(io.Writer, string, ...string) error
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auth = append(f.auth, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
+	if repo, path, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/repos/"), "/contents/"); ok && f.files[repo] != nil {
+		fakeContents(w, f.files[repo], path)
+		return
+	}
 	// Every repo under o looks like o/r.
 	r.URL.Path = anyRepo.ReplaceAllString(r.URL.Path, "/repos/o/r")
 	r.URL.RawPath = anyRepo.ReplaceAllString(r.URL.RawPath, "/repos/o/r")
@@ -203,10 +210,104 @@ func TestSetReposTwice(t *testing.T) {
 			t.Fatalf("lost the rest of the file: %+v", cfg)
 		}
 	}
+	// A repo's own settings survive a change to the list.
 	b, _ := os.ReadFile(path)
-	os.WriteFile(path, []byte(strings.Replace(string(b), "  - o/a\n", "  - name: o/a\n    base_branch: dev\n", 1)), 0o644)
-	if err := setRepos(path, []string{"o/a"}); err == nil || !strings.Contains(err.Error(), "o/a settings of its own") {
-		t.Fatalf("want a refusal, got %v", err)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "  - o/a\n", "  - name: o/a\n    base_branch: dev\n    gates: {install: npm ci}\n", 1)), 0o644)
+	if err := setRepos(path, []string{"o/a", "o/d"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := cfg.RepoConf("o/a"); a.BaseBranch != "dev" || a.Gates.Install != "npm ci" {
+		t.Fatalf("o/a lost its settings: %+v", a)
+	}
+	if err := setRepos(path, []string{"o/d"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "\nrepo: o/d\n") {
+		t.Fatalf("one bare repo should use the short form:\n%s", b)
+	}
+}
+
+func fakeContents(w http.ResponseWriter, files map[string]string, path string) {
+	if c, ok := files[path]; ok {
+		json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(c))})
+		return
+	}
+	var list []map[string]string
+	seen := map[string]bool{}
+	for p := range files {
+		rest, ok := strings.CutPrefix(p, path)
+		if !ok || (path != "" && !strings.HasPrefix(rest, "/") && path[len(path)-1] != '/') {
+			continue
+		}
+		rest = strings.TrimPrefix(rest, "/")
+		name, _, dir := strings.Cut(rest, "/")
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		typ := "file"
+		if dir {
+			typ = "dir"
+		}
+		list = append(list, map[string]string{"name": name, "type": typ})
+	}
+	if len(list) == 0 {
+		w.WriteHeader(404)
+		return
+	}
+	json.NewEncoder(w).Encode(list)
+}
+
+// Setup suggests checks and an image per repo from its files, and writes
+// the ones you accept.
+func TestSetupSuggestsChecks(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, files: map[string]map[string]string{
+		"o/api": {"Gemfile": "gem \"rails\"\ngem \"rspec-rails\"\n", ".ruby-version": "3.3.6"},
+		"o/web": {"package.json": `{"scripts":{"build":"vite build","test":"vitest"},"devDependencies":{"vite":"^8"}}`, "package-lock.json": "{}"},
+	}}
+	var built []string
+	f.runCmd = func(_ io.Writer, name string, args ...string) error {
+		cmd := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(cmd, "image inspect factory-job-o-api"):
+			return errors.New("no such image")
+		case strings.HasPrefix(cmd, "build"):
+			built = append(built, cmd)
+		}
+		return nil
+	}
+	cfgPath, _, out := runSetup(t, f,
+		"o/api, o/web",
+		"3", "ghp_token123",
+		"n", // no labels
+		"y", // o/api's checks
+		"y", // o/web's checks
+		"y", // build the images
+		"sk-ant-api03-abc",
+		"",
+		"",
+	)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := cfg.RepoConf("o/api")
+	if api.Image != "factory-job-o-api:latest" || api.ImageFrom != "ruby:3.3-bookworm" || api.Gates.Install != "bundle install" || api.Gates.Commands["test"] != "bundle exec rspec" || api.Gates.ProvesFix != "" {
+		t.Fatalf("o/api = %+v %+v\n%s", api, api.Gates, out)
+	}
+	web, _ := cfg.RepoConf("o/web")
+	if web.Image != cfg.Runner.Image || strings.Join(web.Gates.Required, ",") != "test,build" || web.Gates.DiffGuard.MaxChangedLines == 0 {
+		t.Fatalf("o/web = %+v %+v", web, web.Gates)
+	}
+	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o-api:latest --build-arg BASE=ruby:3.3-bookworm ") {
+		t.Fatalf("built %q", built)
+	}
+	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o-api:latest") {
+		t.Fatalf("output:\n%s", out)
 	}
 }
 
@@ -249,8 +350,11 @@ func testConfig(t *testing.T, repo string) string {
 		t.Fatal(err)
 	}
 	y := regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAllString(string(b), "repo: "+repo)
-	path := filepath.Join(t.TempDir(), "factory.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "factory.yaml")
 	os.WriteFile(path, []byte(y), 0o644)
+	os.MkdirAll(filepath.Join(dir, "deploy", "job-image"), 0o755)
+	os.WriteFile(filepath.Join(dir, "deploy", "job-image", "Dockerfile"), []byte("FROM scratch\n"), 0o644)
 	return path
 }
 
@@ -262,6 +366,9 @@ func runSetup(t *testing.T, f *fakeGitHub, answers ...string) (cfgPath, envPath,
 	oldAPI, oldWeb, oldRun := githubAPI, githubWeb, runCmd
 	githubAPI, githubWeb = srv.URL, "https://github.example"
 	runCmd = func(io.Writer, string, ...string) error { return nil } // Docker works, image built
+	if f.runCmd != nil {
+		runCmd = f.runCmd
+	}
 	t.Cleanup(func() { githubAPI, githubWeb, runCmd = oldAPI, oldWeb, oldRun })
 	for _, k := range envKeys {
 		t.Setenv(k, "")
