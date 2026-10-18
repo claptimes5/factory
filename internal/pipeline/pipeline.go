@@ -85,9 +85,10 @@ type GitHub interface {
 }
 
 // AutoMerger is a GitHub (or GitLab) client that can merge a PR once its
-// checks pass, if its head is still sha.
+// checks pass, if its head is still sha, and call that off.
 type AutoMerger interface {
 	AutoMerge(ctx context.Context, n int, sha, method string) error
+	CancelAutoMerge(ctx context.Context, n int) error
 }
 
 // RepoClients are one repository's GitHub client and git remote.
@@ -531,7 +532,7 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 					pr.Number, p.ref(it.Repo, it.IssueNumber), arg))
 			}
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
-			if by == "daemon" {
+			if p.autoMerged(ctx, it) {
 				p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
 			}
 		} else if pr.State == "closed" {

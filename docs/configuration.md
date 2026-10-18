@@ -344,26 +344,40 @@ repos:
 
 A PR qualifies when its risk (after the [feature map](quality.md#feature-map)
 has had its say) is at or below `up_to` and its size is at or below
-`max_size`. High-risk changes and workspace changes always wait for you.
-For a qualifying PR, the factory:
+`max_size`. High-risk changes, workspace changes, and changes whose feature
+map couldn't be read always wait for you. For a qualifying PR, the factory:
 
 1. Marks the draft ready and turns on GitHub's auto-merge (or GitLab's
-   "merge when the pipeline succeeds"), pinned to the commit the gates and
-   reviewer passed.
+   "merge when the pipeline succeeds") for the commit the gates and
+   reviewer passed. GitHub refuses if the branch has moved since.
 2. Labels the PR and issue `factory:auto-merge` instead of
    `factory:awaiting-you`, and notifies you.
-3. Lets GitHub merge it when the required checks and reviews pass. If CI
-   fails, nothing merges and the PR waits for you.
+3. Lets GitHub merge it when the branch's required checks and reviews pass.
+   If CI fails, nothing merges and the PR waits for you.
 
-To stop one, turn off auto-merge on the PR or close it.
+To stop one, park the item, turn off auto-merge on the PR, or close it. The
+factory also turns auto-merge off itself before it builds on the branch
+again, so a new commit never merges before it has been checked. If you push
+to the PR yourself, turn auto-merge off first: GitHub keeps it on for a
+push from anyone with write access.
 
-The repo has to allow it. On GitHub, turn on **Allow auto-merge** in the
-repo's settings. If your branch protection requires an approving review,
-auto-merge still waits for one, so a PR merges as soon as you approve it
-rather than on its own. To let these PRs merge without you, protect the
-branch with required status checks but no required review, or give the
-factory's GitHub App a bypass in a ruleset. If the factory can't turn on
-auto-merge, it says why and the PR waits for you as usual.
+The repo has to be set up for it:
+
+- **Allow auto-merge** must be on in the repo's settings (GitHub).
+- **Make your CI checks required** in branch protection. GitHub's
+  auto-merge waits only for required checks. If nothing is required, the
+  factory merges only when every check on the commit has already passed,
+  and otherwise leaves the PR for you. On GitLab, a pipeline must have run
+  on the commit.
+- **Required reviews still apply.** If branch protection requires an
+  approving review, the PR merges the moment you approve it. To let these
+  PRs merge without you, require status checks but no review, or give the
+  factory's GitHub App a bypass in a ruleset.
+
+If the factory can't turn on auto-merge, it says why and the PR waits for
+you as usual. On GitLab, `method: rebase` and `merge` both follow the
+project's own merge method; only `squash` changes it. PRs waiting to
+auto-merge count toward `awaiting_human_max` until they merge.
 
 ## Budgets
 

@@ -156,3 +156,6 @@ func (m *Memory) AutoMerge(_ context.Context, n int, _, _ string) error {
 	}
 	return fmt.Errorf("no PR %d", n)
 }
+
+// CancelAutoMerge has nothing to cancel: AutoMerge merges at once.
+func (m *Memory) CancelAutoMerge(context.Context, int) error { return nil }

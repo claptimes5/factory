@@ -144,12 +144,13 @@ type partBlast struct {
 // workspace, a section per repo.
 func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int64, bs []partBlast) string {
 	var md strings.Builder
-	found := false
+	found, unread := false, false
 	risk, feature := "", ""
 	for _, pb := range bs {
 		if pb.b == nil {
 			continue
 		}
+		unread = unread || pb.b.note != ""
 		found = true
 		if r, f := features.MaxRisk(pb.b.hits); features.Higher(r, risk) {
 			risk, feature = r, f
@@ -176,7 +177,7 @@ func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int
 		it.Risk = risk
 	}
 	out := md.String()
-	data, _ := json.Marshal(map[string]string{"markdown": out})
+	data, _ := json.Marshal(map[string]any{"markdown": out, "unread": unread})
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "blast_radius", Data: string(data)}), "AddEvent")
 	return out
 }
@@ -263,4 +264,21 @@ func code(files []string) []string {
 // cell keeps text from breaking a markdown table row.
 func cell(s string) string {
 	return strings.NewReplacer("|", "\\|", "\n", " ").Replace(s)
+}
+
+// blastUnread says whether the feature map couldn't be read for a job, so
+// the item's risk may be understated.
+func (p *Pipeline) blastUnread(ctx context.Context, itemID, jobID int64) bool {
+	evs, err := p.Store.Events(ctx, itemID)
+	if err != nil {
+		return true
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if e := evs[i]; e.Type == "blast_radius" && e.JobID != nil && *e.JobID == jobID {
+			var d struct{ Unread bool }
+			_ = json.Unmarshal([]byte(e.Data), &d)
+			return d.Unread
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,6 +171,43 @@ func TestUndraft(t *testing.T) {
 	for in, want := range map[string]string{"Draft: Fix it (#3)": "Fix it (#3)", "[WIP] x": "x", "Fix drafts": "Fix drafts"} {
 		if got, _ := undraft(in); got != want {
 			t.Errorf("undraft(%q) = %q", in, got)
+		}
+	}
+}
+
+func TestAutoMerge(t *testing.T) {
+	for _, c := range []struct {
+		pipeline string
+		want     string
+		err      bool
+	}{
+		{`{"sha":"abc"}`, `PUT title=Fix it|PUT merge {"auto_merge":true,"merge_when_pipeline_succeeds":true,"sha":"abc","squash":true}`, false},
+		{`null`, ``, true},
+		{`{"sha":"old"}`, ``, true},
+	} {
+		var calls []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			switch p := r.URL.EscapedPath(); {
+			case r.Method == "GET" && strings.HasSuffix(p, "/merge_requests/4"):
+				w.Write([]byte(`{"iid":4,"title":"Draft: Fix it","head_pipeline":` + c.pipeline + `}`))
+			case r.Method == "PUT" && strings.HasSuffix(p, "/merge_requests/4"):
+				var in map[string]string
+				json.Unmarshal(b, &in)
+				calls = append(calls, "PUT title="+in["title"])
+				w.Write([]byte(`{}`))
+			case r.Method == "PUT" && strings.HasSuffix(p, "/merge_requests/4/merge"):
+				calls = append(calls, "PUT merge "+strings.TrimSpace(string(b)))
+				w.Write([]byte(`{}`))
+			default:
+				w.WriteHeader(404)
+			}
+		}))
+		cl := &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+		err := cl.AutoMerge(context.Background(), 4, "abc", "squash")
+		srv.Close()
+		if got := strings.Join(calls, "|"); (err != nil) != c.err || got != c.want {
+			t.Errorf("pipeline %s: %v\ngot  %s\nwant %s", c.pipeline, err, got, c.want)
 		}
 	}
 }

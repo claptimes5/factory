@@ -42,6 +42,7 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	if err := p.Store.SetStage(ctx, it.ID, state.Parked, "daemon", reason); err != nil {
 		return err
 	}
+	p.cancelAutoMerge(ctx, it, "the item was parked")
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
 	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
@@ -155,6 +156,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 			return err
 		}
 	}
+	// This build will push to the PR's branch: nothing it pushes may merge
+	// before the gates and reviewer pass it.
+	p.cancelAutoMerge(ctx, it, "the factory is building on it again")
 
 	fail := func(run agentRun, st state.JobState, msg string) error {
 		if p.stopIfCancelled(ctx, j, it, run) {
@@ -733,7 +737,8 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if len(in.Heads) > 0 {
 		return p.openWorkspacePRs(ctx, it, is, in)
 	}
-	body, err := p.prBody(ctx, it, in, fmt.Sprintf("Closes #%d", it.IssueNumber))
+	auto := p.autoMergeWanted(ctx, it, in)
+	body, err := p.prBody(ctx, it, in, fmt.Sprintf("Closes #%d", it.IssueNumber), auto)
 	if err != nil {
 		return err
 	}
@@ -757,8 +762,12 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if err := p.Store.SetStage(ctx, it.ID, state.AwaitingHuman, "daemon", fmt.Sprintf("draft PR #%d ready", pr.Number)); err != nil {
 		return err
 	}
-	if p.autoMerge(ctx, it, is, pr, in.Head) {
-		return nil
+	if auto {
+		if p.autoMerge(ctx, it, is, pr, in.Head) {
+			return nil
+		}
+		// The body promised a merge that won't happen.
+		p.warn(p.gh(it.Repo).UpdatePRBody(ctx, pr.Number, strings.Replace(body, autoFooter, humanFooter, 1)), "UpdatePRBody")
 	}
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
@@ -770,7 +779,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 
 // prBody is a PR's description: top (what it closes, and in a workspace
 // the linked PRs), then the evidence.
-func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInput, top string) (string, error) {
+func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInput, top string, auto bool) (string, error) {
 	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
 	if err != nil {
 		return "", err
@@ -813,10 +822,10 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 			break
 		}
 	}
-	if len(in.Heads) == 0 && p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) {
-		b.WriteString("_This change is within the repo's `auto_merge` setting, so it merges itself once its checks pass. To stop that, turn off auto-merge on this PR or close it._\n")
+	if auto {
+		b.WriteString(autoFooter)
 	} else {
-		b.WriteString("_Merge is always human. Review the diff before merging._\n")
+		b.WriteString(humanFooter)
 	}
 	return b.String(), nil
 }
@@ -830,19 +839,30 @@ func partRepos(parts []*part) []string {
 	return out
 }
 
-// autoMerge hands a PR to the forge to merge once its checks pass, when
-// the repo's auto_merge covers the item's risk and size. The merge is
-// pinned to the verified commit. It reports whether it did; otherwise the
-// PR waits for a human as usual.
+const (
+	autoFooter  = "_This change is within the repo's `auto_merge` setting, so it merges itself once its required checks pass. To stop that, turn off auto-merge on this PR, park the item, or close the PR._\n"
+	humanFooter = "_Merge is always human. Review the diff before merging._\n"
+)
+
+// autoMergeWanted says whether the item's PR should merge itself: the
+// repo's auto_merge covers its risk and size, it is one repo's change, and
+// the feature map that rates its risk could be read.
+func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in ReviewInput) bool {
+	if len(in.Heads) > 0 || p.inWorkspace(it) || in.Head == "" {
+		return false
+	}
+	if _, ok := p.gh(it.Repo).(AutoMerger); !ok {
+		return false
+	}
+	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob)
+}
+
+// autoMerge hands a PR to the forge to merge once its checks pass, pinned
+// to the verified commit. It reports whether it did; otherwise the PR
+// waits for a human as usual.
 func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.Issue, pr *github.PR, head string) bool {
 	am := p.repoConf(it.Repo).AutoMerge
-	if !am.Allows(it.Risk, it.Complexity) {
-		return false
-	}
-	m, ok := p.gh(it.Repo).(AutoMerger)
-	if !ok {
-		return false
-	}
+	m := p.gh(it.Repo).(AutoMerger)
 	if err := m.AutoMerge(ctx, pr.Number, head, am.MergeMethod()); err != nil {
 		p.log().Warn("auto-merge", "pr", pr.Number, "err", err)
 		p.notify(ctx, fmt.Sprintf("Couldn't turn on auto-merge for %s, so it waits for you: %v", p.ref(it.Repo, pr.Number), err))
@@ -858,16 +878,48 @@ func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.
 	return true
 }
 
-// autoMerged says whether the factory handed the item's PR to auto-merge.
+// autoMerged says whether auto-merge is on for the item's PR: the factory
+// turned it on and hasn't turned it off since.
 func (p *Pipeline) autoMerged(ctx context.Context, it *store.WorkItem) bool {
-	evs, err := p.Store.Events(ctx, it.ID)
-	if err != nil {
+	if it.PRNumber == 0 {
 		return false
 	}
+	evs, err := p.Store.Events(ctx, it.ID)
+	if err != nil {
+		return true // unsure: cancelling is harmless, a missed cancel isn't
+	}
+	on := false
 	for _, e := range evs {
-		if e.Type == "auto_merge" && e.Reason == fmt.Sprintf("PR #%d", it.PRNumber) {
-			return true
+		if e.Reason == fmt.Sprintf("PR #%d", it.PRNumber) {
+			switch e.Type {
+			case "auto_merge":
+				on = true
+			case "auto_merge_off":
+				on = false
+			}
 		}
 	}
-	return false
+	return on
+}
+
+// cancelAutoMerge turns auto-merge off on the item's PR if the factory
+// turned it on, so nothing merges that the gates and reviewer haven't
+// passed.
+func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why string) {
+	if !p.autoMerged(ctx, it) {
+		return
+	}
+	gh := p.gh(it.Repo)
+	m, ok := gh.(AutoMerger)
+	if !ok {
+		return
+	}
+	if err := m.CancelAutoMerge(ctx, it.PRNumber); err != nil {
+		p.log().Warn("cancel auto-merge", "pr", it.PRNumber, "err", err)
+		p.notify(ctx, fmt.Sprintf("Couldn't turn off auto-merge on %s (%s): %v. Turn it off on the PR yourself.", p.ref(it.Repo, it.PRNumber), why, err))
+		return
+	}
+	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge_off", Reason: fmt.Sprintf("PR #%d", it.PRNumber), Data: fmt.Sprintf(`{"why":%q}`, why)}), "AddEvent")
+	p.warn(gh.UnlabelPR(ctx, it.PRNumber, LabelAutoMerge), "UnlabelPR")
+	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
 }

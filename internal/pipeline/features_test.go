@@ -264,6 +264,9 @@ func TestAutoMergeUpToARiskLevel(t *testing.T) {
 			if c.fail != nil && !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "Couldn't turn on auto-merge") }) {
 				t.Fatalf("notes: %q", notes)
 			}
+			if body := e.gh.bodies[it.PRNumber]; c.fail != nil && (!strings.Contains(body, humanFooter) || strings.Contains(body, autoFooter)) {
+				t.Fatalf("a PR that won't merge itself must not say it will:\n%s", body)
+			}
 			if !c.auto {
 				return
 			}
@@ -283,5 +286,55 @@ func TestAutoMergeUpToARiskLevel(t *testing.T) {
 				t.Fatalf("no daemon merge event: %+v", evs)
 			}
 		})
+	}
+}
+
+func TestAutoMergeIsCancelledBeforeAnythingNewCanMerge(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if _, on := e.gh.autoMerged[it.PRNumber]; !on {
+		t.Fatal("auto-merge should be on")
+	}
+	// Waiting on CI or an approval, a human parks it: it must not merge.
+	if err := e.p.Park(ctx, it.ID, "not yet"); err != nil {
+		t.Fatal(err)
+	}
+	if _, on := e.gh.autoMerged[it.PRNumber]; on || !slices.Contains(e.gh.cancelled, it.PRNumber) {
+		t.Fatalf("auto-merge still on after parking; cancelled %v", e.gh.cancelled)
+	}
+	if slices.Contains(e.gh.prLabels[it.PRNumber], LabelAutoMerge) {
+		t.Fatal("auto-merge label left on")
+	}
+	if p := e.p; p.autoMerged(ctx, e.item(t, 1)) {
+		t.Fatal("the item still reads as auto-merging")
+	}
+}
+
+func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": "features: [not valid"})
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.PRNumber == 0 {
+		t.Fatalf("no PR: %s", it.Stage)
+	}
+	if _, on := e.gh.autoMerged[it.PRNumber]; on {
+		t.Fatal("auto-merged with an unreadable feature map")
 	}
 }

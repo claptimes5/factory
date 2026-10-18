@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -437,10 +438,19 @@ func (c *Client) User(ctx context.Context) (string, error) {
 // AutoMerge takes the merge request out of draft and has GitLab merge it
 // when its pipeline succeeds, but only while its head is still sha.
 // method squash squashes; merge and rebase follow the project's setting.
+// With no pipeline GitLab would merge at once, so that is refused.
 func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error {
-	var r rawMR
+	var r struct {
+		rawMR
+		Pipeline *struct {
+			SHA string `json:"sha"`
+		} `json:"head_pipeline"`
+	}
 	if err := c.do(ctx, "GET", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), nil, &r); err != nil {
 		return err
+	}
+	if r.Pipeline == nil || r.Pipeline.SHA != sha {
+		return fmt.Errorf("no pipeline has run on the verified commit, so GitLab would merge it untested")
 	}
 	if t, ok := undraft(r.Title); ok {
 		if err := c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), map[string]any{"title": t}, nil); err != nil {
@@ -461,4 +471,14 @@ func undraft(title string) (string, bool) {
 		}
 	}
 	return title, false
+}
+
+// CancelAutoMerge turns off merge-when-pipeline-succeeds, if it's on.
+func (c *Client) CancelAutoMerge(ctx context.Context, n int) error {
+	err := c.do(ctx, "POST", fmt.Sprintf("%s/merge_requests/%d/cancel_merge_when_pipeline_succeeds", c.project(), n), nil, nil)
+	var he *HTTPError
+	if errors.As(err, &he) && he.Status == 406 { // it wasn't on
+		return nil
+	}
+	return err
 }
