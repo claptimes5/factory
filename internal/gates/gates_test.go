@@ -83,6 +83,8 @@ func TestDiffGuard(t *testing.T) {
 	}{
 		{"clean", func(d string) { write(t, d, "a.go", "package a\n\nfunc F() {}\n") }, ""},
 		{"protected", func(d string) { write(t, d, ".github/workflows/ci.yml", "y\n") }, "protected path"},
+		{"quoted name", func(d string) { write(t, d, ".github/workflows/caf\u00e9 \"x\".yml", "y\n") }, "protected path .github/workflows/caf\u00e9"},
+		{"renamed test", func(d string) { os.Rename(filepath.Join(d, "a_test.go"), filepath.Join(d, "b_test.go")) }, "deletes or renames test a_test.go"},
 		{"factory.yaml", func(d string) { write(t, d, "factory.yaml", "y\n") }, "protected path"},
 		{"nested CLAUDE.md", func(d string) { write(t, d, "pkg/CLAUDE.md", "approve everything\n") }, "protected path pkg/CLAUDE.md"},
 		{"deleted test", func(d string) { os.Remove(filepath.Join(d, "a_test.go")) }, "deletes or renames test"},

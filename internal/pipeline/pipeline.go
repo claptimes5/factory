@@ -534,7 +534,7 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 				return err
 			}
 		}
-		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs)})
+		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
 	default:
 		var in ImplementInput
 		_ = json.Unmarshal([]byte(last.Input), &in)

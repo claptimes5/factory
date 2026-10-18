@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/claptimes5/factory/internal/features"
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/state"
@@ -232,6 +231,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 
 	p.warn(p.Store.SetJobHead(ctx, j.ID, head), "SetJobHead")
+	// Before the job is marked done, so a restart that resumes at review
+	// finds both: the risk raised and the blast radius saved.
+	blastMD := p.applyBlast(ctx, it, j.ID, blast)
 	// Push exactly the commit that was verified.
 	if err := p.git(it.Repo).Push(ctx, ws.Repo, head, j.Branch, !in.FixRound); err != nil {
 		return fail(run, state.Failed, "push: "+err.Error())
@@ -242,16 +244,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, "daemon", line); err != nil {
 		return err
 	}
-	if blast != nil {
-		// Review scales with the riskiest feature the change touches.
-		if risk, feature := features.MaxRisk(blast.hits); features.Higher(risk, it.Risk) {
-			p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Risk: &risk}), "UpdateItem")
-			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &j.ID, Type: "risk_raised",
-				Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature)}), "AddEvent")
-			it.Risk = risk
-		}
-	}
-	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: head, Gates: line + "\n\n" + gateTable(results), Features: blast.markdown()})
+	return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: j.ID, Head: head, Gates: line + "\n\n" + gateTable(results), Features: blastMD})
 }
 
 // verify runs the deterministic checks on the commit under test: the diff

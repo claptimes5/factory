@@ -247,7 +247,13 @@ func (g *Git) Diff(ctx context.Context, repo, from, to string) (string, error) {
 
 // FileAt returns a file's contents at sha, and false if it isn't there.
 func (g *Git) FileAt(ctx context.Context, repo, sha, path string) (string, bool, error) {
-	if _, err := g.run(ctx, repo, nil, "cat-file", "-e", sha+":"+path); err != nil {
+	// ls-tree prints nothing for a missing path, and fails only for a bad
+	// commit, which is an error, not "no file".
+	ls, err := g.run(ctx, repo, nil, "ls-tree", "--name-only", sha, "--", path)
+	if err != nil {
+		return "", false, err
+	}
+	if ls == "" {
 		return "", false, nil
 	}
 	var b strings.Builder
@@ -259,11 +265,18 @@ func (g *Git) FileAt(ctx context.Context, repo, sha, path string) (string, bool,
 
 // ChangedFiles lists paths changed between two commits.
 func (g *Git) ChangedFiles(ctx context.Context, repo, from, to string) ([]string, error) {
-	out, err := g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--name-only", "--no-renames", from, to)
-	if err != nil || out == "" {
+	// -z: raw paths, never C-quoted (a quoted name matches no feature).
+	out, err := g.run(ctx, repo, nil, "diff", "--no-ext-diff", "--name-only", "--no-renames", "-z", from, to)
+	if err != nil {
 		return nil, err
 	}
-	return strings.Split(out, "\n"), nil
+	var files []string
+	for _, f := range strings.Split(out, "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, nil
 }
 
 // Push pushes exactly sha (not whatever HEAD is) to branch on the remote.

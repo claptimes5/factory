@@ -432,10 +432,14 @@ features:
     tests: []                                             # none yet; say so rather than leave it out
 ```
 
-A path is a file, a directory (with or without a trailing `/`), or a glob.
+A path is a file, a directory (with or without a trailing `/`), or a glob
+matched against the whole path (`*` stops at `/`; there is no `**`, so
+use a directory for a tree).
 When a change touches a feature, through its code or its tests:
 
-- its `check` runs as a gate, `feature:<name>`, after the required checks;
+- its `check` runs as a gate, `feature:<name>`, after the required checks
+  (once per distinct command). A check that fails on the base branch too
+  doesn't block the change; the PR says it fails, as on the base branch;
 - the reviewer and the PR get the **blast radius**: each feature touched,
   its risk, the files that touch it and what proves it, plus any changed
   files the map doesn't cover;

@@ -340,13 +340,17 @@ func orderGates(required []string) []string {
 	return out
 }
 
+// skipDirs hold dependencies and build output, not the repo's own code.
+var skipDirs = map[string]bool{"node_modules": true, "vendor": true, ".venv": true, ".git": true,
+	"dist": true, "build": true, "target": true, "coverage": true, ".next": true, "__pycache__": true}
+
 func listFiles(dir string) []string {
 	var out []string
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == "vendor" || d.Name() == ".venv" || d.Name() == ".git") {
+		if d.IsDir() && skipDirs[d.Name()] {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() {

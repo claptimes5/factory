@@ -186,4 +186,8 @@ var sourceExt = map[string]bool{
 	".swift": true, ".php": true, ".cs": true, ".ex": true, ".exs": true, ".scala": true, ".c": true, ".cc": true, ".cpp": true, ".h": true,
 }
 
-func isSource(f string) bool { return sourceExt[path.Ext(f)] }
+// isSource is hand-written code: not minified bundles or type stubs.
+func isSource(f string) bool {
+	base := path.Base(f)
+	return sourceExt[path.Ext(f)] && !strings.Contains(base, ".min.") && !strings.HasSuffix(base, ".d.ts")
+}

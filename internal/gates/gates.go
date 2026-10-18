@@ -109,16 +109,24 @@ type Guard struct {
 // base and head are commits in a daemon-owned repository.
 func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result {
 	var problems []string
-	status, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-M", base, head)
+	// -z: paths come raw, never C-quoted, so a name with a quote, a
+	// newline or a non-ASCII letter can't slip past the protected paths.
+	status, err := git(ctx, repoDir, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", base, head)
 	if err != nil {
 		return Result{"diff_guard", Fail, err.Error()}
 	}
-	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) < 2 {
-			continue
+	fields := strings.Split(strings.TrimSuffix(status, "\x00"), "\x00")
+	for i := 0; i < len(fields); {
+		code := fields[i]
+		n := 1 // a rename or copy names two paths
+		if strings.HasPrefix(code, "R") || strings.HasPrefix(code, "C") {
+			n = 2
 		}
-		code, paths := f[0], f[1:]
+		if code == "" || i+1+n > len(fields) {
+			break
+		}
+		paths := fields[i+1 : i+1+n]
+		i += 1 + n
 		for _, p := range paths {
 			if protected(p, g.ProtectedPaths) {
 				problems = append(problems, "edits protected path "+p)

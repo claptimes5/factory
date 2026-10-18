@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/features"
@@ -16,8 +18,8 @@ import (
 type blastRadius struct {
 	hits     []features.Hit
 	unmapped []string
-	checks   map[string]gates.Result // by feature name
-	note     string                  // why there is no map to use
+	checks   map[string]checkResult // by feature name
+	note     string                 // why there is no map to use
 }
 
 // loadMap reads the feature map at sha; nil when the repo has none.
@@ -48,29 +50,101 @@ func (p *Pipeline) featureChecks(ctx context.Context, jobID int64, it *store.Wor
 	if err != nil {
 		return nil, &blastRadius{note: "Couldn't list the changed files: " + err.Error()}
 	}
-	b := &blastRadius{checks: map[string]gates.Result{}}
+	b := &blastRadius{checks: map[string]checkResult{}}
 	b.hits, b.unmapped = m.Touched(changed)
 	var results []gates.Result
+	ran := map[string]checkResult{} // features often share a check
+	baseDir := ""
 	for _, h := range b.hits {
-		if h.Feature.Check == "" {
+		cmd := h.Feature.Check
+		if cmd == "" {
 			continue
 		}
-		r := gates.Result{Gate: "feature:" + h.Feature.Name, Status: gates.Pass}
-		code, out, err := p.gateExec(ctx, jobID, gateDir, h.Feature.Check, gateRun{repo: it.Repo})
-		switch {
-		case err != nil:
-			r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
-		case code != 0:
-			r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
-		default:
-			if note := snap.tamperNote(gateDir); note != "" {
-				r.Status, r.Detail = gates.Fail, note
+		r, done := ran[cmd]
+		if !done {
+			r = p.featureCheck(ctx, jobID, it.Repo, gateDir, cmd, snap)
+			if r.Status == gates.Fail {
+				// A check that fails on the base branch too isn't this
+				// change's to fix; the builder can't change the map, so it
+				// would block every change to the feature.
+				if baseDir == "" {
+					baseDir = filepath.Join(p.jobDir(jobID), "feature-base")
+					if err := p.git(it.Repo).Export(ctx, ws.Repo, base, baseDir); err != nil {
+						baseDir = "-"
+					}
+				}
+				if baseDir != "-" {
+					if code, _, err := p.gateExec(ctx, jobID, baseDir, cmd, gateRun{repo: it.Repo}); err == nil && code != 0 {
+						r = checkResult{Result: gates.Result{Status: gates.Pass, Detail: "fails on the base branch too, so it isn't counted against this change\n\n" + r.Detail}, baseRed: true}
+					}
+				}
 			}
+			ran[cmd] = r
 		}
+		r.Gate = "feature:" + h.Feature.Name
 		b.checks[h.Feature.Name] = r
-		results = append(results, r)
+		results = append(results, r.Result)
 	}
 	return results, b
+}
+
+// featureCheck runs one feature's check on the export under test.
+func (p *Pipeline) featureCheck(ctx context.Context, jobID int64, repo, gateDir, cmd string, snap snapshot) checkResult {
+	r := checkResult{Result: gates.Result{Status: gates.Pass}}
+	code, out, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: repo})
+	switch {
+	case err != nil:
+		r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
+	case code != 0:
+		r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
+	default:
+		if note := snap.tamperNote(gateDir); note != "" {
+			r.Status, r.Detail = gates.Fail, note
+		}
+	}
+	return r
+}
+
+// checkResult is a feature check's gate result, and whether it fails on
+// the base branch as well.
+type checkResult struct {
+	gates.Result
+	baseRed bool
+}
+
+// applyBlast raises the item's risk to the riskiest feature the change
+// touches, so review scales with it, and saves the blast radius with the
+// job for a review resumed after a restart. It returns the markdown.
+func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int64, b *blastRadius) string {
+	if b == nil {
+		return ""
+	}
+	if risk, feature := features.MaxRisk(b.hits); features.Higher(risk, it.Risk) {
+		p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Risk: &risk}), "UpdateItem")
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "risk_raised",
+			Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature)}), "AddEvent")
+		it.Risk = risk
+	}
+	md := b.markdown()
+	data, _ := json.Marshal(map[string]string{"markdown": md})
+	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "blast_radius", Data: string(data)}), "AddEvent")
+	return md
+}
+
+// savedBlast is the blast radius applyBlast saved for a job.
+func (p *Pipeline) savedBlast(ctx context.Context, itemID, jobID int64) string {
+	evs, err := p.Store.Events(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if e := evs[i]; e.Type == "blast_radius" && e.JobID != nil && *e.JobID == jobID {
+			var d struct{ Markdown string }
+			_ = json.Unmarshal([]byte(e.Data), &d)
+			return d.Markdown
+		}
+	}
+	return ""
 }
 
 // markdown is the blast radius for the reviewer and the PR.
@@ -92,11 +166,11 @@ func (b *blastRadius) markdown() string {
 			if risk == "" {
 				risk = "-"
 			}
-			fmt.Fprintf(&s, "| %s | %s | %s | %s |\n", cell(f.Name), risk, cell(strings.Join(code(h.Files), ", ")), cell(b.proof(f)))
+			fmt.Fprintf(&s, "| %s | %s | %s | %s |\n", cell(f.Name), risk, cell(list(h.Files, 20)), cell(b.proof(f)))
 		}
 	}
 	if len(b.unmapped) > 0 {
-		fmt.Fprintf(&s, "\nNot in the feature map: %s\n", strings.Join(code(b.unmapped), ", "))
+		fmt.Fprintf(&s, "\nNot in the feature map: %s\n", list(b.unmapped, 50))
 	}
 	return s.String()
 }
@@ -104,7 +178,11 @@ func (b *blastRadius) markdown() string {
 func (b *blastRadius) proof(f features.Feature) string {
 	var parts []string
 	if r, ok := b.checks[f.Name]; ok {
-		parts = append(parts, fmt.Sprintf("`%s`: %s", f.Check, r.Status))
+		status := r.Status
+		if r.baseRed {
+			status = "**fails, as on the base branch**"
+		}
+		parts = append(parts, fmt.Sprintf("`%s`: %s", f.Check, status))
 	}
 	if len(f.Tests) > 0 {
 		parts = append(parts, strings.Join(code(f.Tests), ", "))
@@ -113,6 +191,15 @@ func (b *blastRadius) proof(f features.Feature) string {
 		return "**nothing: no tests are mapped to it**"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// list names up to n files, so a change with thousands can't overflow
+// the PR body.
+func list(files []string, n int) string {
+	if len(files) <= n {
+		return strings.Join(code(files), ", ")
+	}
+	return strings.Join(code(files[:n]), ", ") + fmt.Sprintf(" and %d more", len(files)-n)
 }
 
 func code(files []string) []string {

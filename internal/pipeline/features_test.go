@@ -73,7 +73,8 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 // A failing feature check fails the gates, like any other check.
 func TestFeatureCheckFails(t *testing.T) {
 	ctx := context.Background()
-	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok", "echo broken; exit 3", 1)})
+	// Passes on base, which has no add.go; fails once the change adds it.
+	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok", "test ! -f add.go || { echo broken; exit 3; }", 1)})
 	e.addIssue(1)
 	e.claude.builds = []func(string) error{goodBuild, goodBuild, goodBuild}
 	if err := e.p.Drain(ctx); err != nil {
@@ -93,5 +94,26 @@ func TestFeatureCheckFails(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no failing feature:Math gate")
+	}
+}
+
+// A check that fails on the base branch too doesn't block the change: the
+// builder can't fix the map, and it isn't the change's fault.
+func TestFeatureCheckRedOnBase(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok", "exit 3", 1)})
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.claude.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.Stage != state.AwaitingHuman {
+		t.Fatalf("item = %+v", it)
+	}
+	if body := e.gh.comments[it.PRNumber][0]; !strings.Contains(body, "`exit 3`: **fails, as on the base branch**") {
+		t.Fatalf("PR body:\n%s", body)
 	}
 }
