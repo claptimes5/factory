@@ -82,6 +82,8 @@ func TestCoverable(t *testing.T) {
 		"vendor/x/y/y.go":   "package y\n",
 		"tools/sub/go.mod":  "module sub\n",
 		"tools/sub/in/i.go": "package in\n",
+		"tools/tools.go":    "//go:build tools\n\npackage tools\n",
+		"cmd/x/main.go":     "package main\n\nfunc main() {}\n",
 	} {
 		if err := writeFile(root, name, body); err != nil {
 			t.Fatal(err)
@@ -89,11 +91,14 @@ func TestCoverable(t *testing.T) {
 	}
 	for f, want := range map[string]bool{
 		"a/a.go": true, "a/a.pb.go": false, "vendor/x/y/y.go": false,
-		"tools/sub/in/i.go": false, "gone/g.go": true,
+		"tools/sub/in/i.go": false, "gone/g.go": true, "tools/tools.go": false,
 	} {
 		if got := coverable(root, f); got != want {
 			t.Errorf("coverable(%s) = %v, want %v", f, got, want)
 		}
+	}
+	if !isMain(root, "cmd/x") || isMain(root, "a") {
+		t.Error("isMain")
 	}
 }
 

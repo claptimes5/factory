@@ -3,6 +3,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,9 +94,12 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 		return r
 	}
 	if len(head) == 0 {
-		if err != nil || code != 0 {
+		switch {
+		case err != nil || code != 0:
 			r.Status, r.Detail = gates.Fail, fmt.Sprintf("the coverage run failed (exit %d %v)\n%s", code, err, tail(out, 2000))
-		} else {
+		case strings.Contains(out, "[no statements]") || strings.Contains(out, "[no test files]"):
+			r.Status, r.Detail = gates.Pass, "nothing to measure in the changed packages\n"+tail(out, 1000)
+		default:
 			r.Status, r.Detail = gates.Misconfigured, "the coverage command printed no coverage lines\n"+tail(out, 1000)
 		}
 		return r
@@ -122,7 +128,7 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 			baseExists[d] = true
 		}
 	}
-	base, _, _, _ := measure(baseDir)
+	base, baseOut, baseCode, baseErr := measure(baseDir)
 	var drops, lines []string
 	names := make([]string, 0, len(dirs))
 	for d := range dirs {
@@ -132,13 +138,16 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 	for _, d := range names {
 		h, inHead := head[d]
 		b, inBase := base[d]
+		if fi, err := os.Stat(filepath.Join(gateDir, d)); err != nil || !fi.IsDir() {
+			continue // removed: nothing left to cover
+		}
 		switch {
 		case !inHead && inBase:
 			// Its tests didn't run or didn't build; the test gate says why.
 			line := fmt.Sprintf("%s: %.1f%% → no coverage reported", d, b)
 			lines, drops = append(lines, line), append(drops, line)
 		case !inHead:
-		case !baseExists[d] && h == 0:
+		case !baseExists[d] && h == 0 && !isMain(gateDir, d):
 			line := fmt.Sprintf("%s: new, with no tests", d)
 			lines, drops = append(lines, line), append(drops, line)
 		case !inBase:
@@ -160,6 +169,9 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 		return r
 	}
 	r.Status, r.Detail = gates.Pass, strings.Join(lines, "\n")
+	if baseErr != nil || baseCode != 0 {
+		r.Detail += fmt.Sprintf("\nthe base run failed (exit %d %v), so packages it didn't measure have no floor:\n%s", baseCode, baseErr, tail(baseOut, 1000))
+	}
 	return r
 }
 
@@ -182,7 +194,25 @@ func coverable(root, f string) bool {
 	if err != nil {
 		return true // removed: its package may have lost tested code
 	}
+	if ok, err := build.Default.MatchFile(filepath.Join(root, filepath.Dir(f)), filepath.Base(f)); err == nil && !ok {
+		return false // build tags leave it out (tools.go, ignore)
+	}
 	return !generated.Match(b)
+}
+
+// isMain says the package in root/dir is a command, which needn't have
+// tests of its own.
+func isMain(root, dir string) bool {
+	ms, _ := filepath.Glob(filepath.Join(root, dir, "*.go"))
+	for _, m := range ms {
+		if gates.IsTest(m) {
+			continue
+		}
+		if f, err := parser.ParseFile(token.NewFileSet(), m, nil, parser.PackageClauseOnly); err == nil {
+			return f.Name.Name == "main"
+		}
+	}
+	return false
 }
 
 // generated is Go's marker for generated files.
