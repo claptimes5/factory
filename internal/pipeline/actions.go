@@ -83,7 +83,15 @@ func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp 
 			per := p.Cfg.Escalation.MaxAttemptsPerTier
 			attempt = ((j.Attempt-1)/per+1)*per + 1
 		}
-		if _, ok := p.Cfg.Implement(it.Complexity, attempt); !ok {
+		var in ImplementInput
+		if j.Input != "" {
+			_ = jsonUnmarshal(j.Input, &in)
+		}
+		size := it.Complexity
+		if in.Size != "" {
+			size = in.Size // a rethink's build, or a fix round after one
+		}
+		if _, ok := p.Cfg.Implement(size, attempt); !ok {
 			return errors.New("already on the top model tier")
 		}
 		if it.Stage == state.Parked || it.Stage == state.Blocked || it.Stage == state.Triage {
@@ -94,11 +102,10 @@ func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp 
 		if err := p.Store.SetStage(ctx, it.ID, state.Implementing, actor, "retry implement"); err != nil {
 			return err
 		}
-		var in ImplementInput
-		if j.Input != "" {
-			_ = jsonUnmarshal(j.Input, &in)
+		ok, err := p.enqueueImplement(ctx, it, attempt, in)
+		if err == nil && !ok {
+			return fmt.Errorf("no implement route for size %q at attempt %d", size, attempt)
 		}
-		_, err := p.enqueueImplement(ctx, it, attempt, in)
 		return err
 	case "review", "critic":
 		if it.Stage != state.Reviewing {

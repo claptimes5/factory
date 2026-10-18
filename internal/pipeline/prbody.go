@@ -492,6 +492,9 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 	}
 	bp := bodyParts{sections: map[string]string{}}
 	bp.top = fmt.Sprintf("%s\n\nBuilt by the factory. Complexity **%s**, risk **%s**. %s\n\n", strings.TrimRight(top, "\n"), it.Complexity, riskOrLow(it.Risk), verified)
+	if rj := rethinkJob(jobs); rj != nil {
+		bp.top += fmt.Sprintf("This is the factory's second approach: the first hit the review round cap, so it started over from the base branch on routing.%s (job %d).\n\n", rj.Route, rj.ID)
+	}
 	impl := implementVerdict(jobs, in.ImplementJob)
 	if s := strings.TrimSpace(impl.Summary); s != "" {
 		bp.sections[secSummary] = "The builder's summary, in its words:\n\n" + fenced(inert(safeBlock(truncate(s, 3000))))

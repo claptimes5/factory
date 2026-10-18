@@ -1036,6 +1036,7 @@ review:
   paired_high_risk: false   # high risk: reviewer and critic side by side
   incremental: true         # after round one, review what changed
   context_bytes: 20000      # whole diff as context up to this size
+  rethink: true             # one fresh attempt before the round cap parks
 ```
 
 | Key | Default | What it does |
@@ -1043,6 +1044,7 @@ review:
 | `verify` | `true` | Each blocking finding goes to the verifier, `routing.verify`, which confirms or refutes it against the code. Only a confirmed finding blocks; a refuted one stays on the PR as a note. If the verifier can't run (the daily budget can't cover `budgets.verify`, its harness is held or signed out, it fails, or it skips a finding), the finding blocks. `false` blocks on the reviewer's word, as before. |
 | `paired_high_risk` | `false` | A high-risk item's reviewer and critic read the change at the same time, instead of the critic after the reviewer passes it. The round blocks on any finding either raises that the verifier confirms. It costs a critic run on every high-risk round, but saves a round when the critic would have blocked. When the critic can't start (its harness is held or signed out, busy with another job it can't share a sign-in with, or the daily budget can't cover its `budgets.review` cap), the round isn't paired and the critic follows the reviewer as usual. The paired critic doesn't count toward `concurrent_jobs`: each high-risk review in progress can run one agent more than that allows. |
 | `incremental` | `true` | From round two, a reviewer gets the diff since the commit it last reviewed, with its open findings and the builder's answers, rather than the whole diff again. |
+| `rethink` | `true` | An item the reviewer blocks past `escalation.max_review_rounds` gets one fresh build from the base branch on the next size's implement route, with the unresolved findings and the note that the approach may be wrong, before it parks. Once per triage; with `budgets.confirm_over` set, only when the item's estimate (its p75, or the approved amount) covers it. See [Rethink before parking](quality.md#rethink-before-parking). `false` parks at the cap, as before. |
 | `context_bytes` | `20000` | A re-review also gets the whole diff, for context, when it's at most this many bytes; a bigger one is listed by file, which the reviewer can read in its checkout. |
 
 `routing.verify` should be cheap: it reads a few claims and the code

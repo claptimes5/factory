@@ -25,10 +25,18 @@ type Reviews struct {
 	// ContextBytes is the largest whole diff a re-review also gets as
 	// context; a larger one is listed by file. Default 20000.
 	ContextBytes int `yaml:"context_bytes,omitempty"`
+	// Rethink gives an item that hits escalation.max_review_rounds one
+	// more try before it parks: a fresh build from the base branch on the
+	// next size's implement route, told the approach itself may be wrong.
+	// On unless false.
+	Rethink *bool `yaml:"rethink,omitempty"`
 }
 
 // VerifyOn says whether blocking findings go to the verifier.
 func (r Reviews) VerifyOn() bool { return r.Verify == nil || *r.Verify }
+
+// RethinkOn says whether the round cap earns one fresh attempt first.
+func (r Reviews) RethinkOn() bool { return r.Rethink == nil || *r.Rethink }
 
 // IncrementalOn says whether a re-review reads only what changed.
 func (r Reviews) IncrementalOn() bool { return r.Incremental == nil || *r.Incremental }

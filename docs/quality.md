@@ -36,8 +36,37 @@ change to auth, input handling, commands, SQL or dependencies also gets a
 [security pass](#security-pass) beside it. Before a finding blocks, a
 second, cheaper model checks it (see [Review findings](#review-findings)). A block sends the findings back to
 the builder, for at most `max_review_rounds` fix rounds (2); a third block
-parks the item. A malformed review retries once, then parks, so a broken
+earns it one [rethink](#rethink-before-parking) before it parks. A malformed review retries once, then parks, so a broken
 reviewer never consumes a fix round or passes code.
+
+## Rethink before parking
+
+When the reviewer blocks past the round cap, the item gets one more try
+before it parks: a fresh build from the base branch, on the implement
+route one size up (`S` and `XS` go to `implement.M`, `M` and `L` to
+`implement.L`; the item's own route when that one is missing). The old branch's approach is dropped; the builder gets
+the reviewer's unresolved findings, fenced as the reviewer's words, and
+is told the approach itself may be wrong and to reconsider it from
+scratch. The rethink gets its own `max_review_rounds` fix rounds, on the
+same route, and reviewers start over with it: its rounds count from 1,
+and findings on the dropped attempt aren't carried as open findings. Its
+first reviewer gets them, fenced, as context, to check whether the new
+change repeats any of them. If it hits the cap
+too, the item parks, and the notice says both attempts did.
+
+A rethink happens once per triage, so a `factory:retry` allows another.
+Its build job is the record (its input says `rethink`), so a restart
+never starts a second; the issue gets a comment, the item a `rethink`
+event, and the PR says it is the second approach.
+
+Only the round cap rethinks. Questions, a failed build, a refused
+estimate and every other park are as before, and so are the protections
+on the way to a PR: a high-risk item still gets its critic and waits for
+you. With `budgets.confirm_over` set, a rethink must fit the item's
+estimate (its p75, or what you approved): what it has billed since
+triage, plus the rethink route's build cap and one round of review (the
+reviewer, the critic on a high-risk item, the security pass when the
+first approach had one). Otherwise it parks at the cap, saying why. `review.rethink: false` turns it off.
 
 ## Test proves fix
 
@@ -251,6 +280,12 @@ can say how often a reviewer's findings were worth a round.
 
 **To revisit after real use.** These defaults were picked before any
 real runs, and are to be looked at again once the metrics have data:
+- A rethink goes one size up, not one model tier up: on routes where the
+  next size uses the same model, it differs only in effort and skills.
+  Whether rethinks pass more often than fix rounds, and whether one is
+  enough, is for the metrics to say.
+- A rethink's budget check counts one round of review; a rethink that
+  needs its fix rounds can bill past the estimate.
 - The verifier confirms a finding when it can't tell, so a finding it's
   unsure of still blocks. That's safe, but a light filter; a stricter
   verifier would refute more.

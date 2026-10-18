@@ -30,6 +30,9 @@ type reviewRound struct {
 	// open are blocking findings no review has settled: this one rules on
 	// each. seen are the rest raised before, which it shouldn't repeat.
 	open, seen []store.ReviewFinding
+	// rethought is a rethink's first round: the findings the dropped
+	// approach left unresolved, fenced, for the reviewer to recheck.
+	rethought string
 }
 
 // round reads the item's earlier rounds for review job j.
@@ -44,16 +47,28 @@ func (p *Pipeline) round(ctx context.Context, j *store.Job, it *store.WorkItem) 
 	if err != nil {
 		return nil, err
 	}
+	// Findings count from a rethink, when there is one.
+	since := int64(-1)
 	for _, o := range jobs { // newest first
 		if o.Kind == "triage" {
 			rr.triage = o.ID
 			break
 		}
-		if rr.prior == nil && o.ID < j.ID && o.Kind == j.Kind && o.State == state.Succeeded && o.BaseSHA != "" {
+		if since < 0 && isRethink(o) {
+			since = o.ID
+			var in ImplementInput
+			if rr.n == 1 && json.Unmarshal([]byte(o.Input), &in) == nil {
+				rr.rethought = in.Findings
+			}
+		}
+		if since < 0 && rr.prior == nil && o.ID < j.ID && o.Kind == j.Kind && o.State == state.Succeeded && o.BaseSHA != "" {
 			rr.prior = o
 		}
 	}
-	fs, err := p.Store.ItemFindings(ctx, it.ID, rr.triage)
+	if since < 0 {
+		since = rr.triage
+	}
+	fs, err := p.Store.ItemFindings(ctx, it.ID, since)
 	if err != nil {
 		return nil, err
 	}

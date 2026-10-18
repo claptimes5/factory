@@ -958,6 +958,12 @@ type ImplementInput struct {
 	FindingIDs      []string `json:"finding_ids,omitempty"`
 	PreviousFailure string   `json:"previous_failure,omitempty"` // why the last attempt failed
 	FixRound        bool     `json:"fix_round,omitempty"`
+	// Rethink marks the fresh attempt an item gets when it hits the
+	// review round cap (see rethink.go): the rounds count from it.
+	Rethink bool `json:"rethink,omitempty"`
+	// Size is the implement route's size when it isn't the item's own:
+	// a rethink and the fix rounds after it build one size up.
+	Size string `json:"size,omitempty"`
 }
 
 func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, attempt int, in ImplementInput) (bool, error) {
@@ -966,13 +972,17 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 	if p.estimateNeedsOK(ctx, it.ID) {
 		return false, errEstimateWaiting
 	}
-	r, ok := p.Cfg.Implement(it.Complexity, attempt)
+	size := it.Complexity
+	if in.Size != "" {
+		size = in.Size
+	}
+	r, ok := p.Cfg.Implement(size, attempt)
 	if !ok {
 		return false, nil
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: p.Cfg.ImplementKey(it.Complexity), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("implement", it.Complexity), r.FastFor(r.Harness, r.Model)),
+		Skillset: r.Skills, Route: p.Cfg.ImplementKey(size), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("implement", size), r.FastFor(r.Harness, r.Model)),
 		Branch: p.branchFor(it), Input: string(b)})
 	return true, err
 }
@@ -1264,6 +1274,7 @@ type PromptData struct {
 	Coverage        bool     // a coverage floor holds the change
 	Findings        string   // a fix round's findings, or the verifier's, fenced
 	AnswerIDs       []string // the findings a fix round's builder answers
+	Rethink         bool     // Findings are the last approach's, which hit the round cap
 	PreviousFailure string
 	Gates           string
 	Features        string   // the change's blast radius, when the repo has a feature map
@@ -1274,6 +1285,7 @@ type PromptData struct {
 	Fence           string         // a code fence the diff cannot close
 	Round           int            // the review round
 	Earlier         string         // a re-review's open and earlier findings, fenced
+	Rethought       string         // a rethink's first review: the dropped approach's findings, fenced
 	Security        string         // why the security pass reads the change, fenced
 	Since           string         // a re-review: the commit Diff starts from, the one last reviewed
 	Context         string         // a re-review: the whole change, when small
