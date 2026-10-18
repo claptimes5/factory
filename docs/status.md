@@ -22,6 +22,9 @@ too.
 - **The daemon pushes, not the builder** (see [Isolation](security.md#isolation)).
 - **Checkouts are fresh per job on the host** (under `data/jobs/<id>`),
   mounted into the container and deleted when the job ends.
+- **Auto-merge is opt-in:** SPEC.md keeps every merge human. With
+  [`auto_merge`](configuration.md#auto-merge) set, small low-risk PRs merge
+  themselves once CI passes.
 - **Unparking is explicit:** a `factory:retry` label, not a removed label.
 - **A malformed review retries once, then parks**, so a broken reviewer
   never consumes a fix round or passes code.

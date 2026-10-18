@@ -433,3 +433,32 @@ func (c *Client) User(ctx context.Context) (string, error) {
 	err := c.do(ctx, "GET", "/user", nil, &u)
 	return u.Username, err
 }
+
+// AutoMerge takes the merge request out of draft and has GitLab merge it
+// when its pipeline succeeds, but only while its head is still sha.
+// method squash squashes; merge and rebase follow the project's setting.
+func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error {
+	var r rawMR
+	if err := c.do(ctx, "GET", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), nil, &r); err != nil {
+		return err
+	}
+	if t, ok := undraft(r.Title); ok {
+		if err := c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), map[string]any{"title": t}, nil); err != nil {
+			return fmt.Errorf("mark ready: %w", err)
+		}
+	}
+	// auto_merge is GitLab 17.11's name; older versions read the other.
+	return c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d/merge", c.project(), n), map[string]any{
+		"sha": sha, "squash": method == "squash", "auto_merge": true, "merge_when_pipeline_succeeds": true,
+	}, nil)
+}
+
+// undraft strips a draft prefix from a merge request title.
+func undraft(title string) (string, bool) {
+	for _, p := range []string{"Draft:", "[Draft]", "(Draft)", "WIP:", "[WIP]"} {
+		if len(title) >= len(p) && strings.EqualFold(title[:len(p)], p) {
+			return strings.TrimSpace(title[len(p):]), true
+		}
+	}
+	return title, false
+}

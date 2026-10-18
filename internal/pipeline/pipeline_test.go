@@ -34,6 +34,22 @@ type fakeGH struct {
 	labeledBy    map[int]string // who added labels to an issue; "maintainer" unless set
 	outsiders    map[string]bool
 	editedAfter  map[int]bool // the issue changed after it was labeled
+
+	autoMerged    map[int]string // PR -> the head it may merge at
+	failAutoMerge error
+}
+
+func (f *fakeGH) AutoMerge(_ context.Context, n int, sha, method string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failAutoMerge != nil {
+		return f.failAutoMerge
+	}
+	if f.autoMerged == nil {
+		f.autoMerged = map[int]string{}
+	}
+	f.autoMerged[n] = sha + " " + method
+	return nil
 }
 
 func (f *fakeGH) Approver(_ context.Context, n int, _ string) (github.Approval, error) {

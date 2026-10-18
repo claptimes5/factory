@@ -165,3 +165,11 @@ func TestClient(t *testing.T) {
 		t.Fatalf("want a 401, got %v", err)
 	}
 }
+
+func TestUndraft(t *testing.T) {
+	for in, want := range map[string]string{"Draft: Fix it (#3)": "Fix it (#3)", "[WIP] x": "x", "Fix drafts": "Fix drafts"} {
+		if got, _ := undraft(in); got != want {
+			t.Errorf("undraft(%q) = %q", in, got)
+		}
+	}
+}

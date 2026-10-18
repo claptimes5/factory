@@ -37,6 +37,7 @@ const (
 	LabelAwaitingYou = "factory:awaiting-you"
 	LabelReview      = "factory:review"
 	LabelRetry       = "factory:retry" // a human adds it to send a parked item back to triage
+	LabelAutoMerge   = "factory:auto-merge"
 )
 
 // Label is one GitHub label the factory reads or sets.
@@ -49,6 +50,7 @@ func Labels(intake string) []Label {
 		{LabelRunning, "fbca04", "Factory: a job is running"},
 		{LabelParked, "d93f0b", "Factory: needs a human; remove to retry"},
 		{LabelAwaitingYou, "1d76db", "Factory: draft PR ready for your review"},
+		{LabelAutoMerge, "0e8a16", "Factory: merges itself once its checks pass (auto_merge)"},
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
@@ -80,6 +82,12 @@ type GitHub interface {
 	// Approver is who last added label to issue n, whether they may
 	// approve work, and the text they approved (see approval.go).
 	Approver(ctx context.Context, n int, label string) (github.Approval, error)
+}
+
+// AutoMerger is a GitHub (or GitLab) client that can merge a PR once its
+// checks pass, if its head is still sha.
+type AutoMerger interface {
+	AutoMerge(ctx context.Context, n int, sha, method string) error
 }
 
 // RepoClients are one repository's GitHub client and git remote.
@@ -508,9 +516,13 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			// Metrics: did the human change the PR before merging it?
 			want, _ := headOf(p.lastHeads(ctx, it), it.Repo)
 			changed := pr.Head.SHA != "" && pr.Head.SHA != want
-			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
+			by := "human"
+			if !changed && p.autoMerged(ctx, it) {
+				by = "daemon"
+			}
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: by, ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
-			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
+			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, by, fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
 			if changed {
 				// What the human changed is what the factory missed: worth
 				// a replay case, so the next config is measured against it.
@@ -519,6 +531,9 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 					pr.Number, p.ref(it.Repo, it.IssueNumber), arg))
 			}
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+			if by == "daemon" {
+				p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
+			}
 		} else if pr.State == "closed" {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")

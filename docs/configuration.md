@@ -326,6 +326,45 @@ effort: a missing session starts fresh.
 which the daemon prices from `pricing`, cached input included. Keep those
 prices current when OpenAI changes them.
 
+## Auto-merge
+
+By default every PR waits for you. `auto_merge` lets the factory merge its
+own PRs for small, low-risk changes, once the repo's CI passes:
+
+```yaml
+auto_merge:
+  up_to: low        # the highest risk that merges itself: low or medium
+  max_size: S       # the largest triage size: XS, S (default), M or L
+  method: squash    # merge (default), squash or rebase
+
+repos:
+  - name: you/payments
+    auto_merge: {up_to: none}   # a repo's setting replaces the top level's
+```
+
+A PR qualifies when its risk (after the [feature map](quality.md#feature-map)
+has had its say) is at or below `up_to` and its size is at or below
+`max_size`. High-risk changes and workspace changes always wait for you.
+For a qualifying PR, the factory:
+
+1. Marks the draft ready and turns on GitHub's auto-merge (or GitLab's
+   "merge when the pipeline succeeds"), pinned to the commit the gates and
+   reviewer passed.
+2. Labels the PR and issue `factory:auto-merge` instead of
+   `factory:awaiting-you`, and notifies you.
+3. Lets GitHub merge it when the required checks and reviews pass. If CI
+   fails, nothing merges and the PR waits for you.
+
+To stop one, turn off auto-merge on the PR or close it.
+
+The repo has to allow it. On GitHub, turn on **Allow auto-merge** in the
+repo's settings. If your branch protection requires an approving review,
+auto-merge still waits for one, so a PR merges as soon as you approve it
+rather than on its own. To let these PRs merge without you, protect the
+branch with required status checks but no required review, or give the
+factory's GitHub App a bypass in a ruleset. If the factory can't turn on
+auto-merge, it says why and the PR waits for you as usual.
+
 ## Budgets
 
 The daemon enforces its own caps, under `budgets` in `factory.yaml`. The
