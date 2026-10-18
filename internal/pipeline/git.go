@@ -98,6 +98,35 @@ func (g *Git) remote() string {
 	return g.RemoteURL
 }
 
+// ident is the name and email the daemon commits with.
+func (g *Git) ident() (name, email string) {
+	if n, e, ok := strings.Cut(g.Author, " <"); ok {
+		return n, strings.TrimSuffix(e, ">")
+	}
+	return "factory", "factory@localhost"
+}
+
+// AuthorEmail is the email on the commits the daemon makes.
+func (g *Git) AuthorEmail() string {
+	_, e := g.ident()
+	return e
+}
+
+// HasBranch reports whether the remote had branch when repo was cloned.
+func (g *Git) HasBranch(ctx context.Context, repo, branch string) bool {
+	_, err := g.run(ctx, repo, nil, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	return err == nil
+}
+
+// Authors lists the author emails of the commits on to after from.
+func (g *Git) Authors(ctx context.Context, repo, from, to string) ([]string, error) {
+	out, err := g.run(ctx, repo, nil, "log", "--format=%ae", from+".."+to)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
+}
+
 // Workspace is one job's checkouts.
 type Workspace struct {
 	Repo    string // daemon-owned clone; never writable by an agent
@@ -131,10 +160,7 @@ func (g *Git) PrepareAt(ctx context.Context, repoDir, workDir, base, branch stri
 	if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-tags", g.remote(), ws.Repo); err != nil {
 		return nil, err
 	}
-	name, email := "factory", "factory@localhost"
-	if n, e, ok := strings.Cut(g.Author, " <"); ok {
-		name, email = n, strings.TrimSuffix(e, ">")
-	}
+	name, email := g.ident()
 	for k, v := range map[string]string{"user.name": name, "user.email": email} {
 		if _, err := g.run(ctx, ws.Repo, nil, "config", k, v); err != nil {
 			return nil, err

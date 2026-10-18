@@ -4,10 +4,12 @@ import (
 	"gopkg.in/yaml.v3"
 	"maps"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func load(t *testing.T) *Config {
@@ -496,5 +498,96 @@ func TestFastMode(t *testing.T) {
 	c.Routing["review"] = rv
 	if err := c.Validate(); err == nil {
 		t.Fatal("fast on a codex reviewer accepted")
+	}
+}
+
+func TestTuning(t *testing.T) {
+	c := load(t)
+	if tu := c.Tuning; tu.Every != 720*time.Hour || tu.MinItems != 10 || tu.Budget != c.Orchestrator.RunBudget || tu.Path != "factory.yaml" || tu.Repo != "" {
+		t.Fatalf("defaults = %+v", tu)
+	}
+	if r := c.Routing["tune"]; !reflect.DeepEqual(r, c.Routing["orchestrate"]) {
+		t.Fatalf("routing.tune = %+v, want the orchestrate route", r)
+	}
+	b, _ := os.ReadFile("../../factory.yaml")
+	with := func(block string) (*Config, error) { return Parse([]byte(string(b) + "\ntuning: " + block + "\n")) }
+	for block, every := range map[string]time.Duration{"{every: 0}": 0, "{every: 0s}": 0, "{every: none}": 0, "{every: 168h}": 168 * time.Hour, "{every: 1h}": time.Hour} {
+		c, err := with(block)
+		if err != nil || c.Tuning.Every != every {
+			t.Errorf("%s: every = %v, %v", block, c.Tuning.Every, err)
+		}
+	}
+	c, err := with("{repo: claptimes5/factory, path: deploy/factory.yaml, min_items: 3, budget: 1.5}")
+	if err != nil || c.Tuning.Repo != "claptimes5/factory" || c.Tuning.MinItems != 3 || c.Tuning.Budget != 1.5 {
+		t.Fatalf("tuning = %+v, %v", c.Tuning, err)
+	}
+	for block, want := range map[string]string{
+		"{every: monthly}":    "tuning.every must be a duration",
+		"{every: -1h}":        "tuning.every must be a duration",
+		"{min_items: -1}":     "tuning.min_items",
+		"{budget: -2}":        "tuning.budget",
+		"{repo: o/elsewhere}": "tuning.repo o/elsewhere isn't in repos",
+		"{path: ../x.yaml}":   "tuning.path",
+	} {
+		if _, err := with(block); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", block, err, want)
+		}
+	}
+}
+
+func TestUnifiedDiff(t *testing.T) {
+	a := []byte("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n")
+	b := []byte("a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n")
+	want := "--- a/f.yaml\n+++ b/f.yaml\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n d\n e\n@@ -9,3 +9,4 @@\n i\n j\n k\n+l\n"
+	if got := UnifiedDiff("f.yaml", a, b); got != want {
+		t.Fatalf("diff:\n%s\nwant:\n%s", got, want)
+	}
+	if UnifiedDiff("f", a, a) != "" {
+		t.Fatal("no change, no diff")
+	}
+}
+
+func TestTuningEverySetting(t *testing.T) {
+	groups, err := Settings([]byte("repo: o/r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := FindSetting(groups, []string{"tuning", "every"})
+	if !ok {
+		t.Fatal("no tuning.every setting")
+	}
+	for in, want := range map[string]string{"0": "0", "0s": "0s", "none": "none", "1h": "1h", "720h": "720h"} {
+		if v, err := s.Coerce(in); err != nil || v != want {
+			t.Errorf("%s: %v, %v", in, v, err)
+		}
+	}
+	for _, in := range []string{"30m", "10s"} {
+		if _, err := s.Coerce(in); err == nil || !strings.Contains(err.Error(), "at least 1h") {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+	if s, _ := FindSetting(groups, []string{"orchestrator", "interval"}); s.Path == nil {
+		t.Fatal("no orchestrator.interval")
+	} else if _, err := s.Coerce("0"); err == nil {
+		t.Error("an interval of 0 isn't off")
+	}
+}
+
+func TestTunable(t *testing.T) {
+	for path, want := range map[string]bool{
+		"budgets.daily_total": true, "routing.implement.S.model": true, "routing.review.effort": true, "escalation.implement": true,
+		"tuning.every": false, "auto_merge.up_to": false, "orchestrator.enabled": false, "orchestrator.run_budget": true,
+		"routing.tune.model": false, "routing.orchestrate.model": false, "": false,
+	} {
+		p := strings.Split(path, ".")
+		if strings.HasPrefix(path, "routing.") {
+			p = []string{"routing", strings.TrimSuffix(strings.TrimPrefix(path, "routing."), "."+p[len(p)-1]), p[len(p)-1]}
+		}
+		if path == "" {
+			p = nil
+		}
+		if got := Tunable(p); got != want {
+			t.Errorf("%s: %v", path, got)
+		}
 	}
 }

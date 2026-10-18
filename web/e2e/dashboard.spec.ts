@@ -185,3 +185,28 @@ test("settings save to factory.yaml and restart once jobs finish", async ({ page
   await shot(page, info, "settings");
   if (phone(info)) await noSidewaysScroll(page);
 });
+
+test("a tuning proposal shows its changes, evidence and diff on the settings screen", async ({ page }, info) => {
+  await page.goto("/app/settings");
+  // The devserver is shared and its proposal stays pending, so this only looks.
+  const card = page.getByRole("region", { name: "Tuning proposal" });
+  await expect(card).toContainText("First-pass rate on S builds fell from 0.71 to 0.53");
+  const changes = card.getByRole("list", { name: "Proposed changes" });
+  await expect(changes.getByRole("listitem")).toHaveCount(2);
+  await expect(changes).toContainText("budgets.concurrent_jobs");
+  await expect(changes).toContainText("Jobs waited in the queue on 11 of 30 days");
+  await expect(card.getByRole("region", { name: "Ideas" })).toContainText("tell triage to name the package");
+  await expect(card.getByLabel("Diff")).toContainText("+  concurrent_jobs: 4");
+  await expect(card.getByText("1 dropped change")).toBeVisible();
+  await expect(card.getByRole("link", { name: /Draft PR/ })).toHaveAttribute("href", "https://github.com/acme/api/pull/120");
+  await expect(card.getByRole("button", { name: "Apply" })).toBeEnabled();
+  // Each change can be left out.
+  const pick = card.getByRole("checkbox", { name: "Apply budgets.concurrent_jobs" });
+  await expect(pick).toBeChecked();
+  await pick.uncheck();
+  await expect(card.getByRole("button", { name: "Apply 1 of 2" })).toBeEnabled();
+  await pick.check();
+  await expect(card.getByRole("button", { name: "Dismiss" })).toBeEnabled();
+  await shot(page, info, "tuning");
+  if (phone(info)) await noSidewaysScroll(page);
+});

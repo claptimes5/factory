@@ -5,7 +5,9 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/claptimes5/factory/internal/state"
@@ -79,13 +81,60 @@ func rate(n, d int) float64 {
 	return float64(n) / float64(d)
 }
 
+// Slice is how the builds of one size, or that started on one model, went.
+type Slice struct {
+	Key           string  `json:"key"`
+	Implemented   int     `json:"implemented"`
+	FirstPass     float64 `json:"first_pass_rate"`
+	Escalation    float64 `json:"escalation_rate"`
+	Merged        int     `json:"merged"`
+	ReviewEscapes float64 `json:"review_escape_rate"`
+	CostPerMerged float64 `json:"cost_per_merged_usd"` // -1 when none merged
+
+	firstPass, escalated, passed, escapes int
+	cost                                  float64
+}
+
+// Breakdown is the report's build numbers per route, which the tuning
+// loop reads to propose routing changes.
+type Breakdown struct {
+	Implemented  int     `json:"implemented"`
+	ByComplexity []Slice `json:"by_complexity"`
+	ByModel      []Slice `json:"by_model"` // the model an item's first build ran on
+	ParkReasons  []Count `json:"park_reasons"`
+}
+
+// Count is how many items parked for one reason.
+type Count struct {
+	Reason string `json:"reason"`
+	Items  int    `json:"items"`
+}
+
 // Compute builds the report over every item the store holds.
 func Compute(ctx context.Context, st *store.Store) (*Report, error) {
-	items, err := st.ListItems(ctx)
+	r, _, err := Period(ctx, st, time.Time{}, time.Time{})
+	return r, err
+}
+
+// Period builds the report and its breakdown over the items whose first
+// build was queued in [from, to), or that were filed then when never
+// built. A zero time leaves that end open.
+func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, *Breakdown, error) {
+	all, err := st.ListItems(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	r := &Report{Items: len(items)}
+	in := func(ts string) bool {
+		t, err := time.Parse(store.TimeFormat, ts)
+		if err != nil {
+			return from.IsZero() && to.IsZero()
+		}
+		return (from.IsZero() || !t.Before(from)) && (to.IsZero() || t.Before(to))
+	}
+	r := &Report{}
+	b := &Breakdown{}
+	byCxSlice, byModelSlice := map[string]*Slice{}, map[string]*Slice{}
+	parks := map[string]int{}
 	var mergedCost float64
 	byCx, byModel := map[string]*Group{}, map[string]*Group{}
 	var implemented, firstPass, escalated, passedPRs, escapes, awaitingStays int
@@ -100,15 +149,26 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 		}
 		return weeks[k]
 	}
-	for _, it := range items {
+	for _, it := range all {
 		jobs, err := st.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		sort.Slice(jobs, func(a, b int) bool { return jobs[a].ID < jobs[b].ID })
+		started := it.CreatedAt
+		for _, j := range jobs {
+			if j.Kind == "implement" {
+				started = j.QueuedAt
+				break
+			}
+		}
+		if !in(started) {
+			continue
+		}
+		r.Items++
 		evs, err := st.Events(ctx, it.ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		var cost float64
 		var impls []*store.Job
@@ -128,8 +188,15 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 				}
 			}
 		}
+		cx := it.Complexity
+		if cx == "" {
+			cx = "?"
+		}
+		// The item's slices: its size, and the model its first build ran on.
+		var slices []*Slice
 		if len(impls) > 0 {
 			implemented++
+			slices = []*Slice{slice(byCxSlice, cx), slice(byModelSlice, impls[0].Harness+"/"+impls[0].Model)}
 			models := map[string]bool{}
 			for _, j := range impls {
 				models[j.Model] = true
@@ -138,10 +205,16 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 			if w != nil {
 				w.Implemented++
 			}
+			for _, sl := range slices {
+				sl.Implemented++
+			}
 			if len(models) > 1 {
 				escalated++
 				if w != nil {
 					w.escalated++
+				}
+				for _, sl := range slices {
+					sl.escalated++
 				}
 			}
 			var v verdict.Review
@@ -150,6 +223,9 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 				firstPass++
 				if w != nil {
 					w.firstPass++
+				}
+				for _, sl := range slices {
+					sl.firstPass++
 				}
 			}
 		}
@@ -170,6 +246,9 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 				var d struct{ From, To string }
 				_ = json.Unmarshal([]byte(e.Data), &d)
 				t, _ := time.Parse(store.TimeFormat, e.At)
+				if d.To == string(state.Parked) {
+					parks[parkReason(e.Reason)]++
+				}
 				if d.To == string(state.AwaitingHuman) {
 					awaitSince = t
 				} else if d.From == string(state.AwaitingHuman) && !awaitSince.IsZero() {
@@ -191,6 +270,12 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 			if closed || changed {
 				escapes++
 			}
+			for _, sl := range slices {
+				sl.passed++
+				if closed || changed {
+					sl.escapes++
+				}
+			}
 		}
 		switch {
 		case merged:
@@ -200,9 +285,9 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 				w.Merged++
 				w.Cost += cost
 			}
-			cx := it.Complexity
-			if cx == "" {
-				cx = "?"
+			for _, sl := range slices {
+				sl.Merged++
+				sl.cost += cost
 			}
 			add(byCx, cx, cost)
 			model := "?"
@@ -239,7 +324,56 @@ func Compute(ctx context.Context, st *store.Store) (*Report, error) {
 		r.Weekly = append(r.Weekly, *w)
 	}
 	sort.Slice(r.Weekly, func(a, b int) bool { return r.Weekly[a].Start < r.Weekly[b].Start })
-	return r, nil
+	b.Implemented = implemented
+	b.ByComplexity, b.ByModel = sliced(byCxSlice), sliced(byModelSlice)
+	b.ParkReasons = []Count{}
+	for k, n := range parks {
+		b.ParkReasons = append(b.ParkReasons, Count{k, n})
+	}
+	sort.Slice(b.ParkReasons, func(i, j int) bool {
+		x, y := b.ParkReasons[i], b.ParkReasons[j]
+		return x.Items > y.Items || x.Items == y.Items && x.Reason < y.Reason
+	})
+	if len(b.ParkReasons) > 8 {
+		b.ParkReasons = b.ParkReasons[:8]
+	}
+	return r, b, nil
+}
+
+func slice(m map[string]*Slice, k string) *Slice {
+	if m[k] == nil {
+		m[k] = &Slice{Key: k}
+	}
+	return m[k]
+}
+
+func sliced(m map[string]*Slice) []Slice {
+	out := []Slice{}
+	for _, s := range m {
+		s.FirstPass = rate(s.firstPass, s.Implemented)
+		s.Escalation = rate(s.escalated, s.Implemented)
+		s.ReviewEscapes = rate(s.escapes, s.passed)
+		s.CostPerMerged = -1 // nothing merged: no data
+		if s.Merged > 0 {
+			s.CostPerMerged = s.cost / float64(s.Merged)
+		}
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Key < out[b].Key })
+	return out
+}
+
+var digits = regexp.MustCompile(`[0-9]+`)
+
+// parkReason is a park's reason as a group: its first line, with numbers
+// (issue, PR and job numbers, dollars) made alike.
+func parkReason(s string) string {
+	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+	s = digits.ReplaceAllString(s, "N")
+	if len(s) > 160 {
+		s = s[:160]
+	}
+	return s
 }
 
 func add(m map[string]*Group, k string, cost float64) {

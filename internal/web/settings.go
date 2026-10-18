@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -166,50 +167,55 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	// One save at a time: each reads the file the last one wrote.
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
+	res, code, err := s.saveChanges(r, in.Changes, in.Version)
+	if err != nil {
+		apiErr(w, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// saveChanges writes changes to factory.yaml if the file is still the
+// version the page loaded, each change is a setting the screen lists and
+// fits it, and the result loads. It returns the settings saved, or an
+// error with its HTTP status. The caller holds settingsMu.
+func (s *Server) saveChanges(r *http.Request, in []config.Change, version string) (APISettings, int, error) {
 	cur, groups, src, err := s.settings(r)
 	if err != nil {
-		apiErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return APISettings{}, http.StatusInternalServerError, err
 	}
-	if in.Version != cur.Version {
-		apiErr(w, http.StatusConflict, "factory.yaml changed since this page loaded it; reload to see what changed")
-		return
+	if version != cur.Version {
+		return APISettings{}, http.StatusConflict, errors.New("factory.yaml changed since this page loaded it; reload to see what changed")
 	}
 	var changes []config.Change
-	for _, c := range in.Changes {
+	for _, c := range in {
 		f, ok := config.FindSetting(groups, c.Path)
 		if !ok {
-			apiErr(w, http.StatusBadRequest, strings.Join(c.Path, ".")+" can't be changed here; edit factory.yaml")
-			return
+			return APISettings{}, http.StatusBadRequest, errors.New(strings.Join(c.Path, ".") + " can't be changed here; edit factory.yaml")
 		}
 		v, err := f.Coerce(c.Value)
 		if err != nil {
-			apiErr(w, http.StatusBadRequest, err.Error())
-			return
+			return APISettings{}, http.StatusBadRequest, err
 		}
 		changes = append(changes, config.Change{Path: c.Path, Value: v})
 	}
 	out, err := config.Edit(src, changes)
 	if err != nil {
-		apiErr(w, http.StatusBadRequest, err.Error())
-		return
+		return APISettings{}, http.StatusBadRequest, err
 	}
 	// The whole file must still load, as the daemon will load it.
 	dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
 	if _, err := config.ParseIn(out, dir); err != nil {
-		apiErr(w, http.StatusBadRequest, err.Error())
-		return
+		return APISettings{}, http.StatusBadRequest, err
 	}
 	if err := writeAtomic(s.ConfigPath, out); err != nil {
-		apiErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return APISettings{}, http.StatusInternalServerError, err
 	}
 	res, _, _, err := s.settings(r)
 	if err != nil {
-		apiErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return APISettings{}, http.StatusInternalServerError, err
 	}
-	writeJSON(w, http.StatusOK, res)
+	return res, http.StatusOK, nil
 }
 
 func (s *Server) apiRestart(w http.ResponseWriter, r *http.Request) {

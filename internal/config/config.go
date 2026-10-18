@@ -291,6 +291,10 @@ type Config struct {
 		Labels []string `yaml:"labels"`
 	} `yaml:"orchestrator"`
 
+	// Tuning is the loop that reads the metrics on a cadence and proposes
+	// changes to the settings the dashboard may edit. See Tuning.
+	Tuning Tuning `yaml:"tuning"`
+
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
 		Triage           float64            `yaml:"triage"`
@@ -316,6 +320,31 @@ type Config struct {
 	Gates Gates `yaml:"gates"`
 
 	dir string
+}
+
+// MinTuningEvery is the shortest tuning cadence: each run costs a model
+// run, and a period shorter than this holds too few builds to read.
+const MinTuningEvery = time.Hour
+
+// Tuning says how often the factory proposes changes from its metrics,
+// and where its factory.yaml lives in a repo it works on, if anywhere.
+type Tuning struct {
+	// EveryText is the cadence as written: a duration such as 720h (the
+	// default, about monthly), or 0 or none for off. Every is it parsed.
+	EveryText string        `yaml:"every"`
+	Every     time.Duration `yaml:"-"`
+	// MinItems skips a run when fewer items were built since the last
+	// one; default 10.
+	MinItems int `yaml:"min_items"`
+	// Budget is dollars per run; default orchestrator.run_budget.
+	Budget float64 `yaml:"budget"`
+	// Repo and Path name this file in one of the factory's repos; with
+	// Repo set, each proposal also opens a draft PR there. Path defaults
+	// to factory.yaml.
+	Repo string `yaml:"repo"`
+	Path string `yaml:"path"`
+
+	everyErr error
 }
 
 // Price is dollars per million tokens.
@@ -405,7 +434,7 @@ func (c *Config) defaults() {
 	if c.Timeouts == nil {
 		c.Timeouts = map[string]Duration{}
 	}
-	for k, v := range map[string]time.Duration{"triage": 10 * time.Minute, "implement": 60 * time.Minute, "review": 20 * time.Minute, "gates": 20 * time.Minute, "orchestrate": 20 * time.Minute} {
+	for k, v := range map[string]time.Duration{"triage": 10 * time.Minute, "implement": 60 * time.Minute, "review": 20 * time.Minute, "gates": 20 * time.Minute, "orchestrate": 20 * time.Minute, "tune": 20 * time.Minute} {
 		if c.Timeouts[k].Duration == 0 {
 			c.Timeouts[k] = Duration{v}
 		}
@@ -431,6 +460,27 @@ func (c *Config) defaults() {
 	}
 	if _, ok := c.Routing["orchestrate"]; !ok && c.Routing != nil {
 		c.Routing["orchestrate"] = Route{Harness: "claude", Model: "opus"}
+	}
+	t := &c.Tuning
+	switch strings.TrimSpace(t.EveryText) {
+	case "":
+		t.Every = 720 * time.Hour
+	case "none":
+		t.Every = 0
+	default:
+		t.Every, t.everyErr = time.ParseDuration(strings.TrimSpace(t.EveryText))
+	}
+	if t.MinItems == 0 {
+		t.MinItems = 10
+	}
+	if t.Budget == 0 {
+		t.Budget = o.RunBudget
+	}
+	if t.Path == "" {
+		t.Path = "factory.yaml"
+	}
+	if _, ok := c.Routing["tune"]; !ok && c.Routing != nil {
+		c.Routing["tune"] = c.Routing["orchestrate"]
 	}
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
@@ -691,6 +741,25 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Escalation.Implement) == 0 {
 		bad("escalation.implement needs at least one model tier")
+	}
+	if t := c.Tuning; t.everyErr != nil || t.Every < 0 {
+		bad("tuning.every must be a duration such as 720h, or 0 or none to turn tuning off")
+	} else if t.Every > 0 && t.Every < MinTuningEvery {
+		bad("tuning.every must be at least 1h, or 0 or none to turn tuning off")
+	}
+	if c.Tuning.MinItems < 0 {
+		bad("tuning.min_items can't be negative")
+	}
+	if c.Tuning.Budget < 0 {
+		bad("tuning.budget must be > 0, or left out for orchestrator.run_budget")
+	}
+	if r := c.Tuning.Repo; r != "" {
+		if _, ok := c.RepoConf(r); !ok {
+			bad("tuning.repo %s isn't in repos", r)
+		}
+	}
+	if _, err := CleanFilePath(c.Tuning.Path); err != nil {
+		bad("tuning.path: %v", err)
 	}
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")

@@ -120,6 +120,8 @@ type Pipeline struct {
 	// JobPrefix keeps container names unique when several pipelines with
 	// their own stores run at once (factory eval and factory compare).
 	JobPrefix string
+	// ConfigPath is the factory.yaml the tuning loop proposes changes to.
+	ConfigPath string
 
 	mu         sync.Mutex
 	clientsMu  sync.Mutex
@@ -149,6 +151,8 @@ type Pipeline struct {
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
+	tuneDue     time.Time // when the tuning cadence last fired
+	tuneHeld    string    // day a due tuning run waited for budget, to notify once
 
 	restart atomic.Bool // a restart was asked for: claim nothing more
 }
@@ -357,6 +361,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	if p.Cfg.Orchestrator.On {
 		p.orchestratorTriggers(ctx, time.Now())
 	}
+	p.tuneTrigger(ctx, time.Now())
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
 		if errors.Is(err, ErrDiskLow) && async {
@@ -402,12 +407,19 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if running >= p.Cfg.Budgets.ConcurrentJobs || p.restart.Load() {
 		return nil, nil
 	}
-	// One orchestrator at a time: its tools act on the whole queue.
+	// One orchestrator at a time: its tools act on the whole queue. One
+	// tuning run at a time, too: each reads the file the last proposed for.
 	var except []string
-	if n, err := p.Store.CountJobs(ctx, state.Running, "orchestrate"); err != nil {
-		return nil, err
-	} else if n > 0 {
-		except = append(except, "orchestrate")
+	for _, kind := range []string{"orchestrate", "tune"} {
+		if n, err := p.Store.CountJobs(ctx, state.Running, kind); err != nil {
+			return nil, err
+		} else if n > 0 {
+			except = append(except, kind)
+		}
+	}
+	// A tuning run waits for both today's budget and the orchestrator's.
+	if !slices.Contains(except, "tune") && p.tuneBudget(ctx) != "" {
+		except = append(except, "tune")
 	}
 	if msg := p.diskLow(ctx); msg != "" {
 		if !p.diskHalt {
@@ -522,8 +534,19 @@ func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	orch, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	orch, err := p.orchSpend(ctx)
 	return all - orch, err
+}
+
+// orchSpend is today's spend on orchestration: the orchestrator's runs
+// and the tuning loop's, which share orchestrator.daily_budget.
+func (p *Pipeline) orchSpend(ctx context.Context) (float64, error) {
+	orch, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
+	if err != nil {
+		return 0, err
+	}
+	tune, err := p.Store.SpendByKind(ctx, store.Today(), "tune")
+	return orch + tune, err
 }
 
 // Intake turns labeled issues into work items, sends items a human marked
@@ -1009,7 +1032,7 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
 		p.log().Error("finish job", "job", j.ID, "err", err)
 	}
-	if (st == state.Failed || st == state.TimedOut) && j.Kind != "orchestrate" && p.Cfg.Orchestrator.On {
+	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On {
 		p.failedTwice(ctx, j)
 	}
 }
@@ -1065,6 +1088,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runReview(ctx, j, it)
 	case "orchestrate":
 		err = p.runOrchestrate(ctx, j)
+	case "tune":
+		err = p.runTune(ctx, j)
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -1099,6 +1124,7 @@ type PromptData struct {
 	Reasons         []string       // why the orchestrator runs
 	Summary         bool           // the orchestrator writes the daily summary
 	Status          string         // queue snapshot for the orchestrator
+	Tune            TunePrompt     // the tuning loop's metrics and settings
 }
 
 func (p *Pipeline) render(stage string, d PromptData) (string, error) {

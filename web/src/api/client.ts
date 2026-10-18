@@ -29,6 +29,9 @@ export type Settings = S["Settings"];
 export type SettingsGroup = S["SettingsGroup"];
 export type Setting = S["Setting"];
 export type SettingValue = S["SettingValue"];
+export type Tuning = S["Tuning"];
+export type TuningProposal = S["TuningProposal"];
+export type TuningChange = S["TuningChange"];
 
 export class APIError extends Error {
   constructor(
@@ -120,6 +123,12 @@ export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () 
 /** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
   postJSON<Settings>("/settings", { changes, version });
+
+export const useTuning = () => useQuery({ queryKey: ["tuning"], queryFn: () => getJSON<Tuning>("/settings/tuning") });
+
+/** Applies the picked changes of a tuning proposal (by index) to factory.yaml as it is now, through the same checks as a save. */
+export const applyTuning = (id: number, version: string, changes: number[]) =>
+  postJSON<Settings>(`/settings/tuning/${id}/apply`, { version, changes });
 
 /**
  * Refetches everything on screen whenever the daemon reports a change.
