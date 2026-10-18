@@ -128,8 +128,12 @@ func TestEscalation(t *testing.T) {
 
 func TestReviewRouteByRisk(t *testing.T) {
 	c := load(t)
-	if c.Review("high").Effort != "high" || c.Review("low").Effort != "" {
+	if c.Review("high").Effort != "high" || c.Review("low").Effort != "" || c.Review("medium").Effort != "" {
 		t.Fatal("high risk should use review.high_risk")
+	}
+	c.Routing["review.medium_risk"] = Route{Harness: "codex", Model: "m", Effort: "medium"}
+	if c.Review("medium").Effort != "medium" || c.Review("low").Effort != "" {
+		t.Fatal("medium risk should use review.medium_risk when set")
 	}
 }
 

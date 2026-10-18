@@ -140,8 +140,9 @@ func (p *Pipeline) applyBlast(ctx context.Context, it *store.WorkItem, jobID int
 	}
 	if risk, feature := features.MaxRisk(b.hits); features.Higher(risk, it.Risk) {
 		p.warn(p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Risk: &risk}), "UpdateItem")
+		data, _ := json.Marshal(map[string]string{"feature": feature, "from": it.Risk, "to": risk})
 		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, JobID: &jobID, Type: "risk_raised",
-			Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature)}), "AddEvent")
+			Reason: fmt.Sprintf("%s -> %s: touches %s", it.Risk, risk, feature), Data: string(data)}), "AddEvent")
 		it.Risk = risk
 	}
 	md := b.markdown()

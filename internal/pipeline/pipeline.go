@@ -52,6 +52,9 @@ func Labels(intake string) []Label {
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
+		{riskLabel("high"), "b60205", "Factory: high risk; reviewer and critic passed it, read all of it"},
+		{riskLabel("medium"), "fbca04", "Factory: medium risk; read the changes to the features it touches"},
+		{riskLabel("low"), "c2e0c6", "Factory: low risk; gates and a reviewer passed it, a skim is enough"},
 	}
 }
 
@@ -66,6 +69,7 @@ type GitHub interface {
 	GetIssue(ctx context.Context, n int) (*github.Issue, error)
 	AddLabels(ctx context.Context, n int, labels ...string) error
 	LabelPR(ctx context.Context, n int, labels ...string) error
+	UnlabelPR(ctx context.Context, n int, label string) error
 	RemoveLabel(ctx context.Context, n int, label string) error
 	Comment(ctx context.Context, n int, body string) error
 	FindPR(ctx context.Context, branch string) (*github.PR, error)
@@ -878,6 +882,7 @@ type PromptData struct {
 	PreviousFailure string
 	Gates           string
 	Features        string // the change's blast radius, when the repo has a feature map
+	Risk            string // low, medium or high, for the reviewer
 	Diff            string
 	Fence           string   // a code fence the diff cannot close
 	Reasons         []string // why the orchestrator runs

@@ -26,13 +26,14 @@ type fakeGH struct {
 	issues   map[int]*github.Issue
 	comments map[int][]string
 	prs      map[string]*github.PR
+	prLabels map[int][]string
 	nextPR   int
 
 	failCreatePR int
 }
 
 func newFakeGH() *fakeGH {
-	return &fakeGH{issues: map[int]*github.Issue{}, comments: map[int][]string{}, prs: map[string]*github.PR{}, nextPR: 100}
+	return &fakeGH{issues: map[int]*github.Issue{}, comments: map[int][]string{}, prs: map[string]*github.PR{}, prLabels: map[int][]string{}, nextPR: 100}
 }
 
 func (f *fakeGH) ListIssues(_ context.Context, label string) ([]github.Issue, error) {
@@ -53,7 +54,27 @@ func (f *fakeGH) GetIssue(_ context.Context, n int) (*github.Issue, error) {
 	return &is, nil
 }
 func (f *fakeGH) LabelPR(ctx context.Context, n int, ls ...string) error {
+	f.mu.Lock()
+	for _, l := range ls {
+		if !hasLabel(f.prLabels[n], l) {
+			f.prLabels[n] = append(f.prLabels[n], l)
+		}
+	}
+	f.mu.Unlock()
 	return f.AddLabels(ctx, n, ls...)
+}
+
+func (f *fakeGH) UnlabelPR(ctx context.Context, n int, l string) error {
+	f.mu.Lock()
+	var keep []string
+	for _, x := range f.prLabels[n] {
+		if x != l {
+			keep = append(keep, x)
+		}
+	}
+	f.prLabels[n] = keep
+	f.mu.Unlock()
+	return f.RemoveLabel(ctx, n, l)
 }
 
 func (f *fakeGH) AddLabels(_ context.Context, n int, ls ...string) error {
@@ -377,6 +398,15 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 	spent, _ := e.p.Store.SpendOn(ctx, store.Today())
 	if spent < 0.29 {
 		t.Fatalf("spend not recorded: %v", spent)
+	}
+
+	// Low risk: the PR says a skim will do, in its body and its label.
+	pr0 := e.gh.prs["factory/issue-1"].Number
+	if body := e.gh.comments[pr0][0]; !strings.Contains(body, "**Low risk**: triage rated it low. The gates and an independent reviewer passed it; a skim of the diff is enough.") {
+		t.Fatalf("PR body:\n%s", body)
+	}
+	if l := e.gh.prLabels[pr0]; !hasLabel(l, "factory:risk-low") {
+		t.Fatalf("PR labels = %v", l)
 	}
 
 	// The human changes the PR and merges it; the next poll closes the

@@ -27,6 +27,7 @@ routing:
   implement.L:       {harness: claude, model: opus}
   review:            {harness: codex,  model: gpt-5-codex}
   review.high_risk:  {harness: codex,  model: gpt-5-codex, effort: high}
+  # review.medium_risk: {harness: codex, model: gpt-5-codex, effort: medium}
   # Any entry may name a skill set: a folder under skills/ mounted read-only
   # as the worker's skills directory, e.g.
   #   implement.M: {harness: claude, model: sonnet, skills: baseline}

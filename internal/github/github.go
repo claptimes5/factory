@@ -232,6 +232,11 @@ func (c *Client) LabelPR(ctx context.Context, n int, labels ...string) error {
 	return c.AddLabels(ctx, n, labels...)
 }
 
+// UnlabelPR is RemoveLabel: a PR is an issue to GitHub's labels API.
+func (c *Client) UnlabelPR(ctx context.Context, n int, label string) error {
+	return c.RemoveLabel(ctx, n, label)
+}
+
 // RemoveLabel removes a label; a label that is not there is not an error.
 func (c *Client) RemoveLabel(ctx context.Context, n int, label string) error {
 	err := c.do(ctx, "DELETE", fmt.Sprintf("/repos/%s/issues/%d/labels/%s", c.Repo, n, url.PathEscape(label)), nil, nil)

@@ -260,7 +260,7 @@ A PR reaches a human only after deterministic gates pass and a different model, 
 
 - `block` or any `critical` finding sends the job back to implement with the findings attached.
 - At most two fix-and-review rounds. A third block parks the item for a human.
-- `high` risk items also get a Claude critic pass, so two independent reviewers see them.
+- `high` risk items also get a Claude critic pass, so two independent reviewers see them. `medium` (raised by the feature map) uses `review.medium_risk` when set. The reviewer is told the risk, and the PR carries a risk label and a "How to review" section scaled to it.
 
 **4. Hidden scenarios.** A `scenarios/` folder outside the builder's checkout holds end-to-end checks (HTTP, CLI, or Playwright). The verify stage runs them; builders never see their contents, only pass/fail.
 

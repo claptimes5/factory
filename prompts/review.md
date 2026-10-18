@@ -9,6 +9,9 @@ Decide:
 
 For each finding give the severity (`critical`, `major` or `minor`), the file and line, the claim, and concrete evidence (a code path, an input, a failing scenario). List the assumptions in the change you challenged in `challenged_assumptions`.
 
+{{if eq .Risk "high"}}This change is rated **high risk**: a mistake here costs a lot (security, money, data). Hold it to a higher bar. Block on any changed behavior no test proves, any unhandled error or edge case on these paths, and anything you can't verify from the code.
+{{else if eq .Risk "medium"}}This change is rated **medium risk**. Make sure every behavior it changes is proven by a test.
+{{end}}
 Reply with only the JSON object described by the schema.
 
 ## Issue #{{.Issue.Number}}: {{.Issue.Title}}
