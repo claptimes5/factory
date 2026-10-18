@@ -221,6 +221,13 @@ type rawMR struct {
 	Draft  bool   `json:"draft"`
 	WIP    bool   `json:"work_in_progress"` // before GitLab 14
 	SHA    string `json:"sha"`
+	Title  string `json:"title"`
+	Desc   string `json:"description"`
+	Merge  string `json:"merge_commit_sha"`
+	Squash string `json:"squash_commit_sha"`
+	Refs   struct {
+		Base string `json:"base_sha"`
+	} `json:"diff_refs"`
 	// They differ for a merge request from a fork.
 	SourceProject int `json:"source_project_id"`
 	TargetProject int `json:"target_project_id"`
@@ -234,7 +241,12 @@ func (r rawMR) pr() *github.PR {
 	case "closed":
 		pr.State = "closed"
 	}
-	pr.Head.SHA = r.SHA
+	pr.Head.SHA, pr.Base.SHA, pr.Title, pr.Body = r.SHA, r.Refs.Base, r.Title, r.Desc
+	// A fast-forward merge makes no commit of its own; a squash makes one.
+	pr.MergeCommit = r.Merge
+	if pr.MergeCommit == "" {
+		pr.MergeCommit = r.Squash
+	}
 	return pr
 }
 

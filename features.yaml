@@ -62,10 +62,10 @@ features:
     tests: [internal/web/api_test.go, internal/web/web_test.go, internal/web/cache_test.go, web/e2e/]
     check: go test ./internal/web/
   - name: Evals and comparisons
-    description: Replays issue cases against skill sets and models
-    paths: [internal/eval/, internal/compare/, evals/, skills/]
-    tests: [internal/eval/, internal/compare/]
-    check: go test ./internal/eval/ ./internal/compare/
+    description: Replays issue cases against skill sets and models, and captures merged fixes as cases
+    paths: [internal/eval/, internal/compare/, evals/, skills/, cmd/factory/capture.go]
+    tests: [internal/eval/, internal/compare/, cmd/factory/capture_test.go]
+    check: go test ./internal/eval/ ./internal/compare/ ./cmd/factory/
   - name: Notifications
     description: Phone notifications through ntfy, Slack or Discord
     paths: [internal/notify/]

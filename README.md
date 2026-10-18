@@ -267,6 +267,7 @@ If that forwarding is unreliable, set `networkingMode=mirrored` in
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
 | `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |
+| `factory eval capture [-set evals] [-name NAME] [-accept CMD] PR` | Turn a merged PR into a replay case: the issue it closed, frozen where its branch started, with its tests as the hidden acceptance files |
 | `factory compare ISSUE -skills a,b [-complexity M] [-no-push]` | Build one issue once per skill set and report the arms side by side |
 | `factory pull ISSUE` | Fetch an item's branch into the current checkout and copy its job transcripts to `.factory/issue-N/` |
 
@@ -320,6 +321,12 @@ against the build budget.
   `factory eval` runs every case through the real pipeline against a private
   copy of the repo and an in-memory GitHub (nothing is pushed or posted),
   then runs `accept` on the result. See `evals/README.md`.
+- **Failures become cases.** When you merge a factory PR only after changing
+  it, the daemon tells you, because what you changed is what the factory
+  missed. `factory eval capture PR` turns that PR, or any merged fix, into a
+  case: frozen at the commit its branch started from, with the issue it
+  closed as the task and its own tests and test data as the acceptance files. Every
+  later config is then measured against the miss.
 - **Session resume.** With the Docker runner, an implement retry on the same
   model continues the previous attempt's Claude session (best effort; a
   missing session starts fresh).

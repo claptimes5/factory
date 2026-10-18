@@ -23,7 +23,15 @@ accept: go test -count=1 -run TestAccept ./internal/pipeline/
 ```
 
 Pick the acceptance test from the merged fix's own tests, and keep 20 to 50
-cases. Run `factory eval -out base.json` on the current config, then
+cases. `factory eval capture PR` writes one from a merged PR: `base_sha` is
+where its branch left the base branch, the task is the issue its body
+closes (else the PR's own title and body), `accept/` holds the test files
+and test data it added or changed, as merged, and `accept` is the repo's
+test gate unless you pass `-accept`. Start with the PRs you had to fix by
+hand. If a fix came with no tests, add one to `accept/` that fails on the
+factory's version; otherwise the case only checks that the suite still
+passes. The command lists what it couldn't copy: a test the fix deleted
+(`accept/` can only add files), or a symlink or submodule. Run `factory eval -out base.json` on the current config, then
 `factory eval -config candidate.yaml -baseline base.json` before changing a
 model, prompt, skill or routing threshold. The command fails if the
 candidate's pass rate is lower or its cost per pass higher.

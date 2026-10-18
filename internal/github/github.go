@@ -44,12 +44,20 @@ type Issue struct {
 type PR struct {
 	Number int    `json:"number"`
 	URL    string `json:"html_url"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 	State  string `json:"state"`
 	Merged bool   `json:"merged"`
 	Draft  bool   `json:"draft"`
 	Head   struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	Base struct {
+		SHA string `json:"sha"`
+	} `json:"base"`
+	// MergeCommit is the commit the merge made on the base branch (a merge
+	// or squash commit), once merged.
+	MergeCommit string `json:"merge_commit_sha"`
 }
 
 // TokenSource returns a valid token for the repository.

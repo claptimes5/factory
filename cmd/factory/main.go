@@ -448,6 +448,9 @@ func trunc(s string, n int) string {
 // runEval runs the replay set against a candidate config and, with a
 // baseline, rejects a candidate that passes less or costs more per pass.
 func runEval(ctx context.Context, cfg *config.Config, args []string) error {
+	if len(args) > 0 && args[0] == "capture" {
+		return runCapture(ctx, cfg, args[1:])
+	}
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	candidate := fs.String("config", "", "candidate factory.yaml (routing, prompts, skills) to evaluate; default the main config")
 	set := fs.String("set", "evals", "directory of replay cases")
