@@ -155,6 +155,35 @@ type Health struct {
 	Stale    []string // "feature: pattern" for paths or tests that match no file
 }
 
+// TestFiles are the files among files that the feature's tests name.
+func (f Feature) TestFiles(files []string) []string {
+	var out []string
+	for _, file := range files {
+		if matchAny(f.Tests, file) {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// PropertyMarkers are what a property-based or fuzz test uses, by stack:
+// the library's import or name.
+var PropertyMarkers = []string{
+	"testing/quick", "pgregory.net/rapid", "gopter", "func Fuzz", // Go
+	"from hypothesis", "import hypothesis", // Python
+	"fast-check", "fc.assert", "fc.property", // JS/TS
+	"prop_check", "rantly", "Rantly", // Ruby
+	"proptest", "quickcheck", // Rust
+	"ExUnitProperties", "StreamData", // Elixir
+	"jqwik", "junit-quickcheck", "kotest.property", // JVM
+}
+
+// HasProperties reports whether a test file's text uses property-based
+// or fuzz testing.
+func HasProperties(text string) bool {
+	return slices.ContainsFunc(PropertyMarkers, func(m string) bool { return strings.Contains(text, m) })
+}
+
 // Check measures the map against the repo's files.
 func (m *Map) Check(files []string) Health {
 	var h Health

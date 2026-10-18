@@ -471,14 +471,17 @@ When a change touches a feature, through its code or its tests:
   its risk, the files that touch it and what proves it, plus any changed
   files the map doesn't cover;
 - a feature's `risk` raises the item's: a change to a `high` feature is
-  reviewed as high risk (with the critic), whatever triage said.
+  reviewed as high risk (with the critic), whatever triage said;
+- the builder is told the `high` features and where they live before it
+  starts, and asked for a property-based test of any rule it changes in
+  them (as it is for an issue triage rated high).
 
 The map is read from the base branch, never from the change, so a builder
 can't shrink its own blast radius. Builders are asked to keep it up to
 date when they add or move a feature; those edits count once merged. The
 readiness check reports how much of the code the map covers, entries that
-point at nothing, and features with no tests, and files the work to fix
-each.
+point at nothing, features with no tests, and `high` features whose tests
+include no property-based or fuzz test, and files the work to fix each.
 
 ### How ready a repo is
 

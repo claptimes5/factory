@@ -442,6 +442,36 @@ func (r *Report) mapHealth(dir string, files []string) {
 			Issue: &Issue{Key: "feature-tests", Title: "Add tests for the untested features",
 				Body: "These features in `features.yaml` have no tests: " + strings.Join(h.Untested, ", ") + ".\n\nFor each, add tests of its main behavior and list them under its `tests`. Start with the riskiest."}})
 	}
+	if gaps := propertyGaps(dir, m, files); len(gaps) > 0 {
+		list := strings.Join(gaps, ", ")
+		r.add(Finding{Level: Gap, Area: "tests", Title: "High-risk features have no property tests: " + list,
+			Detail: "Example tests check the cases someone thought of. A property test checks a rule against hundreds of generated inputs, which is where bugs in money, permissions and parsing hide.",
+			Issue: &Issue{Key: "property-tests", Title: "Add property tests for the high-risk features",
+				Body: "These high-risk features in `features.yaml` have tests, but none of them is a property-based or fuzz test: " + list + ".\n\n" +
+					"For each, find the rules that must hold for every input (totals add up, a round trip gives back what went in, a user never sees another user's data, an invalid input is rejected and never crashes) and write a property test for each rule with the stack's usual library: `testing/quick` or `pgregory.net/rapid` or a fuzz test in Go, Hypothesis in Python, fast-check in JavaScript or TypeScript, prop_check in Ruby, proptest in Rust. Keep each run fast and seeded so failures reproduce, and list the files under the feature's `tests`."}})
+	}
+}
+
+// propertyGaps names the high-risk features whose tests have no property
+// or fuzz test. Untested ones are left to the feature-tests issue.
+func propertyGaps(dir string, m *features.Map, files []string) []string {
+	var gaps []string
+	for _, f := range m.Features {
+		if f.Risk != "high" {
+			continue
+		}
+		tests := f.TestFiles(files)
+		if len(tests) == 0 {
+			continue
+		}
+		if !slices.ContainsFunc(tests, func(t string) bool {
+			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(t)))
+			return err == nil && len(b) < 1<<20 && features.HasProperties(string(b))
+		}) {
+			gaps = append(gaps, f.Name)
+		}
+	}
+	return gaps
 }
 
 func featureMap(files []string) bool {

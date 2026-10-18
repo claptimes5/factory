@@ -115,3 +115,19 @@ func capitalize(s string) string {
 	}
 	return string(s[0]-'a'+'A') + s[1:]
 }
+
+// riskyFeatures names the high-risk features in the base branch's feature
+// map with where they live, so the builder knows before it changes them.
+func (p *Pipeline) riskyFeatures(ctx context.Context, repo, dir, base string) []string {
+	m, err := p.loadMap(ctx, repo, dir, base)
+	if err != nil || m == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range m.Features {
+		if f.Risk == "high" {
+			out = append(out, fmt.Sprintf("%s (%s)", f.Name, strings.Join(code(f.Paths), ", ")))
+		}
+	}
+	return out
+}

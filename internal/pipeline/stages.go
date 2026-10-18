@@ -184,7 +184,8 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		}
 	}
 	prompt, err := p.render("implement", PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(ws.Work, out)).Out,
-		Install: g.Install, Checks: checks, Findings: in.Findings, PreviousFailure: in.PreviousFailure})
+		Install: g.Install, Checks: checks, Findings: in.Findings, PreviousFailure: in.PreviousFailure,
+		Risk: riskOrLow(it.Risk), Risky: p.riskyFeatures(ctx, it.Repo, ws.Repo, ws.BaseSHA)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
