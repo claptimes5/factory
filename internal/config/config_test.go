@@ -365,3 +365,58 @@ func TestStepInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestStepFilesResolveAgainstTheConfig(t *testing.T) {
+	dir := t.TempDir()
+	b, err := os.ReadFile("../../factory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(b), "routing:\n", "routing:\n  critic: {harness: claude, model: opus, instructions_file: notes/critic.md}\n", 1)
+	if err := os.MkdirAll(dir+"/notes", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"factory.yaml", "notes/critic.md"} {
+		body := "Check the money paths.\n"
+		if f == "factory.yaml" {
+			body = cfg
+		}
+		if err := os.WriteFile(dir+"/"+f, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Run from elsewhere: the file is next to the config, not here.
+	c, err := Load(dir + "/factory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.StepInstructions("critic", "critic"); err != nil || got != "Check the money paths." {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	// A directory passes a stat but can't be read.
+	if err := os.WriteFile(dir+"/factory.yaml", []byte(strings.Replace(cfg, "notes/critic.md", "notes", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir + "/factory.yaml"); err == nil || !strings.Contains(err.Error(), "instructions_file") {
+		t.Fatalf("a directory as instructions_file: %v", err)
+	}
+}
+
+func TestRepoWithOnlyInstructionsKeepsThem(t *testing.T) {
+	out, err := yaml.Marshal([]Repo{{Name: "a/b", Instructions: map[string]string{"review": "x"}}, {Name: "c/d"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "review: x") || !strings.Contains(string(out), "- c/d") {
+		t.Fatalf("marshaled:\n%s", out)
+	}
+}
+
+func TestWorkspaceInstructionsAreLabeled(t *testing.T) {
+	c := load(t)
+	c.Repos = []Repo{{Name: "o/api", Instructions: map[string]string{"implement": "Regenerate the client."}}, {Name: "o/web"}, {Name: "o/docs", Instructions: map[string]string{"implement": "Update the changelog."}}}
+	got, _ := c.StepInstructions("implement.M", "implement", "o/api", "o/web", "o/docs")
+	if want := "In o/api:\n\nRegenerate the client.\n\nIn o/docs:\n\nUpdate the changelog."; got != want {
+		t.Fatalf("got %q", got)
+	}
+}

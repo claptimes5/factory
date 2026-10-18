@@ -965,13 +965,13 @@ func (p *Pipeline) render(stage string, d PromptData) (string, error) {
 }
 
 // renderStep renders a job's prompt and adds the instructions its route
-// and repo carry for the step.
-func (p *Pipeline) renderStep(j *store.Job, stage, repo string, d PromptData) (string, error) {
+// and repos carry for the step.
+func (p *Pipeline) renderStep(j *store.Job, stage string, repos []string, d PromptData) (string, error) {
 	prompt, err := p.render(stage, d)
 	if err != nil {
 		return "", err
 	}
-	extra, err := p.Cfg.StepInstructions(j.Route, j.Kind, repo)
+	extra, err := p.Cfg.StepInstructions(j.Route, j.Kind, repos...)
 	if err != nil || extra == "" {
 		return prompt, err
 	}

@@ -317,7 +317,7 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	}})
 
 	snapshot, _ := p.statusText(ctx)
-	prompt, err := p.renderStep(j, "orchestrate", "", PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
+	prompt, err := p.renderStep(j, "orchestrate", nil, PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}

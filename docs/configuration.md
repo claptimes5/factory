@@ -268,9 +268,10 @@ To try two skill sets on the same issue, use
 
 ### Skills and instructions for each step
 
-A routing entry can also say which skills in its set to use, in order, and
-add instructions of its own, inline or from a file next to `factory.yaml`.
-A repo can add instructions for `triage`, `implement`, `review` or `critic`:
+Any routing entry, including `critic` and `orchestrate`, can also say which
+skills in its set to use, in order, and add instructions of its own, inline
+or from a file (a relative path is relative to `factory.yaml`). A repo can
+add instructions for `triage`, `implement`, `review` or `critic`:
 
 ```yaml
 routing:
@@ -294,7 +295,8 @@ All of these are added to the end of that step's prompt, under
 instructions, then the file, then the repo's. The daemon checks at startup
 that each skill and file exists. Escalation keeps the instructions of the
 size an item started on, so an `implement.S` item that climbs to Opus still
-gets `implement.S`'s.
+gets `implement.S`'s. In a [workspace](#workspaces-one-change-across-repos), the build and review
+get every member repo's instructions, each labeled with its repo.
 
 ## Models and escalation
 

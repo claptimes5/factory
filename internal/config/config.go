@@ -114,7 +114,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -281,18 +281,22 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := Parse(b)
+	abs, _ := filepath.Abs(filepath.Dir(path))
+	c, err := ParseIn(b, abs)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	abs, _ := filepath.Abs(filepath.Dir(path))
-	c.dir = abs
 	return c, nil
 }
 
-// Parse decodes and validates config bytes, filling defaults.
-func Parse(b []byte) (*Config, error) {
-	var c Config
+// Parse decodes and validates config bytes, filling defaults. Relative
+// paths resolve against the current directory.
+func Parse(b []byte) (*Config, error) { return ParseIn(b, "") }
+
+// ParseIn is Parse for a config that lives in dir: relative paths in it,
+// including the files validation checks, resolve against dir.
+func ParseIn(b []byte, dir string) (*Config, error) {
+	c := Config{dir: dir}
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
@@ -560,7 +564,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if r.InstructionsFile != "" {
-			if _, err := os.Stat(c.Path(r.InstructionsFile)); err != nil {
+			// Read it now: a directory or unreadable file would otherwise
+			// fail every job on this route.
+			if _, err := os.ReadFile(c.Path(r.InstructionsFile)); err != nil {
 				bad("routing.%s: instructions_file: %v", k, err)
 			}
 		}
@@ -927,8 +933,9 @@ func (c *Config) ImplementKey(complexity string) string {
 // StepInstructions is what a step's prompt gets on top of its template:
 // the route's skills to use and instructions, then the repo's for the
 // step. kind is the job kind (triage, implement, review, critic,
-// orchestrate); repo may be empty.
-func (c *Config) StepInstructions(route, kind, repo string) (string, error) {
+// orchestrate). With several repos, as in a workspace, each repo's
+// instructions are labeled with its name.
+func (c *Config) StepInstructions(route, kind string, repos ...string) (string, error) {
 	var parts []string
 	r := c.Routing[route]
 	if len(r.Use) > 0 {
@@ -946,9 +953,12 @@ func (c *Config) StepInstructions(route, kind, repo string) (string, error) {
 			parts = append(parts, s)
 		}
 	}
-	if repo != "" {
+	for _, repo := range repos {
 		if rc, ok := c.RepoConf(repo); ok {
 			if s := strings.TrimSpace(rc.Instructions[kind]); s != "" {
+				if len(repos) > 1 {
+					s = "In " + repo + ":\n\n" + s
+				}
 				parts = append(parts, s)
 			}
 		}
