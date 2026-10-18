@@ -464,19 +464,25 @@ func (p *Pipeline) tuningBranch(ctx context.Context, g *Git, ws *Workspace) (str
 		if !g.HasBranch(ctx, ws.Repo, branch) {
 			return branch, nil
 		}
-		authors, err := g.Authors(ctx, ws.Repo, ws.BaseSHA, "refs/remotes/origin/"+branch)
-		if err != nil {
-			return "", err
-		}
-		mine := true
-		for _, a := range authors {
-			mine = mine && strings.EqualFold(a, g.AuthorEmail())
-		}
-		if mine {
-			return branch, nil
+		if mine, err := g.onlyMine(ctx, ws.Repo, ws.BaseSHA, "refs/remotes/origin/"+branch); err != nil || mine {
+			return branch, err
 		}
 	}
 	return "", fmt.Errorf("every %s branch has commits of someone else's", base)
+}
+
+// onlyMine says whether every commit on to after from is the daemon's.
+func (g *Git) onlyMine(ctx context.Context, repo, from, to string) (bool, error) {
+	authors, err := g.Authors(ctx, repo, from, to)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range authors {
+		if !strings.EqualFold(a, g.AuthorEmail()) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // tuningPR opens (or updates) a draft PR with the proposal applied to the
@@ -506,7 +512,7 @@ func (p *Pipeline) tuningPR(ctx context.Context, j *store.Job, prop store.Propos
 	}
 	defer func() { _ = root.Close() }()
 	if err := plainFile(root, rel); err != nil {
-		return "", err
+		return "", fmt.Errorf("tuning.path %w", err)
 	}
 	theirs, err := root.ReadFile(rel)
 	if err != nil {
@@ -571,18 +577,18 @@ func plainFile(root *os.Root, rel string) error {
 		at := strings.Join(parts[:i], "/")
 		fi, err := root.Lstat(at)
 		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("tuning.path %s not found in the repo", rel)
+			return fmt.Errorf("%s not found in the repo", rel)
 		}
 		if err != nil {
 			return err
 		}
 		switch {
 		case fi.Mode()&fs.ModeSymlink != 0:
-			return fmt.Errorf("tuning.path %s: %s is a symlink in the repo; refusing to write through it", rel, at)
+			return fmt.Errorf("%s: %s is a symlink in the repo; refusing to write through it", rel, at)
 		case i < len(parts) && !fi.IsDir():
-			return fmt.Errorf("tuning.path %s not found in the repo", rel)
+			return fmt.Errorf("%s not found in the repo", rel)
 		case i == len(parts) && !fi.Mode().IsRegular():
-			return fmt.Errorf("tuning.path %s isn't a regular file in the repo", rel)
+			return fmt.Errorf("%s isn't a regular file in the repo", rel)
 		}
 	}
 	return nil

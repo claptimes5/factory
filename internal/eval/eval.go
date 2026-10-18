@@ -170,6 +170,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Intake.PollInterval = config.Duration{}
 	cfg.Orchestrator.On = false
+	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	rc, known := o.Cfg.RepoConf(c.Repo)
 	if !known {
 		rc = o.Cfg.Primary()

@@ -467,7 +467,7 @@ func nullable(s string) any {
 
 // EnqueueJob inserts a queued job and returns its id.
 func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
-	id, _, err := s.enqueue(ctx, j, false)
+	id, _, err := s.enqueue(ctx, j, false, "")
 	return id, err
 }
 
@@ -475,10 +475,17 @@ func (s *Store) EnqueueJob(ctx context.Context, j Job) (int64, error) {
 // queued or running, in this process or another: then it inserts nothing
 // and returns false.
 func (s *Store) EnqueueSole(ctx context.Context, j Job) (int64, bool, error) {
-	return s.enqueue(ctx, j, true)
+	return s.enqueue(ctx, j, true, "")
 }
 
-func (s *Store) enqueue(ctx context.Context, j Job, sole bool) (int64, bool, error) {
+// EnqueueSoleFor is EnqueueSole per repo: it inserts nothing while a job
+// of the same kind whose input names repo ({"repo": ...}) is queued or
+// running.
+func (s *Store) EnqueueSoleFor(ctx context.Context, j Job, repo string) (int64, bool, error) {
+	return s.enqueue(ctx, j, true, repo)
+}
+
+func (s *Store) enqueue(ctx context.Context, j Job, sole bool, repo string) (int64, bool, error) {
 	if j.Attempt == 0 {
 		j.Attempt = 1
 	}
@@ -488,7 +495,8 @@ func (s *Store) enqueue(ctx context.Context, j Job, sole bool) (int64, bool, err
 			// The write transaction is immediate, so no other writer can
 			// queue one between this check and the insert.
 			var n int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind = ? AND state IN ('queued', 'running')`, j.Kind).Scan(&n); err != nil || n > 0 {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind = ? AND state IN ('queued', 'running')
+				AND (? = '' OR lower(CASE WHEN json_valid(input) THEN json_extract(input, '$.repo') END) = lower(?))`, j.Kind, repo, repo).Scan(&n); err != nil || n > 0 {
 				return err
 			}
 		}

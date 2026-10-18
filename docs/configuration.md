@@ -20,6 +20,7 @@ change something by hand.
 - [Auto-merge](#auto-merge)
 - [Budgets](#budgets)
 - [Tuning](#tuning)
+- [Learning from your edits](#learning-from-your-edits)
 - [Claude-only review](#claude-only-review)
 
 The gates, the coverage floor, risk and the feature map are in
@@ -344,7 +345,7 @@ get every member repo's instructions, each labeled with its repo.
 
 `routing` picks the harness, model and effort for each step: `triage`,
 `implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
-`review.high_risk`), `critic`, `orchestrate` and `tune`. Triage rates each issue
+`review.high_risk`), `critic`, `orchestrate`, `tune` and `learn`. Triage rates each issue
 `XS`, `S`, `M` or `L`, and the item builds on the matching
 `implement.<size>` entry.
 
@@ -524,6 +525,31 @@ Unlike the orchestrator it has no tools, so it can run on Codex too:
 routing:
   tune: {harness: claude, model: opus, effort: high}
 ```
+
+## Learning from your edits
+
+The factory proposes lines for each repo's agent instructions (`AGENTS.md`,
+or `CLAUDE.md` for Claude builders) from the changes you make to its PRs and from findings its reviewers repeat (see
+[Learning from your edits](quality.md#learning-from-your-edits)). It's on
+unless you turn it off:
+
+```yaml
+learning:
+  enabled: true     # false turns it off
+  min_findings: 2   # alike findings, from two or more items, that start a run
+  budget: 0.5       # dollars per learn job; left out, budgets.triage
+```
+
+| Key | What it does |
+| --- | --- |
+| `enabled` | On by default. Off, the factory records nothing and runs no learn jobs. |
+| `min_findings` | How many alike blocking findings, from at least two items, start a learn job when no edit of yours does. At least 2 (default 2). |
+| `budget` | Dollars per learn job. Left out, it's `budgets.triage`. |
+
+`routing.learn` picks its model. Left out, it runs on triage's harness:
+Sonnet on Claude, since triage often runs on Haiku, or triage's own model
+on Codex. `timeouts.learn` is 10 minutes by default. A learn job counts
+toward `budgets.daily_total`, and waits like a build when the cap is hit.
 
 ## Claude-only review
 

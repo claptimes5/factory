@@ -357,6 +357,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 		if err := p.Intake(ctx); err != nil {
 			p.log().Error("intake", "err", err)
 		}
+		p.learnTriggers(ctx)
 	}
 	if p.Cfg.Orchestrator.On {
 		p.orchestratorTriggers(ctx, time.Now())
@@ -409,8 +410,9 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	}
 	// One orchestrator at a time: its tools act on the whole queue. One
 	// tuning run at a time, too: each reads the file the last proposed for.
+	// And one learn job: two for a repo would push over each other's lines.
 	var except []string
-	for _, kind := range []string{"orchestrate", "tune"} {
+	for _, kind := range []string{"orchestrate", "tune", "learn"} {
 		if n, err := p.Store.CountJobs(ctx, state.Running, kind); err != nil {
 			return nil, err
 		} else if n > 0 {
@@ -427,7 +429,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic"), p.pausedHarnesses(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.pausedHarnesses(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -445,7 +447,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic"), p.pausedHarnesses(ctx))
+		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn"), p.pausedHarnesses(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -686,6 +688,7 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 				// What the human changed is what the factory missed: worth
 				// a replay case, so the next config is measured against it.
 				arg := strings.TrimPrefix(p.ref(it.Repo, pr.Number), "#") // a bare # starts a shell comment
+				p.recordHumanEdit(ctx, it, pr, want)
 				p.notify(ctx, fmt.Sprintf("PR #%d for %s was merged with your changes. If they fixed something the factory got wrong, `factory eval capture %s` turns it into a replay case.",
 					pr.Number, p.ref(it.Repo, it.IssueNumber), arg))
 			}
@@ -1090,6 +1093,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runOrchestrate(ctx, j)
 	case "tune":
 		err = p.runTune(ctx, j)
+	case "learn":
+		err = p.runLearn(ctx, j)
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -1127,7 +1132,7 @@ type PromptData struct {
 	Tune            TunePrompt     // the tuning loop's metrics and settings
 }
 
-func (p *Pipeline) render(stage string, d PromptData) (string, error) {
+func (p *Pipeline) render(stage string, d any) (string, error) {
 	path := filepath.Join(p.Cfg.Path(p.Cfg.PromptsDir), stage+".md")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -1145,8 +1150,8 @@ func (p *Pipeline) render(stage string, d PromptData) (string, error) {
 }
 
 // renderStep renders a job's prompt and adds the instructions its route
-// and repos carry for the step.
-func (p *Pipeline) renderStep(j *store.Job, stage string, repos []string, d PromptData) (string, error) {
+// and repos carry for the step. d is a PromptData, or a stage's own data.
+func (p *Pipeline) renderStep(j *store.Job, stage string, repos []string, d any) (string, error) {
 	prompt, err := p.render(stage, d)
 	if err != nil {
 		return "", err
