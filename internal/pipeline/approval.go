@@ -41,6 +41,17 @@ func IssueHash(is github.Issue) string {
 // after they labeled it, it takes the label off and says why on the
 // issue; when the host can't say, it leaves everything for the next poll.
 func (p *Pipeline) approvedBy(ctx context.Context, repo string, n int, label string) (string, github.Issue, bool) {
+	return p.approvedFor(ctx, repo, n, label, labelRefusal{"not starting", "approve work", "approve this issue", "approve it"})
+}
+
+// labelRefusal words approvedFor's comment: what the factory won't do ("not
+// closing"), what the labeler can't do here ("confirm that"), and what
+// someone else may add the label to do, before and after an edit.
+type labelRefusal struct{ doing, may, to, again string }
+
+// approvedFor is approvedBy for a label that asks for something other
+// than work, with the refusal worded for it.
+func (p *Pipeline) approvedFor(ctx context.Context, repo string, n int, label string, w labelRefusal) (string, github.Issue, bool) {
 	gh := p.gh(repo)
 	a, err := gh.Approver(ctx, n, label)
 	if err != nil {
@@ -54,11 +65,11 @@ func (p *Pipeline) approvedBy(ctx context.Context, repo string, n int, label str
 	if a.By != "" {
 		by = "@" + a.By
 	}
-	msg := fmt.Sprintf("**Factory: not starting.** `%s` was added by %s, who can't approve work here. "+
-		"Someone with write access to the repository (Developer or above on GitLab) can add it to approve this issue.", label, by)
+	msg := fmt.Sprintf("**Factory: %s.** `%s` was added by %s, who can't %s here. "+
+		"Someone with write access to the repository (Developer or above on GitLab) can add it to %s.", w.doing, label, by, w.may, w.to)
 	if a.OK {
-		msg = fmt.Sprintf("**Factory: not starting.** The issue's title or text changed after %s added `%s`. "+
-			"Read the new text; if it's fine, add `%s` again to approve it.", by, label, label)
+		msg = fmt.Sprintf("**Factory: %s.** The issue's title or text changed after %s added `%s`. "+
+			"Read the new text; if it's fine, add `%s` again to %s.", w.doing, by, label, label, w.again)
 	}
 	p.log().Warn("label isn't an approval", "repo", repo, "issue", n, "label", label, "by", a.By, "edited", a.Edited)
 	// Off first, so a failed comment can't make it say this every poll.

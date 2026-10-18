@@ -75,7 +75,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -202,6 +202,12 @@ func run(args []string) error {
 		}
 		fmt.Printf("queued tuning run (job %d); its proposal shows on the dashboard's Settings screen\n", id)
 		return nil
+	case "groom":
+		// Queued for the daemon, like tune, whatever grooming.every says.
+		if fs.NArg() > 2 {
+			return usage()
+		}
+		return groom(ctx, os.Stdout, cfg, st, fs.Arg(1))
 	case "serve", "run-once":
 		p, err := build(cfg, st)
 		if err != nil {
@@ -209,6 +215,9 @@ func run(args []string) error {
 		}
 		p.ConfigPath, _ = filepath.Abs(*cfgPath)
 		if err := p.CheckTunePrompt(); err != nil {
+			return err
+		}
+		if err := p.CheckGroomPrompt(); err != nil {
 			return err
 		}
 		if cmd == "serve" {
@@ -565,6 +574,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		fmt.Fprintln(w, l)
 	}
 	for _, l := range sourceLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
+	for _, l := range groomLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})

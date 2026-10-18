@@ -2,7 +2,7 @@
 
 The builder runs arbitrary code, and the issues it reads may come from
 anyone. This guide covers who can start work, how jobs are kept apart from
-the daemon, what jobs can reach on the network, and how to put a login on
+the daemon, how untrusted issue text is handled, what jobs can reach on the network, and how to put a login on
 the control room.
 
 ## Who can start work
@@ -30,6 +30,10 @@ to it can start work there. The factory checks who added `factory:ready`
   you.** They never carry `factory:ready` and are never approved as the
   factory, so the same check applies to them as to an outsider's issue
   (see [Sources](#sources-tokens-and-untrusted-text)).
+- **Grooming acts only on a maintainer's label.** `factory:close` and
+  `factory:split` are checked the same way as `factory:ready`, and the
+  sub-issues a split opens wait for `factory:ready` too (see
+  [Grooming](#grooming-untrusted-issue-text)).
 
 Approving a [cost estimate](using.md#cost-estimates) from the dashboard
 needs the control room's password, or a browser on the factory's own
@@ -119,6 +123,33 @@ other people control into issues the builder may later read:
   app's permission for them is read-only.
 - **The TODO scan** is a shallow clone the daemon owns, read with
   `git grep` and `git show` and deleted after. Nothing in it runs.
+
+## Grooming: untrusted issue text
+
+[Backlog grooming](using.md#backlog-grooming) puts the text of open
+issues, which anyone can write on a public repo, into a model's prompt:
+
+- **It's fenced and marked as data.** Titles, labels and bodies (cut to
+  1500 characters) go inside a code fence none of them can close, with
+  the prompt saying to ignore any instructions in them. The job is
+  read-only, runs in an empty folder with no checkout and none of the
+  repo's `env`, and its only output is its JSON answer.
+- **Its answer can't act.** The daemon checks every issue number against
+  what the job was shown and may flag, so a planted "close #1" can only
+  propose closing an issue a human then has to confirm. What it posts is
+  checked first: no links, @mentions, HTML, GitLab references or quick
+  actions (a line starting with `/`), and `#N` only for issues it was
+  shown. The model's words are quoted in the comment, below the factory's.
+- **Nothing happens without write access.** The factory only comments and
+  adds `?` labels. Closing and splitting wait for `factory:close` or
+  `factory:split` from someone with write access, checked like an
+  approval, and sub-issues wait for `factory:ready`. A confirmed close is
+  refused if the issue changed since it was flagged, and a duplicate is
+  never closed when the issue to keep is closed or proposed closed too.
+- **Its marker can't be forged:** only the factory's own comments count
+  when it looks for the marker that says an issue was flagged already.
+- **It leaves the factory's own work alone:** issues being built, with an
+  open PR, or with a factory label are never flagged.
 
 ## Previews: running the change's app
 

@@ -250,7 +250,11 @@ func (c *Client) GetIssue(ctx context.Context, n int) (*Issue, error) {
 // CreateIssue opens an issue and returns its number.
 func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []string) (int, error) {
 	var r rawIssue
-	err := c.do(ctx, "POST", "/repos/"+c.Repo+"/issues", map[string]any{"title": title, "body": body, "labels": labels}, &r)
+	in := map[string]any{"title": title, "body": body}
+	if len(labels) > 0 {
+		in["labels"] = labels // GitHub refuses null
+	}
+	err := c.do(ctx, "POST", "/repos/"+c.Repo+"/issues", in, &r)
 	return r.Number, err
 }
 
@@ -440,6 +444,11 @@ func (c *Client) Self(ctx context.Context) (string, error) { return c.self(ctx) 
 // CloseNotPlanned closes an issue as not planned.
 func (c *Client) CloseNotPlanned(ctx context.Context, n int) error {
 	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "not_planned"}, nil)
+}
+
+// CloseDuplicate closes an issue as a duplicate.
+func (c *Client) CloseDuplicate(ctx context.Context, n int) error {
+	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "duplicate"}, nil)
 }
 
 // CloseIssue closes an issue as completed.

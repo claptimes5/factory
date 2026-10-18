@@ -175,6 +175,7 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
 	cfg.Previews.Off()               // nor is there a PR to show them on
 	cfg.Budgets.ConfirmOver = 0      // nobody is there to say go
+	cfg.Grooming.Off()               // nor is its backlog the run's
 	rc, known := o.Cfg.RepoConf(c.Repo)
 	if !known {
 		rc = o.Cfg.Primary()

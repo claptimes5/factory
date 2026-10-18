@@ -22,6 +22,7 @@ change something by hand.
 - [Asking before costly builds](#asking-before-costly-builds)
 - [Tuning](#tuning)
 - [Learning from your edits](#learning-from-your-edits)
+- [Backlog grooming](#backlog-grooming)
 - [PR previews](#pr-previews)
 - [Claude-only review](#claude-only-review)
 
@@ -721,6 +722,36 @@ Read-only* repository permission: setup's app has it, and an app made
 before this needs it added (then accept it on the installation page). A
 `GITHUB_TOKEN` needs the `security_events` scope, or for a fine-grained
 token *Dependabot alerts: read*.
+
+## Backlog grooming
+
+On a cadence, the factory can read each repo's open issues and flag likely
+duplicates, stale issues and ones too big for one change, for you to
+confirm (see [Backlog grooming](using.md#backlog-grooming)). It's off
+unless you set `every`, since it comments on people's issues:
+
+```yaml
+grooming:
+  every: 168h        # weekly; at least 24h; 0 or none (the default) turns it off
+  stale_after: 90d   # no activity this long, and it may be called stale; at least 7d
+  max_issues: 50     # issues one run reads, at most 200
+  budget: 0.5        # dollars per groom job; left out, budgets.triage
+  # repos: [acme/api]  # default: every repo
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `every` | off | How often each repo is groomed, at least `24h`. The clock starts the first time the daemon runs with grooming on and survives restarts, so the first run comes one cadence later. `factory groom` runs one now. |
+| `stale_after` | `90d` | An issue with no activity (a comment, an edit, a label) for this long may be called stale. Days (`90d`) or hours (`2160h`); at least 7 days. |
+| `max_issues` | `50` | How many issues one run reads: half the newest, half the longest idle. The rest wait for a later run. |
+| `budget` | `budgets.triage` | Dollars per groom job. It counts toward `budgets.daily_total`, and a run that's due waits while today's budget is spent. |
+| `repos` | every repo | Which repos. |
+
+`routing.groom` picks its model. Left out, it runs on triage's harness, like
+`routing.learn`: Sonnet on Claude, or triage's own model on Codex.
+`timeouts.groom` is 10 minutes by default. With grooming on, the daemon
+won't start without `prompts/groom.md`. `factory eval` and
+`factory compare` never groom.
 
 ## PR previews
 

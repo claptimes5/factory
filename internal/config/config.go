@@ -306,6 +306,9 @@ type Config struct {
 	// Sources file issues from Sentry, Dependabot and TODO comments, for
 	// you to approve. See Sources.
 	Sources Sources `yaml:"sources"`
+	// Grooming flags duplicate, stale and too-big issues on a cadence, for
+	// you to confirm. See Grooming.
+	Grooming Grooming `yaml:"grooming"`
 	// Previews are the defaults and limits of each repo's preview.
 	Previews Previews `yaml:"previews"`
 
@@ -506,6 +509,7 @@ func (c *Config) defaults() {
 	c.learningDefaults()
 	c.healthDefaults()
 	c.sourcesDefaults()
+	c.groomingDefaults()
 	c.previewDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
@@ -792,6 +796,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkLearning()...)
 	errs = append(errs, c.checkHealth()...)
 	errs = append(errs, c.checkSources()...)
+	errs = append(errs, c.checkGrooming()...)
 	errs = append(errs, c.checkPreviews()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
