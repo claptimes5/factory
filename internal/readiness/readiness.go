@@ -5,6 +5,7 @@
 package readiness
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -179,7 +182,14 @@ func Assess(ctx context.Context, in Input) *Report {
 		if name == "test" {
 			testRun = &x
 		}
-		if !x.Passed {
+		if hint := servicesHint(in.Dir, files, in.Repo, x.Output); !x.Passed && hint != "" {
+			// The code is fine; the check can't reach a database the
+			// factory doesn't start. Only factory.yaml can fix that, which
+			// builders may not edit, so no issue.
+			allPassed = false
+			r.add(Finding{Level: Blocker, Area: "services", Title: "`" + name + "` can't reach a service it needs",
+				Detail: hint + "\n\n" + fence(x.Output)})
+		} else if !x.Passed {
 			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + name + "` fails on " + r.Branch,
 				Detail: "Every change would fail this check, whatever it does.\n\n" + fence(x.Output),
@@ -495,6 +505,53 @@ func readCapped(p string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, 1<<20))
+}
+
+// knownServices are the images for the services a repo's files point at,
+// with a readiness command and test settings.
+var knownServices = []struct {
+	name, image, env, ready string
+	signs                   []string // lowercase text in docker-compose or config files
+}{
+	{"postgres", "postgres:16", "{POSTGRES_PASSWORD: factory}", "pg_isready -U postgres", []string{"image: postgres", "image: \"postgres", "adapter: postgresql", "postgres://", "postgresql://"}},
+	{"mysql", "mysql:8", "{MYSQL_ROOT_PASSWORD: factory}", "mysqladmin ping -h 127.0.0.1 -pfactory", []string{"image: mysql", "image: mariadb", "adapter: mysql2", "mysql://"}},
+	{"redis", "redis:7", "", "redis-cli ping", []string{"image: redis", "redis://"}},
+	{"mongo", "mongo:7", "", "mongosh --quiet --eval 'db.runCommand({ping:1})'", []string{"image: mongo", "mongodb://"}},
+}
+
+// connRefused is how a check that can't reach a service usually fails.
+var connRefused = regexp.MustCompile(`(?i)connection refused|econnrefused|could not connect to server|could not translate host name|can't connect to (local )?mysql|getaddrinfo|name or service not known|no such host|redis::cannotconnecterror|server selection timed out`)
+
+// servicesHint suggests services for factory.yaml when a check failed
+// the way one does that can't reach a database, the repo has none
+// configured, and its files say which it uses; "" otherwise.
+func servicesHint(dir string, files []string, repo config.Repo, output string) string {
+	if len(repo.Services) > 0 || !connRefused.MatchString(output) {
+		return ""
+	}
+	var text strings.Builder
+	for _, f := range files {
+		base := path.Base(f)
+		if strings.HasPrefix(base, "docker-compose") || strings.HasPrefix(base, "compose.") || f == "config/database.yml" || base == ".env.example" || base == ".env.test" {
+			if b, err := readCapped(filepath.Join(dir, filepath.FromSlash(f))); err == nil {
+				text.Write(bytes.ToLower(b))
+			}
+		}
+	}
+	var snippet strings.Builder
+	for _, s := range knownServices {
+		if slices.ContainsFunc(s.signs, func(sign string) bool { return strings.Contains(text.String(), sign) }) {
+			fmt.Fprintf(&snippet, "    %s:\n      image: %s\n", s.name, s.image)
+			if s.env != "" {
+				fmt.Fprintf(&snippet, "      env: %s\n", s.env)
+			}
+			fmt.Fprintf(&snippet, "      ready: %s\n", s.ready)
+		}
+	}
+	if snippet.Len() == 0 {
+		return ""
+	}
+	return "The check couldn't connect to a service, and the repo's files point at the ones below. The factory starts services for every build and check when factory.yaml lists them under the repo; each is reached by its name as the host (`postgres:5432`), so point the test settings at it in the repo's `env:` (for example `DATABASE_URL`):\n\n```yaml\n  - name: " + repo.Name + "\n    services:\n" + snippet.String() + "```"
 }
 
 func featureMap(files []string) bool {

@@ -40,6 +40,8 @@ type RunRequest struct {
 	// across jobs (Claude only), and Resume a session in it to continue.
 	SessionDir string
 	Resume     string
+	// Services is the job's services network, when it has services.
+	Services string
 }
 
 // Event is normalized from each CLI's JSON stream.
@@ -89,7 +91,7 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	}
 	spec := runner.Spec{
 		Name: req.Name, Image: req.Image, Workdir: req.Workdir, OutDir: req.OutDir,
-		ReadOnly: req.ReadOnly, Env: req.Env, Timeout: req.Timeout,
+		ReadOnly: req.ReadOnly, Env: req.Env, Timeout: req.Timeout, Services: req.Services,
 	}
 	spec.Mounts = append(spec.Mounts, req.Mounts...)
 	paths := h.runner.Paths(spec)

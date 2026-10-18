@@ -117,6 +117,8 @@ type Pipeline struct {
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
+	svcMu      sync.Mutex
+	svcNets    map[int64]string // job ID -> its services network
 	inflight   sync.Map        // item id -> job id while a job for it, and its follow-ups, run
 	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
 	jobCancel  sync.Map        // job id -> context.CancelFunc of a running job
@@ -713,7 +715,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		Name: p.containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image,
-		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume,
+		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume, Services: p.servicesOf(j.ID),
 	}, events)
 	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
 		// Resuming is best effort: if the session is gone, start fresh,
@@ -967,7 +969,7 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 	timeout := p.Cfg.Timeout("gates")
 	code, err := p.Runner.Run(ctx, runner.Spec{
 		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: rc.Image,
-		Workdir: workdir, OutDir: outDir, Mounts: mounts, Env: env, NoNetwork: g.noNet,
+		Workdir: workdir, OutDir: outDir, Mounts: mounts, Env: env, NoNetwork: g.noNet, Services: p.servicesOf(jobID),
 		Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: timeout,
 	}, &out)
 	return code, out.String(), err

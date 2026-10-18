@@ -39,6 +39,30 @@ type Spec struct {
 	// NoNetwork runs without any network (hidden scenarios, so code under
 	// test cannot send them anywhere).
 	NoNetwork bool
+	// Services is the network of the job's services (from StartServices),
+	// joined as well as the usual one, or alone with NoNetwork: it has no
+	// way out, so the services are all it reaches.
+	Services string
+}
+
+// Service is a container a job's commands need, such as a database. Its
+// name is its host name on the services network.
+type Service struct {
+	Name  string
+	Image string
+	Env   map[string]string
+	// Ready is a command run in the service container until it succeeds,
+	// e.g. pg_isready; empty means ready once started.
+	Ready string
+}
+
+// ServiceRunner starts and stops a job's services. Only Docker is one.
+type ServiceRunner interface {
+	// StartServices starts svcs on a new network named for job and waits
+	// until each is ready, returning the network for Spec.Services.
+	StartServices(ctx context.Context, job string, svcs []Service, wait time.Duration) (string, error)
+	// StopServices removes the job's services and their network.
+	StopServices(ctx context.Context, job string) error
 }
 
 // Paths are the locations a command should use for the checkout, the
@@ -95,9 +119,13 @@ func (d *Docker) Args(s Spec) []string {
 	if d.Memory != "" {
 		a = append(a, "--memory", d.Memory)
 	}
-	if s.NoNetwork {
+	switch {
+	case s.Services != "":
+		// Joined first: the usual network is connected after create.
+		a = append(a, "--network", s.Services)
+	case s.NoNetwork:
 		a = append(a, "--network", "none")
-	} else if d.Network != "" {
+	case d.Network != "":
 		a = append(a, "--network", d.Network)
 	}
 	ro := ""
@@ -122,7 +150,27 @@ func (d *Docker) Args(s Spec) []string {
 func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 	ctx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
-	cmd := exec.Command(d.bin(), d.Args(s)...)
+	args := d.Args(s)
+	if s.Services != "" {
+		// docker run joins one network; the usual one (for the agent's
+		// API and installs) is connected between create and start.
+		args[0] = "create"
+		if out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput(); err != nil {
+			return -1, fmt.Errorf("docker create: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		if !s.NoNetwork {
+			net := d.Network
+			if net == "" {
+				net = "bridge"
+			}
+			if out, err := exec.CommandContext(ctx, d.bin(), "network", "connect", net, s.Name).CombinedOutput(); err != nil {
+				_ = d.Kill(context.Background(), s.Name)
+				return -1, fmt.Errorf("docker network connect: %v: %s", err, strings.TrimSpace(string(out)))
+			}
+		}
+		args = []string{"start", "-a", "-i", s.Name}
+	}
+	cmd := exec.Command(d.bin(), args...)
 	cmd.Env = append(os.Environ(), envList(s.Env)...)
 	cmd.Stdin = s.Stdin
 	cmd.Stdout = stdout
@@ -146,6 +194,91 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	}
 }
 
+// serviceNet is the network of a job's services.
+func serviceNet(job string) string { return job + "-svc" }
+
+// ServiceArgs builds the docker run arguments for one service. Services
+// keep their default capabilities (database images switch users and chown
+// their data directory) but get no new privileges, the job's limits and
+// only the internal services network.
+func (d *Docker) ServiceArgs(job string, s Service) []string {
+	a := []string{"run", "-d", "--rm", "--name", job + "-svc-" + s.Name,
+		"--network", serviceNet(job), "--network-alias", s.Name,
+		"--security-opt", "no-new-privileges", "--pids-limit", "1024",
+		"--label", "factory.job=" + job,
+	}
+	if d.CPUs != "" {
+		a = append(a, "--cpus", d.CPUs)
+	}
+	if d.Memory != "" {
+		a = append(a, "--memory", d.Memory)
+	}
+	for _, k := range sortedKeys(s.Env) {
+		a = append(a, "-e", k+"="+s.Env[k])
+	}
+	return append(a, s.Image)
+}
+
+func (d *Docker) StartServices(ctx context.Context, job string, svcs []Service, wait time.Duration) (string, error) {
+	net := serviceNet(job)
+	_ = d.StopServices(ctx, job) // left over from a crash
+	if out, err := exec.CommandContext(ctx, d.bin(), "network", "create", "--internal", "--label", "factory.job="+job, net).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("docker network create: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	fail := func(err error) (string, error) {
+		_ = d.StopServices(context.Background(), job)
+		return "", err
+	}
+	for _, s := range svcs {
+		if out, err := exec.CommandContext(ctx, d.bin(), d.ServiceArgs(job, s)...).CombinedOutput(); err != nil {
+			return fail(fmt.Errorf("service %s: %v: %s", s.Name, err, strings.TrimSpace(string(out))))
+		}
+	}
+	deadline := time.Now().Add(wait)
+	for _, s := range svcs {
+		if s.Ready == "" {
+			continue
+		}
+		for {
+			out, err := exec.CommandContext(ctx, d.bin(), "exec", job+"-svc-"+s.Name, "sh", "-c", s.Ready).CombinedOutput()
+			if err == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				return fail(ctx.Err())
+			}
+			if time.Now().After(deadline) {
+				return fail(fmt.Errorf("service %s wasn't ready after %s: `%s`: %s", s.Name, wait, s.Ready, tail(string(out), 500)))
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	return net, nil
+}
+
+func (d *Docker) StopServices(ctx context.Context, job string) error {
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-aq", "--filter", "name=^"+job+"-svc-").Output()
+	if err != nil {
+		return err
+	}
+	if ids := strings.Fields(string(out)); len(ids) > 0 {
+		if err := exec.CommandContext(ctx, d.bin(), append([]string{"rm", "-f"}, ids...)...).Run(); err != nil {
+			return err
+		}
+	}
+	// Fails when there is no network, which is fine.
+	_ = exec.CommandContext(ctx, d.bin(), "network", "rm", serviceNet(job)).Run()
+	return nil
+}
+
+func tail(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		return "…" + s[len(s)-n:]
+	}
+	return s
+}
+
 func (d *Docker) Alive(ctx context.Context, name string) bool {
 	out, err := exec.CommandContext(ctx, d.bin(), "inspect", "-f", "{{.State.Running}}", name).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
@@ -160,11 +293,22 @@ func (d *Docker) KillAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ids := strings.Fields(string(out))
-	if len(ids) == 0 {
-		return nil
+	if ids := strings.Fields(string(out)); len(ids) > 0 {
+		if err := exec.CommandContext(ctx, d.bin(), append([]string{"rm", "-f"}, ids...)...).Run(); err != nil {
+			return err
+		}
 	}
-	return exec.CommandContext(ctx, d.bin(), append([]string{"rm", "-f"}, ids...)...).Run()
+	// And the services networks those jobs left behind.
+	out, err = exec.CommandContext(ctx, d.bin(), "network", "ls", "--filter", "label=factory.job", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return err
+	}
+	for _, name := range strings.Fields(string(out)) {
+		if strings.HasPrefix(name, "factory-job-") {
+			_ = exec.CommandContext(ctx, d.bin(), "network", "rm", name).Run()
+		}
+	}
+	return nil
 }
 
 // Local runs the command directly on the host, in the job's workdir. It
