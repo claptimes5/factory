@@ -195,3 +195,31 @@ func TestTextOnlyLane(t *testing.T) {
 		t.Fatalf("no PR: stage %s", it.Stage)
 	}
 }
+
+func TestStepInstructionsReachPrompts(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	r := e.p.Cfg.Routing["implement.M"]
+	r.Instructions = "Name tests after the behavior."
+	e.p.Cfg.Routing["implement.M"] = r
+	e.p.Cfg.Repos[0].Instructions = map[string]string{"review": "Flag any exported function without a doc comment.", "triage": "Rate anything touching billing high risk."}
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ prompt, want, not string }{
+		{e.claude.prompts["implement"][0], "## Instructions for this step\n\nName tests after the behavior.", "doc comment"},
+		{e.codex.prompts["review"][0], "## Instructions for this step\n\nFlag any exported function without a doc comment.", "Name tests"},
+		{e.claude.prompts["triage"][0], "Rate anything touching billing high risk.", "doc comment"},
+	} {
+		if !strings.Contains(c.prompt, c.want) || strings.Contains(c.prompt, c.not) {
+			t.Errorf("prompt should have %q and not %q:\n%s", c.want, c.not, c.prompt)
+		}
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 1).ID, Kind: "implement"})
+	if len(jobs) != 1 || jobs[0].Route != "implement.M" {
+		t.Fatalf("implement jobs: %+v", jobs)
+	}
+}

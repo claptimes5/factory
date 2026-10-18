@@ -651,7 +651,7 @@ func (p *Pipeline) skillsDir(set string) string {
 func (p *Pipeline) enqueueTriage(ctx context.Context, it *store.WorkItem, attempt int, input string) error {
 	r := p.Cfg.Routing["triage"]
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "triage", Harness: r.Harness, Model: r.Model, Effort: r.Effort,
-		Skillset: r.Skills, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("triage", ""), Input: input})
+		Skillset: r.Skills, Route: "triage", Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("triage", ""), Input: input})
 	return err
 }
 
@@ -669,7 +669,7 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: r.Harness, Model: r.Model, Effort: r.Effort,
-		Skillset: r.Skills, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("implement", it.Complexity),
+		Skillset: r.Skills, Route: p.Cfg.ImplementKey(it.Complexity), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("implement", it.Complexity),
 		Branch: p.branchFor(it), Input: string(b)})
 	return true, err
 }
@@ -686,17 +686,19 @@ type ReviewInput struct {
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
-	r := p.Cfg.Review(it.Risk)
+	route := p.Cfg.ReviewKey(it.Risk)
+	r := p.Cfg.Routing[route]
 	if kind == "critic" {
+		route = "critic"
 		r = p.Cfg.Routing["implement.L"] // the strongest Claude tier
-		r.Skills = ""
+		r.Skills, r.Use, r.Instructions, r.InstructionsFile = "", nil, "", ""
 		if c, ok := p.Cfg.Routing["critic"]; ok {
 			r = c
 		}
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: kind, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
-		Skillset: r.Skills, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""),
+		Skillset: r.Skills, Route: route, Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""),
 		Branch: p.branchFor(it), Input: string(b)})
 	return err
 }
@@ -960,6 +962,20 @@ func (p *Pipeline) render(stage string, d PromptData) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// renderStep renders a job's prompt and adds the instructions its route
+// and repos carry for the step.
+func (p *Pipeline) renderStep(j *store.Job, stage string, repos []string, d PromptData) (string, error) {
+	prompt, err := p.render(stage, d)
+	if err != nil {
+		return "", err
+	}
+	extra, err := p.Cfg.StepInstructions(j.Route, j.Kind, repos...)
+	if err != nil || extra == "" {
+		return prompt, err
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n## Instructions for this step\n\n" + extra + "\n", nil
 }
 
 // gateRun says how a gate command runs.

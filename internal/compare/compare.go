@@ -191,6 +191,9 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 			if set == None {
 				r.Skills = ""
 			}
+			// Skills to use name folders in the original set, which this
+			// arm may not have.
+			r.Use = nil
 		}
 		cfg.Routing[k] = r
 	}

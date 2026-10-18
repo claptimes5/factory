@@ -266,6 +266,38 @@ and so does the PR's job table.
 To try two skill sets on the same issue, use
 [`factory compare`](using.md#comparing-skill-sets).
 
+### Skills and instructions for each step
+
+Any routing entry, including `critic` and `orchestrate`, can also say which
+skills in its set to use, in order, and add instructions of its own, inline
+or from a file (a relative path is relative to `factory.yaml`). A repo can
+add instructions for `triage`, `implement`, `review` or `critic`:
+
+```yaml
+routing:
+  implement.M:
+    harness: claude
+    model: sonnet
+    skills: go
+    use: [tdd, table-tests]          # each needs skills/go/<name>/SKILL.md
+    instructions: Keep each commit to one behavior.
+    instructions_file: prompts/house-style.md
+
+repos:
+  - name: you/app
+    instructions:
+      implement: Run `make generate` after editing the schema.
+      review: Block any handler that skips the auth middleware.
+```
+
+All of these are added to the end of that step's prompt, under
+"Instructions for this step": the skills first, then the route's
+instructions, then the file, then the repo's. The daemon checks at startup
+that each skill and file exists. Escalation keeps the instructions of the
+size an item started on, so an `implement.S` item that climbs to Opus still
+gets `implement.S`'s. In a [workspace](#workspaces-one-change-across-repos), the build and review
+get every member repo's instructions, each labeled with its repo.
+
 ## Models and escalation
 
 `routing` picks the harness and model for each stage, such as

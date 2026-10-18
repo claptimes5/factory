@@ -85,7 +85,7 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
-	prompt, err := p.render("triage", PromptData{Repo: it.Repo, Issue: is})
+	prompt, err := p.renderStep(j, "triage", []string{it.Repo}, PromptData{Repo: it.Repo, Issue: is})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -233,7 +233,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	for _, pt := range parts {
 		data.Coverage = data.Coverage || p.repoConf(pt.repo).Gates.Coverage != ""
 	}
-	prompt, err := p.render("implement", data)
+	prompt, err := p.renderStep(j, "implement", partRepos(parts), data)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -615,7 +615,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it)})
+	prompt, err := p.renderStep(j, "review", partRepos(parts), PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -811,4 +811,13 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 	}
 	b.WriteString("_Merge is always human. Review the diff before merging._\n")
 	return b.String(), nil
+}
+
+// partRepos names the repos a change spans, in order.
+func partRepos(parts []*part) []string {
+	var out []string
+	for _, pt := range parts {
+		out = append(out, pt.repo)
+	}
+	return out
 }

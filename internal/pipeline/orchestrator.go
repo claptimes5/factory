@@ -65,7 +65,7 @@ func (p *Pipeline) Orchestrate(ctx context.Context, reason string, summary bool)
 	r := p.Cfg.Routing["orchestrate"]
 	b, _ := json.Marshal(OrchestrateInput{Reasons: []string{reason}, Summary: summary})
 	_, err = p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: r.Harness, Model: r.Model, Effort: r.Effort,
-		Skillset: r.Skills, BudgetUSD: p.Cfg.Orchestrator.RunBudget, Priority: 10, Input: string(b)})
+		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.Orchestrator.RunBudget, Priority: 10, Input: string(b)})
 	return err
 }
 
@@ -317,7 +317,7 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	}})
 
 	snapshot, _ := p.statusText(ctx)
-	prompt, err := p.render("orchestrate", PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
+	prompt, err := p.renderStep(j, "orchestrate", nil, PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}

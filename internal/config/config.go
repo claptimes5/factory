@@ -23,6 +23,12 @@ type Route struct {
 	Model   string `yaml:"model"`
 	Effort  string `yaml:"effort"`
 	Skills  string `yaml:"skills"` // skill set folder under skills/
+	// Use names skills in that set the worker must use, in order.
+	Use []string `yaml:"use,omitempty"`
+	// Instructions, and the file InstructionsFile names (relative to the
+	// config), are added to the step's prompt.
+	Instructions     string `yaml:"instructions,omitempty"`
+	InstructionsFile string `yaml:"instructions_file,omitempty"`
 }
 
 // Gates are the checks a change must pass before review.
@@ -79,6 +85,9 @@ type Repo struct {
 	// commands replace the top level's. install, proves_fix, coverage or
 	// scenarios_dir "none" turns one off.
 	Gates *Gates `yaml:"gates,omitempty"`
+	// Instructions are added to this repo's prompts, by step: triage,
+	// implement, review or critic.
+	Instructions map[string]string `yaml:"instructions,omitempty"`
 }
 
 // MarshalYAML writes Required even when it is empty but not nil, since an
@@ -105,7 +114,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -272,18 +281,22 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := Parse(b)
+	abs, _ := filepath.Abs(filepath.Dir(path))
+	c, err := ParseIn(b, abs)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	abs, _ := filepath.Abs(filepath.Dir(path))
-	c.dir = abs
 	return c, nil
 }
 
-// Parse decodes and validates config bytes, filling defaults.
-func Parse(b []byte) (*Config, error) {
-	var c Config
+// Parse decodes and validates config bytes, filling defaults. Relative
+// paths resolve against the current directory.
+func Parse(b []byte) (*Config, error) { return ParseIn(b, "") }
+
+// ParseIn is Parse for a config that lives in dir: relative paths in it,
+// including the files validation checks, resolve against dir.
+func ParseIn(b []byte, dir string) (*Config, error) {
+	c := Config{dir: dir}
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
@@ -485,6 +498,11 @@ func (c *Config) Validate() error {
 			bad("repo %s is listed twice", r.Name)
 		}
 		seen[strings.ToLower(r.Name)] = true
+		for _, step := range sortedKeys(r.Instructions) {
+			if !slices.Contains([]string{"triage", "implement", "review", "critic"}, step) {
+				bad("repo %s: instructions.%s: the steps are triage, implement, review and critic", r.Name, step)
+			}
+		}
 	}
 	inWS := map[string]string{}
 	for _, name := range sortedKeys(c.Workspaces) {
@@ -532,6 +550,25 @@ func (c *Config) Validate() error {
 		}
 		if strings.ContainsAny(r.Skills, `/\.`) {
 			bad("routing.%s: skills must be a folder name under skills_dir", k)
+		}
+		if len(r.Use) > 0 && r.Skills == "" {
+			bad("routing.%s: use names skills, so it needs a skill set (skills:)", k)
+		}
+		for _, u := range r.Use {
+			if u == "" || strings.ContainsAny(u, `/\`) || u == "." || u == ".." {
+				bad("routing.%s: use %q must be a skill folder name", k, u)
+			} else if r.Skills != "" && !strings.ContainsAny(r.Skills, `/\.`) {
+				if _, err := os.Stat(filepath.Join(c.Path(c.SkillsDir), r.Skills, u, "SKILL.md")); err != nil {
+					bad("routing.%s: use %q: no %s", k, u, filepath.Join(c.SkillsDir, r.Skills, u, "SKILL.md"))
+				}
+			}
+		}
+		if r.InstructionsFile != "" {
+			// Read it now: a directory or unreadable file would otherwise
+			// fail every job on this route.
+			if _, err := os.ReadFile(c.Path(r.InstructionsFile)); err != nil {
+				bad("routing.%s: instructions_file: %v", k, err)
+			}
 		}
 	}
 	for _, size := range []string{"XS", "S", "M", "L"} {
@@ -869,12 +906,64 @@ func sameModel(harness, a, b string) bool {
 // Review returns the reviewer route for an item's risk: review.high_risk
 // or review.medium_risk when set, else review.
 func (c *Config) Review(risk string) Route {
+	return c.Routing[c.ReviewKey(risk)]
+}
+
+// ReviewKey is the routing entry Review picks.
+func (c *Config) ReviewKey(risk string) string {
 	if risk == "high" || risk == "medium" {
-		if r, ok := c.Routing["review."+risk+"_risk"]; ok {
-			return r
+		if _, ok := c.Routing["review."+risk+"_risk"]; ok {
+			return "review." + risk + "_risk"
 		}
 	}
-	return c.Routing["review"]
+	return "review"
+}
+
+// ImplementKey is the routing entry Implement starts from.
+func (c *Config) ImplementKey(complexity string) string {
+	if _, ok := c.Routing["implement."+complexity]; ok {
+		return "implement." + complexity
+	}
+	if _, ok := c.Routing["implement.S"]; ok && complexity == "XS" {
+		return "implement.S"
+	}
+	return "implement.M"
+}
+
+// StepInstructions is what a step's prompt gets on top of its template:
+// the route's skills to use and instructions, then the repo's for the
+// step. kind is the job kind (triage, implement, review, critic,
+// orchestrate). With several repos, as in a workspace, each repo's
+// instructions are labeled with its name.
+func (c *Config) StepInstructions(route, kind string, repos ...string) (string, error) {
+	var parts []string
+	r := c.Routing[route]
+	if len(r.Use) > 0 {
+		parts = append(parts, "Use these skills from your skills directory, in this order: "+strings.Join(r.Use, ", ")+".")
+	}
+	if s := strings.TrimSpace(r.Instructions); s != "" {
+		parts = append(parts, s)
+	}
+	if r.InstructionsFile != "" {
+		b, err := os.ReadFile(c.Path(r.InstructionsFile))
+		if err != nil {
+			return "", fmt.Errorf("routing.%s instructions_file: %w", route, err)
+		}
+		if s := strings.TrimSpace(string(b)); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	for _, repo := range repos {
+		if rc, ok := c.RepoConf(repo); ok {
+			if s := strings.TrimSpace(rc.Instructions[kind]); s != "" {
+				if len(repos) > 1 {
+					s = "In " + repo + ":\n\n" + s
+				}
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // JobBudget returns the dollar cap for a job.

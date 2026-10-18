@@ -799,7 +799,8 @@ func setYAML(path, key, value string) error {
 // writeConfig replaces the config file in one step, after checking that
 // the new text is a valid config.
 func writeConfig(path string, out []byte) error {
-	if _, err := config.Parse(out); err != nil {
+	dir, _ := filepath.Abs(filepath.Dir(path))
+	if _, err := config.ParseIn(out, dir); err != nil {
 		return fmt.Errorf("updating %s: %w", path, err)
 	}
 	st, err := os.Stat(path)
