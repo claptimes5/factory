@@ -368,7 +368,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 			"codex":  newCodex(cfg, r),
 		},
 		Secrets:    secrets(),
-		PlanBilled: planBilled(secrets(), os.Getenv),
+		PlanBilled: planBilled(secrets(), os.Getenv, codexAuthMode()),
 		Log:        slog.Default(),
 		Notify:     notifier(),
 		Sentry:     sentryClient(cfg),
@@ -377,13 +377,17 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 
 // planBilled names the harnesses on a subscription plan: Claude signed in
 // with a subscription token and no API key, which Claude Code would use
-// first, nor an auth token or Bedrock or Vertex, all billed by use. Codex
-// always runs with an API key.
-func planBilled(sec map[string]map[string]string, getenv func(string) string) map[string]bool {
+// first, nor an auth token or Bedrock or Vertex, all billed by use; and
+// Codex signed in to a ChatGPT plan (codexMode is codexAuth's) rather
+// than run with an API key.
+func planBilled(sec map[string]map[string]string, getenv func(string) string, codexMode string) map[string]bool {
 	c := sec["claude"]
 	set := func(k string) bool { return c[k] != "" || getenv(k) != "" }
 	billed := set("ANTHROPIC_API_KEY") || set("ANTHROPIC_AUTH_TOKEN") || set("CLAUDE_CODE_USE_BEDROCK") || set("CLAUDE_CODE_USE_VERTEX")
-	return map[string]bool{"claude": set("CLAUDE_CODE_OAUTH_TOKEN") && !billed}
+	return map[string]bool{
+		"claude": set("CLAUDE_CODE_OAUTH_TOKEN") && !billed,
+		"codex":  codexMode == codexChatGPT || codexMode == codexAccessToken,
+	}
 }
 
 // sentryToken is SENTRY_AUTH_TOKEN, taken out of the environment.

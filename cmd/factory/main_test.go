@@ -122,16 +122,21 @@ func TestEstimateCellAndPlanBilled(t *testing.T) {
 	}
 	none := func(string) string { return "" }
 	plan := map[string]map[string]string{"claude": {"CLAUDE_CODE_OAUTH_TOKEN": "x"}}
-	if !planBilled(plan, none)["claude"] || planBilled(plan, none)["codex"] {
+	if !planBilled(plan, none, codexAPIKey)["claude"] || planBilled(plan, none, codexAPIKey)["codex"] {
 		t.Fatal("a subscription token alone is a plan")
 	}
 	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"} {
-		if planBilled(map[string]map[string]string{"claude": {"CLAUDE_CODE_OAUTH_TOKEN": "x", k: "1"}}, none)["claude"] {
+		if planBilled(map[string]map[string]string{"claude": {"CLAUDE_CODE_OAUTH_TOKEN": "x", k: "1"}}, none, codexAPIKey)["claude"] {
 			t.Fatalf("%s bills dollars", k)
 		}
 		env := func(e string) string { return map[bool]string{true: "1"}[e == k] }
-		if planBilled(plan, env)["claude"] {
+		if planBilled(plan, env, codexAPIKey)["claude"] {
 			t.Fatalf("%s in the daemon's environment bills dollars", k)
+		}
+	}
+	for mode, want := range map[string]bool{codexAPIKey: false, codexChatGPT: true, codexAccessToken: true} {
+		if planBilled(nil, none, mode)["codex"] != want {
+			t.Errorf("codex signed in by %q: plan %v, want %v", mode, !want, want)
 		}
 	}
 }

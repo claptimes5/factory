@@ -938,11 +938,20 @@ func (p *Pipeline) enqueueStage(ctx context.Context, itemID int64, stage, comple
 	if p.estimateNeedsOK(ctx, it.ID) {
 		return errEstimateWaiting
 	}
-	if complexity != "" {
+	if complexity != "" && complexity != it.Complexity {
 		if err := p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Complexity: &complexity}); err != nil {
 			return err
 		}
 		it.Complexity = complexity
+		// The estimate was for triage's size: a new size is estimated, and
+		// held, again.
+		if p.Cfg.ConfirmOver(it.Repo) > 0 {
+			if held, err := p.reestimate(ctx, it); err != nil {
+				return err
+			} else if held {
+				return errEstimateWaiting
+			}
+		}
 	}
 	if it.Complexity == "" {
 		return errors.New("refused: the item has no complexity; triage it or pass one")

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestPreview(t *testing.T) {
@@ -75,5 +77,25 @@ func TestPreview(t *testing.T) {
 	ws := y + "workspaces: {shop: [o/web, o/api]}\n"
 	if _, err := Parse([]byte(ws)); err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("preview in a workspace: %v", err)
+	}
+}
+
+// A duration writes back as it reads, so setup can rewrite a repo with a
+// preview wait.
+func TestDurationRoundTrips(t *testing.T) {
+	r := Repo{Name: "o/web", Preview: &Preview{Start: "npm start", Wait: Duration{2 * time.Minute}}}
+	b, err := yaml.Marshal([]Repo{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "wait: 2m0s") {
+		t.Fatalf("yaml:\n%s", b)
+	}
+	var back []Repo
+	if err := yaml.Unmarshal(b, &back); err != nil {
+		t.Fatalf("read back: %v\n%s", err, b)
+	}
+	if len(back) != 1 || back[0].Preview == nil || back[0].Preview.Wait.Duration != 2*time.Minute {
+		t.Fatalf("read back %+v", back)
 	}
 }

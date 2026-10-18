@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -185,6 +186,16 @@ func usd(v float64) string { return fmt.Sprintf("$%.2f", v) }
 // An OK carries over a re-triage of the same text that comes out no
 // higher; an edit, or a higher estimate, asks again.
 func (p *Pipeline) checkEstimate(ctx context.Context, it *store.WorkItem) (bool, error) {
+	return p.gateEstimate(ctx, it, false)
+}
+
+// reestimate estimates an item again for a size given after triage, as
+// the orchestrator's enqueue can: the stored estimate was for triage's.
+func (p *Pipeline) reestimate(ctx context.Context, it *store.WorkItem) (bool, error) {
+	return p.gateEstimate(ctx, it, true)
+}
+
+func (p *Pipeline) gateEstimate(ctx context.Context, it *store.WorkItem, again bool) (bool, error) {
 	var triage int64
 	if js, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "triage", Limit: 1}); err != nil {
 		return false, err
@@ -195,7 +206,7 @@ func (p *Pipeline) checkEstimate(ctx context.Context, it *store.WorkItem) (bool,
 	if err != nil {
 		return false, err
 	}
-	if prev != nil && triage != 0 && prev.TriageJob == triage {
+	if !again && prev != nil && triage != 0 && prev.TriageJob == triage {
 		// Decided after this triage already (a resumed item): only once.
 		if prev.Status == store.EstimateWaiting {
 			if err := p.Store.SetStage(ctx, it.ID, state.Blocked, "daemon", p.waitingReason(prev)); err != nil {
@@ -397,12 +408,22 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 		return err
 	}
 	for _, is := range issues {
+		// Only an item that isn't there is not waiting; a failed read
+		// leaves the label for the next poll.
 		var est *store.Estimate
 		it, err := p.Store.ItemByIssue(ctx, repo, is.Number)
-		if err == nil {
-			est, _ = p.Store.ItemEstimate(ctx, it.ID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			p.warn(err, "ItemByIssue")
+			continue
+		default:
+			if est, err = p.Store.ItemEstimate(ctx, it.ID); err != nil {
+				p.warn(err, "ItemEstimate")
+				continue
+			}
 		}
-		waiting := err == nil && it.Stage == state.Blocked && est != nil && est.Status == store.EstimateWaiting
+		waiting := it != nil && it.Stage == state.Blocked && est != nil && est.Status == store.EstimateWaiting
 		if waiting && !est.Announced {
 			continue // announceWait takes it off before it may count
 		}

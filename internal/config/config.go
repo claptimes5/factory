@@ -386,6 +386,9 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// MarshalYAML writes a duration as it's read back: 2m0s, 1h30m0s.
+func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
+
 // Load reads and validates a config file. Relative paths in it resolve
 // against the file's directory.
 func Load(path string) (*Config, error) {

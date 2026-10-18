@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/claptimes5/factory/internal/state"
@@ -108,5 +110,39 @@ func TestItemCosts(t *testing.T) {
 	}
 	if c := cs[1]; c.ItemID != parked || c.Total() != 3 || c.Stage != "parked" {
 		t.Fatalf("parked %+v", c)
+	}
+}
+
+// Upgrading marks the health fixes already in flight, so their cost
+// isn't held once the health issue is gone.
+func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
+	ctx := context.Background()
+	s, path := openTest(t)
+	fix, _, _ := s.UpsertItem(ctx, "o/r", 7, "Main is red: test")
+	other, _, _ := s.UpsertItem(ctx, "o/r", 8, "t")
+	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "test", Kind: HealthRed, HeadSHA: "abc", IssueNumber: 7})
+	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "lint", Kind: HealthRed, HeadSHA: "abc"}) // not filed yet
+	// Back to before 0013.
+	for _, q := range []string{`DROP TABLE estimates`, `ALTER TABLE work_items DROP COLUMN main_health`, `DELETE FROM schema_migrations WHERE version = 13`} {
+		if _, err := s.write.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	// The first open's backups may share this second's name.
+	baks, _ := filepath.Glob(path + ".bak-*")
+	for _, b := range baks {
+		os.Remove(b)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if ok, _ := s.IsHealthItem(ctx, fix.ID); !ok {
+		t.Fatal("the health fix in flight wasn't marked")
+	}
+	if ok, _ := s.IsHealthItem(ctx, other.ID); ok {
+		t.Fatal("marked an item that isn't a health fix")
 	}
 }

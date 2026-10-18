@@ -628,3 +628,55 @@ func TestEstimateGoFailureKeepsIntakeGoing(t *testing.T) {
 		t.Fatalf("the retry wasn't taken: %s", it.Stage)
 	}
 }
+
+// A size raised after triage is estimated again: the orchestrator can't
+// enqueue an item under the limit as M with complexity L, over it.
+func TestEstimateRaisedSizeIsEstimatedAgain(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	m, _ := e.p.estimate(ctx, &store.WorkItem{ID: 999, Repo: "o/r", Complexity: "M", Risk: "low"})
+	l, _ := e.p.estimate(ctx, &store.WorkItem{ID: 999, Repo: "o/r", Complexity: "L", Risk: "low"})
+	if l.P75 <= m.P75 {
+		t.Fatalf("M %+v, L %+v", m, l)
+	}
+	e.p.Cfg.Budgets.ConfirmOver = (m.P75 + l.P75) / 2
+	// Held back by a dependency after triage, so it's the orchestrator's
+	// to queue once that's done.
+	dep, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 50, "dep")
+	e.addIssue(50)
+	e.gh.issues[50].Labels = nil
+	e.addIssue(1)
+	if err := e.p.Intake(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.p.lastPoll = time.Now()
+	it := e.item(t, 1)
+	e.p.Store.SetDependencies(ctx, it.ID, []int64{dep.ID}, "orchestrator", "r")
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if est, _ := e.p.Store.ItemEstimate(ctx, it.ID); est == nil || est.Status != store.EstimateUnder || est.Size != "M" || e.item(t, 1).Stage != state.Blocked {
+		t.Fatalf("after triage: %+v, %s", est, e.item(t, 1).Stage)
+	}
+	for _, to := range []state.Stage{state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Done} {
+		e.p.Store.SetStage(ctx, dep.ID, to, "daemon", "")
+	}
+	tools := toolsByName(e.p, 0)
+	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": it.ID, "stage": "implement", "complexity": "L", "reason": "r"}); err == nil || !strings.Contains(err.Error(), "needs a human's OK") {
+		t.Fatalf("enqueue as L: %v", err)
+	}
+	if n, _ := e.p.Store.CountJobs(ctx, state.Queued, "implement"); n != 0 {
+		t.Fatalf("%d implement jobs queued", n)
+	}
+	est, _ := e.p.Store.ItemEstimate(ctx, it.ID)
+	if est.Status != store.EstimateWaiting || est.Size != "L" || !est.Announced || e.item(t, 1).Stage != state.Blocked {
+		t.Fatalf("as L: %+v, %s", est, e.item(t, 1).Stage)
+	}
+	if c := e.gh.comments[1]; len(c) == 0 || !strings.Contains(c[len(c)-1], "Triage rated this L") {
+		t.Fatalf("comments %q", c)
+	}
+	// The same size again changes nothing to estimate: the wait holds.
+	if _, err := callTool(t, tools, "enqueue", map[string]any{"item": it.ID, "stage": "implement", "complexity": "L", "reason": "r"}); err == nil {
+		t.Fatal("queued while waiting")
+	}
+}

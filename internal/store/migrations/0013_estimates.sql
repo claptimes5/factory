@@ -24,3 +24,8 @@ CREATE TABLE estimates (
 -- Items filed for a red or flaky main: their cost is never held. Kept
 -- after the check is green again and its tracking row goes.
 ALTER TABLE work_items ADD COLUMN main_health INTEGER NOT NULL DEFAULT 0;
+
+-- Health fixes already in flight when this runs are marked too.
+UPDATE work_items SET main_health = 1
+WHERE EXISTS (SELECT 1 FROM health_issues h
+              WHERE h.repo = work_items.repo AND h.issue_number = work_items.issue_number AND h.issue_number > 0);

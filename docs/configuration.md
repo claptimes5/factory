@@ -548,12 +548,14 @@ went badly.
 `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK` or
 `CLAUDE_CODE_USE_VERTEX`, which all bill by use), its work draws on
 your plan's usage windows instead of billing dollars. The estimate splits
-it out job by job, by the harness each past job ran on: only the dollars billed, such as a Codex review, count against
+it out job by job, by the harness each past job ran on: only the dollars billed, such as a Codex review on an API key, count against
 `confirm_over`, and the plan's part is shown as "on your plan", with the
 cost Claude Code reports and how full its windows are now. An item built
 and reviewed entirely on the plan never waits. Plan runs are recorded at
 the cost Claude Code reports for them, which is what an API key would
-have paid, so the history works for both. Codex always runs on an API key.
+have paid, so the history works for both. Codex counts as on a plan too
+when it's signed in to ChatGPT (`FACTORY_CODEX_AUTH=chatgpt` or
+`CODEX_ACCESS_TOKEN`), and as billed on an API key.
 
 Main health fixes are never held: a red main is urgent. That's items the
 factory filed for a red or flaky main, marked when they came in; a high
