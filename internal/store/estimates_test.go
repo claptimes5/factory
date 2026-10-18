@@ -122,8 +122,12 @@ func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
 	other, _, _ := s.UpsertItem(ctx, "o/r", 8, "t")
 	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "test", Kind: HealthRed, HeadSHA: "abc", IssueNumber: 7})
 	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "lint", Kind: HealthRed, HeadSHA: "abc"}) // not filed yet
-	// Back to before 0013.
-	for _, q := range []string{`DROP TABLE estimates`, `ALTER TABLE work_items DROP COLUMN main_health`, `DELETE FROM schema_migrations WHERE version = 13`} {
+	// Back to before 0013, undoing the later migrations too.
+	for _, q := range []string{
+		`DROP TABLE groom_proposals`, `DROP TABLE groom_children`, `DROP TABLE groom_runs`, // 0014
+		`DROP TABLE estimates`, `ALTER TABLE work_items DROP COLUMN main_health`,
+		`DELETE FROM schema_migrations WHERE version >= 13`,
+	} {
 		if _, err := s.write.ExecContext(ctx, q); err != nil {
 			t.Fatal(err)
 		}
