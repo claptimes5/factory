@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ type Issue struct {
 	// closed ("completed", "not_planned").
 	State       string `json:"-"`
 	StateReason string `json:"-"`
+	// Author is who opened it (a login; an app's ends in [bot]).
+	Author string `json:"-"`
 }
 
 // PR is the subset of a pull request the factory reads.
@@ -97,7 +100,13 @@ func (c *Client) base() string {
 type HTTPError struct {
 	Status int
 	Body   string
+	// Limited: GitHub refused for a rate limit, which passes, rather than
+	// for a lack of access. It answers those with a 403 as well as a 429.
+	Limited bool
 }
+
+// RateLimit says whether the request was refused for a rate limit.
+func (e *HTTPError) RateLimit() bool { return e.Limited }
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("github: HTTP %d: %s", e.Status, e.Body) }
 
@@ -158,7 +167,10 @@ func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, ou
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode/100 != 2 {
-		return &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
+		body := strings.TrimSpace(string(b))
+		limited := resp.StatusCode == 429 || resp.StatusCode == 403 &&
+			(resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "" || strings.Contains(strings.ToLower(body), "rate limit"))
+		return &HTTPError{Status: resp.StatusCode, Body: body, Limited: limited}
 	}
 	if out != nil && len(b) > 0 {
 		return json.Unmarshal(b, out)
@@ -176,10 +188,13 @@ type rawIssue struct {
 	Labels      []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
 
 func (r rawIssue) issue() Issue {
-	is := Issue{Number: r.Number, Title: r.Title, Body: r.Body, IsPR: r.PullRequest != nil, State: r.State, StateReason: r.StateReason}
+	is := Issue{Number: r.Number, Title: r.Title, Body: r.Body, IsPR: r.PullRequest != nil, State: r.State, StateReason: r.StateReason, Author: r.User.Login}
 	for _, l := range r.Labels {
 		is.Labels = append(is.Labels, l.Name)
 	}
@@ -313,6 +328,18 @@ type CheckRun struct {
 	Status     string `json:"status"`     // queued|in_progress|completed
 	Conclusion string `json:"conclusion"` // success|failure|neutral|cancelled|skipped|timed_out|action_required
 	URL        string `json:"html_url"`
+	// ID orders a check's runs: a rerun has a higher one.
+	ID int64 `json:"id"`
+	// Output is what the check said about itself (GitHub's title and
+	// summary), when CheckHistory lists it. It is CI output: untrusted.
+	Output string `json:"-"`
+	// Key and Group are set by CheckHistory. Key names the check the same
+	// way on every commit: its workflow and name, or its app's and name,
+	// so two workflows' "build" jobs are two checks. Group is the run of
+	// CI it belongs to on this commit (a check suite, a GitLab pipeline):
+	// a rerun stays in its group, so fail-then-pass within one is a flake.
+	Key   string `json:"-"`
+	Group string `json:"-"`
 }
 
 // CheckRuns lists the CI checks on a commit.
@@ -322,6 +349,87 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) 
 	}
 	err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", c.Repo, url.PathEscape(sha)), nil, &out)
 	return out.CheckRuns, err
+}
+
+// CheckHistory lists every run of every check on a commit, reruns
+// included, oldest first by ID. Workflow names come from the Actions API
+// when the token may read it (actions: read); without it, an Actions
+// check is keyed by its job name alone.
+func (c *Client) CheckHistory(ctx context.Context, sha string) ([]CheckRun, error) {
+	var out []CheckRun
+	for page := 1; ; page++ {
+		var r struct {
+			CheckRuns []struct {
+				CheckRun
+				Output struct {
+					Title   string `json:"title"`
+					Summary string `json:"summary"`
+				} `json:"output"`
+				App struct {
+					Slug string `json:"slug"`
+				} `json:"app"`
+				Suite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
+			} `json:"check_runs"`
+		}
+		q := url.Values{"filter": {"all"}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?%s", c.Repo, url.PathEscape(sha), q.Encode()), nil, &r); err != nil {
+			return nil, err
+		}
+		for _, cr := range r.CheckRuns {
+			run := cr.CheckRun
+			run.Output = strings.TrimSpace(strings.TrimSpace(cr.Output.Title) + "\n" + strings.TrimSpace(cr.Output.Summary))
+			run.Group = fmt.Sprintf("suite %d", cr.Suite.ID)
+			run.Key = run.Name
+			if cr.App.Slug != "" && cr.App.Slug != "github-actions" {
+				run.Key = cr.App.Slug + ": " + run.Name
+			}
+			out = append(out, run)
+		}
+		if len(r.CheckRuns) < 100 {
+			break
+		}
+		if page == 10 {
+			return nil, fmt.Errorf("github: %s has over 1000 check runs; not reading a partial list", sha)
+		}
+	}
+	// Name Actions checks for their workflow, so a "build" job in two
+	// workflows is two checks. Best effort: without the names it carries on.
+	var runs struct {
+		Runs []struct {
+			Name  string `json:"name"`
+			Suite int64  `json:"check_suite_id"`
+		} `json:"workflow_runs"`
+	}
+	q := url.Values{"head_sha": {sha}, "per_page": {"100"}}
+	if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/actions/runs?"+q.Encode(), nil, &runs); err == nil {
+		wf := map[string]string{}
+		for _, r := range runs.Runs {
+			wf[fmt.Sprintf("suite %d", r.Suite)] = r.Name
+		}
+		for i := range out {
+			if n := wf[out[i].Group]; n != "" && out[i].Key == out[i].Name {
+				out[i].Key = n + " / " + out[i].Name
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// CheckLog is the start of what a failed check said: on GitHub, the
+// output CheckHistory already read, so no further call.
+func (c *Client) CheckLog(_ context.Context, run CheckRun) (string, error) {
+	return run.Output, nil
+}
+
+// Self is who the factory acts as: its app's bot login, or the token's user.
+func (c *Client) Self(ctx context.Context) (string, error) { return c.self(ctx) }
+
+// CloseIssue closes an issue as completed.
+func (c *Client) CloseIssue(ctx context.Context, n int) error {
+	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "completed"}, nil)
 }
 
 // CreatePR opens a pull request.

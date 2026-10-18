@@ -518,6 +518,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if s := codexSignIn(cfg); s != "" {
 		fmt.Fprintf(w, "codex sign-in (by this shell's settings):\t%s\n", s)
 	}
+	for _, l := range mainHealthLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
@@ -529,6 +532,55 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// mainHealthLines are status's lines on each repo's base branch CI, as
+// main health last read it; none while it's off and never ran.
+func mainHealthLines(ctx context.Context, st *store.Store, cfg *config.Config) []string {
+	hs, _ := st.RepoHealths(ctx)
+	if !cfg.MainHealth.Enabled && len(hs) == 0 {
+		return nil
+	}
+	by := map[string]store.RepoHealth{}
+	for _, h := range hs {
+		by[strings.ToLower(h.Repo)] = h
+	}
+	issues, _ := st.HealthIssues(ctx, "")
+	var out []string
+	for _, repo := range cfg.RepoNames() {
+		h, ok := by[strings.ToLower(repo)]
+		if !ok {
+			out = append(out, fmt.Sprintf("main %s:\tnot read yet", repo))
+			continue
+		}
+		// Check names and Detail come from CI: no escapes reach the terminal.
+		line := fmt.Sprintf("main %s:\t%s on %s", repo, strings.ReplaceAll(h.State, "_", " "), pipeline.SafeText(h.Branch, 100))
+		if h.HeadSHA != "" {
+			line += " at " + pipeline.SafeText(h.HeadSHA[:min(7, len(h.HeadSHA))], 7)
+		}
+		var checks []string
+		for _, is := range issues {
+			if !strings.EqualFold(is.Repo, repo) || is.State != store.HealthRed && is.State != store.HealthFlaky {
+				continue // only what's failing now
+			}
+			c := pipeline.SafeName(is.Check) + " (" + is.State + ", not filed yet)"
+			if is.IssueNumber > 0 {
+				c = fmt.Sprintf("%s (%s, %s)", pipeline.SafeName(is.Check), is.State, issueRef(cfg, repo, is.IssueNumber))
+			}
+			checks = append(checks, c)
+		}
+		switch {
+		case len(checks) > 0:
+			line += ": " + strings.Join(checks, ", ")
+		case h.Detail != "":
+			line += ": " + pipeline.SafeText(h.Detail, 200)
+		}
+		if !cfg.MainHealth.Enabled {
+			line += " (main_health is off)"
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // parseIssue reads an issue as 12, #12 or owner/name#12. A bare number

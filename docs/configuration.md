@@ -556,6 +556,37 @@ Sonnet on Claude, since triage often runs on Haiku, or triage's own model
 on Codex. `timeouts.learn` is 10 minutes by default. A learn job counts
 toward `budgets.daily_total`, and waits like a build when the cap is hit.
 
+## Main health
+
+The factory can watch CI on each repo's base branch and file a fix, first
+in the queue, when a check goes red or flakes there (see
+[Keeping main green](using.md#keeping-main-green)). It's off unless you
+turn it on, since the fixes it files spend on builds:
+
+```yaml
+main_health:
+  enabled: true            # off by default
+  every: 10m               # how often it reads CI, at least 1m
+  daily_issue_cap: 3       # issues it may file per repo a day
+  require_approval: false  # true: issues wait for you to add factory:ready
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` | Reads CI on each repo's `base_branch` and files issues. |
+| `every` | `10m` | How often. Each reading is a few API calls per repo. |
+| `daily_issue_cap` | `3` | Issues it may file per repo per UTC day. Past it, a red check is tracked and filed the next day. |
+| `require_approval` | `false` | Off, an issue is filed with `factory:ready` and built at once, approved as the factory: its text has no CI output, and its fix never merges itself. On, it's filed with the output quoted, and waits for someone with write access to add the label. Either way the fix goes first in the queue and through the gates and review. |
+
+`daily_issue_cap: 0` is the default, 3; to stop filing, turn
+`enabled` off.
+
+On GitHub it reads check runs, which the factory's app may read
+(`checks: read`), and workflow runs, to name checks by their workflow
+(`actions: read`; for an app made before, add it in the app's settings
+and accept it on the installation, or checks are told apart by name only). On GitLab it reads the pipelines' jobs and, for a failed one, the
+end of its log.
+
 ## Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the

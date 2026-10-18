@@ -210,3 +210,12 @@ test("a tuning proposal shows its changes, evidence and diff on the settings scr
   await shot(page, info, "tuning");
   if (phone(info)) await noSidewaysScroll(page);
 });
+
+test("a flaky main shows above every screen, linked to its fix", async ({ page }, info) => {
+  await page.goto("/app/metrics");
+  const health = page.getByRole("region", { name: "Main health" });
+  await expect(health).toContainText("api main is flaky: test #106");
+  await expect(health.getByRole("link", { name: "#106" })).toHaveAttribute("href", /acme\/api\/issues\/106$/);
+  await expect(health).not.toContainText("web main");
+  if (phone(info)) await noSidewaysScroll(page);
+});

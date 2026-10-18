@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -147,5 +148,94 @@ func TestAppTokenWithoutChecksPermission(t *testing.T) {
 	}
 	if len(asked) != 2 || asked[1]["contents"] != "write" {
 		t.Fatalf("requests = %v", asked)
+	}
+}
+
+func TestCheckHistoryListsReruns(t *testing.T) {
+	var closed map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/o/r/commits/abc/check-runs":
+			if r.URL.Query().Get("filter") != "all" {
+				t.Errorf("filter = %q, want all (reruns)", r.URL.Query().Get("filter"))
+			}
+			w.Write([]byte(`{"check_runs":[
+				{"id":9,"name":"build","status":"completed","conclusion":"success","html_url":"https://ci/9","app":{"slug":"github-actions"},"check_suite":{"id":1},"output":{"title":"ok","summary":""}},
+				{"id":5,"name":"build","status":"completed","conclusion":"failure","html_url":"https://ci/5","app":{"slug":"github-actions"},"check_suite":{"id":1},"output":{"title":"1 failed","summary":"TestX timed out"}},
+				{"id":6,"name":"build","status":"completed","conclusion":"success","app":{"slug":"github-actions"},"check_suite":{"id":2}},
+				{"id":7,"name":"build","status":"completed","conclusion":"success","app":{"slug":"buildkite"},"check_suite":{"id":3}}]}`))
+		case r.URL.Path == "/repos/o/r/actions/runs":
+			if r.URL.Query().Get("head_sha") != "abc" {
+				t.Errorf("runs for %q", r.URL.Query().Get("head_sha"))
+			}
+			w.Write([]byte(`{"workflow_runs":[{"name":"CI","check_suite_id":1},{"name":"Release","check_suite_id":2}]}`))
+		case r.Method == "PATCH" && r.URL.Path == "/repos/o/r/issues/4":
+			json.NewDecoder(r.Body).Decode(&closed)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	runs, err := c.CheckHistory(context.Background(), "abc")
+	if err != nil || len(runs) != 4 || runs[0].ID != 5 || runs[0].Conclusion != "failure" || runs[3].ID != 9 {
+		t.Fatalf("runs = %+v %v", runs, err)
+	}
+	// Two workflows' "build" jobs, and another app's, are three checks.
+	keys := map[int64]string{}
+	for _, r := range runs {
+		keys[r.ID] = r.Key + "|" + r.Group
+	}
+	if keys[5] != "CI / build|suite 1" || keys[9] != "CI / build|suite 1" || keys[6] != "Release / build|suite 2" || keys[7] != "buildkite: build|suite 3" {
+		t.Fatalf("keys %v", keys)
+	}
+	if log, _ := c.CheckLog(context.Background(), runs[0]); log != "1 failed\nTestX timed out" {
+		t.Fatalf("log = %q", log)
+	}
+	if err := c.CloseIssue(context.Background(), 4); err != nil || closed["state"] != "closed" {
+		t.Fatalf("close: %v %v", closed, err)
+	}
+}
+
+func TestRateLimitIsNotDenied(t *testing.T) {
+	for _, c := range []struct {
+		status  int
+		header  string
+		body    string
+		limited bool
+	}{
+		{403, "", `{"message":"Resource not accessible by integration"}`, false},
+		{403, "0", `{"message":"API rate limit exceeded"}`, true},
+		{403, "", `{"message":"You have exceeded a secondary rate limit"}`, true},
+		{429, "", ``, true},
+		{404, "", ``, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if c.header != "" {
+				w.Header().Set("X-RateLimit-Remaining", c.header)
+			}
+			w.WriteHeader(c.status)
+			w.Write([]byte(c.body))
+		}))
+		_, err := (&Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}).GetIssue(context.Background(), 1)
+		srv.Close()
+		var he *HTTPError
+		if !errors.As(err, &he) || he.RateLimit() != c.limited {
+			t.Errorf("%d %q: %v, limited want %v", c.status, c.body, err, c.limited)
+		}
+	}
+}
+
+func TestCheckHistoryRefusesAPartialList(t *testing.T) {
+	page := `{"check_runs":[` + strings.TrimSuffix(strings.Repeat(`{"id":1,"name":"x","status":"completed","conclusion":"success"},`, 100), ",") + `]}`
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		w.Write([]byte(page))
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	if _, err := c.CheckHistory(context.Background(), "abc"); err == nil || pages != 10 {
+		t.Fatalf("%d pages, %v: want an error after 10 full pages", pages, err)
 	}
 }

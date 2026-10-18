@@ -157,7 +157,7 @@ func getJSON(t *testing.T, u string, v any) {
 }
 
 func TestAPIReads(t *testing.T) {
-	base, _, _, _ := apiSetup(t)
+	base, st, _, _ := apiSetup(t)
 	var b APIBoard
 	getJSON(t, base+"/api/v1/board", &b)
 	var awaiting, parked APIColumn
@@ -259,8 +259,17 @@ func TestAPIReads(t *testing.T) {
 	}
 	var o APIOverview
 	getJSON(t, base+"/api/v1/overview", &o)
-	if o.Awaiting != 1 || o.Version == "" || o.SpentTodayUSD != 1.75 {
+	if o.Awaiting != 1 || o.Version == "" || o.SpentTodayUSD != 1.75 || o.MainHealth == nil || len(o.MainHealth) != 0 {
 		t.Fatalf("overview = %+v", o)
+	}
+	st.SetRepoHealth(context.Background(), store.RepoHealth{Repo: "o/r", Branch: "main", HeadSHA: "abc", State: store.HealthRed, Detail: "test"})
+	st.SetHealthIssue(context.Background(), store.HealthIssue{Repo: "o/r", Check: "test", Kind: store.HealthRed, State: store.HealthRed, HeadSHA: "abc", IssueNumber: 12})
+	// A check passing now, and a repo no longer configured, aren't shown.
+	st.SetHealthIssue(context.Background(), store.HealthIssue{Repo: "o/r", Check: "lint", Kind: store.HealthFlaky, State: store.HealthGreen, HeadSHA: "abc", IssueNumber: 13})
+	st.SetRepoHealth(context.Background(), store.RepoHealth{Repo: "gone/repo", Branch: "main", HeadSHA: "abc", State: store.HealthRed})
+	getJSON(t, base+"/api/v1/overview", &o)
+	if len(o.MainHealth) != 1 || o.MainHealth[0].State != "red" || len(o.MainHealth[0].Checks) != 1 || o.MainHealth[0].Checks[0].Issue != 12 {
+		t.Fatalf("main health = %+v", o.MainHealth)
 	}
 	if !strings.Contains(get(t, base+"/api/v1/openapi.yaml"), "openapi: 3.1.0") {
 		t.Fatal("spec not served")

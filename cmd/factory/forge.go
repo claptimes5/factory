@@ -25,8 +25,10 @@ type forge interface {
 }
 
 var (
-	_ forge = (*github.Client)(nil)
-	_ forge = (*gitlab.Client)(nil)
+	_ forge                = (*github.Client)(nil)
+	_ forge                = (*gitlab.Client)(nil)
+	_ pipeline.HealthForge = (*github.Client)(nil)
+	_ pipeline.HealthForge = (*gitlab.Client)(nil)
 )
 
 // gitlabAPI overrides the GitLab API base for every host; tests set it.

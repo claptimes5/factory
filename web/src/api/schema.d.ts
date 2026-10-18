@@ -918,6 +918,8 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description Each repo's base branch CI, as main health last read it; empty while it's off */
+            main_health: components["schemas"]["MainHealth"][];
             /** @description Why no job is starting for lack of disk; empty when there's room */
             disk_low: string;
             /** @description The control room asks for a password (so the app can sign out) */
@@ -933,6 +935,25 @@ export interface components {
             running: number;
             queued: number;
             version: string;
+        };
+        MainHealth: {
+            repo: string;
+            branch: string;
+            /** @enum {string} */
+            state: "green" | "red" | "flaky" | "pending" | "no_ci" | "unreadable";
+            /** @description the branch head it read */
+            sha: string;
+            /** @description the red, flaky or pending checks, or why CI can't be read */
+            detail: string;
+            /** @description The red and flaky checks it tracks, with the issue filed for each */
+            checks: {
+                check: string;
+                /** @enum {string} */
+                kind: "red" | "flaky";
+                /** @description 0 until filed (the day's cap was reached) */
+                issue: number;
+                issue_url: string;
+            }[];
         };
         Item: {
             id: number;

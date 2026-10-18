@@ -295,6 +295,9 @@ type Config struct {
 	// changes to the settings the dashboard may edit. See Tuning.
 	Tuning   Tuning   `yaml:"tuning"`
 	Learning Learning `yaml:"learning"`
+	// MainHealth files fix issues when CI goes red or flakes on a repo's
+	// base branch. See MainHealth.
+	MainHealth MainHealth `yaml:"main_health"`
 
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
@@ -484,6 +487,7 @@ func (c *Config) defaults() {
 		c.Routing["tune"] = c.Routing["orchestrate"]
 	}
 	c.learningDefaults()
+	c.healthDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -764,6 +768,7 @@ func (c *Config) Validate() error {
 		bad("tuning.path: %v", err)
 	}
 	errs = append(errs, c.checkLearning()...)
+	errs = append(errs, c.checkHealth()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}

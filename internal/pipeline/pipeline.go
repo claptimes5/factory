@@ -55,6 +55,8 @@ func Labels(intake string) []Label {
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
+		{LabelMainHealth, "b60205", "Factory: a check is red or flaky on the base branch; first in the queue"},
+		{LabelMute, "cccccc", "Factory: on a main health issue, mutes its check"},
 		{riskLabel("high"), "b60205", "Factory: high risk; reviewer and critic passed it, read all of it"},
 		{riskLabel("medium"), "fbca04", "Factory: medium risk; read the changes to the features it touches"},
 		{riskLabel("low"), "c2e0c6", "Factory: low risk; gates and a reviewer passed it, a skim is enough"},
@@ -154,6 +156,7 @@ type Pipeline struct {
 	lastDrain   time.Time // last drained-queue orchestrator request
 	tuneDue     time.Time // when the tuning cadence last fired
 	tuneHeld    string    // day a due tuning run waited for budget, to notify once
+	healthAt    time.Time // when main's CI was last read
 
 	restart atomic.Bool // a restart was asked for: claim nothing more
 }
@@ -365,6 +368,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 		p.orchestratorTriggers(ctx, time.Now())
 	}
 	p.tuneTrigger(ctx, time.Now())
+	p.healthTrigger(ctx, time.Now())
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
 		if errors.Is(err, ErrDiskLow) && async {
@@ -602,6 +606,16 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 			// Should this fail, the item parks at triage for lack of one.
 			if err := p.approve(ctx, it, text, who); err != nil {
 				return err
+			}
+			// A fix for a red main, filed for someone to approve, still
+			// goes first.
+			if health, err := p.Store.IsHealthIssue(ctx, repo, is.Number); err != nil {
+				return err
+			} else if health {
+				if err := p.Store.SetPriority(ctx, it.ID, HealthPriority); err != nil {
+					return err
+				}
+				it.Priority = HealthPriority
 			}
 			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
 				return err

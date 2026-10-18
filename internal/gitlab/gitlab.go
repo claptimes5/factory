@@ -14,6 +14,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +35,7 @@ type Client struct {
 	mu       sync.Mutex
 	ref      string // the default branch, once looked up
 	selfName string // the token's user, once looked up
+	logsOpen *bool  // whether anyone who can read issues can read job logs, once looked up
 }
 
 // HTTPError is a non-2xx response.
@@ -42,6 +46,9 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string   { return fmt.Sprintf("gitlab: HTTP %d: %s", e.Status, e.Body) }
 func (e *HTTPError) StatusCode() int { return e.Status }
+
+// RateLimit says whether GitLab refused for a rate limit.
+func (e *HTTPError) RateLimit() bool { return e.Status == 429 }
 
 func (c *Client) base() string {
 	if c.BaseURL != "" {
@@ -66,6 +73,17 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 }
 
 func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, error) {
+	resp, err := c.send(ctx, method, path, in)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// send makes a request; a response it returns is a 2xx, its body for the
+// caller to read and close.
+func (c *Client) send(ctx context.Context, method, path string, in any) (*http.Response, error) {
 	tok, err := c.Tokens.Token(ctx)
 	if err != nil {
 		return nil, err
@@ -98,12 +116,12 @@ func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode/100 != 2 {
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
-	return b, nil
+	return resp, nil
 }
 
 type rawIssue struct {
@@ -112,10 +130,13 @@ type rawIssue struct {
 	Description string   `json:"description"`
 	State       string   `json:"state"` // opened, closed
 	Labels      []string `json:"labels"`
+	Author      struct {
+		Username string `json:"username"`
+	} `json:"author"`
 }
 
 func (r rawIssue) issue() github.Issue {
-	is := github.Issue{Number: r.IID, Title: r.Title, Body: r.Description, Labels: r.Labels, State: "open"}
+	is := github.Issue{Number: r.IID, Title: r.Title, Body: r.Description, Labels: r.Labels, State: "open", Author: r.Author.Username}
 	if r.State == "closed" {
 		// GitLab doesn't say why, so StateReason stays empty.
 		is.State = "closed"
@@ -303,6 +324,7 @@ func (c *Client) UpdatePRBody(ctx context.Context, n int, body string) error {
 // CheckRuns lists the CI jobs on a commit as GitHub-style checks.
 func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error) {
 	type status struct {
+		ID           int64  `json:"id"`
 		Name         string `json:"name"`
 		Status       string `json:"status"`
 		TargetURL    string `json:"target_url"`
@@ -322,29 +344,185 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, 
 	}
 	out := make([]github.CheckRun, 0, len(st))
 	for _, s := range st {
-		cr := github.CheckRun{Name: s.Name, URL: s.TargetURL, Status: "completed"}
-		switch s.Status {
-		case "success":
-			cr.Conclusion = "success"
-		case "failed":
-			cr.Conclusion = "failure"
-			if s.AllowFailure {
-				cr.Conclusion = "neutral"
-			}
-		case "canceled":
-			cr.Conclusion = "cancelled"
-		case "skipped":
-			cr.Conclusion = "skipped"
-		case "manual":
-			cr.Conclusion = "action_required"
-		case "running", "canceling":
-			cr.Status = "in_progress"
-		default: // created, pending, preparing, scheduled, waiting_for_resource
-			cr.Status = "queued"
-		}
-		out = append(out, cr)
+		out = append(out, checkRun(s.ID, s.Name, s.Status, s.TargetURL, s.AllowFailure, ""))
 	}
 	return out, nil
+}
+
+// infraFailures are why a job can fail that say nothing about the code:
+// the runner, not the job, broke.
+var infraFailures = []string{"runner_system_failure", "stuck_or_timeout_failure", "scheduler_failure", "data_integrity_failure", "api_failure", "runner_unsupported", "unknown_failure"}
+
+func checkRun(id int64, name, status, url string, allowFailure bool, reason string) github.CheckRun {
+	cr := github.CheckRun{ID: id, Name: name, URL: url, Status: "completed"}
+	switch status {
+	case "success":
+		cr.Conclusion = "success"
+	case "failed":
+		cr.Conclusion = "failure"
+		if allowFailure {
+			cr.Conclusion = "neutral"
+		} else if slices.Contains(infraFailures, reason) {
+			cr.Conclusion = "cancelled" // no result: rerun it, don't fix the code
+		}
+	case "canceled":
+		cr.Conclusion = "cancelled"
+	case "skipped":
+		cr.Conclusion = "skipped"
+	case "manual":
+		cr.Conclusion = "action_required"
+	case "running", "canceling":
+		cr.Status = "in_progress"
+	default: // created, pending, preparing, scheduled, waiting_for_resource
+		cr.Status = "queued"
+	}
+	return cr
+}
+
+// CheckHistory lists every job of every pipeline on a commit, retries
+// included, oldest first by ID. A job's group is its pipeline; its key is
+// its name, with the pipeline's source unless that's a push, so a
+// scheduled pipeline's "test" isn't the push pipeline's.
+func (c *Client) CheckHistory(ctx context.Context, sha string) ([]github.CheckRun, error) {
+	var pipes []struct {
+		ID     int64  `json:"id"`
+		Source string `json:"source"`
+	}
+	q := url.Values{"sha": {sha}, "per_page": {"100"}}
+	if err := c.do(ctx, "GET", c.project()+"/pipelines?"+q.Encode(), nil, &pipes); err != nil {
+		return nil, err
+	}
+	var out []github.CheckRun
+	for _, pl := range pipes {
+		for page := 1; ; page++ {
+			var jobs []struct {
+				ID            int64  `json:"id"`
+				Name          string `json:"name"`
+				Status        string `json:"status"`
+				WebURL        string `json:"web_url"`
+				AllowFailure  bool   `json:"allow_failure"`
+				FailureReason string `json:"failure_reason"`
+			}
+			q := url.Values{"include_retried": {"true"}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+			if err := c.do(ctx, "GET", fmt.Sprintf("%s/pipelines/%d/jobs?%s", c.project(), pl.ID, q.Encode()), nil, &jobs); err != nil {
+				return nil, err
+			}
+			for _, j := range jobs {
+				cr := checkRun(j.ID, j.Name, j.Status, j.WebURL, j.AllowFailure, j.FailureReason)
+				cr.Key, cr.Group = j.Name, fmt.Sprintf("pipeline %d", pl.ID)
+				if pl.Source != "" && pl.Source != "push" {
+					cr.Key += " (" + pl.Source + ")"
+				}
+				out = append(out, cr)
+			}
+			if len(jobs) < 100 {
+				break
+			}
+			if page == 10 {
+				return nil, fmt.Errorf("gitlab: pipeline %d has over 1000 jobs; not reading a partial list", pl.ID)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// logTail is how much of the end of a job's log CheckLog reads.
+const logTail = 64 << 10
+
+// CheckLog is the end of a CI job's log, where the failure usually is,
+// read to its end but kept to the last 64 KiB. It's "" when the project's
+// issues are public but its job logs aren't: quoting one in an issue would
+// publish it.
+func (c *Client) CheckLog(ctx context.Context, run github.CheckRun) (string, error) {
+	open, err := c.logsReadable(ctx)
+	if err != nil || !open {
+		return "", err
+	}
+	resp, err := c.send(ctx, "GET", fmt.Sprintf("%s/jobs/%d/trace", c.project(), run.ID), nil)
+	if github.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	t := &tailBuffer{max: logTail}
+	if _, err := io.Copy(t, io.LimitReader(resp.Body, 256<<20)); err != nil {
+		return "", err
+	}
+	return cleanTrace(strings.ToValidUTF8(string(t.bytes()), "")), nil
+}
+
+// logsReadable says whether everyone who can read the project's issues
+// can read its job logs too: a private project, or public job logs.
+func (c *Client) logsReadable(ctx context.Context) (bool, error) {
+	c.mu.Lock()
+	known := c.logsOpen
+	c.mu.Unlock()
+	if known != nil {
+		return *known, nil
+	}
+	var p struct {
+		Visibility string `json:"visibility"`
+		PublicJobs bool   `json:"public_jobs"`
+	}
+	if err := c.do(ctx, "GET", c.project(), nil, &p); err != nil {
+		return false, err
+	}
+	open := p.Visibility == "private" || p.PublicJobs
+	c.mu.Lock()
+	c.logsOpen = &open
+	c.mu.Unlock()
+	return open, nil
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) bytes() []byte { return t.buf }
+
+var (
+	ansi    = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+	section = regexp.MustCompile(`section_(start|end):[0-9]+:[A-Za-z0-9_.-]+(\[[^\]]*\])?\r?`)
+)
+
+// cleanTrace drops a job log's colors and section markers, and keeps the
+// last line written over each carriage return.
+func cleanTrace(s string) string {
+	s = section.ReplaceAllString(ansi.ReplaceAllString(s, ""), "")
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if j := strings.LastIndex(strings.TrimRight(l, "\r"), "\r"); j >= 0 {
+			l = l[j+1:]
+		}
+		lines[i] = strings.TrimRight(l, "\r")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Self is who the factory acts as: the token's user.
+func (c *Client) Self(ctx context.Context) (string, error) { return c.self(ctx) }
+
+// CloseIssue closes an issue.
+func (c *Client) CloseIssue(ctx context.Context, n int) error {
+	return c.do(ctx, "PUT", fmt.Sprintf("%s/issues/%d", c.project(), n), map[string]any{"state_event": "close"}, nil)
 }
 
 // DefaultBranch returns the project's default branch.

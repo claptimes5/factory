@@ -98,6 +98,9 @@ func main() {
 	if err := seedTuning(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	if err := seedHealth(context.Background(), st); err != nil {
+		log.Fatal(err)
+	}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
@@ -390,3 +393,16 @@ func seedTuning(ctx context.Context, st *store.Store) error {
 }
 
 func ptr(v int64) *int64 { return &v }
+
+// seedHealth makes acme/api's main flaky, with its issue filed.
+func seedHealth(ctx context.Context, st *store.Store) error {
+	for _, h := range []store.RepoHealth{
+		{Repo: "acme/api", Branch: "main", HeadSHA: "9f2c1e0", State: store.HealthFlaky, Detail: "test"},
+		{Repo: "acme/web", Branch: "main", HeadSHA: "41ab7d2", State: store.HealthGreen},
+	} {
+		if err := st.SetRepoHealth(ctx, h); err != nil {
+			return err
+		}
+	}
+	return st.SetHealthIssue(ctx, store.HealthIssue{Repo: "acme/api", Check: "test", Kind: store.HealthFlaky, State: store.HealthFlaky, HeadSHA: "9f2c1e0", IssueNumber: 106})
+}
