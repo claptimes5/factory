@@ -7,6 +7,7 @@ package readiness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/gates"
+	"github.com/claptimes5/factory/internal/runner"
 )
 
 // Level is how much a finding holds the factory back.
@@ -43,8 +45,10 @@ type Finding struct {
 	Issue *Issue `json:"issue,omitempty"`
 }
 
-// Issue is a draft GitHub issue.
+// Issue is a draft GitHub issue. Key names the gap it closes, so the
+// same gap isn't filed twice when its title changes.
 type Issue struct {
+	Key   string `json:"key"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
 }
@@ -60,14 +64,18 @@ type Run struct {
 
 // Report is the result for one repository.
 type Report struct {
-	Repo     string    `json:"repo"`
-	SHA      string    `json:"sha"`
-	Branch   string    `json:"branch"`
-	Started  time.Time `json:"started"`
-	Score    int       `json:"score"` // 0 to 100
-	Ready    bool      `json:"ready"` // no blockers
-	Runs     []Run     `json:"runs"`
-	Findings []Finding `json:"findings"`
+	Repo    string    `json:"repo"`
+	SHA     string    `json:"sha"`
+	Branch  string    `json:"branch"`
+	Started time.Time `json:"started"`
+	Score   int       `json:"score"` // 0 to 100
+	Ready   bool      `json:"ready"` // no blockers
+	// Incomplete is set when the check itself couldn't run (no Docker, a
+	// missing image, a timeout), so the report says nothing about the repo
+	// past that point.
+	Incomplete bool      `json:"incomplete,omitempty"`
+	Runs       []Run     `json:"runs"`
+	Findings   []Finding `json:"findings"`
 }
 
 // Exec runs a command on the export the way gates do; install marks the
@@ -92,7 +100,10 @@ func Assess(ctx context.Context, in Input) *Report {
 	r := &Report{Repo: in.Repo.Name, SHA: in.SHA, Branch: in.Repo.BaseBranch, Started: time.Now().UTC()}
 	g := in.Repo.Gates
 	files := listFiles(in.Dir)
-	run := func(gate, cmd string, install bool) Run {
+	// run runs one command. When the command couldn't be run at all, it
+	// records that and returns false: the rest of the report would only
+	// repeat it.
+	run := func(gate, cmd string, install bool) (Run, bool) {
 		start := time.Now()
 		code, out, err := in.Exec(ctx, in.Dir, cmd, install)
 		x := Run{Gate: gate, Command: cmd, Passed: err == nil && code == 0, Duration: time.Since(start).Round(time.Second)}
@@ -103,16 +114,34 @@ func Assess(ctx context.Context, in Input) *Report {
 			x.Output = tail(out, 3000)
 		}
 		r.Runs = append(r.Runs, x)
-		return x
+		switch {
+		case errors.Is(err, runner.ErrTimeout):
+			r.Incomplete = true
+			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + gate + "` timed out after " + x.Duration.String(),
+				Detail: "The check stopped here. Speed up or fix the hanging command, or raise timeouts.gates in factory.yaml, then run it again.\n\n" + fence(x.Output)})
+			return x, false
+		case err != nil || code == 125 || code == 126 || code == 127:
+			// 125 is Docker failing to start the container; 126 and 127 are
+			// the shell failing to run the command.
+			r.Incomplete = true
+			r.add(Finding{Level: Blocker, Area: "checks", Title: "Couldn't run `" + gate + "`",
+				Detail: "This is a problem with the factory's setup or the command in factory.yaml, not with the repo's code, so the check stopped here. Fix it and run the check again.\n\n" + fence(x.Output)})
+			return x, false
+		}
+		return x, true
 	}
 
 	installed := true
 	if g.Install != "" {
-		if x := run("install", g.Install, true); !x.Passed {
+		x, ok := run("install", g.Install, true)
+		if !ok {
+			return r.finish()
+		}
+		if !x.Passed {
 			installed = false
 			r.add(Finding{Level: Blocker, Area: "install", Title: "Install fails on " + r.Branch,
 				Detail: "`" + g.Install + "` failed, so no other check can run.\n\n" + fence(x.Output),
-				Issue: &Issue{Title: "Make `" + g.Install + "` work from a clean checkout",
+				Issue: &Issue{Key: "install", Title: "Make `" + g.Install + "` work from a clean checkout",
 					Body: fmt.Sprintf("The factory installs dependencies with `%s` on a fresh export of `%s`, and it fails:\n\n%s\n"+
 						"Make it succeed from a clean checkout with no network access beyond the package registries. Commit any missing lockfile. "+
 						"If the install command itself is wrong for this repo, say so in your summary with the command that works.", g.Install, r.Branch, fence(x.Output))}})
@@ -123,7 +152,7 @@ func Assess(ctx context.Context, in Input) *Report {
 	if !lockfile(files) {
 		r.add(Finding{Level: Gap, Area: "install", Title: "No lockfile",
 			Detail: "Without one, each install can pick up different dependency versions, so a check can fail or pass for reasons outside the change.",
-			Issue: &Issue{Title: "Commit a dependency lockfile",
+			Issue: &Issue{Key: "lockfile", Title: "Commit a dependency lockfile",
 				Body: "Generate and commit the lockfile for this repo's package manager (package-lock.json, pnpm-lock.yaml, yarn.lock, Gemfile.lock, uv.lock, poetry.lock or Cargo.lock) so installs are reproducible. Don't change dependency versions beyond what the lockfile pins today."}})
 	}
 
@@ -133,6 +162,7 @@ func Assess(ctx context.Context, in Input) *Report {
 	for _, name := range orderGates(g.Required) {
 		cmd := g.Commands[name]
 		if cmd == "" {
+			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "checks", Title: "The required check " + name + " has no command",
 				Detail: "Add it under gates.commands in factory.yaml, or drop it from gates.required."})
 			continue
@@ -140,7 +170,10 @@ func Assess(ctx context.Context, in Input) *Report {
 		if !installed {
 			continue
 		}
-		x := run(name, cmd, false)
+		x, ok := run(name, cmd, false)
+		if !ok {
+			return r.finish()
+		}
 		if name == "test" {
 			testRun = &x
 		}
@@ -148,7 +181,7 @@ func Assess(ctx context.Context, in Input) *Report {
 			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + name + "` fails on " + r.Branch,
 				Detail: "Every change would fail this check, whatever it does.\n\n" + fence(x.Output),
-				Issue: &Issue{Title: fmt.Sprintf("Make the %s check pass on %s", name, r.Branch),
+				Issue: &Issue{Key: "check:" + name, Title: fmt.Sprintf("Make the %s check pass on %s", name, r.Branch),
 					Body: fmt.Sprintf("The factory runs `%s` as a required check, and it fails on `%s` before any change:\n\n%s\n"+
 						"Fix the cause so it passes. Don't skip, delete or loosen tests or lint rules to get there; if a failure is a real bug, fix the bug.", cmd, r.Branch, fence(x.Output))}})
 		}
@@ -176,18 +209,21 @@ func Assess(ctx context.Context, in Input) *Report {
 	case tests == 0:
 		r.add(Finding{Level: Blocker, Area: "tests", Title: "No tests",
 			Detail: "The factory proves a change by its tests. With none, a reviewer can only read the code.",
-			Issue: &Issue{Title: "Add a test suite with tests for the main behaviors",
+			Issue: &Issue{Key: "no-tests", Title: "Add a test suite with tests for the main behaviors",
 				Body: "This repo has no tests. Set up the standard test framework for its stack, wire it to the test command in factory.yaml, and add tests for the most important behaviors (the main user flows and the riskiest logic). Keep them fast and deterministic: no network, no dependence on time or order."}})
 	case testRun != nil && testRun.Passed:
 		// Run them again: a suite that passes and fails at random makes every
 		// gate result a coin flip.
-		// GOFLAGS=-count=1 keeps Go from replaying the first run's cached
-		// results; other tools ignore it.
-		again := run("test (again)", "GOFLAGS=-count=1 "+testRun.Command, false)
+		// -count=1 in GOFLAGS keeps Go from replaying the first run's cached
+		// results, keeping flags the repo sets; other tools ignore it.
+		again, ok := run("test (again)", `export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1"; `+testRun.Command, false)
+		if !ok {
+			return r.finish()
+		}
 		if !again.Passed {
 			r.add(Finding{Level: Blocker, Area: "tests", Title: "Tests are flaky",
 				Detail: "They passed, then failed on the same commit.\n\n" + fence(again.Output),
-				Issue: &Issue{Title: "Fix flaky tests",
+				Issue: &Issue{Key: "flaky", Title: "Fix flaky tests",
 					Body: fmt.Sprintf("`%s` passed once and then failed on the same commit of `%s`:\n\n%s\n"+
 						"Find the tests that depend on order, time, randomness, shared state or the network, and make them deterministic. Don't delete or skip them.", testRun.Command, r.Branch, fence(again.Output))}})
 		} else {
@@ -196,7 +232,7 @@ func Assess(ctx context.Context, in Input) *Report {
 		if testRun.Duration > slowTests {
 			r.add(Finding{Level: Gap, Area: "tests", Title: "Tests take " + testRun.Duration.String(),
 				Detail: "Every attempt waits for them, and a builder runs them several times.",
-				Issue: &Issue{Title: "Speed up the test suite",
+				Issue: &Issue{Key: "slow-tests", Title: "Speed up the test suite",
 					Body: fmt.Sprintf("`%s` takes %s. Find the slowest tests and make them faster without losing coverage: share expensive setup, replace sleeps with waits on conditions, run independent tests in parallel.", testRun.Command, testRun.Duration)}})
 		}
 	}
@@ -206,7 +242,7 @@ func Assess(ctx context.Context, in Input) *Report {
 	} else {
 		r.add(Finding{Level: Gap, Area: "e2e", Title: "No end-to-end tests",
 			Detail: "Unit tests can pass while the app is broken for its users. A few end-to-end tests of the main flows catch that.",
-			Issue: &Issue{Title: "Add end-to-end smoke tests for the main user flows",
+			Issue: &Issue{Key: "e2e", Title: "Add end-to-end smoke tests for the main user flows",
 				Body: "Add a small end-to-end suite (Playwright for a web frontend, system or request specs for a Rails app, an HTTP-level test for an API) covering the two or three flows users depend on most. Run it from the test command or add it as its own check in factory.yaml. Keep it under a few minutes and free of external services."}})
 	}
 	if featureMap(files) {
@@ -214,7 +250,7 @@ func Assess(ctx context.Context, in Input) *Report {
 	} else {
 		r.add(Finding{Level: Gap, Area: "feature map", Title: "No feature map",
 			Detail: "A feature map lists what the product does, where each feature lives and which tests prove it. The factory uses it to pick what to verify for a change and to show the reviewer its blast radius.",
-			Issue: &Issue{Title: "Start a feature map",
+			Issue: &Issue{Key: "feature-map", Title: "Start a feature map",
 				Body: "Create `features.yaml` at the repo root listing the product's user-facing features. For each: `name`, a one-line `description`, `paths` (the files or directories that implement it) and `tests` (the test files that prove it). Cover the main features first; mark any feature with no tests with `tests: []` rather than leaving it out."}})
 	}
 	if ci(files) {
@@ -224,6 +260,11 @@ func Assess(ctx context.Context, in Input) *Report {
 			Detail: "The factory checks its own changes, but changes merged any other way go unchecked."})
 	}
 
+	return r.finish()
+}
+
+// finish scores the report.
+func (r *Report) finish() *Report {
 	r.Score = 100
 	for _, f := range r.Findings {
 		switch f.Level {
@@ -249,10 +290,11 @@ func (r *Report) add(f Finding) {
 }
 
 // Issues are the drafts for every finding that has one, blockers first.
+// An incomplete report has none: it can't tell which gaps are real.
 func (r *Report) Issues() []Issue {
 	var out []Issue
 	for _, f := range r.Findings {
-		if f.Issue != nil {
+		if f.Issue != nil && !r.Incomplete {
 			out = append(out, *f.Issue)
 		}
 	}
@@ -263,7 +305,10 @@ func (r *Report) Issues() []Issue {
 func (r *Report) Text() string {
 	var b strings.Builder
 	verdict := "ready: the factory can start on issues now"
-	if !r.Ready {
+	switch {
+	case r.Incomplete:
+		verdict = "the check couldn't finish"
+	case !r.Ready:
 		verdict = "not ready yet: fix the blockers first"
 	}
 	sha := r.SHA

@@ -216,27 +216,43 @@ func protected(p string, list []string) bool {
 const binaryLines = 100
 
 // IsTest reports whether a path is test code or test data, in Go, Ruby,
-// JavaScript/TypeScript, Python or Rust.
+// JavaScript/TypeScript, Python or Rust. It goes by file names, plus a few
+// directories only when the file in them is code of that kind: a bare
+// features/ or spec/ directory is as often app code or an API spec.
 func IsTest(p string) bool {
 	p = filepath.ToSlash(p)
 	base := path.Base(p)
-	for _, dir := range []string{"testdata", "test", "tests", "spec", "__tests__", "e2e", "cypress", "features"} {
-		if strings.HasPrefix(p, dir+"/") || strings.Contains(p, "/"+dir+"/") {
-			return true
-		}
+	ext := path.Ext(base)
+	in := func(dir string) bool { return strings.HasPrefix(p, dir+"/") || strings.Contains(p, "/"+dir+"/") }
+	if in("testdata") {
+		return true
 	}
-	for _, suf := range []string{"_test.go", "_spec.rb", "_test.rb", "_test.py", "_test.rs"} {
+	if strings.Contains(base, ".snap") || in("__snapshots__") || in("fixtures") || in("__fixtures__") {
+		return false
+	}
+	for _, suf := range []string{"_test.go", "_spec.rb", "_test.rb", "_test.py", ".feature"} {
 		if strings.HasSuffix(base, suf) {
 			return true
 		}
 	}
-	if strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") {
+	if strings.HasPrefix(base, "test_") && ext == ".py" {
 		return true
 	}
-	// foo.test.ts, foo.spec.jsx and the like.
-	parts := strings.Split(base, ".")
-	return len(parts) >= 3 && (parts[len(parts)-2] == "test" || parts[len(parts)-2] == "spec")
+	if jsCode[ext] {
+		// foo.test.ts, foo.spec.jsx and the like.
+		parts := strings.Split(base, ".")
+		if len(parts) >= 3 && (parts[len(parts)-2] == "test" || parts[len(parts)-2] == "spec") {
+			return true
+		}
+		if in("__tests__") || in("cypress") || in("e2e") {
+			return true
+		}
+	}
+	// Python and Rust keep tests in tests/.
+	return (ext == ".py" || ext == ".rs") && in("tests")
 }
+
+var jsCode = map[string]bool{".js": true, ".jsx": true, ".ts": true, ".tsx": true, ".mjs": true, ".cjs": true, ".vue": true, ".svelte": true}
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	safe := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "--no-pager"}

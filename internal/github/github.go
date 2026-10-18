@@ -34,6 +34,10 @@ type Issue struct {
 	Body   string   `json:"body"`
 	Labels []string `json:"-"`
 	IsPR   bool     `json:"-"`
+	// State is "open" or "closed"; StateReason says why a closed one was
+	// closed ("completed", "not_planned").
+	State       string `json:"-"`
+	StateReason string `json:"-"`
 }
 
 // PR is the subset of a pull request the factory reads.
@@ -148,13 +152,15 @@ type rawIssue struct {
 	Title       string `json:"title"`
 	Body        string `json:"body"`
 	PullRequest any    `json:"pull_request"`
+	State       string `json:"state"`
+	StateReason string `json:"state_reason"`
 	Labels      []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 }
 
 func (r rawIssue) issue() Issue {
-	is := Issue{Number: r.Number, Title: r.Title, Body: r.Body, IsPR: r.PullRequest != nil}
+	is := Issue{Number: r.Number, Title: r.Title, Body: r.Body, IsPR: r.PullRequest != nil, State: r.State, StateReason: r.StateReason}
 	for _, l := range r.Labels {
 		is.Labels = append(is.Labels, l.Name)
 	}
@@ -163,10 +169,15 @@ func (r rawIssue) issue() Issue {
 
 // ListIssues returns open issues (not PRs) carrying a label.
 func (c *Client) ListIssues(ctx context.Context, label string) ([]Issue, error) {
+	return c.ListIssuesIn(ctx, label, "open")
+}
+
+// ListIssuesIn is ListIssues for a state: "open", "closed" or "all".
+func (c *Client) ListIssuesIn(ctx context.Context, label, state string) ([]Issue, error) {
 	var out []Issue
 	for page := 1; page <= 10; page++ {
 		var raw []rawIssue
-		q := url.Values{"state": {"open"}, "labels": {label}, "per_page": {"100"}, "page": {fmt.Sprint(page)}, "sort": {"created"}, "direction": {"asc"}}
+		q := url.Values{"state": {state}, "labels": {label}, "per_page": {"100"}, "page": {fmt.Sprint(page)}, "sort": {"created"}, "direction": {"asc"}}
 		if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/issues?"+q.Encode(), nil, &raw); err != nil {
 			return nil, err
 		}

@@ -2,12 +2,14 @@ package readiness
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/runner"
 )
 
 func tree(t *testing.T, files ...string) string {
@@ -38,13 +40,15 @@ func fails(cmds ...string) (Exec, *[]string) {
 		ran = append(ran, cmd)
 		seen[cmd]++
 		for _, c := range cmds {
-			if c == cmd || (c == "flaky:"+strings.TrimPrefix(cmd, "GOFLAGS=-count=1 ") && seen[cmd] == 1 && strings.HasPrefix(cmd, "GOFLAGS")) {
+			if c == cmd || (c == "flaky:"+strings.TrimPrefix(cmd, again) && seen[cmd] == 1 && strings.HasPrefix(cmd, again)) {
 				return 1, "boom: " + cmd, nil
 			}
 		}
 		return 0, "", nil
 	}, &ran
 }
+
+const again = `export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1"; `
 
 func titles(r *Report, l Level) string {
 	var out []string
@@ -63,7 +67,7 @@ func TestReadyRepo(t *testing.T) {
 	if !r.Ready || r.Score != 100 || titles(r, Blocker) != "" || titles(r, Gap) != "" {
 		t.Fatalf("report:\n%s", r.Text())
 	}
-	if got := strings.Join(*ran, ","); got != "bundle install,run lint,run test,run build,GOFLAGS=-count=1 run test" {
+	if got := strings.Join(*ran, ","); got != "bundle install,run lint,run test,run build,"+again+"run test" {
 		t.Fatalf("ran %s", got)
 	}
 	if len(r.Issues()) != 0 {
@@ -106,6 +110,35 @@ func TestBlockersComeWithIssues(t *testing.T) {
 	exec, _ = fails()
 	r = Assess(ctx, Input{Repo: repo("", "test"), Dir: tree(t, "go.mod", "main.go"), Exec: exec})
 	if titles(r, Blocker) != "No tests" || r.Score >= 75 {
+		t.Fatalf("report:\n%s", r.Text())
+	}
+}
+
+func TestCouldNotRun(t *testing.T) {
+	ctx := context.Background()
+	dir := tree(t, "go.mod", "a_test.go")
+	for name, exec := range map[string]Exec{
+		"no docker": func(context.Context, string, string, bool) (int, string, error) {
+			return -1, "", errors.New("docker: not found")
+		},
+		"missing command": func(context.Context, string, string, bool) (int, string, error) {
+			return 127, "sh: run: not found", nil
+		},
+		"timeout": func(context.Context, string, string, bool) (int, string, error) { return -1, "", runner.ErrTimeout },
+	} {
+		r := Assess(ctx, Input{Repo: repo("", "lint", "test"), Dir: dir, Exec: exec})
+		if !r.Incomplete || len(r.Runs) != 1 || len(r.Issues()) != 0 || !strings.Contains(r.Text(), "couldn't finish") {
+			t.Errorf("%s: runs %d, issues %+v\n%s", name, len(r.Runs), r.Issues(), r.Text())
+		}
+	}
+}
+
+func TestMissingCommand(t *testing.T) {
+	exec, _ := fails()
+	rp := repo("", "test", "lint")
+	delete(rp.Gates.Commands, "lint")
+	r := Assess(context.Background(), Input{Repo: rp, Dir: tree(t, "go.mod", "a_test.go"), Exec: exec})
+	if strings.Contains(titles(r, Good), "Every required check passes") {
 		t.Fatalf("report:\n%s", r.Text())
 	}
 }

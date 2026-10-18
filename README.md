@@ -392,6 +392,7 @@ run it again any time:
 
 ```sh
 ./factory readiness              # every repo; or name one: ./factory readiness you/api
+                                 # (flags go before the name)
 ./factory readiness -file        # also open an issue for each gap
 ./factory readiness -queue       # open them labeled for the factory to work
 ```
@@ -414,9 +415,16 @@ A **blocker** means every job would fail, or pass for the wrong reason
 (tests that fail on the base branch, flaky tests, no tests at all). A
 **gap** means jobs work but less of what they change is verified. Each one
 comes with an issue written for the factory's builder, so the first thing
-the factory does on a new repo can be making it verifiable. Issues it
-files carry `factory:readiness`, and running it again skips those still
-open. The report is saved to `data/readiness/<owner>__<name>.json`.
+the factory does on a new repo can be making it verifiable. While a repo
+has blockers, `-queue` labels only those for the factory, since every other
+job would fail until they're fixed; the gaps are filed for later.
+
+Issues it files carry `factory:readiness`. Running it again skips a gap
+whose issue is still open or was closed as not planned, and files it again
+if it was closed as done but came back. If the check itself can't run (no
+Docker, a missing job image, a command that isn't installed, a timeout), it
+stops there and files nothing. The report is saved to
+`data/readiness/<owner>__<name>.json`.
 
 ### Each repo's toolchain and checks
 

@@ -119,7 +119,8 @@ type fakeGitHub struct {
 	files    map[string]map[string]string // repo -> path -> contents
 	runCmd   func(io.Writer, string, ...string) error
 	report   *readiness.Report // what the readiness check finds; ready if nil
-	issues   []string          // titles of issues created
+	issues   []string          // path, title and labels of issues created
+	bodies   []string
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,15 +132,24 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/issues") && r.Method == "POST" {
-		var body struct{ Title string }
+		var body struct {
+			Title, Body string
+			Labels      []string
+		}
 		json.NewDecoder(r.Body).Decode(&body)
-		f.issues = append(f.issues, r.URL.Path+" "+body.Title)
+		f.issues = append(f.issues, r.URL.Path+" "+body.Title+" "+strings.Join(body.Labels, ","))
+		f.bodies = append(f.bodies, body.Body)
 		json.NewEncoder(w).Encode(map[string]int{"number": 100 + len(f.issues)})
 		return
 	}
-	if strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("labels") == "factory:readiness" {
-		// One of the check's issues is already open.
-		json.NewEncoder(w).Encode([]map[string]any{{"number": 7, "title": "Start a feature map"}})
+	if strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("labels") == "factory:readiness" && r.URL.Query().Get("state") == "all" {
+		// The check filed before: one still open (from before issues had
+		// keys), one done, one declined.
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"number": 7, "title": "Start a feature map", "state": "open"},
+			{"number": 8, "title": "Add e2e tests", "body": "x\n<!-- factory-readiness: e2e -->", "state": "closed", "state_reason": "completed"},
+			{"number": 9, "title": "Lockfile", "body": "<!-- factory-readiness: lockfile -->", "state": "closed", "state_reason": "not_planned"},
+		})
 		return
 	}
 	// Every repo under o looks like o/r.
@@ -354,8 +364,10 @@ func TestWriteReposSkipsBlankLines(t *testing.T) {
 func TestSetupFilesReadinessIssues(t *testing.T) {
 	f := &fakeGitHub{labels: map[string]bool{}, report: &readiness.Report{Branch: "main", SHA: "abc1234", Score: 59,
 		Findings: []readiness.Finding{
-			{Level: readiness.Blocker, Title: "`test` fails on main", Issue: &readiness.Issue{Title: "Make the test check pass on main", Body: "fix it"}},
-			{Level: readiness.Gap, Title: "No feature map", Issue: &readiness.Issue{Title: "Start a feature map", Body: "map it"}},
+			{Level: readiness.Blocker, Title: "`test` fails on main", Issue: &readiness.Issue{Key: "check:test", Title: "Make the test check pass on main", Body: "fix it"}},
+			{Level: readiness.Gap, Title: "No feature map", Issue: &readiness.Issue{Key: "feature-map", Title: "Start a feature map", Body: "map it"}},
+			{Level: readiness.Gap, Title: "No end-to-end tests", Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests", Body: "e2e"}},
+			{Level: readiness.Gap, Title: "No lockfile", Issue: &readiness.Issue{Key: "lockfile", Title: "Commit a dependency lockfile", Body: "lock"}},
 		}}}
 	_, _, out := runSetup(t, f,
 		"o/r",
@@ -368,10 +380,16 @@ func TestSetupFilesReadinessIssues(t *testing.T) {
 		"",
 		"",
 	)
-	if len(f.issues) != 1 || f.issues[0] != "/repos/o/r/issues Make the test check pass on main" {
+	// While the repo has blockers, only they are queued.
+	want := []string{"/repos/o/r/issues Make the test check pass on main factory:readiness,factory:ready", "/repos/o/r/issues Add end-to-end smoke tests factory:readiness"}
+	if strings.Join(f.issues, "|") != strings.Join(want, "|") {
 		t.Fatalf("issues: %v\n%s", f.issues, out)
 	}
-	for _, want := range []string{"o/r at main (abc1234): 59/100, not ready yet", "✗ `test` fails on main", "Every job would fail until the blockers are fixed", "Opened 1 issue(s) on o/r (1 already open)."} {
+	if !strings.HasSuffix(f.bodies[0], "<!-- factory-readiness: check:test -->") {
+		t.Fatalf("body: %s", f.bodies[0])
+	}
+	for _, want := range []string{"o/r at main (abc1234): 59/100, not ready yet", "✗ `test` fails on main", "Every job would fail until the blockers are fixed",
+		"Open these 2 issues on o/r?", "(2 more already filed.)", "Opened 2 issue(s) on o/r."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)
 		}

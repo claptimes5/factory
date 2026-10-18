@@ -255,14 +255,20 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 			return err
 		}
 	}
+	images := true
 	if cfg.Runner.Kind == "docker" {
 		p.say("\n== 5. Job images")
-		setupImages(p, cfg)
+		images = setupImages(p, cfg)
 	}
 
 	if client != nil {
 		p.say("\n== 6. How ready each repo is for the factory")
-		setupReadiness(ctx, p, cfg, client)
+		if images {
+			setupReadiness(ctx, p, cfg, client)
+		} else {
+			p.say("The check runs in the job images, so it waits until they're built.")
+			p.say("Run it then with: ./factory readiness")
+		}
 	}
 
 	p.say("\n== 7. Claude (writes the code)")
@@ -505,8 +511,9 @@ func checkDocker(p *prompter, cfg *config.Config) error {
 	return nil
 }
 
-// setupImages builds the job images that aren't built yet.
-func setupImages(p *prompter, cfg *config.Config) {
+// setupImages builds the job images that aren't built yet. It reports
+// whether they all are now.
+func setupImages(p *prompter, cfg *config.Config) bool {
 	var missing []jobImage
 	for _, im := range jobImages(cfg) {
 		if runCmd(io.Discard, "docker", "image", "inspect", im.tag) != nil {
@@ -515,7 +522,7 @@ func setupImages(p *prompter, cfg *config.Config) {
 	}
 	if len(missing) == 0 {
 		p.say("The job images are built.")
-		return
+		return true
 	}
 	for _, im := range missing {
 		p.say("Jobs for %s run in the image %s, which isn't built yet.", joinAnd(im.repos), im.tag)
@@ -523,11 +530,13 @@ func setupImages(p *prompter, cfg *config.Config) {
 	p.say("Building takes a few minutes per image.")
 	if !p.yes("Build now?", true) {
 		p.say("Build them later with: ./factory images")
-		return
+		return false
 	}
 	if err := buildImages(p.out, cfg, false); err != nil {
 		p.say("%v. Fix it and run `./factory images` (or setup) again.", err)
+		return false
 	}
+	return true
 }
 
 // checkBaseBranches compares each repo's base branch in factory.yaml with

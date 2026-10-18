@@ -51,38 +51,65 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	return r, nil
 }
 
-// fileIssues opens the report's issues on GitHub, skipping any the check
-// filed before that are still open. With queue they get the intake label,
-// so the factory starts on them.
-func fileIssues(ctx context.Context, gh *github.Client, r *readiness.Report, intake string, queue bool) (filed []int, skipped int, err error) {
-	open, err := gh.ListIssues(ctx, pipeline.LabelReadiness)
+// marker is hidden in the body of each issue the check files, so a later
+// run knows the gap is already filed even if its title changed.
+func marker(key string) string { return "<!-- factory-readiness: " + key + " -->" }
+
+// planIssues picks the report's findings that need an issue. It skips a
+// gap whose issue is still open, or was closed as not planned: someone
+// decided against it. A gap whose issue was closed as done is back, so it
+// is filed again.
+func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report) (todo []readiness.Finding, skipped int, err error) {
+	if r.Incomplete {
+		return nil, 0, nil
+	}
+	filed, err := gh.ListIssuesIn(ctx, pipeline.LabelReadiness, "all")
 	if err != nil {
 		return nil, 0, err
 	}
-	labels := []string{pipeline.LabelReadiness}
-	if queue {
-		labels = append(labels, intake)
-	}
-	for _, is := range r.Issues() {
+	for _, f := range r.Findings {
+		if f.Issue == nil {
+			continue
+		}
 		dup := false
-		for _, o := range open {
-			dup = dup || strings.EqualFold(o.Title, is.Title)
+		for _, o := range filed {
+			same := strings.Contains(o.Body, marker(f.Issue.Key)) || strings.EqualFold(o.Title, f.Issue.Title)
+			dup = dup || (same && (o.State != "closed" || o.StateReason == "not_planned"))
 		}
 		if dup {
 			skipped++
 			continue
 		}
-		body := is.Body + "\n\n---\nFiled by the factory's readiness check of `" + r.Branch + "` at " + r.SHA + "."
-		n, err := gh.CreateIssue(ctx, is.Title, body, labels)
+		todo = append(todo, f)
+	}
+	return todo, skipped, nil
+}
+
+// fileIssues opens an issue for each finding. With queue they get the
+// intake label, so the factory starts on them; while the repo has
+// blockers only those are queued, since every other job would fail until
+// they are fixed.
+func fileIssues(ctx context.Context, gh *github.Client, r *readiness.Report, todo []readiness.Finding, intake string, queue bool) (filed []int, err error) {
+	for _, f := range todo {
+		labels := []string{pipeline.LabelReadiness}
+		if queue && (r.Ready || f.Level == readiness.Blocker) {
+			labels = append(labels, intake)
+		}
+		body := f.Issue.Body + "\n\n---\nFiled by the factory's readiness check of `" + r.Branch + "` at " + r.SHA + ".\n" + marker(f.Issue.Key)
+		n, err := gh.CreateIssue(ctx, f.Issue.Title, body, labels)
 		if err != nil {
-			return filed, skipped, err
+			return filed, err
 		}
 		filed = append(filed, n)
 	}
-	return filed, skipped, nil
+	return filed, nil
 }
 
-// runReadiness is `factory readiness [owner/name] [-file] [-queue]`.
+// readinessPrefix keeps the check's containers apart from a running
+// daemon's, which it would otherwise kill as leftovers.
+func readinessPrefix() string { return fmt.Sprintf("ready%d-", os.Getpid()) }
+
+// runReadiness is `factory readiness [-file] [-queue] [owner/name]`.
 func runReadiness(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline, args []string) error {
 	fs := flag.NewFlagSet("readiness", flag.ContinueOnError)
 	file := fs.Bool("file", false, "open an issue for each gap")
@@ -100,29 +127,49 @@ func runReadiness(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	} else if fs.NArg() > 1 {
 		return usage()
 	}
+	p.JobPrefix = readinessPrefix()
+	var failed []string
 	for _, repo := range repos {
-		fmt.Printf("Checking %s...\n", repo)
-		r, err := assess(ctx, cfg, p, repo, os.Stdout)
-		if err != nil {
-			return err
+		if err := readinessFor(ctx, cfg, p, repo, *file || *queue, *queue); err != nil {
+			fmt.Printf("%s: %v\n", repo, err)
+			failed = append(failed, repo)
 		}
-		fmt.Print(r.Text())
-		if !*file && !*queue {
-			if n := len(r.Issues()); n > 0 {
-				fmt.Printf("Run with -file to open %d issue(s) for the gaps, or -queue to have the factory work them.\n", n)
-			}
-			continue
-		}
-		gh, ok := p.GitHubFor(repo).(*github.Client)
-		if !ok {
-			return fmt.Errorf("%s: no GitHub client", repo)
-		}
-		filed, skipped, err := fileIssues(ctx, gh, r, cfg.Intake.Label, *queue)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Opened %d issue(s) on %s%s.\n", len(filed), repo, skippedNote(skipped))
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("couldn't check %s", joinAnd(failed))
+	}
+	return nil
+}
+
+func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline, repo string, file, queue bool) error {
+	fmt.Printf("Checking %s...\n", repo)
+	r, err := assess(ctx, cfg, p, repo, os.Stdout)
+	if err != nil {
+		return err
+	}
+	fmt.Print(r.Text())
+	if r.Incomplete {
+		return nil
+	}
+	if !file {
+		if n := len(r.Issues()); n > 0 {
+			fmt.Printf("Run with -file to open %d issue(s) for the gaps, or -queue to have the factory work them.\n", n)
+		}
+		return nil
+	}
+	gh, ok := p.GitHubFor(repo).(*github.Client)
+	if !ok {
+		return fmt.Errorf("no GitHub client")
+	}
+	todo, skipped, err := planIssues(ctx, gh, r)
+	if err != nil {
+		return err
+	}
+	filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Opened %d issue(s) on %s%s.\n", len(filed), repo, skippedNote(skipped))
 	return nil
 }
 
@@ -130,13 +177,13 @@ func skippedNote(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d already open)", n)
+	return fmt.Sprintf(" (%d already filed)", n)
 }
 
 // setupReadiness runs the readiness check on each repo and offers to file
 // the work that makes it verifiable.
 func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client clientFor) {
-	pl := &pipeline.Pipeline{Cfg: cfg, Runner: newRunner(cfg), ClientsFor: func(repo string) pipeline.RepoClients {
+	pl := &pipeline.Pipeline{Cfg: cfg, Runner: newRunner(cfg), JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
 		gh, err := client(repo)
 		if err != nil {
 			gh = &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: github.StaticToken("")}
@@ -157,8 +204,25 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			continue
 		}
 		p.say("%s", strings.TrimRight(r.Text(), "\n"))
-		issues := r.Issues()
-		if len(issues) == 0 {
+		if r.Incomplete {
+			p.say("Fix that and run: ./factory readiness %s", repo)
+			continue
+		}
+		if len(r.Issues()) == 0 {
+			continue
+		}
+		gh, err := client(repo)
+		if err != nil {
+			p.say("%s: %v", repo, err)
+			continue
+		}
+		todo, skipped, err := planIssues(ctx, gh, r)
+		if err != nil {
+			p.say("Couldn't list %s's issues: %v", repo, err)
+			continue
+		}
+		if len(todo) == 0 {
+			p.say("Issues for these are already filed on %s.", repo)
 			continue
 		}
 		if r.Ready {
@@ -166,25 +230,27 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		} else {
 			p.say("Every job would fail until the blockers are fixed. The factory can fix them first:")
 		}
-		for i, is := range issues {
-			p.say("  %d. %s", i+1, is.Title)
+		for i, f := range todo {
+			p.say("  %d. %s", i+1, f.Issue.Title)
 		}
-		if !p.yes(fmt.Sprintf("Open these %d issues on %s?", len(issues), repo), true) {
+		if skipped > 0 {
+			p.say("(%d more already filed.)", skipped)
+		}
+		if !p.yes(fmt.Sprintf("Open these %d issues on %s?", len(todo), repo), true) {
 			p.say("Open them later with: ./factory readiness -file %s", repo)
 			continue
 		}
-		queue := p.yes(fmt.Sprintf("Label them %s so the factory starts on them when it runs?", cfg.Intake.Label), true)
-		gh, err := client(repo)
-		if err != nil {
-			p.say("%s: %v", repo, err)
-			continue
+		ask := fmt.Sprintf("Label them %s so the factory starts on them when it runs?", cfg.Intake.Label)
+		if !r.Ready {
+			ask = fmt.Sprintf("Label the blockers %s so the factory starts on them when it runs? The rest wait until they're fixed", cfg.Intake.Label)
 		}
-		filed, skipped, err := fileIssues(ctx, gh, r, cfg.Intake.Label, queue)
+		queue := p.yes(ask, true)
+		filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
 		if err != nil {
 			p.say("Opening issues on %s failed: %v", repo, err)
 			continue
 		}
-		p.say("Opened %d issue(s) on %s%s.", len(filed), repo, skippedNote(skipped))
+		p.say("Opened %d issue(s) on %s.", len(filed), repo)
 	}
 }
 
