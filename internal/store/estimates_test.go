@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -137,16 +137,17 @@ func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
 		}
 	}
 	s.Close()
-	// The first open's backups may share this second's name.
-	baks, _ := filepath.Glob(path + ".bak-*")
-	for _, b := range baks {
-		os.Remove(b)
-	}
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	// An existing database is backed up before each migration.
+	for _, v := range []int{12, 13, 14} {
+		if baks, _ := filepath.Glob(fmt.Sprintf("%s.bak-v%d-*", path, v)); len(baks) != 1 {
+			t.Fatalf("backups before migrating from v%d: %v", v, baks)
+		}
+	}
 	if ok, _ := s.IsHealthItem(ctx, fix.ID); !ok {
 		t.Fatal("the health fix in flight wasn't marked")
 	}

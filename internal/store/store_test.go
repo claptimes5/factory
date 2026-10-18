@@ -323,6 +323,42 @@ func TestMigrationsAreForwardOnlyAndBackedUp(t *testing.T) {
 	}
 }
 
+// A new database has nothing to back up before its migrations.
+func TestNewDatabaseMakesNoBackups(t *testing.T) {
+	t.Parallel()
+	_, path := openFresh(t)
+	if baks, _ := filepath.Glob(path + ".bak-*"); len(baks) != 0 {
+		t.Fatalf("a new database was backed up: %v", baks)
+	}
+}
+
+// factory backup writes a database that opens and holds the data.
+func TestBackup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, path := openTest(t)
+	it := newItem(t, s, 7)
+	dst := filepath.Join(filepath.Dir(path), "backup.db")
+	if err := s.Backup(ctx, dst); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if err := s.Backup(ctx, dst); err == nil {
+		t.Fatal("a backup over an existing file must be refused")
+	}
+	b, err := Open(dst)
+	if err != nil {
+		t.Fatalf("opening the backup: %v", err)
+	}
+	defer b.Close()
+	if v, _ := b.SchemaVersion(ctx); v != len(migrationFiles(t)) {
+		t.Fatalf("backup schema version %d", v)
+	}
+	got, err := b.ItemByIssue(ctx, "o/r", 7)
+	if err != nil || got.ID != it.ID {
+		t.Fatalf("backup item %+v %v", got, err)
+	}
+}
+
 func migrationFiles(t *testing.T) []string {
 	ms, err := loadMigrations()
 	if err != nil {
