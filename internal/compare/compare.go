@@ -181,6 +181,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	cfg.Repos = []config.Repo{o.repoConf()}
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Orchestrator.On = false
+	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	if budget > 0 {
 		cfg.Budgets.DailyTotal = budget
 	}

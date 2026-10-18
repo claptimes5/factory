@@ -294,6 +294,7 @@ type Config struct {
 	// Tuning is the loop that reads the metrics on a cadence and proposes
 	// changes to the settings the dashboard may edit. See Tuning.
 	Tuning Tuning `yaml:"tuning"`
+	Learning Learning `yaml:"learning"`
 
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
@@ -482,6 +483,7 @@ func (c *Config) defaults() {
 	if _, ok := c.Routing["tune"]; !ok && c.Routing != nil {
 		c.Routing["tune"] = c.Routing["orchestrate"]
 	}
+	c.learningDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -761,6 +763,7 @@ func (c *Config) Validate() error {
 	if _, err := CleanFilePath(c.Tuning.Path); err != nil {
 		bad("tuning.path: %v", err)
 	}
+	errs = append(errs, c.checkLearning()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}

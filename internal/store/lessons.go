@@ -1,0 +1,93 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+)
+
+// Signal is one thing a learn job can learn from: the changes a human
+// pushed to a factory PR before merging it (kind human_edit), or one
+// blocking reviewer or critic finding (kind finding).
+type Signal struct {
+	ID          int64
+	Repo        string
+	Kind        string // human_edit | finding
+	ItemID      int64
+	IssueNumber int
+	JobID       int64 // the review or critic job of a finding
+	PRNumber    int
+	File        string
+	Claim       string
+	Severity    string
+	Evidence    string
+	Diff        string // a human edit's changes
+	CreatedAt   string
+	LearnJob    int64 // the learn job that used it; 0 while unused
+}
+
+// Signal kinds.
+const (
+	SignalHumanEdit = "human_edit"
+	SignalFinding   = "finding"
+)
+
+// AddSignal records a signal. The same one recorded again (a rerun job, a
+// second poll) is ignored.
+func (s *Store) AddSignal(ctx context.Context, sig Signal) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO lesson_signals(repo, kind, item_id, issue_number, job_id, pr_number, file, claim, severity, evidence, diff, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			sig.Repo, sig.Kind, sig.ItemID, sig.IssueNumber, sig.JobID, sig.PRNumber, sig.File, sig.Claim, sig.Severity, sig.Evidence, sig.Diff, Now())
+		return err
+	})
+}
+
+const signalCols = `id, repo, kind, COALESCE(item_id,0), issue_number, job_id, pr_number, file, claim, severity, evidence, diff, created_at, COALESCE(learn_job,0)`
+
+func (s *Store) signals(ctx context.Context, q string, args ...any) ([]Signal, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT `+signalCols+` FROM lesson_signals `+q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Signal
+	for rows.Next() {
+		var g Signal
+		if err := rows.Scan(&g.ID, &g.Repo, &g.Kind, &g.ItemID, &g.IssueNumber, &g.JobID, &g.PRNumber, &g.File, &g.Claim, &g.Severity, &g.Evidence, &g.Diff, &g.CreatedAt, &g.LearnJob); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// UnusedSignals lists a repo's signals no learn job has used, recorded at
+// or after since (TimeFormat; "" for all), oldest first.
+func (s *Store) UnusedSignals(ctx context.Context, repo, since string) ([]Signal, error) {
+	return s.signals(ctx, `WHERE repo = ? COLLATE NOCASE AND learn_job IS NULL AND created_at >= ? ORDER BY id`, repo, since)
+}
+
+// SignalsByID returns the signals with these ids, oldest first.
+func (s *Store) SignalsByID(ctx context.Context, ids []int64) ([]Signal, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return s.signals(ctx, `WHERE id IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY id`, args...)
+}
+
+// UseSignals marks signals as used by a learn job.
+func (s *Store) UseSignals(ctx context.Context, ids []int64, learnJob int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if _, err := tx.Exec(`UPDATE lesson_signals SET learn_job = ? WHERE id = ?`, learnJob, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

@@ -268,3 +268,37 @@ because what you changed is what the factory missed.
 - with its own tests and test data as the acceptance files.
 
 Every later config is then measured against the miss.
+
+## Learning from your edits
+
+The factory learns from the work you correct. It watches two things:
+
+- **Your edits.** When you push to a factory PR and then merge it, the
+  factory keeps the diff between its last push and what you merged (up to
+  20 KB, in whole hunks).
+- **Repeat findings.** Each critical or major finding in a review or critic
+  verdict that blocked a build is kept, with its file and claim.
+
+Once a day per repo, a read-only learn job runs if there's something new: at
+least one edit of yours, or `learning.min_findings` alike findings (in
+files of the same folder and type, or with claims in the same words) from
+two or more items. It reads them with the repo's current `AGENTS.md` and
+`CLAUDE.md`, and proposes up to three lines: general rules a builder would
+follow next time, not one fix restated. It may propose none. A lone finding
+waits, for up to 30 days, for one like it.
+
+The lines go to `AGENTS.md`, which builders read before they start, under a
+`## Lessons from the factory` section. The daemon, not the agent, makes the
+change: on the `factory/lessons` branch, in a draft PR labeled
+`factory:awaiting-you`. The PR lists each line with why it was proposed and
+links to the issues and PRs it came from. While it's open, new lines are
+added to it. A line already in `AGENTS.md` or in the PR is skipped. You get
+a notification each time it opens or grows.
+
+Read the lines before you merge: they steer every later build. Edit or drop
+any on the branch. The PR never merges itself, whatever `auto_merge` says,
+and no build ever runs on its branch. Close it to turn the lines down; the
+next lessons start a fresh PR.
+
+To turn it off, set `learning: {enabled: false}` (see
+[Configuration](configuration.md#learning-from-your-edits)).

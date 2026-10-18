@@ -180,7 +180,7 @@ func (f *fakeGH) CreatePR(_ context.Context, title, body, head, base string, dra
 		return nil, fmt.Errorf("github: HTTP 502")
 	}
 	f.nextPR++
-	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", State: "open", Draft: draft}
+	pr := &github.PR{Number: f.nextPR, URL: "https://example/pr", State: "open", Draft: draft, Body: body}
 	f.prs[head] = pr
 	f.comments[pr.Number] = append(f.comments[pr.Number], "BODY:"+body)
 	f.bodies[pr.Number] = body
@@ -190,6 +190,11 @@ func (f *fakeGH) UpdatePRBody(_ context.Context, n int, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bodies[n] = body
+	for _, pr := range f.prs {
+		if pr.Number == n {
+			pr.Body = body
+		}
+	}
 	return nil
 }
 func (f *fakeGH) CreateIssue(_ context.Context, title, body string, labels []string) (int, error) {
@@ -221,6 +226,7 @@ type fakeHarness struct {
 	resumes []string            // Resume of each implement call
 	noSess  bool                // fail any resumed run, as if the session were gone
 	nets    map[string][]string // Services of each call, by stage
+	learn   []string            // successive learn verdicts
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -273,6 +279,11 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, err
 		}
 		res.Final = final
+	case "learn":
+		if n >= len(h.learn) {
+			return nil, fmt.Errorf("no scripted learn %d", n)
+		}
+		res.Final = h.learn[n]
 	case "review", "critic":
 		if n >= len(h.reviews) {
 			return nil, fmt.Errorf("no scripted review %d", n)

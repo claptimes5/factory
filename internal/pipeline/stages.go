@@ -650,6 +650,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	norm, _ := json.Marshal(v)
 	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
+	p.recordFindings(ctx, j, it, &v)
 	return p.afterReview(ctx, it, j.Kind, &v, in)
 }
 
