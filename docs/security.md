@@ -116,6 +116,49 @@ other people control into issues the builder may later read:
 - **The TODO scan** is a shallow clone the daemon owns, read with
   `git grep` and `git show` and deleted after. Nothing in it runs.
 
+## Previews: running the change's app
+
+A [preview](using.md#screenshots-on-the-pr) runs the change's own code, so
+it's held to the gates' rules:
+
+- **It runs only after the gates pass**, on the same export, in the same
+  job image and container limits, with the repo's `env` and services and
+  the same egress allowlist. No model key, forge token or `factory.env`
+  secret reaches it, so the app can't push or act on the repo.
+- **The daemon uploads, not the app.** The forge token stays in the
+  daemon, which posts the comment and commits the images itself.
+- **Only the files the factory named come back**, and only as regular
+  files (no links out of the export) that decode in full as PNGs (a
+  truncated or corrupt one is refused) of at most 4000×4000 pixels and
+  5 MB, at most `previews.max_screenshots` of them.
+  The app shares the container and could write anything there; anything
+  else is ignored.
+- **Pages the builder names are model output**, so only plain paths are
+  kept (one leading `/`, no spaces, quotes, backticks or angle brackets),
+  and they're always opened on the app's own `127.0.0.1` address.
+- **The app's log stays off the PR.** The app runs with the repo's
+  `files`, so its log can quote a secret. The log and the browser's error
+  messages go to the job's folder and the item's page in the dashboard;
+  the PR comment says what went wrong in the factory's own words only.
+- **Images are attacker-influenced.** A PR can make its pages show
+  anything, text included. The reviewer is told the screenshots show what
+  the change looks like, not that it works, and that text in them is page
+  content, never instructions.
+- **On GitHub, the images live on `factory/previews`** in the repo
+  itself, so anyone who can read the repo can read them, as with the PR.
+  A removed image stays reachable by its commit's link until GitHub's
+  garbage collection.
+  It has no workflow files, so it runs no CI. The factory checks that
+  the branch is its own (one parentless "factory: PR screenshots"
+  commit) and then force-updates it, but the two steps aren't atomic:
+  GitHub has no compare-and-swap on refs, so a push that lands between
+  them is overwritten. Only the factory should write to the branch. On
+  GitLab they're project
+  uploads, with GitLab's own access rules; removing them takes the
+  Maintainer role and GitLab 17.2.
+- **The dashboard serves only the images a build's manifest lists**, as
+  `image/png` with `nosniff` and a `default-src 'none'` policy.
+
 ## Network: the egress allowlist
 
 With the docker runner, jobs can reach only the hosts on an allowlist. A

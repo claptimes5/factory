@@ -17,6 +17,8 @@ export type Event = S["Event"];
 export type PRPanel = S["PRPanel"];
 export type Finding = S["Finding"];
 export type Diff = S["Diff"];
+export type Preview = S["Preview"];
+export type PreviewShot = S["PreviewShot"];
 export type Feed = S["Feed"];
 export type Activity = S["Activity"];
 export type ActivityEntry = S["ActivityEntry"];
@@ -101,6 +103,8 @@ export const useItem = (id: number) =>
   useQuery({ queryKey: ["item", id], queryFn: () => getJSON<ItemDetail>(`/items/${id}`) });
 export const usePRPanel = (id: number) =>
   useQuery({ queryKey: ["pr", id], queryFn: () => getJSON<PRPanel>(`/items/${id}/pr`) });
+export const usePreview = (id: number) =>
+  useQuery({ queryKey: ["preview", id], queryFn: () => getJSON<Preview>(`/items/${id}/preview`) });
 export const useDiff = (id: number) =>
   useQuery({ queryKey: ["diff", id], queryFn: () => getJSON<Diff>(`/items/${id}/diff`) });
 export const useJob = (id: number) => useQuery({ queryKey: ["job", id], queryFn: () => getJSON<JobDetail>(`/jobs/${id}`) });

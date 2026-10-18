@@ -85,9 +85,12 @@ type Client struct {
 	BaseURL string // default https://api.github.com
 	Tokens  TokenSource
 	HTTP    *http.Client
+	// WebURL is GitHub's site, for links to files; default https://github.com.
+	WebURL string
 
 	selfOnce  sync.Mutex
-	selfLogin string // who the factory acts as, once looked up
+	previewMu sync.Mutex // one rewrite of the preview branch at a time
+	selfLogin string     // who the factory acts as, once looked up
 }
 
 func (c *Client) base() string {

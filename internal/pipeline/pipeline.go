@@ -168,6 +168,8 @@ type Pipeline struct {
 	retryWait  time.Duration        // between retries of a source's read; 0 for 2s
 
 	restart atomic.Bool // a restart was asked for: claim nothing more
+
+	previewMu sync.Mutex // a build's post and a sweep's removal, one at a time
 }
 
 func (p *Pipeline) clients(repo string) RepoClients {
@@ -680,6 +682,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 // closeOut finishes items whose PR was merged or closed, unblocks their
 // dependents and reconciles items left with no job.
 func (p *Pipeline) closeOut(ctx context.Context) error {
+	p.sweepPreviews(ctx, time.Now())
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return err
@@ -711,6 +714,7 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: by, ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, by, fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
+			p.dropPreview(ctx, it, "once it merged")
 			if changed {
 				// What the human changed is what the factory missed: worth
 				// a replay case, so the next config is measured against it.
@@ -725,6 +729,7 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			}
 		} else if pr.State == "closed" {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
+			p.dropPreview(ctx, it, "once it was closed")
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
@@ -934,6 +939,7 @@ type agentExtras struct {
 	mounts     []runner.Mount
 	mcpConfig  string
 	tools      []string
+	images     []string // screenshots for the reviewer, as it sees them
 }
 
 func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
@@ -973,6 +979,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
 		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image, CaptureLimits: p.Cfg.Runner.Kind == "docker",
 		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume, Services: p.servicesOf(j.ID),
+		Images: x.images,
 	}, events)
 	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
 		// Resuming is best effort: if the session is gone, start fresh,
@@ -1079,7 +1086,7 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		return
 	}
 	defer func() {
-		for _, d := range []string{"repo", "repos", "work", "gate", "proves", "feature-base"} {
+		for _, d := range []string{"repo", "repos", "work", "gate", "proves", "feature-base", "preview-base"} {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()
@@ -1158,6 +1165,8 @@ type PromptData struct {
 	Summary         bool           // the orchestrator writes the daily summary
 	Status          string         // queue snapshot for the orchestrator
 	Tune            TunePrompt     // the tuning loop's metrics and settings
+	Preview         bool           // the builder may name the pages it changed
+	Screenshots     []PromptShot   // the change's screenshots, for the reviewer
 }
 
 func (p *Pipeline) render(stage string, d any) (string, error) {
@@ -1197,6 +1206,7 @@ type gateRun struct {
 	install bool           // the install step: the only one that may write the cache
 	noNet   bool           // no network at all (hidden scenarios)
 	mounts  []runner.Mount // extra mounts (the scenarios directory)
+	timeout time.Duration  // instead of timeouts.gates (a preview)
 }
 
 // cacheEnv points package managers at the repo's dependency cache at
@@ -1248,6 +1258,9 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 		}
 	}
 	timeout := p.Cfg.Timeout("gates")
+	if g.timeout > 0 {
+		timeout = g.timeout
+	}
 	code, err := p.Runner.Run(ctx, runner.Spec{
 		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: rc.Image,
 		Workdir: workdir, OutDir: outDir, Mounts: mounts, Env: env, NoNetwork: g.noNet, Services: p.servicesOf(jobID),

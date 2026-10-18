@@ -45,6 +45,9 @@ func (a codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) 
 	if req.Effort != "" {
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", req.Effort))
 	}
+	for _, im := range req.Images {
+		args = append(args, "--image="+im) // one value each: a bare -i would take the - after it
+	}
 	args = append(args, "-")
 	if req.CaptureLimits {
 		// Codex writes its usage-limit windows only to its session file:

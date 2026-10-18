@@ -43,6 +43,10 @@ type RunRequest struct {
 	Resume     string
 	// Services is the job's services network, when it has services.
 	Services string
+	// Images are pictures for the agent to look at, as paths the process
+	// sees: Codex attaches them to the prompt; Claude reads them with its
+	// Read tool, so the prompt names them.
+	Images []string
 	// CaptureLimits asks the CLI for its usage-limit windows where it only
 	// writes them to its own files (Codex). Only in a container: on the
 	// host those files are the user's own sessions.

@@ -227,6 +227,9 @@ type fakeHarness struct {
 	noSess  bool                // fail any resumed run, as if the session were gone
 	nets    map[string][]string // Services of each call, by stage
 	learn   []string            // successive learn verdicts
+	images  [][]string          // Images of each review call
+	// implVerdict replaces the builder's usual verdict.
+	implVerdict string
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -260,7 +263,11 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		if err := h.builds[n](req.Workdir); err != nil {
 			return nil, err
 		}
-		os.WriteFile(filepath.Join(req.OutDir, "verdict.json"), []byte(`{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":""}`), 0o644)
+		v := `{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":""}`
+		if h.implVerdict != "" {
+			v = h.implVerdict
+		}
+		os.WriteFile(filepath.Join(req.OutDir, "verdict.json"), []byte(v), 0o644)
 	case "orchestrate":
 		if h.orch == nil {
 			return nil, errors.New("no scripted orchestrator")
@@ -285,6 +292,7 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		}
 		res.Final = h.learn[n]
 	case "review", "critic":
+		h.images = append(h.images, req.Images)
 		if n >= len(h.reviews) {
 			return nil, fmt.Errorf("no scripted review %d", n)
 		}

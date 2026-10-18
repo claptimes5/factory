@@ -19,7 +19,7 @@ To reach it from another machine, or to put a password on it, see
 | **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with the question to answer. Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
 | **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The issue, triage's spec, jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
+| **Item** | The issue, triage's spec, the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
@@ -492,6 +492,84 @@ closes nothing that scan), and doesn't clone while the disk is low.
 
 `factory status` shows each source's last read of each repo, what it found
 and the issues it has open.
+
+## Screenshots on the PR
+
+With a repo's [`preview`](configuration.md#pr-previews) set, each build of
+a web app that passes its gates is run and photographed before review.
+
+**How.** In the export the gates just passed on, with the dependencies
+the install step fetched, the factory starts the app with `preview.start`
+and `$PORT`, in the repo's job image like any gate: no secrets, the same
+egress allowlist, the repo's services. It polls `preview.ready` until the
+app answers, then the image's own headless Chromium (Playwright) opens
+each page at each viewport, waits for it to load and settle, and takes a
+full-page screenshot, cut at 4000 pixels. With `preview.before`, the base
+branch gets the same on its own export, so each page shows before and
+after.
+
+**Which pages.** The `pages` you list, then the ones the builder names:
+when the repo has a preview, the builder's verdict lists the paths its
+change shows up on. A builder's entry that isn't a plain path (`/orders/1`)
+is dropped. All together, pages × viewports × sides stay within
+`previews.max_screenshots` (12): past it the builder's pages are dropped
+first, then yours, then viewports. Each page has 45 seconds to load and be
+taken, so one that hangs costs its own time and not the rest's; when
+`previews.timeout` runs short, the pages left are skipped.
+
+**The reviewer** gets them as image files beside its prompt, with each
+page, size and side named, and is asked to treat a visibly broken page as
+a finding. Codex gets them attached to its prompt; Claude reads them with
+its Read tool. At most 12 go to the reviewer.
+
+**The PR** gets one comment, a table per page with a column per viewport
+and a row per side; each image links to its full size. Each push edits
+the same comment, and the last build's images are removed once the new
+ones are up. A live preview link from `preview.url` goes at the top. On
+GitHub the images are committed to the `factory/previews` branch (see
+below); on GitLab they're the project's uploads, as a comment's images
+would be.
+
+**When something goes wrong** (the image has no Chromium, the app never
+answers, a page errors, the capture runs out of time), the comment says
+so in a folded note, in the factory's own words ("the app didn't answer
+/ within 1m", "2 of 4 screenshots couldn't be taken"), and the build goes
+on as if previews were off. The app's log and the browser's errors are on
+the item's page in the dashboard only, never on the PR: the log can quote
+secrets from the repo's `files`. A preview never fails or retries a build.
+
+**Cleanup.** A PR's images are removed when it merges or closes, and
+after `previews.keep_for` (two weeks) on a PR left open, and its comment
+says so. The `factory/previews` branch is one commit with no history:
+each change makes it anew, so a removed image is gone from the branch,
+and the branch itself goes once it's empty. It has no workflow files, so
+updating it runs no CI. If a branch protection rule matches every branch
+(`**`; `*` stops at a `/`) or a ruleset targets all branches, exempt
+`factory/previews`, or the uploads fail and the comment says so. A branch
+named `factory` blocks it too (git can't have both `factory` and
+`factory/previews`): the comment says so, and renaming that branch fixes
+it. The factory only ever rewrites a `factory/previews` whose one commit
+is its own ("factory: PR screenshots", no parents); any other branch of
+that name is left alone and the uploads are refused.
+
+A removed image is gone from the branch, but GitHub keeps the commit it
+was in until its own garbage collection, so someone who saved an image's
+link (it names the commit) can still open it for a while. Don't rely on
+removal to take back a screenshot that showed something it shouldn't.
+
+On GitLab, removing uploads takes the Maintainer role and GitLab 17.2 or
+later. Without them the factory can't remove a PR's images: it says so in
+the comment once, stops trying, and leaves them to you (Settings >
+General > Uploads).
+
+**On the dashboard.** The item's page shows the latest build's
+screenshots, served from the job's folder on the factory's machine, so
+they're there even before the PR opens or after the PR's copies are
+removed.
+
+**Not yet.** A short video of each page, and deploying a live preview
+with a command of the factory's own. `preview.url` links one that your
+own hosting deploys; screenshots don't depend on it.
 
 ## Working on the dashboard
 

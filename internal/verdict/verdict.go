@@ -27,6 +27,9 @@ type Implement struct {
 	Summary    string   `json:"summary"`
 	TestsAdded []string `json:"tests_added"`
 	Blocker    string   `json:"blocker"`
+	// Pages are the app's pages the change touches, as paths, for its
+	// screenshots; only asked for when the repo has previews.
+	Pages []string `json:"pages,omitempty"`
 }
 
 // Finding is one reviewer finding.
@@ -174,7 +177,8 @@ var schemas = map[string]string{
  "status":{"type":"string","enum":["done","blocked"]},
  "summary":{"type":"string"},
  "tests_added":{"type":"array","items":{"type":"string"}},
- "blocker":{"type":"string"}}}`,
+ "blocker":{"type":"string"},
+ "pages":{"type":"array","items":{"type":"string"}}}}`,
 	"review": `{"type":"object","additionalProperties":false,
 "required":["decision","findings","challenged_assumptions"],
 "properties":{

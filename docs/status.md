@@ -17,7 +17,7 @@ These milestones from [SPEC.md](../SPEC.md) are in:
 Side-by-side skill comparison, services, workspaces across repos,
 [keeping main green](using.md#keeping-main-green) and
 [issues from Sentry, Dependabot and TODOs](using.md#issues-from-sentry-dependabot-and-todos)
-are in too.
+and [screenshots on the PR](using.md#screenshots-on-the-pr) are in too.
 
 ## Where this differs from SPEC.md
 

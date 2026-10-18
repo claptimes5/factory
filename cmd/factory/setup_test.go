@@ -593,3 +593,18 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 		t.Fatal("labels created without permission")
 	}
 }
+
+// A repo that takes screenshots gets Chromium in its image.
+func TestImagesForPreviews(t *testing.T) {
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	y := strings.Replace(string(b), "repo: o/r", "repos:\n  - name: o/web\n    preview: {start: npm start}\n  - name: o/api\n    image_from: ruby:3.4-bookworm\n", 1)
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ims := jobImages(cfg)
+	if len(ims) != 2 || !strings.Contains(strings.Join(ims[0].buildArgs("d"), " "), "--build-arg PLAYWRIGHT=1") || strings.Contains(strings.Join(ims[1].buildArgs("d"), " "), "PLAYWRIGHT") {
+		t.Fatalf("images %+v", ims)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/verdict"
@@ -236,6 +238,26 @@ type APIDiff struct {
 	Findings []APIFinding `json:"findings"`
 }
 
+// APIPreview is the latest build's screenshots.
+type APIPreview struct {
+	JobID int64            `json:"job_id"`
+	Head  string           `json:"head"`
+	Base  string           `json:"base"`
+	At    string           `json:"at"`
+	Shots []APIPreviewShot `json:"shots"`
+	Notes []string         `json:"notes"`
+}
+
+// APIPreviewShot is one screenshot, with the address of its image.
+type APIPreviewShot struct {
+	URL      string `json:"url"`
+	Page     string `json:"page"`
+	Viewport string `json:"viewport"`
+	Side     string `json:"side"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
 // APIFeed is the orchestrator's decisions, newest first.
 type APIFeed struct {
 	Events []APIEvent `json:"events"`
@@ -444,6 +466,8 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/items/{id}", s.apiItemDetail)
 	mux.HandleFunc("GET /api/v1/items/{id}/pr", s.apiPRPanel)
 	mux.HandleFunc("GET /api/v1/items/{id}/diff", s.apiDiff)
+	mux.HandleFunc("GET /api/v1/items/{id}/preview", s.apiPreview)
+	mux.HandleFunc("GET /api/v1/items/{id}/preview/{file}", s.apiPreviewImage)
 	mux.HandleFunc("POST /api/v1/items/{id}/park", s.apiPark)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.apiJobDetail)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/log", s.apiLog)
@@ -714,6 +738,86 @@ func (s *Server) apiDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	apiErr(w, http.StatusNotFound, "no reviewed diff for this item yet")
+}
+
+// latestPreview is the screenshots of the item's newest finished build
+// that took any, and its job: a build that failed after its capture, or
+// one still running, doesn't replace what its PR shows. With jobID it's
+// that build's, if it's one of the item's.
+func (s *Server) latestPreview(ctx context.Context, itemID, jobID int64) (*store.Job, *preview.Manifest, string) {
+	if s.JobsDir == "" {
+		return nil, nil, ""
+	}
+	jobs, err := s.sortedJobs(ctx, itemID)
+	if err != nil {
+		return nil, nil, ""
+	}
+	for i := len(jobs) - 1; i >= 0; i-- {
+		if jobs[i].Kind != "implement" || jobs[i].State != state.Succeeded || (jobID != 0 && jobs[i].ID != jobID) {
+			continue
+		}
+		dir := filepath.Join(s.JobsDir, strconv.FormatInt(jobs[i].ID, 10), preview.Dir)
+		if m, err := preview.Load(dir); err == nil && m != nil {
+			return jobs[i], m, dir
+		}
+	}
+	return nil, nil, ""
+}
+
+func (s *Server) apiPreview(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	j, m, _ := s.latestPreview(r.Context(), id, 0)
+	if m == nil {
+		apiErr(w, http.StatusNotFound, "no screenshots for this item")
+		return
+	}
+	p := APIPreview{JobID: j.ID, Head: m.Head, Base: m.Base, At: m.At, Shots: []APIPreviewShot{}, Notes: m.Notes}
+	if p.Notes == nil {
+		p.Notes = []string{}
+	}
+	for _, sh := range m.Shots {
+		p.Shots = append(p.Shots, APIPreviewShot{URL: fmt.Sprintf("/api/v1/items/%d/preview/%s?job=%d", id, url.PathEscape(sh.File), j.ID),
+			Page: sh.Page, Viewport: sh.Viewport, Side: sh.Side, Width: sh.Width, Height: sh.Height})
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// apiPreviewImage serves a screenshot the manifest lists, and nothing
+// else from the job's folder.
+func (s *Server) apiPreviewImage(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("file")
+	// ?job= names the build: each build's images have their own URL, so
+	// a cached one is never another build's.
+	var jobID int64
+	if q := r.URL.Query().Get("job"); q != "" {
+		var err error
+		if jobID, err = strconv.ParseInt(q, 10, 64); err != nil || jobID <= 0 {
+			apiErr(w, http.StatusBadRequest, "job must be a job id")
+			return
+		}
+	}
+	_, m, dir := s.latestPreview(r.Context(), id, jobID)
+	if m == nil || !m.Has(name) || filepath.Base(name) != name {
+		apiErr(w, http.StatusNotFound, "no such screenshot")
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		apiErr(w, http.StatusNotFound, "no such screenshot")
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	_, _ = w.Write(b)
 }
 
 func (s *Server) apiJobDetail(w http.ResponseWriter, r *http.Request) {

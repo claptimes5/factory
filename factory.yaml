@@ -99,3 +99,10 @@ gates:
     # read the checkout (the reviewer and critic).
     protected_paths: [".github/", ".gitlab-ci.yml", ".gitlab/", "factory.yaml", ".golangci.yml", "prompts/", "skills/", "CODEOWNERS",
                       ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json"]
+
+# Screenshots of a web app's pages on each PR, once its gates pass: a repo
+# opts in with its own preview block (see docs/configuration.md#pr-previews):
+#   repos:
+#     - name: you/web
+#       preview: {start: "npm run dev -- --port $PORT", pages: [/, /pricing]}
+# previews: {timeout: 5m, max_screenshots: 12, keep_for: 336h}

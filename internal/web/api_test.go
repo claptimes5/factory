@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/metrics"
+	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -46,6 +48,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Error": APIError{}, "Metrics": metrics.Report{}, "Group": metrics.Group{}, "Week": metrics.Week{},
 		"Settings": APISettings{}, "SettingsGroup": APISettingsGroup{}, "Setting": APISetting{},
 		"Tuning": APITuning{}, "TuningProposal": APITuningProposal{}, "TuningChange": APITuningChange{},
+		"Preview": APIPreview{}, "PreviewShot": APIPreviewShot{},
 	}
 	for name, v := range types {
 		sc, ok := schemas[name]
@@ -551,5 +554,56 @@ func TestWorkspacePRs(t *testing.T) {
 	getJSON(t, base+"/api/v1/items/"+itoa(it.ID)+"/pr", &p)
 	if len(p.PRs) != 2 || p.PRURL != a.PRURL {
 		t.Fatalf("panel = %+v", p)
+	}
+}
+
+// The item's page shows the newest build's screenshots, and serves only
+// the images its manifest lists.
+func TestAPIPreview(t *testing.T) {
+	base, st, _, s := apiSetup(t)
+	ctx := context.Background()
+	if resp, _ := http.Get(base + "/api/v1/items/2/preview"); resp.StatusCode != 404 {
+		t.Fatalf("no screenshots yet: %d", resp.StatusCode)
+	}
+	it, _ := st.ItemByIssue(ctx, "o/r", 2)
+	jobs, _ := st.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	dir := filepath.Join(s.JobsDir, itoa(jobs[0].ID), preview.Dir)
+	(&preview.Manifest{Head: "abc123", At: "2026-10-18T10:00:00Z", Shots: []preview.Shot{{File: "after-01-desktop.png", Page: "/settings", Viewport: "desktop", Side: "after", Width: 1280, Height: 900}}}).Save(dir)
+	os.WriteFile(filepath.Join(dir, "after-01-desktop.png"), []byte("\x89PNG fake"), 0o644)
+	os.WriteFile(filepath.Join(dir, "secret.png"), []byte("not listed"), 0o644)
+	var p APIPreview
+	getJSON(t, base+"/api/v1/items/2/preview", &p)
+	if p.JobID != jobs[0].ID || p.Head != "abc123" || len(p.Shots) != 1 || p.Shots[0].Page != "/settings" || p.Notes == nil {
+		t.Fatalf("preview = %+v", p)
+	}
+	resp, err := http.Get(base + p.Shots[0].URL)
+	if err != nil || resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("image: %v %+v", err, resp)
+	}
+	for _, bad := range []string{"secret.png", "manifest.json", "..%2Fdiff.patch"} {
+		if resp, _ := http.Get(base + "/api/v1/items/2/preview/" + bad); resp.StatusCode != 404 {
+			t.Errorf("%s served: %d", bad, resp.StatusCode)
+		}
+	}
+	// Each build's images have their own URL, so a cached one is never
+	// another build's.
+	if want := fmt.Sprintf("/api/v1/items/%d/preview/after-01-desktop.png?job=%d", it.ID, jobs[0].ID); p.Shots[0].URL != want {
+		t.Fatalf("url %q, want %q", p.Shots[0].URL, want)
+	}
+	// A later build that failed after its capture doesn't replace them.
+	later, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 2})
+	st.ClaimJob(ctx)
+	st.FinishJob(ctx, later, store.Result{State: state.Failed})
+	ldir := filepath.Join(s.JobsDir, itoa(later), preview.Dir)
+	(&preview.Manifest{Head: "bad999", Shots: []preview.Shot{{File: "after-01-desktop.png", Page: "/", Viewport: "desktop", Side: "after"}}}).Save(ldir)
+	os.WriteFile(filepath.Join(ldir, "after-01-desktop.png"), []byte("\x89PNG later"), 0o644)
+	getJSON(t, base+"/api/v1/items/2/preview", &p)
+	if p.JobID != jobs[0].ID || p.Head != "abc123" {
+		t.Fatalf("a failed build's screenshots shown: %+v", p)
+	}
+	for q, want := range map[string]int{fmt.Sprint(later): 404, "x": 400, fmt.Sprint(jobs[0].ID): 200} {
+		if resp, _ := http.Get(base + "/api/v1/items/2/preview/after-01-desktop.png?job=" + q); resp.StatusCode != want {
+			t.Errorf("job=%s: %d, want %d", q, resp.StatusCode, want)
+		}
 	}
 }
