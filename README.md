@@ -28,6 +28,10 @@ it back through triage.
 You need a Linux machine (or WSL2 on Windows) and admin rights on the
 GitHub repo you want the factory to work on.
 
+Starting a new project? Give [`docs/new-project.md`](docs/new-project.md)
+to whoever sets up the repo. It lists what a repo needs before the factory
+can work on it.
+
 ### Dependencies
 
 | What | Version | Why |
