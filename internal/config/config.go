@@ -87,9 +87,9 @@ type Config struct {
 	// BaseBranch, Env and Gates are the defaults for every repo.
 	BaseBranch string            `yaml:"base_branch"`
 	Env        map[string]string `yaml:"env"`
-	DataDir    string `yaml:"data_dir"`
-	SkillsDir  string `yaml:"skills_dir"`
-	PromptsDir string `yaml:"prompts_dir"`
+	DataDir    string            `yaml:"data_dir"`
+	SkillsDir  string            `yaml:"skills_dir"`
+	PromptsDir string            `yaml:"prompts_dir"`
 
 	Intake struct {
 		Label        string   `yaml:"label"`
