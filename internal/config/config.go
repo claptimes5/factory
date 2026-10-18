@@ -553,7 +553,7 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
-		if c.Budgets.PerJob[size] <= 0 && size != "XS" { // XS falls back to S's
+		if v, ok := c.Budgets.PerJob[size]; (ok || size != "XS") && v <= 0 { // a missing XS falls back to S's
 			bad("budgets.per_job.%s must be > 0", size)
 		}
 	}

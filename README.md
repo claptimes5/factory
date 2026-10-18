@@ -523,7 +523,9 @@ else `implement.S`), with its own budget (`budgets.per_job.XS`, else S's).
 The builder is told it needs no new test, and the reviewer is told to block
 anything that turns out to change behavior without one. Every gate still
 runs. On Go code the proves-fix check still asks for a test, and the
-coverage floor skips text.
+coverage floor skips text. In a repo without those checks, the reviewer is
+what catches a "text" issue that is really a logic change. An XS change
+triage rates high risk keeps the usual test-first rule.
 
 ### Review scaled by risk
 

@@ -191,7 +191,7 @@ components:
         issue: { type: integer }
         title: { type: string }
         stage: { $ref: "#/components/schemas/Stage" }
-        complexity: { type: string, description: "S, M, L, or empty before triage" }
+        complexity: { type: string, description: "XS, S, M, L, or empty before triage" }
         risk: { type: string }
         priority: { type: integer }
         parent_id: { type: [integer, "null"] }

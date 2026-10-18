@@ -712,7 +712,7 @@ func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) 
 func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args []string) error {
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
 	skills := fs.String("skills", "", "comma-separated skill sets to compare (\"none\" for no skills)")
-	complexity := fs.String("complexity", "", "S, M or L (default: the item's triage, else M)")
+	complexity := fs.String("complexity", "", "XS, S, M or L (default: the item's triage, else M)")
 	noPush := fs.Bool("no-push", false, "keep the arms' branches local instead of pushing factory/compare-* branches")
 	if len(args) == 0 {
 		return fmt.Errorf("usage: factory compare <issue> -skills a,b")
