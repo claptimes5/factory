@@ -293,7 +293,7 @@ type Config struct {
 
 	// Tuning is the loop that reads the metrics on a cadence and proposes
 	// changes to the settings the dashboard may edit. See Tuning.
-	Tuning Tuning `yaml:"tuning"`
+	Tuning   Tuning   `yaml:"tuning"`
 	Learning Learning `yaml:"learning"`
 
 	Budgets struct {
