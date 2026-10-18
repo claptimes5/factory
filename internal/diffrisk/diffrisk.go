@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/claptimes5/factory/internal/gates"
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 // The kinds of reason a diff raises risk for. The last four are the ones
@@ -47,8 +48,9 @@ type Rules struct {
 	MediumFiles, HighFiles int
 	// A change touching any of these paths is at least medium or high.
 	MediumPaths, HighPaths []string
-	// Auth and Migrations say which paths are auth code and migrations.
-	Auth, Migrations []string
+	// Auth are the areas of code a change to which counts as auth (auth,
+	// crypto, secrets, payments), and Migrations a database's migrations.
+	Auth, Migrations []pathglob.Area
 	// NeedsPerson are the kinds that always wait for a person.
 	NeedsPerson []string
 }
@@ -73,7 +75,7 @@ type Change struct {
 
 // Item is something the diff names, as the diff has it: untrusted.
 type Item struct {
-	Name  string `json:"name,omitempty"`  // a package, a test or a feature
+	Name  string `json:"name,omitempty"`  // a package, a test, a feature or a glob
 	File  string `json:"file,omitempty"`  // the file it's in
 	Count int    `json:"count,omitempty"` // how many, when more than one
 }
@@ -246,20 +248,21 @@ func Rate(ch Change, r Rules) Assessment {
 	case r.MediumFiles > 0 && n >= r.MediumFiles:
 		a.Add(Reason{Kind: KindFiles, Risk: "medium", What: fmt.Sprintf("changes %d files (risk.medium_files is %d)", n, r.MediumFiles)}, r)
 	}
-	var high, medium, auth, migrations, deleted []string
+	var high, medium, migrations, deleted []string
+	auth := map[string][]Item{} // by area
 	for _, f := range ch.Files {
 		test := gates.IsTest(f.Path)
 		switch {
-		case MatchAny(r.HighPaths, f.Path):
+		case pathglob.MatchAny(r.HighPaths, f.Path):
 			high = append(high, f.Path)
-		case MatchAny(r.MediumPaths, f.Path):
+		case pathglob.MatchAny(r.MediumPaths, f.Path):
 			medium = append(medium, f.Path)
 		}
 		code := !test && !notCode(f.Path)
-		if code && !vendored(f.Path) && MatchAny(r.Auth, f.Path) {
-			auth = append(auth, f.Path)
+		if area, g, ok := pathglob.InAreas(r.Auth, f.Path); ok && code && !vendored(f.Path) {
+			auth[area] = append(auth[area], Item{Name: g, File: f.Path})
 		}
-		if code && MatchAny(r.Migrations, f.Path) {
+		if _, _, ok := pathglob.InAreas(r.Migrations, f.Path); ok && code {
 			migrations = append(migrations, f.Path)
 		}
 		if test && f.Status == "D" {
@@ -275,8 +278,12 @@ func Rate(ch Change, r Rules) Assessment {
 	if len(migrations) > 0 {
 		a.Add(files(Migrations, "high", "adds or changes a migration", migrations), r)
 	}
-	if len(auth) > 0 {
-		a.Add(files(Auth, "high", "changes auth code", auth), r)
+	for _, ar := range r.Auth {
+		if its := auth[ar.Name]; len(its) > 0 {
+			sort.Slice(its, func(i, j int) bool { return its[i].File < its[j].File })
+			a.Add(items(Auth, "high", "changes "+ar.Name+" code", its), r)
+			delete(auth, ar.Name) // an area may be listed twice
+		}
 	}
 	deps, unknown := newDependencies(ch, &a)
 	if len(deps) > 0 {
@@ -324,75 +331,4 @@ func notCode(p string) bool { return docExts[strings.ToLower(path.Ext(p))] }
 func vendored(p string) bool {
 	p = "/" + strings.ToLower(p)
 	return strings.Contains(p, "/vendor/") || strings.Contains(p, "/node_modules/") || strings.Contains(p, "/third_party/")
-}
-
-// MatchAny reports whether file matches one of the patterns (see Match).
-func MatchAny(patterns []string, file string) bool {
-	return slices.ContainsFunc(patterns, func(p string) bool { return Match(p, file) })
-}
-
-// Match matches a path against a risk pattern, ignoring case. A pattern
-// with a / inside is matched against the whole path ("db/schema.rb",
-// "app/*/auth.rb"), and ending in / against its leading directories
-// ("config/initializers/"). A pattern without one is matched against
-// each part of the path, so "auth" matches internal/auth/token.go and
-// "session*" matches app/sessions_controller.rb; ending in /, only
-// against its directories ("migrations/"). * stops at /. A leading / or
-// ./ means the repo's root, as no leading / does.
-func Match(pattern, file string) bool {
-	pattern = strings.ToLower(normPattern(pattern))
-	file = strings.ToLower(path.Clean("/" + file))[1:]
-	dir := strings.HasSuffix(pattern, "/")
-	pattern = strings.TrimSuffix(pattern, "/")
-	parts := strings.Split(file, "/")
-	if strings.Contains(pattern, "/") {
-		n := strings.Count(pattern, "/") + 1
-		if !dir {
-			ok, _ := path.Match(pattern, file)
-			return ok
-		}
-		if len(parts) <= n {
-			return false
-		}
-		ok, _ := path.Match(pattern, strings.Join(parts[:n], "/"))
-		return ok
-	}
-	if dir {
-		parts = parts[:len(parts)-1]
-	}
-	for _, p := range parts {
-		if ok, _ := path.Match(pattern, p); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// normPattern takes a leading / or ./ off: no path in a diff has one.
-func normPattern(p string) string {
-	for {
-		switch {
-		case strings.HasPrefix(p, "./"):
-			p = p[2:]
-		case strings.HasPrefix(p, "/"):
-			p = p[1:]
-		default:
-			return p
-		}
-	}
-}
-
-// ValidPattern says what's wrong with a pattern, or nil.
-func ValidPattern(p string) error {
-	n := normPattern(strings.TrimSpace(p))
-	switch {
-	case strings.Trim(n, "/") == "":
-		return fmt.Errorf("an empty pattern")
-	case strings.Contains(n, "**"):
-		return fmt.Errorf("%q: ** isn't supported; a pattern without a / already matches at any depth (\"migrations/\", \"auth*\")", p)
-	}
-	if _, err := path.Match(strings.TrimSuffix(n, "/"), ""); err != nil {
-		return fmt.Errorf("%q is not a valid pattern", p)
-	}
-	return nil
 }

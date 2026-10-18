@@ -3,6 +3,8 @@ package reviewmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 func TestParseFrontMatterAndText(t *testing.T) {
@@ -96,6 +98,13 @@ func TestSensitive(t *testing.T) {
 	for _, p := range []string{"docs/guide.md", "internal/gen/types.go", "web/styles.css"} {
 		if Sensitive(p) {
 			t.Errorf("%s is sensitive", p)
+		}
+	}
+	// The sensitive list adds to the words, and can't take one away.
+	areas := []pathglob.Area{{Name: "input", Globs: []string{"*upload*"}}, {Name: "auth", Globs: nil}}
+	for p, want := range map[string]bool{"internal/upload/handler.go": true, "internal/auth/x.go": true, "web/styles.css": false} {
+		if SensitiveIn(areas, p) != want {
+			t.Errorf("SensitiveIn(%s) != %v", p, want)
 		}
 	}
 }

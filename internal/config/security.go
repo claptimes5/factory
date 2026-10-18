@@ -1,10 +1,9 @@
 package config
 
 import (
-	"errors"
 	"fmt"
-	"path"
-	"strings"
+
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 // Security is the security pass: a review of its own, on routing.security
@@ -15,11 +14,12 @@ type Security struct {
 	// Enabled is on unless set to false.
 	Enabled *bool `yaml:"enabled,omitempty"`
 	// Paths are the globs of files whose change starts a pass; left out,
-	// DefaultSecurityPaths, and [] for none, so only Content and the
-	// feature map start one. See Match for how they match.
+	// every area of the sensitive list, which is the place to set them,
+	// and [] for none, so only Content and the feature map start one.
+	// Set, they replace the sensitive list for the pass. See
+	// pathglob.Match for how they match.
 	Paths []string `yaml:"paths,omitempty"`
-	// ExtraPaths are added to Paths, to extend the defaults without
-	// repeating them.
+	// ExtraPaths are added to Paths, or to the sensitive list.
 	ExtraPaths []string `yaml:"extra_paths,omitempty"`
 	// Content also starts a pass on code the change adds that runs a
 	// command, builds SQL from strings, evaluates code, deserializes
@@ -34,127 +34,19 @@ func (s Security) On() bool { return s.Enabled == nil || *s.Enabled }
 // ContentOn says whether added code can start a pass.
 func (s Security) ContentOn() bool { return s.Content == nil || *s.Content }
 
-// DefaultSecurityPaths are the files whose change gets a security pass
-// when security.paths is left out: authentication, sessions and
-// permissions, cryptography, keys and secrets, untrusted input (uploads,
-// webhooks, deserializers, redirects), running commands, SQL and
-// migrations, CI workflows, and dependency manifests, lockfiles and the
-// images and infrastructure a repo runs on. A glob with no / matches any
-// part of a path, so *auth* catches AuthController.php and internal/auth/
-// alike (and authors.go: a false start is cheaper than a miss).
-var DefaultSecurityPaths = []string{
-	// Authentication, sessions, permissions.
-	"*auth*", "*oidc*", "*saml*", "jwt*", "*_jwt*", "*login*", "*logout*", "*signin*", "*signup*", "*session*",
-	"*cookie*", "*password*", "*permission*", "*rbac*", "acl", "acl.*", "*accesscontrol*", "*access_control*",
-	"*csrf*", "*cors*", "*middleware*",
-	// Cryptography, keys and secrets.
-	"*crypt*", "*cipher*", "*hmac*", "tls", "tls.*", "cert", "certs", "cert.*", "cert_*", "cert-*", "*certificate*",
-	"*.pem", "*.key", "*.crt", "*.p12", "*.pfx", "id_rsa*", "*secret*", "*credential*", "*token*", "*apikey*",
-	"*api_key*", ".env", ".env.*", "*.env", ".npmrc", ".pypirc",
-	// Untrusted input, files and outbound requests.
-	"*sanitiz*", "*upload*", "*download*", "*multipart*", "*serializ*", "*webhook*", "*redirect*", "*proxy*",
-	"*unzip*", "*untar*", "*archive*",
-	// Running commands.
-	"exec", "exec.*", "exec_*", "exec-*", "*exec", "*exec.*", "*_exec_*", "*shell*", "*subprocess*",
-	// SQL and migrations.
-	"*.sql", "*sql*", "migrations", "migrate", "migrate.*",
-	// CI, which runs with the repo's secrets.
-	".github/workflows/", ".gitlab-ci.yml",
-	// Dependencies, and the images and infrastructure the code runs on.
-	"go.mod", "go.sum", "go.work", "vendor", "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
-	"pnpm-lock.yaml", "bun.lock", "bun.lockb", "requirements*.txt", "pipfile", "pipfile.lock", "poetry.lock",
-	"pyproject.toml", "uv.lock", "setup.py", "gemfile", "gemfile.lock", "*.gemspec", "cargo.toml", "cargo.lock",
-	"composer.json", "composer.lock", "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile", "*.csproj",
-	"packages.lock.json", "mix.exs", "mix.lock", "package.swift", "package.resolved", "dockerfile", "dockerfile.*",
-	"*.dockerfile", "containerfile", "docker-compose*.y*ml", "*.tf",
-}
-
-// SecurityGlobs are the globs that start a pass: Paths (or the defaults,
-// when Paths is left out) and ExtraPaths.
-func (s Security) SecurityGlobs() []string {
-	globs := s.Paths
-	if globs == nil {
-		globs = DefaultSecurityPaths
-	}
-	return append(append([]string{}, globs...), s.ExtraPaths...)
-}
-
-// Match says which glob a changed file matches, if any. Matching ignores
-// case. A glob with no / (`*auth*`, `go.mod`) matches any one part of the
-// path: a directory's name or the file's. Any other is matched from the
-// repo's root, part by part, where * stops at / and a part that is only
-// ** matches any number of parts; a leading / or ./ changes nothing. It
-// matches what it names and everything under it, so `internal/billing`,
-// `internal/billing/` and `app/*/keys` each match the files in those
-// directories.
-func (s Security) Match(file string) (string, bool) {
-	parts := strings.Split(strings.ToLower(file), "/")
-	for _, g := range s.SecurityGlobs() {
-		segs, rooted, err := parseGlob(g)
-		if err != nil {
-			continue // Validate refuses it
-		}
-		if !rooted {
-			for _, p := range parts {
-				if ok, _ := path.Match(segs[0], p); ok {
-					return g, true
-				}
-			}
-			continue
-		}
-		if matchParts(segs, parts) {
+// SecurityMatch says which glob a changed file matches that starts a
+// pass, if any: one of security.paths when set, or else of the sensitive
+// list, as "crypto: *crypt*"; or one of security.extra_paths.
+func (c *Config) SecurityMatch(file string) (string, bool) {
+	s := c.Security
+	if s.Paths != nil {
+		if g, ok := pathglob.First(s.Paths, file); ok {
 			return g, true
 		}
+	} else if g, ok := c.SensitiveMatch(file); ok {
+		return g, true
 	}
-	return "", false
-}
-
-// parseGlob reads a security glob into its parts, lowercased, and whether
-// it is matched from the root rather than against any one part.
-func parseGlob(g string) (segs []string, rooted bool, err error) {
-	g = strings.ToLower(strings.TrimSpace(g))
-	if strings.Contains(g, `\`) {
-		return nil, false, errors.New(`paths use /, not \`)
-	}
-	rooted = strings.Contains(g, "/") || strings.Contains(g, "**")
-	g = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(g, "./"), "/"), "/")
-	if g == "" {
-		return nil, false, errors.New("is empty")
-	}
-	for _, s := range strings.Split(g, "/") {
-		switch {
-		case s == "" || s == "." || s == "..":
-			return nil, false, errors.New("has an empty, . or .. part")
-		case strings.Contains(s, "**") && s != "**":
-			return nil, false, errors.New("** must be a whole part of the path, as in a/**/b")
-		}
-		if _, err := path.Match(s, "x"); err != nil {
-			return nil, false, err
-		}
-		segs = append(segs, s)
-	}
-	return segs, rooted, nil
-}
-
-// matchParts matches a rooted glob's parts against a path's. A path
-// longer than the glob matches when the glob names a directory it is in.
-func matchParts(g, f []string) bool {
-	if len(g) == 0 {
-		return true
-	}
-	if g[0] == "**" {
-		for k := 0; k <= len(f); k++ {
-			if matchParts(g[1:], f[k:]) {
-				return true
-			}
-		}
-		return false
-	}
-	if len(f) == 0 {
-		return false
-	}
-	ok, _ := path.Match(g[0], f[0])
-	return ok && matchParts(g[1:], f[1:])
+	return pathglob.First(s.ExtraPaths, file)
 }
 
 // reviewRoutes are the routing entries whose model reviews a change.
@@ -212,7 +104,7 @@ func sameAsAny(r Route, routes []Route) bool {
 func (c *Config) checkSecurity() []error {
 	var errs []error
 	for _, g := range append(append([]string{}, c.Security.Paths...), c.Security.ExtraPaths...) {
-		if _, _, err := parseGlob(g); err != nil {
+		if err := pathglob.Valid(g); err != nil {
 			errs = append(errs, fmt.Errorf("security: glob %q: %v", g, err))
 		}
 	}

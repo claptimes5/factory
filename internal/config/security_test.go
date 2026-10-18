@@ -8,49 +8,53 @@ import (
 
 func TestSecurityDefaultsMatch(t *testing.T) {
 	t.Parallel()
-	var s Security
-	if !s.On() || !s.ContentOn() {
+	var c Config
+	if !c.Security.On() || !c.Security.ContentOn() {
 		t.Fatal("the security pass and its content signals are on by default")
 	}
 	for file, want := range map[string]string{
-		"internal/auth/check.go":             "*auth*",
-		"app/controllers/AuthController.php": "*auth*",
-		"src/authService.ts":                 "*auth*",
-		"internal/harness/codexauth.go":      "*auth*",
-		"app/models/user_session.rb":         "*session*",
-		"web/src/UserLogin.tsx":              "*login*",
-		"pkg/crypto/aes.go":                  "*crypt*",
-		"db/migrations/0001_init.sql":        "*.sql",
-		"internal/store/migrations/0002.go":  "migrations",
-		"go.mod":                             "go.mod",
-		"web/package-lock.json":              "package-lock.json",
-		"Gemfile.lock":                       "gemfile.lock",
-		"deploy/Dockerfile":                  "dockerfile",
-		"internal/runner/exec.go":            "exec.*",
-		"api/webhooks/github.py":             "*webhook*",
-		"requirements-dev.txt":               "requirements*.txt",
+		"internal/auth/check.go":             "auth: auth",
+		"app/controllers/AuthController.php": "auth: *authcontroller*",
+		"src/authService.ts":                 "auth: *authservice*",
+		"internal/harness/codexauth.go":      "access: *auth*",
+		"app/models/user_session.rb":         "access: *session*",
+		"web/src/UserLogin.tsx":              "access: *login*",
+		"lib/jwt.go":                         "auth: *jwt*",
+		"pkg/crypto/aes.go":                  "crypto: *crypt*",
+		"internal/payments/charge.go":        "payments: payment*",
+		"db/migrations/0001_init.sql":        "sql: *.sql",
+		"internal/store/migrations/0002.go":  "migrations: migrations",
+		"go.mod":                             "dependencies: go.mod",
+		"web/package-lock.json":              "dependencies: package-lock.json",
+		"Gemfile.lock":                       "dependencies: gemfile.lock",
+		"deploy/Dockerfile":                  "infra: dockerfile",
+		"internal/runner/exec.go":            "exec: exec.*",
+		"api/webhooks/github.py":             "input: *webhook*",
+		"requirements-dev.txt":               "dependencies: requirements*.txt",
 		// Look-alikes don't.
-		".github/workflows/ci.yml":        ".github/workflows/",
-		".env.production":                 ".env.*",
-		"go.work":                         "go.work",
-		"internal/lexer/tokens.go":        "*token*",
-		"deploy/docker-compose.prod.yaml": "docker-compose*.y*ml",
+		".github/workflows/ci.yml":        "ci: .github/workflows/",
+		".env.production":                 "secrets: .env.*",
+		"go.work":                         "dependencies: go.work",
+		"internal/lexer/tokens.go":        "access: *token*",
+		"deploy/docker-compose.prod.yaml": "infra: docker-compose*.y*ml",
 		"internal/runner/executor.go":     "",
 		"docs/certification.go":           "",
 		"internal/pipeline/add.go":        "",
 		"cmd/factory/main.go":             "",
 		"web/src/screens/Metrics.tsx":     "",
 	} {
-		g, ok := s.Match(file)
+		g, ok := c.SecurityMatch(file)
 		if want == "" && ok || want != "" && (!ok || !strings.EqualFold(g, want)) {
 			t.Errorf("%s: matched %q (%v), want %q", file, g, ok, want)
 		}
 	}
 }
 
+// security.paths, when set, replaces the sensitive list for the pass;
+// extra_paths adds to either.
 func TestSecurityPathsReplaceAndExtend(t *testing.T) {
 	t.Parallel()
-	s := Security{Paths: []string{"app/*/keys.rb"}, ExtraPaths: []string{"internal/billing/", "*.tf"}}
+	c := Config{Security: Security{Paths: []string{"app/*/keys.rb"}, ExtraPaths: []string{"internal/billing/", "*.tf"}}}
 	for file, want := range map[string]bool{
 		"app/models/keys.rb":          true,
 		"app/models/deep/keys.rb":     false, // * stops at /
@@ -58,14 +62,17 @@ func TestSecurityPathsReplaceAndExtend(t *testing.T) {
 		"Internal/Billing/x.go":       true,  // case doesn't matter
 		"other/internal/billing/x.go": false, // a directory glob starts at the root
 		"infra/main.tf":               true,
-		"go.mod":                      false, // the defaults are replaced
+		"go.mod":                      false, // the sensitive list is replaced
 	} {
-		if _, ok := s.Match(file); ok != want {
+		if _, ok := c.SecurityMatch(file); ok != want {
 			t.Errorf("%s: %v", file, ok)
 		}
 	}
-	if g := (Security{ExtraPaths: []string{"*.tf"}}).SecurityGlobs(); len(g) != len(DefaultSecurityPaths)+1 {
-		t.Fatalf("extra_paths alone extends the defaults: %d globs", len(g))
+	c = Config{Security: Security{ExtraPaths: []string{"internal/ledger/"}}}
+	for _, f := range []string{"go.mod", "internal/ledger/post.go"} {
+		if _, ok := c.SecurityMatch(f); !ok {
+			t.Errorf("extra_paths alone extends the sensitive list: %s", f)
+		}
 	}
 }
 
@@ -118,30 +125,12 @@ func TestSecurityBlockParses(t *testing.T) {
 	}
 }
 
-// A glob with a / names a directory too, with or without the trailing /;
-// ** is any number of parts; a leading / or ./ changes nothing.
-func TestSecurityGlobForms(t *testing.T) {
+// security.paths: [] is no path globs at all: only the feature map and
+// content start a pass. (pathglob's tests have the glob forms.)
+func TestSecurityPathsNone(t *testing.T) {
 	t.Parallel()
-	s := Security{Paths: []string{"internal/billing", "./app/**/keys", "/infra/*.tf", "config/**"}}
-	for file, want := range map[string]bool{
-		"internal/billing/charge.go":   true,
-		"internal/billing":             true,
-		"internal/billingx/charge.go":  false,
-		"app/keys/a.rb":                true,
-		"app/models/deep/keys/b.rb":    true,
-		"infra/main.tf":                true,
-		"other/infra/main.tf":          false,
-		"config/prod/secrets.yml":      true,
-		"web/config/x.yml":             false,
-		"app/models/deep/notkeys/b.rb": false,
-	} {
-		if _, ok := s.Match(file); ok != want {
-			t.Errorf("%s: %v", file, ok)
-		}
-	}
-	// [] is no path globs at all: only the feature map and content start one.
-	none := Security{Paths: []string{}}
-	if _, ok := none.Match("go.mod"); ok {
+	none := Config{Security: Security{Paths: []string{}}}
+	if _, ok := none.SecurityMatch("go.mod"); ok {
 		t.Fatal("paths: [] still matched a default")
 	}
 	y, err := os.ReadFile("../../factory.yaml")
@@ -149,7 +138,7 @@ func TestSecurityGlobForms(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := Parse([]byte(strings.Replace(string(y), "\nescalation:", "\nsecurity: {paths: []}\n\nescalation:", 1)))
-	if err != nil || c.Security.Paths == nil || len(c.Security.SecurityGlobs()) != 0 {
+	if _, ok := c.SecurityMatch("internal/auth/a.go"); err != nil || c.Security.Paths == nil || ok {
 		t.Fatalf("paths: [] parsed to %#v, %v", c.Security.Paths, err)
 	}
 }

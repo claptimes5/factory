@@ -9,6 +9,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/features"
 	"github.com/claptimes5/factory/internal/gates"
+	"github.com/claptimes5/factory/internal/pathglob"
 	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/verdict"
@@ -72,6 +73,7 @@ type repoGuide struct {
 	repo, folder string
 	guide        *reviewmd.Guide
 	protected    []string
+	sensitive    []pathglob.Area
 	risky        *features.Map // the base branch's feature map, or nil
 	// noSkip says skip can't apply: the feature map couldn't be read, so
 	// a high-risk path can't be told apart.
@@ -94,7 +96,8 @@ func (p *Pipeline) reviewGuides(ctx context.Context, parts []*part) guides {
 		if gd == nil {
 			continue
 		}
-		rg := repoGuide{repo: pt.repo, folder: pt.folder, guide: gd, protected: p.repoConf(pt.repo).Gates.DiffGuard.ProtectedPaths}
+		rg := repoGuide{repo: pt.repo, folder: pt.folder, guide: gd, protected: p.repoConf(pt.repo).Gates.DiffGuard.ProtectedPaths,
+			sensitive: p.Cfg.SkipGuardAreas()}
 		if len(gd.Skip) > 0 {
 			m, err := p.loadMap(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA)
 			p.warn(err, "loadMap")
@@ -188,7 +191,7 @@ func (g *repoGuide) skips(file string) bool {
 		strings.Contains(file, "..") || !g.modified[file] {
 		return false
 	}
-	if !g.guide.Skips(file) || reviewmd.Sensitive(file) || gates.Protected(file, g.protected) {
+	if !g.guide.Skips(file) || reviewmd.SensitiveIn(g.sensitive, file) || gates.Protected(file, g.protected) {
 		return false
 	}
 	if g.risky != nil {

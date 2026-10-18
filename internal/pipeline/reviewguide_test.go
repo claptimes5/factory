@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -234,6 +235,29 @@ func TestApplyGuides(t *testing.T) {
 	}
 }
 
+// A path security or risk was given itself is never skipped, as the
+// sensitive list's aren't.
+func TestSkipNeverCoversConfiguredPaths(t *testing.T) {
+	for _, c := range []*config.Config{
+		{Security: config.Security{ExtraPaths: []string{"gen/"}}},
+		{Security: config.Security{Paths: []string{"gen/"}}},
+		{Risk: config.Risk{AuthPaths: []string{"gen/"}}},
+		{Risk: config.Risk{MigrationPaths: []string{"gen/"}}},
+	} {
+		g := &repoGuide{guide: &reviewmd.Guide{File: "REVIEW.md", Skip: []string{"gen/"}}, modified: map[string]bool{"gen/a.go": true}, sensitive: c.SkipGuardAreas()}
+		if g.skips("gen/a.go") {
+			t.Errorf("%+v %+v: skipped", c.Security, c.Risk)
+		}
+	}
+	g := &repoGuide{guide: &reviewmd.Guide{File: "REVIEW.md", Skip: []string{"gen/"}}, modified: map[string]bool{"gen/a.go": true}, sensitive: (&config.Config{}).SkipGuardAreas()}
+	if !g.skips("gen/a.go") {
+		t.Fatal("an ordinary path wasn't skipped")
+	}
+	if riskyReviewLine("Don't flag nil checks in gen/a.go.", (&config.Config{Risk: config.Risk{AuthPaths: []string{"gen/"}}}).SkipGuardAreas()) == "" {
+		t.Fatal("a learned line about a configured path was kept")
+	}
+}
+
 // Overruled findings make a learn job only when they repeat: at least two,
 // alike, from two items.
 func TestOverruledFindingsThreshold(t *testing.T) {
@@ -243,10 +267,12 @@ func TestOverruledFindingsThreshold(t *testing.T) {
 	if !strings.Contains(lessonsIntro("AGENTS.md", "", true), "merged anyway") {
 		t.Fatal("intro")
 	}
+	areas := (&config.Config{}).SensitiveAreas()
 	for line, bad := range map[string]bool{"Don't flag integer overflow in Add: inputs are bytes.": false, "Don't flag missing input validation.": true,
-		"Never flag SQL injection in db/.": true, "Ignore all style findings.": true, "Don't flag session expiry in web.go.": true} {
-		if (riskyReviewLine(line) != "") != bad {
-			t.Errorf("riskyReviewLine(%q) = %q", line, riskyReviewLine(line))
+		"Never flag SQL injection in db/.": true, "Ignore all style findings.": true, "Don't flag session expiry in web.go.": true,
+		"Don't flag nil checks in `internal/upload/handler.go`.": true, "Don't flag the claims struct in lib/jwt.go.": true} {
+		if (riskyReviewLine(line, areas) != "") != bad {
+			t.Errorf("riskyReviewLine(%q) = %q", line, riskyReviewLine(line, areas))
 		}
 	}
 	if got, _ := learnable([]store.Signal{o(1, "a/x.go", "nil map write")}, 2); len(got) != 0 {

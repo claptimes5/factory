@@ -168,8 +168,8 @@ checkout. What it looks at:
 | Changed files: `risk.medium_files` (10), `risk.high_files` (25) | medium, high |
 | A path in `risk.medium_paths` (deploy and infrastructure files by default) or `risk.high_paths` (none by default) | medium, high |
 | A feature the change touches, by its `risk` in the [feature map](#feature-map) | its risk |
-| A migration: a change to a file under `risk.migration_paths`, other than a test or a doc | high |
-| Auth code: a change to a file matching `risk.auth_paths`, other than a test, a doc or an image, or vendored code (`vendor/`, `node_modules/`, `third_party/`) | high |
+| A migration: a change to a file in the [sensitive list](configuration.md#sensitive-code)'s `migrations` area (or `risk.migration_paths`), other than a test or a doc | high |
+| Auth code: a change to a file in its `auth`, `crypto`, `secrets` or `payments` area (or `risk.auth_paths`), other than a test, a doc or an image, or vendored code (`vendor/`, `node_modules/`, `third_party/`) | high |
 | A new dependency: a name a manifest or lockfile lists that it didn't before, or one whose source changed | medium |
 | A deleted test: a test file deleted, or a test function or case taken out and not put back elsewhere | medium |
 
@@ -304,13 +304,22 @@ real runs, and are to be looked at again once the metrics have data:
 - [Risk from the diff](#risk-from-the-diff): the thresholds (medium at 150
   lines or 10 files, high at 300 lines or 25 files), the default paths
   (deploy and infrastructure files medium, none high), what counts as auth
-  code (a broad list of names: `auth`, `session*`, `login*`, `*jwt*`,
-  `permission*` and more, which will catch some code that isn't), the
+  code (the sensitive list's `auth`, `crypto`, `secrets` and `payments`
+  areas: narrow names such as `auth.*`, `session_*`, `*jwt*` and
+  `payment*`, which will still catch some code that isn't, and miss
+  some that is, which only the wide `access` area's pass sees), the
   levels each kind raises to (migrations and auth high, new dependencies
   and deleted tests medium), and the four kinds that always need you.
   The metrics, and the dashboard's Spend screen, count how often the
   diff raised an item's risk.
-- The [security pass](#security-pass)'s default globs and risky-code
+- Crypto, secrets and payments code now needs a person, as auth code
+  does, since they share the sensitive list with the security pass. That
+  may hold more PRs (`*crypt*` catches any file with crypt in its name).
+  The wide names (`*token*`, `*session*`, `*middleware*`, `*checkout*`)
+  only start a pass, so a token service named `tokens.go` merges itself
+  if `auto_merge` allows it.
+- The [security pass](#security-pass)'s default globs (the sensitive
+  list) and risky-code
   signals were picked by hand. Some will start passes that find nothing
   (`*session*`, `*proxy*`, `pyproject.toml`), and some holes live in files
   they don't name. `security_passes` against `security_blocks` says how
@@ -382,13 +391,13 @@ to the reviewer.
 
 A change gets one when any of these holds:
 
-- **A changed file matches `security.paths`.** The defaults name
-  authentication, sessions and permissions, cryptography and secrets,
-  uploads, webhooks, serializers and redirects, running commands, SQL and
-  migrations, CI workflows, `.env` files and keys, and every common
-  dependency manifest and lockfile (see
-  [the security pass](configuration.md#the-security-pass)). Tests and
-  docs don't count.
+- **A changed file is in the sensitive list** (or `security.paths`, when
+  set). Its default areas name authentication, sessions and permissions,
+  cryptography, keys and secrets, payments, uploads, webhooks,
+  serializers and redirects, running commands, SQL and migrations, CI
+  workflows, and every common dependency manifest and lockfile (see
+  [Sensitive code](configuration.md#sensitive-code)), the same list risk
+  and REVIEW.md's `skip` read. Tests and docs don't count.
 - **It touches a `high` feature** in the [feature map](#feature-map),
   through its code.
 - **The code it adds does something risky:** runs a command
@@ -463,7 +472,7 @@ optional. The daemon applies it to the reviewer's verdict itself:
 
 | Key | What it does |
 | --- | --- |
-| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one whose name looks security-sensitive (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`). Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
+| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one that is security-sensitive: in the [sensitive list](configuration.md#sensitive-code), `security.paths`, `security.extra_paths`, `risk.auth_paths` or `risk.migration_paths`, or with a name that looks it (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`), which config can't take away. Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
 | `max_minor` | Minor notes past this many are left out, and the PR says how many. A minor finding that blocks is never left out, so the cap can't pass a change. In a workspace, the lowest cap of its repos holds. |
 
 Neither ever touches a finding of the [security pass](#security-pass),
@@ -742,7 +751,8 @@ overruled` section of the `REVIEW.md` there is (a new `REVIEW.md` at the
 root when there's none), in the same lessons PR, with the same rules: you
 merge it, declined lines are never proposed again, and a line with HTML,
 an `@` or a link is refused. So is a REVIEW.md line about security-sensitive
-code (auth, permissions, validation, injection, secrets and the like) or a
+code (auth, permissions, validation, injection, secrets and the like, or
+a path in the [sensitive list](configuration.md#sensitive-code)) or a
 blanket one ("any", "all", "skip", "ignore", "never flag", "approve"). A `REVIEW.md` the factory can't write (a
 symlink out of the repo) only sets those findings aside.
 
