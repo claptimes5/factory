@@ -57,6 +57,9 @@ func Labels(intake string) []Label {
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
 		{LabelMainHealth, "b60205", "Factory: a check is red or flaky on the base branch; first in the queue"},
 		{LabelMute, "cccccc", "Factory: on a main health issue, mutes its check"},
+		{LabelFromSentry, "362d59", "Factory: filed from a Sentry error; add " + intake + " to build it"},
+		{LabelFromDependabot, "0366d6", "Factory: filed from a Dependabot alert; add " + intake + " to build it"},
+		{LabelFromTODO, "c5def5", "Factory: filed from a TODO comment; add " + intake + " to build it"},
 		{riskLabel("high"), "b60205", "Factory: high risk; reviewer and critic passed it, read all of it"},
 		{riskLabel("medium"), "fbca04", "Factory: medium risk; read the changes to the features it touches"},
 		{riskLabel("low"), "c2e0c6", "Factory: low risk; gates and a reviewer passed it, a skim is enough"},
@@ -124,6 +127,8 @@ type Pipeline struct {
 	JobPrefix string
 	// ConfigPath is the factory.yaml the tuning loop proposes changes to.
 	ConfigPath string
+	// Sentry reads Sentry for sources.sentry; nil without a token.
+	Sentry SentryAPI
 
 	mu         sync.Mutex
 	clientsMu  sync.Mutex
@@ -157,6 +162,10 @@ type Pipeline struct {
 	tuneDue     time.Time // when the tuning cadence last fired
 	tuneHeld    string    // day a due tuning run waited for budget, to notify once
 	healthAt    time.Time // when main's CI was last read
+
+	sourceAt   map[string]time.Time // when each source was last read
+	sourceBusy sync.Map             // source -> true while it reads
+	retryWait  time.Duration        // between retries of a source's read; 0 for 2s
 
 	restart atomic.Bool // a restart was asked for: claim nothing more
 }
@@ -244,6 +253,7 @@ func (p *Pipeline) notify(ctx context.Context, msg string) {
 func (p *Pipeline) Recover(ctx context.Context) error {
 	// Nothing runs yet, so every factory container (jobs and gates) is stale.
 	p.warn(p.Runner.KillAll(ctx), "kill stale containers")
+	p.sweepSourceClones()
 	if d, ok := p.Runner.(*runner.Docker); ok {
 		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
 	}
@@ -369,6 +379,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	}
 	p.tuneTrigger(ctx, time.Now())
 	p.healthTrigger(ctx, time.Now())
+	p.sourcesTrigger(ctx, time.Now(), async)
 	for claimed := false; ; claimed = true {
 		j, err := p.claimNext(ctx)
 		if errors.Is(err, ErrDiskLow) && async {

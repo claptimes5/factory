@@ -71,6 +71,9 @@ before moving on:
    [Codex on a ChatGPT plan](#codex-on-a-chatgpt-plan)). To skip it, see
    [Claude-only review](configuration.md#claude-only-review).
 6. **Phone notifications** (optional): an ntfy, Slack or Discord URL.
+7. **Sentry** (optional, only with `sources.sentry` on): an auth token
+   with the `project:read` and `event:read` scopes, saved as
+   `SENTRY_AUTH_TOKEN`. Enter skips it.
 
 For GitLab repos it also asks for `GITLAB_TOKEN` and checks it against each
 project (see [GitLab repos](configuration.md#gitlab-repos)). Setup ends by
@@ -200,7 +203,7 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
       **Homepage URL:** this repo's URL.
    3. **Webhook:** untick **Active**. The factory polls GitHub, so it needs no
       public URL.
-   4. **Repository permissions:** set these four and leave everything else
+   4. **Repository permissions:** set these and leave everything else
       at *No access*. Metadata switches to *Read-only* by itself.
 
       | Permission | Access | Used for |
@@ -209,6 +212,7 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
       | Issues | Read and write | reading issues, labels and comments |
       | Pull requests | Read and write | opening and updating draft PRs |
       | Checks | Read-only | the CI panel in the dashboard |
+      | Dependabot alerts | Read-only | [`sources.dependabot`](configuration.md#sources), if you turn it on |
 
       Leave **Workflows** at *No access*, so the factory can never edit its
       own CI. An app made without *Checks* still works, but the dashboard's
@@ -264,6 +268,7 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
    | `CODEX_ACCESS_TOKEN` | Codex on a ChatGPT Business or Enterprise plan; wins over the two above |
    | `FACTORY_NOTIFY_URL` | Phone notifications (see [Notifications](using.md#notifications)) |
    | `FACTORY_WEB_PASSWORD` | A password for the control room (see [Control room login](security.md#control-room-login)) |
+   | `SENTRY_AUTH_TOKEN` | Reading Sentry for [`sources.sentry`](configuration.md#sources) |
 
    Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
    billed per use, or on a ChatGPT plan (see

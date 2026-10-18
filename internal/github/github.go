@@ -54,6 +54,7 @@ type PR struct {
 	Draft  bool   `json:"draft"`
 	Head   struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
 	Base struct {
 		SHA string `json:"sha"`
@@ -140,17 +141,23 @@ func defaultHTTP() *http.Client { return &http.Client{Timeout: 30 * time.Second}
 var timeNow = time.Now
 
 func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, out any) error {
+	_, err := doJSONHeader(ctx, hc, method, u, auth, in, out)
+	return err
+}
+
+// doJSONHeader is doJSON that also returns the response's headers.
+func doJSONHeader(ctx context.Context, hc *http.Client, method, u, auth string, in, out any) (http.Header, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -162,7 +169,7 @@ func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, ou
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -170,12 +177,12 @@ func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, ou
 		body := strings.TrimSpace(string(b))
 		limited := resp.StatusCode == 429 || resp.StatusCode == 403 &&
 			(resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "" || strings.Contains(strings.ToLower(body), "rate limit"))
-		return &HTTPError{Status: resp.StatusCode, Body: body, Limited: limited}
+		return nil, &HTTPError{Status: resp.StatusCode, Body: body, Limited: limited}
 	}
 	if out != nil && len(b) > 0 {
-		return json.Unmarshal(b, out)
+		return resp.Header, json.Unmarshal(b, out)
 	}
-	return nil
+	return resp.Header, nil
 }
 
 type rawIssue struct {
@@ -426,6 +433,11 @@ func (c *Client) CheckLog(_ context.Context, run CheckRun) (string, error) {
 
 // Self is who the factory acts as: its app's bot login, or the token's user.
 func (c *Client) Self(ctx context.Context) (string, error) { return c.self(ctx) }
+
+// CloseNotPlanned closes an issue as not planned.
+func (c *Client) CloseNotPlanned(ctx context.Context, n int) error {
+	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "not_planned"}, nil)
+}
 
 // CloseIssue closes an issue as completed.
 func (c *Client) CloseIssue(ctx context.Context, n int) error {

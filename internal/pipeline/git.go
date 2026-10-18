@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,7 +62,7 @@ func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...str
 		cmd.Stdout = stdout
 	}
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(errb.String()))
+		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
@@ -402,4 +403,91 @@ func (g *Git) Mode(ctx context.Context, repo, sha, path string) (string, error) 
 func (g *Git) CloneBare(ctx context.Context, dst string) error {
 	_, err := g.run(ctx, "", nil, "clone", "--quiet", "--bare", "--no-tags", g.remote(), dst)
 	return err
+}
+
+// CloneShallow makes a bare copy of only the tip of the remote's branch.
+func (g *Git) CloneShallow(ctx context.Context, dst, branch string) error {
+	_, err := g.run(ctx, "", nil, "clone", "--quiet", "--bare", "--depth", "1", "--single-branch", "--branch", branch, "--no-tags", g.remote(), dst)
+	return err
+}
+
+// GrepHit is a line that matched.
+type GrepHit struct {
+	Path string
+	Line int
+	Text string
+}
+
+// Grep lists the lines of the files git tracks at sha that hold any of
+// the fixed strings, leaving out binary files and the excluded pathspecs.
+// It reads at most max of them, stopping git there, and says whether
+// there were more.
+func (g *Git) Grep(ctx context.Context, repo, sha string, fixed, exclude []string, max int) ([]GrepHit, bool, error) {
+	args := []string{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-F"}
+	for _, f := range fixed {
+		args = append(args, "-e", f)
+	}
+	args = append(args, sha, "--", ".")
+	for _, x := range exclude {
+		args = append(args, ":(exclude,glob)"+x)
+	}
+	w := &grepWriter{prefix: sha + ":", max: max}
+	_, err := g.run(ctx, repo, w, args...)
+	if w.full {
+		return w.hits, true, nil // git stopped when the writer did
+	}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return nil, false, nil // nothing matched
+		}
+		return nil, false, err
+	}
+	w.line(w.rest) // a last line with no newline
+	return w.hits, false, nil
+}
+
+// errGrepFull stops git grep once enough lines are read.
+var errGrepFull = errors.New("enough lines")
+
+// grepWriter parses git grep -z output as it comes: sha:path NUL line
+// NUL text, one per line.
+type grepWriter struct {
+	prefix string
+	max    int
+	hits   []GrepHit
+	rest   []byte
+	full   bool
+}
+
+func (w *grepWriter) Write(b []byte) (int, error) {
+	if w.full {
+		return 0, errGrepFull
+	}
+	w.rest = append(w.rest, b...)
+	for {
+		i := bytes.IndexByte(w.rest, '\n')
+		if i < 0 {
+			break
+		}
+		w.line(w.rest[:i])
+		w.rest = w.rest[i+1:]
+		if len(w.hits) > w.max {
+			w.hits, w.full = w.hits[:w.max], true
+			return 0, errGrepFull
+		}
+	}
+	return len(b), nil
+}
+
+func (w *grepWriter) line(l []byte) {
+	parts := strings.SplitN(string(l), "\x00", 3)
+	if len(parts) != 3 {
+		return
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return
+	}
+	w.hits = append(w.hits, GrepHit{Path: strings.TrimPrefix(parts[0], w.prefix), Line: n, Text: parts[2]})
 }

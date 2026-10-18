@@ -30,13 +30,28 @@ func New(url string) (Notifier, error) {
 	case url == "":
 		return nil, nil
 	case strings.Contains(url, "hooks.slack.com"):
-		return &webhook{url: url, body: func(t, m string) any { return map[string]string{"text": "*" + t + "*\n" + m} }}, nil
+		return &webhook{url: url, body: slackBody}, nil
 	case strings.Contains(url, "discord.com/api/webhooks") || strings.Contains(url, "discordapp.com/api/webhooks"):
-		return &webhook{url: url, body: func(t, m string) any { return map[string]string{"content": "**" + t + "**\n" + m} }}, nil
+		return &webhook{url: url, body: discordBody}, nil
 	case strings.Contains(url, "ntfy"):
 		return &ntfy{url: url}, nil
 	}
 	return nil, fmt.Errorf("notify: unrecognized URL %q (want ntfy, Slack or Discord)", url)
+}
+
+// Messages can quote text from issues and errors, which anyone may have
+// written, so they never ping: Slack's control characters are escaped
+// (no <!channel>, <@U123> or <url|label> links), and Discord is told to
+// resolve no mentions (no @everyone).
+
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+func slackBody(t, m string) any {
+	return map[string]string{"text": "*" + slackEscape.Replace(t) + "*\n" + slackEscape.Replace(m)}
+}
+
+func discordBody(t, m string) any {
+	return map[string]any{"content": "**" + t + "**\n" + m, "allowed_mentions": map[string]any{"parse": []string{}}}
 }
 
 type webhook struct {

@@ -14,8 +14,10 @@ These milestones from [SPEC.md](../SPEC.md) are in:
 | M6 | Hidden scenarios, metrics, `factory eval`, session resume, safe upgrade |
 | M7 | Dashboard v2 |
 
-Side-by-side skill comparison, services, workspaces across repos and
-[keeping main green](using.md#keeping-main-green) are in too.
+Side-by-side skill comparison, services, workspaces across repos,
+[keeping main green](using.md#keeping-main-green) and
+[issues from Sentry, Dependabot and TODOs](using.md#issues-from-sentry-dependabot-and-todos)
+are in too.
 
 ## Where this differs from SPEC.md
 

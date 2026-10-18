@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -265,9 +266,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	// From here on the builder's checkouts are only read as files. Everything
 	// below runs in the daemon's own repositories.
 	msg := fmt.Sprintf("factory: %s %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
-		p.ref(it.Repo, it.IssueNumber), is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+		p.ref(it.Repo, it.IssueNumber), noClose(is.Title), noClose(v.Summary), j.ID, j.Harness, j.Model, j.Attempt)
 	if len(members) == 1 {
-		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt)
+		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, noClose(is.Title), noClose(v.Summary), j.ID, j.Harness, j.Model, j.Attempt)
 	}
 	changed := false
 	for _, pt := range parts {
@@ -760,7 +761,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return err
 	}
 	if pr == nil {
-		pr, err = p.gh(it.Repo).CreatePR(ctx, fmt.Sprintf("%s (#%d)", is.Title, is.Number), body, branch, p.repoConf(it.Repo).BaseBranch, true)
+		pr, err = p.gh(it.Repo).CreatePR(ctx, fmt.Sprintf("%s (#%d)", noClose(is.Title), is.Number), body, branch, p.repoConf(it.Repo).BaseBranch, true)
 		if err != nil {
 			return err
 		}
@@ -944,3 +945,11 @@ func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why 
 	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAutoMerge), "RemoveLabel")
 	return nil
 }
+
+// closeRE is a closing keyword and the issue it names: "fixes #12",
+// "Closes: o/r#12".
+var closeRE = regexp.MustCompile(`(?i)\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s*)((?:[\w.-]+/[\w.-]+)?)#(\d)`)
+
+// noClose keeps text an issue's author wrote from closing other issues
+// when the factory's commit or PR merges: "fixes #12" becomes "fixes # 12".
+func noClose(s string) string { return closeRE.ReplaceAllString(s, "$1$2$3# $4") }

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,5 +70,15 @@ func TestRateLimit(t *testing.T) {
 	r.Send(context.Background(), "t", "m")
 	if c.n != 3 || r.dropped != 0 {
 		t.Fatalf("after window: sent %d dropped %d", c.n, r.dropped)
+	}
+}
+
+func TestWebhooksNeverPing(t *testing.T) {
+	if s := slackBody("Filed", "<!channel> & <https://evil.example|click>").(map[string]string)["text"]; s != "*Filed*\n&lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;" {
+		t.Fatalf("slack %s", s)
+	}
+	b, _ := json.Marshal(discordBody("Filed", "@everyone"))
+	if s := string(b); !strings.Contains(s, `"allowed_mentions":{"parse":[]}`) {
+		t.Fatalf("discord %s", s)
 	}
 }

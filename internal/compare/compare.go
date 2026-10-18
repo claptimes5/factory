@@ -183,6 +183,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	cfg.Orchestrator.On = false
 	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
+	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
 	if budget > 0 {
 		cfg.Budgets.DailyTotal = budget
 	}

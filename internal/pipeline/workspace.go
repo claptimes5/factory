@@ -280,7 +280,7 @@ func (p *Pipeline) linkedTop(it *store.WorkItem, prs []openedPR, i int) string {
 // touches, links them to each other and hands the item to a human.
 func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is github.Issue, in ReviewInput) error {
 	branch := p.branchFor(it)
-	title := fmt.Sprintf("%s (%s)", is.Title, p.issueRef(it.Repo, is.Number))
+	title := fmt.Sprintf("%s (%s)", noClose(is.Title), p.issueRef(it.Repo, is.Number))
 	var prs []openedPR
 	for _, h := range in.Heads {
 		gh := p.gh(h.Repo)

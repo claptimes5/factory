@@ -239,3 +239,74 @@ func TestCheckHistoryRefusesAPartialList(t *testing.T) {
 		t.Fatalf("%d pages, %v: want an error after 10 full pages", pages, err)
 	}
 }
+
+func TestDependabot(t *testing.T) {
+	var base string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/dependabot/alerts":
+			if r.URL.Query().Get("after") == "c2" {
+				w.Write([]byte(`[{"number":4,"state":"open"}]`))
+				return
+			}
+			if q := r.URL.Query(); q.Get("state") != "open" || q.Get("severity") != "high,critical" {
+				t.Errorf("query %v", q)
+			}
+			w.Header().Set("Link", `<`+base+`/repos/o/r/dependabot/alerts?after=c2>; rel="next", <https://elsewhere.example/x>; rel="last"`)
+			w.Write([]byte(`[{"number":3,"state":"open","html_url":"https://github.com/o/r/security/dependabot/3",
+				"dependency":{"package":{"ecosystem":"npm","name":"lodash"},"manifest_path":"web/package-lock.json"},
+				"security_advisory":{"ghsa_id":"GHSA-xxxx-yyyy-zzzz","cve_id":"CVE-2026-1","summary":"Prototype pollution","severity":"high"},
+				"security_vulnerability":{"severity":"high","vulnerable_version_range":"< 4.17.21","first_patched_version":{"identifier":"4.17.21"}}}]`))
+		case "/repos/o/r/dependabot/alerts/3":
+			w.Write([]byte(`{"number":3,"state":"fixed"}`))
+		case "/repos/o/r/pulls":
+			w.Write([]byte(`[{"number":9,"title":"Bump lodash from 4.17.20 to 4.17.21 in /web","html_url":"https://github.com/o/r/pull/9","user":{"login":"dependabot[bot]"},"head":{"ref":"dependabot/npm_and_yarn/web/lodash-4.17.21"}},
+				{"number":10,"title":"Bump lodash","user":{"login":"someone"},"head":{"ref":"dependabot/npm_and_yarn/lodash-1"}},
+				{"number":11,"title":"Bump lodash","user":{"login":"dependabot[bot]"},"head":{"ref":"update-lodash"}}]`))
+		default:
+			t.Errorf("unexpected %s", r.URL)
+		}
+	}))
+	defer srv.Close()
+	base = srv.URL
+	ctx := context.Background()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	as, err := c.DependabotAlerts(ctx, []string{"high", "critical"})
+	if err != nil || len(as) != 2 || as[1].Number != 4 {
+		t.Fatalf("alerts %+v %v", as, err)
+	}
+	if nextLink(`<https://elsewhere.example/repos/o/r/dependabot/alerts?after=x>; rel="next"`, srv.URL) != "" {
+		t.Fatal("followed a next link off the API's host")
+	}
+	if a := as[0]; a.Package != "lodash" || a.Manifest != "web/package-lock.json" || a.GHSA != "GHSA-xxxx-yyyy-zzzz" || a.Severity != "high" || a.Patched != "4.17.21" || a.VulnerableRange != "< 4.17.21" {
+		t.Fatalf("alert %+v", a)
+	}
+	if a, err := c.DependabotAlert(ctx, 3); err != nil || a.State != "fixed" {
+		t.Fatalf("one %+v %v", a, err)
+	}
+	if prs, err := c.DependabotPRs(ctx); err != nil || len(prs) != 1 || prs[0].Number != 9 {
+		t.Fatalf("prs %+v %v", prs, err)
+	}
+}
+
+func TestIssueAuthorAndNotPlanned(t *testing.T) {
+	var closed map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/o/r/issues/4":
+			w.Write([]byte(`{"number":4,"title":"t","state":"open","user":{"login":"factory-app[bot]"}}`))
+		case r.Method == "PATCH" && r.URL.Path == "/repos/o/r/issues/4":
+			json.NewDecoder(r.Body).Decode(&closed)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	if is, err := c.GetIssue(context.Background(), 4); err != nil || is.Author != "factory-app[bot]" {
+		t.Fatalf("issue %+v %v", is, err)
+	}
+	if err := c.CloseNotPlanned(context.Background(), 4); err != nil || closed["state_reason"] != "not_planned" {
+		t.Fatalf("close %v %v", closed, err)
+	}
+}

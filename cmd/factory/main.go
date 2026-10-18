@@ -40,6 +40,7 @@ import (
 	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
+	"github.com/claptimes5/factory/internal/sentry"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -121,6 +122,7 @@ func run(args []string) error {
 	if err := loadEnvFile(*envPath); err != nil {
 		return err
 	}
+	takeSentryToken()
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
@@ -366,7 +368,30 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		Secrets: secrets(),
 		Log:     slog.Default(),
 		Notify:  notifier(),
+		Sentry:  sentryClient(cfg),
 	}, nil
+}
+
+// sentryToken is SENTRY_AUTH_TOKEN, taken out of the environment.
+var sentryToken string
+
+// takeSentryToken moves SENTRY_AUTH_TOKEN out of the process's
+// environment as soon as factory.env is loaded, before any command can
+// start, so nothing the factory runs (git, docker, a job or an eval on
+// the local runner) inherits it.
+func takeSentryToken() {
+	if v, ok := os.LookupEnv("SENTRY_AUTH_TOKEN"); ok {
+		sentryToken = strings.TrimSpace(v)
+		_ = os.Unsetenv("SENTRY_AUTH_TOKEN")
+	}
+}
+
+// sentryClient reads Sentry with the token; nil without one.
+func sentryClient(cfg *config.Config) pipeline.SentryAPI {
+	if sentryToken == "" {
+		return nil
+	}
+	return &sentry.Client{BaseURL: cfg.Sources.Sentry.BaseURL, Token: sentryToken}
 }
 
 // notifier sends to FACTORY_NOTIFY_URL (ntfy, Slack or Discord), at most
@@ -521,6 +546,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	for _, l := range mainHealthLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
+	for _, l := range sourceLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
@@ -579,6 +607,61 @@ func mainHealthLines(ctx context.Context, st *store.Store, cfg *config.Config) [
 			line += " (main_health is off)"
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+// sourceLines are status's lines on each source that's on, or that ran:
+// for each of its repos, its last read and the issues it has open.
+func sourceLines(ctx context.Context, st *store.Store, cfg *config.Config) []string {
+	sts, _ := st.SourceStates(ctx)
+	by := map[string]store.SourceState{}
+	for _, s := range sts {
+		by[s.Source+" "+strings.ToLower(s.Repo)] = s
+	}
+	issues, _ := st.SourceIssues(ctx, "", "")
+	p := &pipeline.Pipeline{Cfg: cfg}
+	var out []string
+	for _, src := range pipeline.SourceNames {
+		on := p.SourceEnabled(src)
+		repos := p.SourceRepos(src)
+		if !on {
+			repos = nil
+			for _, s := range sts {
+				if s.Source == src {
+					repos = append(repos, s.Repo)
+				}
+			}
+		}
+		for _, repo := range repos {
+			s, ok := by[src+" "+strings.ToLower(repo)]
+			if !ok {
+				out = append(out, fmt.Sprintf("%s %s:\tnot read yet", src, repo))
+				continue
+			}
+			line := fmt.Sprintf("%s %s:\tread %s", src, repo, s.PolledAt)
+			if s.State == store.SourceUnreadable {
+				line += ", can't read it: " + s.Detail
+			} else {
+				line += fmt.Sprintf(": %d found", s.Found)
+				if s.Detail != "" {
+					line += " (" + s.Detail + ")"
+				}
+			}
+			var filed []string
+			for _, is := range issues {
+				if is.Source == src && strings.EqualFold(is.Repo, repo) {
+					filed = append(filed, issueRef(cfg, repo, is.IssueNumber))
+				}
+			}
+			if len(filed) > 0 {
+				line += "; issues " + strings.Join(filed, ", ")
+			}
+			if !on {
+				line += " (sources." + src + " is off)"
+			}
+			out = append(out, line)
+		}
 	}
 	return out
 }

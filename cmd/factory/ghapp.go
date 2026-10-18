@@ -33,8 +33,9 @@ var browse func(base string)
 // appPermissions are what the factory needs, and nothing else. Workflows is
 // left out on purpose, so the factory can never edit its own CI. Actions
 // is read only, for main health to tell two workflows' jobs of one name apart.
+// vulnerability_alerts (Dependabot alerts) is read only by sources.dependabot.
 var appPermissions = map[string]string{
-	"contents": "write", "issues": "write", "pull_requests": "write", "checks": "read", "actions": "read", "metadata": "read",
+	"contents": "write", "issues": "write", "pull_requests": "write", "checks": "read", "actions": "read", "metadata": "read", "vulnerability_alerts": "read",
 }
 
 // createApp registers a GitHub App for the factory using GitHub's manifest

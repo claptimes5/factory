@@ -587,6 +587,75 @@ On GitHub it reads check runs, which the factory's app may read
 and accept it on the installation, or checks are told apart by name only). On GitLab it reads the pipelines' jobs and, for a failed one, the
 end of its log.
 
+## Sources
+
+The factory can file issues from Sentry errors, Dependabot alerts and
+`TODO(factory)` comments, for you to approve (see
+[Issues from Sentry, Dependabot and TODOs](using.md#issues-from-sentry-dependabot-and-todos)).
+Each is off unless you turn it on, and none builds anything until someone
+with write access adds `factory:ready` to its issue.
+
+```yaml
+sources:
+  daily_issue_cap: 3            # issues per repo a day, all sources together
+  sentry:
+    enabled: true
+    every: 15m                  # at least 5m
+    org: acme                   # the organization slug
+    projects:                   # each repo's Sentry project
+      acme/api: api-backend
+      acme/web: other-org/web   # org/project for another organization
+    min_events: 10
+    min_users: 0
+    sort: freq                  # or user
+    # base_url: https://sentry.example.com   # self-hosted
+  dependabot:
+    enabled: true
+    every: 1h                   # at least 15m
+    min_severity: high          # low, medium, high or critical
+    # repos: [acme/api]         # default: every GitHub repo
+  todos:
+    enabled: true
+    every: 6h                   # at least 1h
+    markers: [TODO(factory), FIXME(factory)]   # add TODO, FIXME for all
+    max_per_run: 5
+    skip_paths: [legacy, "*.gen.ts"]
+    # repos: [acme/api]         # default: every repo
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `daily_issue_cap` | `3` | Issues all sources together may file per repo per UTC day. |
+| `sentry.enabled` | `false` | Files an issue per unresolved Sentry issue over the thresholds. |
+| `sentry.every` | `15m` | How often it reads Sentry; at least `5m`. |
+| `sentry.base_url` | `https://sentry.io` | A self-hosted Sentry's address: `https`, or `http` only on this machine, since the token goes with every request. |
+| `sentry.org` | none | The organization slug, for projects written without one. |
+| `sentry.projects` | none | Repo to Sentry project slug, or `org/project`. Only these repos are read. |
+| `sentry.min_events`, `min_users` | `10`, `0` | What a Sentry issue needs, both, to be filed. |
+| `sentry.sort` | `freq` | `freq` files the most events first; `user`, the most users. |
+| `dependabot.enabled` | `false` | Files an issue per open Dependabot security alert. GitHub only. |
+| `dependabot.every` | `1h` | How often it reads the alerts; at least `15m`. |
+| `dependabot.min_severity` | `high` | The lowest severity filed. |
+| `dependabot.repos` | every GitHub repo | Which repos. With a GitLab repo in `repos:`, list the GitHub ones here: GitLab's dependency scanning isn't supported, and the config won't load otherwise. |
+| `todos.enabled` | `false` | Files an issue per marked comment on each repo's base branch. |
+| `todos.every` | `6h` | How often it scans; at least `1h`. Each scan is a shallow clone. |
+| `todos.markers` | `TODO(factory)`, `FIXME(factory)` | What a comment must start with. |
+| `todos.max_per_run` | `5` | Issues per scan; the rest wait for the next. |
+| `todos.skip_paths` | none | Folders, or globs (a glob with no `/` matches a name anywhere), to leave out on top of vendored, generated and prose files. |
+| `todos.repos` | every repo | Which repos. |
+
+**The Sentry token** is `SENTRY_AUTH_TOKEN` in `factory.env` (setup asks
+for it when `sentry` is on): an internal integration's token, or a personal
+one, with the `project:read` and `event:read` scopes. Without it, Sentry
+is reported unreadable once and nothing is filed.
+
+**Dependabot alerts** need the alerts turned on in the repo's
+*Settings > Code security*. A GitHub App needs the *Dependabot alerts:
+Read-only* repository permission: setup's app has it, and an app made
+before this needs it added (then accept it on the installation page). A
+`GITHUB_TOKEN` needs the `security_events` scope, or for a fine-grained
+token *Dependabot alerts: read*.
+
 ## Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the
