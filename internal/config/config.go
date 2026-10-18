@@ -23,6 +23,10 @@ type Route struct {
 	Model   string `yaml:"model"`
 	Effort  string `yaml:"effort"`
 	Skills  string `yaml:"skills"` // skill set folder under skills/
+	// Fast runs Claude in fast mode: quicker, at a higher price per token.
+	// Only Opus models have it; on an escalation tier that isn't Opus the
+	// job runs at normal speed.
+	Fast bool `yaml:"fast,omitempty"`
 	// Use names skills in that set the worker must use, in order.
 	Use []string `yaml:"use,omitempty"`
 	// Instructions, and the file InstructionsFile names (relative to the
@@ -611,6 +615,9 @@ func (c *Config) Validate() error {
 		if strings.ContainsAny(r.Skills, `/\.`) {
 			bad("routing.%s: skills must be a folder name under skills_dir", k)
 		}
+		if r.Fast && (r.Harness != "claude" || !IsOpus(r.Model)) {
+			bad("routing.%s: fast mode is Claude's, and only Opus models have it", k)
+		}
 		if len(r.Use) > 0 && r.Skills == "" {
 			bad("routing.%s: use names skills, so it needs a skill set (skills:)", k)
 		}
@@ -964,6 +971,15 @@ func sameModel(harness, a, b string) bool {
 		}
 	}
 	return false
+}
+
+// IsOpus says whether a Claude model is an Opus, the only family with
+// fast mode.
+func IsOpus(model string) bool { return strings.Contains(strings.ToLower(model), "opus") }
+
+// FastFor says whether a job on route r with this model runs in fast mode.
+func (r Route) FastFor(harness, model string) bool {
+	return r.Fast && harness == "claude" && IsOpus(model)
 }
 
 // Review returns the reviewer route for an item's risk: review.high_risk

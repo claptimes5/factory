@@ -811,7 +811,7 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 		if sk == "" {
 			sk = "-"
 		}
-		fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | %d | %s | $%.2f |\n", j.ID, j.Kind, j.Harness, j.Model, sk, j.Attempt, j.State, j.CostUSD)
+		fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | %d | %s | $%.2f |\n", j.ID, j.Kind, j.Harness, j.ModelLabel(), sk, j.Attempt, j.State, j.CostUSD)
 	}
 	fmt.Fprintf(&b, "\n**Total cost:** $%.2f\n\n", total)
 	for _, j := range jobs {

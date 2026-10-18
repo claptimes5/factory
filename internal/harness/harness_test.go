@@ -153,3 +153,17 @@ func TestClaudeResumeAndSessionMount(t *testing.T) {
 		t.Fatalf("mounts = %+v", fr.spec.Mounts)
 	}
 }
+
+func TestClaudeFastMode(t *testing.T) {
+	for _, fast := range []bool{false, true} {
+		fr := &fakeRunner{out: `{"type":"result","subtype":"success","result":"ok","num_turns":1,"total_cost_usd":0.01}` + "\n"}
+		r := req(t, false)
+		r.Fast = fast
+		if _, err := NewClaude(fr).Run(context.Background(), r, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(strings.Join(fr.spec.Cmd, " "), `--settings {"fastMode":true}`); got != fast {
+			t.Errorf("fast=%v: cmd %q", fast, fr.spec.Cmd)
+		}
+	}
+}

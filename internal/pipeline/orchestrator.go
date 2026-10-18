@@ -64,7 +64,7 @@ func (p *Pipeline) Orchestrate(ctx context.Context, reason string, summary bool)
 	}
 	r := p.Cfg.Routing["orchestrate"]
 	b, _ := json.Marshal(OrchestrateInput{Reasons: []string{reason}, Summary: summary})
-	_, err = p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: r.Harness, Model: r.Model, Effort: r.Effort,
+	_, err = p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
 		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.Orchestrator.RunBudget, Priority: 10, Input: string(b)})
 	return err
 }

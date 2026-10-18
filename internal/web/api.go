@@ -354,7 +354,7 @@ func isReview(j *store.Job) bool { return j.Kind == "review" || j.Kind == "criti
 
 func apiJob(j *store.Job) APIJob {
 	return APIJob{
-		ID: j.ID, ItemID: j.ItemID, Kind: j.Kind, State: string(j.State), Harness: j.Harness, Model: j.Model,
+		ID: j.ID, ItemID: j.ItemID, Kind: j.Kind, State: string(j.State), Harness: j.Harness, Model: j.ModelLabel(),
 		Effort: j.Effort, Attempt: j.Attempt, CostUSD: j.CostUSD, BudgetUSD: j.BudgetUSD, TokensIn: j.TokensIn,
 		TokensOut: j.TokensOut, Verdict: j.Verdict, Error: j.Error, QueuedAt: j.QueuedAt, StartedAt: j.StartedAt,
 		FinishedAt: j.FinishedAt, Branch: j.Branch, Skillset: j.Skillset, HeadSHA: j.HeadSHA,

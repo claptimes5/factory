@@ -300,9 +300,11 @@ get every member repo's instructions, each labeled with its repo.
 
 ## Models and escalation
 
-`routing` picks the harness and model for each stage, such as
-`implement.S` or `review`. Triage rates each issue `XS`, `S`, `M` or `L`,
-and the item builds on the matching `implement.<size>` entry.
+`routing` picks the harness, model and effort for each step: `triage`,
+`implement.XS` to `implement.L`, `review` (and `review.medium_risk`,
+`review.high_risk`), `critic` and `orchestrate`. Triage rates each issue
+`XS`, `S`, `M` or `L`, and the item builds on the matching
+`implement.<size>` entry.
 
 The defaults lean on the cheap models where a miss is cheap to retry:
 
@@ -317,6 +319,21 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 
 The daemon refuses a config where a reviewer could run the same harness
 and model as the builder it reviews.
+
+**Fast mode.** `fast: true` on a Claude route runs Claude Code's fast mode,
+which answers up to 2.5 times faster at a higher price per token:
+
+```yaml
+routing:
+  implement.L: {harness: claude, model: opus, fast: true}
+```
+
+Only Opus models have it, so the daemon refuses `fast` on any other model.
+If escalation moves a job to a tier that isn't Opus, that job runs at
+normal speed. The job table and `factory status` show `opus (fast)`. Fast
+mode needs your Anthropic account to have it turned on; on a subscription it
+draws on usage credits, not the plan's limits. The cost recorded is what
+Claude Code reports, so check it against your console the first few times.
 
 **Session resume.** With the Docker runner, an implement retry on the same
 model continues the previous attempt's Claude session. This is best

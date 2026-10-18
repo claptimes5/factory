@@ -463,3 +463,30 @@ func TestAutoMergeLevels(t *testing.T) {
 		t.Fatal("repo should inherit the top-level auto_merge")
 	}
 }
+
+func TestFastMode(t *testing.T) {
+	c := load(t)
+	r := c.Routing["implement.L"] // opus
+	r.Fast = true
+	c.Routing["implement.L"] = r
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.FastFor("claude", "opus") || r.FastFor("claude", "sonnet") || r.FastFor("codex", "opus") {
+		t.Fatal("FastFor")
+	}
+	s := c.Routing["implement.S"] // haiku
+	s.Fast = true
+	c.Routing["implement.S"] = s
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "only Opus") {
+		t.Fatalf("fast on haiku: %v", err)
+	}
+	s.Fast = false
+	c.Routing["implement.S"] = s
+	rv := c.Routing["review"]
+	rv.Fast = true
+	c.Routing["review"] = rv
+	if err := c.Validate(); err == nil {
+		t.Fatal("fast on a codex reviewer accepted")
+	}
+}

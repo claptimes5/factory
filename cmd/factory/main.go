@@ -450,7 +450,7 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if len(jobs) > 0 {
 		fmt.Fprintln(w, "\nJOB\tKIND\tSTATE\tHARNESS\tMODEL\tSKILLS\tATTEMPT\tCOST\tERROR")
 		for _, j := range jobs {
-			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%d\t$%.2f\t%s\n", j.ID, j.Kind, j.State, j.Harness, j.Model, dash(j.Skillset), j.Attempt, j.CostUSD, trunc(j.Error, 60))
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%d\t$%.2f\t%s\n", j.ID, j.Kind, j.State, j.Harness, j.ModelLabel(), dash(j.Skillset), j.Attempt, j.CostUSD, trunc(j.Error, 60))
 		}
 	}
 	return nil
