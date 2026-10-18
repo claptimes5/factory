@@ -158,6 +158,8 @@ the command name to use other files.
 | `factory backup FILE` | Write a consistent copy of the database |
 | `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |
 | `factory eval capture [-set evals] [-name NAME] [-accept CMD] PR` | Turn a merged PR into a replay case: the issue it closed, frozen where its branch started, with its tests as the hidden acceptance files |
+| `factory eval review [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json] [-tolerance 0.05]` | Run the [reviewer evals](quality.md#reviewer-evals) and report recall, false positives and reverts blocked; with a baseline, fail if the candidate's reviewer is worse |
+| `factory eval capture -review [-set evals] [-name NAME] PR` / `factory eval capture -reverts` | Turn a merged PR into reviewer cases (clean, and bugs planted in it; a revert case if it was reverted), or every reverted factory PR into a revert case |
 | `factory compare ISSUE -skills a,b [-complexity M] [-no-push]` | Build one issue once per skill set and report the arms side by side |
 | `factory pull ISSUE` | Fetch an item's branch into the current checkout and copy its job transcripts to `.factory/issue-N/` |
 | `factory last-job`, `factory wait-job AFTER TIMEOUT`, `factory db-path` | Used by `deploy/upgrade.sh` |
@@ -308,7 +310,11 @@ regardless.
 **Check model changes first.** Before you apply a change to a model, run
 [`factory eval`](#measuring-a-change-eval-and-compare) with the candidate
 config. A change that lowers the pass rate or raises cost per pass is the
-wrong one.
+wrong one. For a change to a review prompt, route or model, run
+`factory eval review` the same way. With `tuning.review_eval` on, the
+tuning loop does that itself for the review changes it proposes, and
+drops them when the reviewer gets worse (see
+[Configuration](configuration.md#tuning)).
 
 Its prompt is `prompts/tune.md`, and it runs on `routing.tune` (see
 [Configuration](configuration.md#tuning)). It runs whether or not the

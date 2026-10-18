@@ -672,6 +672,10 @@ tuning:
   budget: 3                   # dollars per run; default orchestrator.run_budget
   repo: you/infra             # optional: also open a draft PR there
   path: deploy/factory.yaml   # where this file lives in that repo; default factory.yaml
+  review_eval: false          # run the reviewer evals before keeping a review change
+  review_eval_set: evals      # where the reviewer cases are
+  review_eval_tolerance: 0.05 # how much worse the reviewer may get, as a share
+  review_eval_cases: 20       # the most cases each run reviews
 ```
 
 | Key | What it does |
@@ -680,6 +684,8 @@ tuning:
 | `min_items` | A run with fewer items built since the last one is skipped, and you're told. `factory tune` ignores it. |
 | `budget` | The dollar cap for one run. Its spend counts toward `orchestrator.daily_budget`, not the build budget. A run waits while either of those is spent for the day. |
 | `repo`, `path` | Where this `factory.yaml` lives in one of the factory's repos. With `repo` set, each proposal with changes opens a draft PR there on `factory/tuning-<date>`, made to that copy of the file. The file must exist there as a plain file, not a symlink or behind one, and still load with the change. If the day's branch has commits the factory didn't make, it uses `factory/tuning-<date>-2` and so on, rather than push over them. |
+
+| `review_eval`, `review_eval_set`, `review_eval_tolerance`, `review_eval_cases` | Off by default. On, each proposed change is checked on its own for whether it changes how review works, as resolved with every fallback: the review route for each risk, the verifier's, critic's and security pass's routes (so `routing.implement.L` counts while `routing.critic` is unset), the `review` and `security` settings, the review and verifier budgets (so `budgets.triage` counts while `budgets.verify` is unset), fast mode's multiplier, the review, critic, verify and security timeouts, and `prompts_dir`. If any does, the [reviewer evals](quality.md#reviewer-evals) in `review_eval_set` run on the current config and on the proposal: at most `review_eval_cases`, taken in turn from the planted, clean and revert cases in name order, so a small set still holds each kind. If recall falls or the false-positive rate rises by more than `review_eval_tolerance` (0 allows no fall at all), fewer reverts are blocked, or more cases get no ruling, the changes that alter review are dropped with why, naming the cases that got worse; the others stay. The proposal's summary gives both runs' numbers. Each run may spend half of what's left of today's budget, counted toward it, and waits like the tuning run when the budget is spent. If the evals can't run or finish (no cases, an error, the cap reached), the review changes are dropped. |
 
 With tuning on, the daemon won't start without `prompts/tune.md`.
 

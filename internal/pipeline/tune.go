@@ -304,13 +304,27 @@ func (p *Pipeline) runTune(ctx context.Context, j *store.Job) error {
 			dropped = append(dropped, c)
 		}
 	}
+	// A change to how review judges must not make it judge worse.
+	n := len(kept)
+	kept, dropped, evalLine := p.gateReview(ctx, src, cfgDir, kept, dropped)
+	if len(kept) != n {
+		changes = changes[:0]
+		for _, c := range kept {
+			changes = append(changes, config.Change{Path: c.Path, Value: c.Value})
+		}
+		edited, _ = config.Proposed(src, cfgDir, changes)
+	}
 	ideas := []string{}
 	for _, idea := range v.Ideas {
 		if s := strings.TrimSpace(idea); s != "" {
 			ideas = append(ideas, s)
 		}
 	}
-	prop := store.Proposal{JobID: &j.ID, Summary: strings.TrimSpace(v.Summary), Changes: kept, Dropped: dropped, Ideas: ideas,
+	summary := strings.TrimSpace(v.Summary)
+	if evalLine != "" {
+		summary += "\n\n" + evalLine
+	}
+	prop := store.Proposal{JobID: &j.ID, Summary: summary, Changes: kept, Dropped: dropped, Ideas: ideas,
 		Diff: config.UnifiedDiff(filepath.Base(p.ConfigPath), src, edited), PeriodFrom: in.From, PeriodTo: in.To}
 	if dropped == nil {
 		prop.Dropped = []store.ProposedChange{}

@@ -558,6 +558,64 @@ blocking findings (and how many the verifier refuted). With `-baseline`, it fail
 is worse. See [`evals/README.md`](../evals/README.md) and the
 [commands](using.md#commands).
 
+## Reviewer evals
+
+The replay set measures the builder. Reviewer cases, in the same
+directory, measure the reviewer: each has a `kind` in its `case.yaml` and
+the change to review in `change.patch`. `factory eval` ignores them, and
+`factory eval review` reads only them.
+
+| Kind | What it is | Scored |
+| --- | --- | --- |
+| `planted` | A merged PR with a known bug planted in a line it added | Caught when the review blocks with a finding in the bug's file within 6 lines of it (or on no line) |
+| `clean` | A merged PR that stood | Any block is a false positive |
+| `revert` | A factory PR the revert watch saw reverted | It should have been blocked |
+
+The bugs are put in by the program, the same way each run: a flipped
+comparison in an `if`, an off-by-one on a `< len(` bound, a dropped
+`if err != nil` block, and a dropped `if x == nil` block. Go code only
+for now (not tests). The case records the mutation, the file and the
+line; a case whose bug would land elsewhere (the patch no longer applies
+the same) fails as an eval error rather than scoring wrong.
+
+Each case runs only the review stage, against a private copy of the repo
+frozen at the case's base with the change on its branch, as if its gates
+had passed: the review route for the case's `risk` (default low), the
+verifier, and a high-risk change's critic. A block stops there; no fix
+round runs. The report gives recall (planted bugs caught), the
+false-positive rate (clean changes blocked), how many reverts it
+blocked, and cost. A case the review gave no ruling on (an eval error, or
+a review parked for no valid verdict) counts as an error and in no rate;
+a review that asks questions counts as a block. With `-baseline`, the
+candidate is rejected when the two runs reviewed different cases, when
+more cases got no ruling, when recall falls or the false-positive rate
+rises by more than `-tolerance` (default `tuning.review_eval_tolerance`,
+5 points; 0 allows none), or when it blocks fewer reverts. The reasons
+name each case that got worse.
+
+`factory eval capture -review PR` writes, from a merged PR, a clean case
+and one planted case per mutation that fits a line it added. When the
+revert watch saw that PR reverted, it writes a revert case instead.
+`factory eval capture -reverts` writes one for every reverted factory PR
+that has none yet. Pick clean cases from PRs that merged unchanged and
+stood a while: a PR fixed soon after isn't clean.
+
+With `tuning.review_eval` on, the [tuning loop](using.md#tuning) runs
+these before keeping any proposed change to how review works (see
+[Tuning](configuration.md#tuning)).
+
+**To revisit after real use.** Picked before any real runs:
+- The tolerance, 5 points of recall or false-positive rate, is a guess;
+  with 20 cases one case is 5 points, so it allows one case of noise.
+- A finding counts as at the bug within 6 lines; a reviewer that names
+  the right function from further away is scored as a miss.
+- A reviewer that asks questions on a clean case counts as blocking it.
+- Only four Go mutations; JS, TS and Python changes give clean cases only.
+- The gate reviews at most `tuning.review_eval_cases` (20) cases, twice
+  per proposal, each run capped at half of what's left of today's
+  budget. The cap is checked before each case, so a run can pass it by
+  one case's cost.
+
 ## Failures become cases
 
 When you merge a factory PR only after changing it, the daemon tells you,

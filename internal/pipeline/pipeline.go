@@ -129,6 +129,9 @@ type Pipeline struct {
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
 	// Notify sends a message to the configured channel (may be nil).
 	Notify func(ctx context.Context, msg string)
+	// ReviewEval runs the reviewer evals on a config, for the tuning
+	// loop's gate on review changes (tuning.review_eval); nil skips it.
+	ReviewEval ReviewEvaluator
 	// JobPrefix keeps container names unique when several pipelines with
 	// their own stores run at once (factory eval and factory compare).
 	JobPrefix string

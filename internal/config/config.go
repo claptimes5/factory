@@ -432,8 +432,27 @@ type Tuning struct {
 	// to factory.yaml.
 	Repo string `yaml:"repo"`
 	Path string `yaml:"path"`
+	// ReviewEval runs the reviewer evals (the kind: planted, clean and
+	// revert cases in ReviewEvalSet) on the current config and on the
+	// proposal before keeping a change to how review works; a proposal
+	// worse by more than ReviewEvalTolerance (a share, default 0.05)
+	// loses those changes. Off by default: it costs two runs of the set.
+	ReviewEval          bool     `yaml:"review_eval,omitempty"`
+	ReviewEvalSet       string   `yaml:"review_eval_set,omitempty"`       // default evals
+	ReviewEvalTolerance *float64 `yaml:"review_eval_tolerance,omitempty"` // default 0.05; 0 allows no drop
+	// ReviewEvalCases is the most cases each run reviews, the first by
+	// name; default 20.
+	ReviewEvalCases int `yaml:"review_eval_cases,omitempty"`
 
 	everyErr error
+}
+
+// ReviewTolerance is tuning.review_eval_tolerance, 0.05 when left out.
+func (t Tuning) ReviewTolerance() float64 {
+	if t.ReviewEvalTolerance == nil {
+		return 0.05
+	}
+	return *t.ReviewEvalTolerance
 }
 
 // Price is dollars per million tokens.
@@ -570,6 +589,12 @@ func (c *Config) defaults() {
 	}
 	if t.Path == "" {
 		t.Path = "factory.yaml"
+	}
+	if t.ReviewEvalSet == "" {
+		t.ReviewEvalSet = "evals"
+	}
+	if t.ReviewEvalCases == 0 {
+		t.ReviewEvalCases = 20
 	}
 	if _, ok := c.Routing["tune"]; !ok && c.Routing != nil {
 		c.Routing["tune"] = c.Routing["orchestrate"]
@@ -871,6 +896,12 @@ func (c *Config) Validate() error {
 		if _, ok := c.RepoConf(r); !ok {
 			bad("tuning.repo %s isn't in repos", r)
 		}
+	}
+	if t := c.Tuning.ReviewTolerance(); t < 0 || t >= 1 {
+		bad("tuning.review_eval_tolerance must be a share from 0 to 1, such as 0.05")
+	}
+	if c.Tuning.ReviewEvalCases < 0 {
+		bad("tuning.review_eval_cases can't be negative")
 	}
 	if _, err := CleanFilePath(c.Tuning.Path); err != nil {
 		bad("tuning.path: %v", err)

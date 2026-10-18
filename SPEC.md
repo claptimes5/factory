@@ -402,6 +402,13 @@ The number that matters is cost per merged PR; everything else explains it.
 
 **Old-bug hunting.** Off by default (`hunt`). When the queue is empty and its own daily budget and the build budget allow, a lowest-priority read-only `hunt` job (`routing.hunt`, the reviewer's model by default) reviews one feature-map area of a repo's base branch, rotating by risk and time since last hunted (kept in `marks`), and answers a fixed JSON list of at most `hunt.max_findings` concrete bugs (file, line, what fails, how to reproduce, severity). The daemon drops findings outside the area or the file, deduplicates them against every finding filed before (same file and title, or within 5 lines in the file; recorded in `hunt_filed` events, which outlive the issue), and files each, within `hunt.daily_issue_cap`, through the sources' machinery as a `factory:from-hunt` issue waiting for approval, its text fenced.
 
+**Evals (reviewer)**
+
+- Reviewer cases sit beside the builder's, with a `kind`: `planted` (a past merged PR with a known bug planted in a line it added: a flipped comparison, an off-by-one, a dropped `err` or `nil` check; Go only), `clean` (a merged PR that stood) and `revert` (a factory PR the revert watch saw reverted).
+- `factory eval review` runs only the review stage on each (the review route for its risk, the verifier, a high-risk critic) and reports recall (planted bugs blocked with a finding at the bug), the false-positive rate (clean changes blocked), reverts blocked, and cost. With `-baseline` it rejects a candidate whose recall falls or false-positive rate rises by more than a tolerance, or that blocks fewer reverts.
+- `factory eval capture -review PR` and `factory eval capture -reverts` write the cases.
+- With `tuning.review_eval` on, a tuning proposal with a change that alters how review resolves (the review, verifier, critic and security routes with their fallbacks, review and security settings, review budgets and timeouts, the prompts directory) runs a stratified sample of the reviewer evals on the current config and the proposal first, within today's remaining budget, and loses those changes if the reviewer gets worse or the evals can't finish.
+
 **Tuning loop.** Monthly, the orchestrator reads these metrics and proposes routing or prompt changes as a PR to `factory.yaml`. A human approves it like any other PR.
 
 ## M0 Bootstrap: a factory that builds itself
