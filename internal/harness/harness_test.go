@@ -103,6 +103,7 @@ const codexStream = `{"type":"thread.started","thread_id":"t"}
 func TestCodexParsesFinalAndUsage(t *testing.T) {
 	fr := &fakeRunner{out: codexStream}
 	r := req(t, true)
+	r.Images = []string{"/out/preview/a.png"}
 	res, err := NewCodex(fr).Run(context.Background(), r, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestCodexParsesFinalAndUsage(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 	cmd := strings.Join(fr.spec.Cmd, " ")
-	for _, want := range []string{"codex exec --json", "--sandbox read-only", "--output-schema /out/schema.json"} {
+	for _, want := range []string{"codex exec --json", "--sandbox read-only", "--output-schema /out/schema.json", "--image=/out/preview/a.png -"} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("cmd missing %q: %s", want, cmd)
 		}

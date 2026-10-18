@@ -107,6 +107,23 @@ test("PR panel shows CI, gates and findings linked to diff lines", async ({ page
   if (phone(info)) await noSidewaysScroll(page);
 });
 
+test("an item's page shows its build's screenshots, before and after", async ({ page }, info) => {
+  await page.goto("/app/");
+  await page.getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true }).click();
+  const gallery = page.getByTestId("screenshots");
+  await expect(gallery).toContainText("/settings");
+  const imgs = gallery.getByRole("img");
+  await expect(imgs).toHaveCount(4);
+  await expect(gallery.getByRole("img", { name: "/settings at phone, with the change" })).toBeVisible();
+  // Each image loads from the API, not a broken link.
+  const loaded = await imgs.evaluateAll((els) => els.every((e) => (e as HTMLImageElement).complete && (e as HTMLImageElement).naturalWidth > 0));
+  expect(loaded).toBe(true);
+  await gallery.getByText("What couldn't be captured").click();
+  await expect(gallery).toContainText("net::ERR_ABORTED");
+  await shot(page, info, "screenshots");
+  if (phone(info)) await noSidewaysScroll(page);
+});
+
 test("buttons go through the daemon and show its answer", async ({ page }) => {
   await page.goto("/app/items/1");
   await page.getByTestId("pr-panel").getByRole("button", { name: "Retry", exact: true }).click();

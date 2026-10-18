@@ -92,6 +92,7 @@ See [How ready a repo is](docs/quality.md#how-ready-a-repo-is).
 | Glance at the dashboard's **Floor** or your phone | Notifies you when something parks, a PR is ready or the budget runs out |
 | Turn on [`main_health`](docs/using.md#keeping-main-green) | Files a fix first in the queue when a check goes red or flaky on your default branch, and closes it once the check passes |
 | Turn on [`sources`](docs/using.md#issues-from-sentry-dependabot-and-todos), then label the issues you want built | Files issues from Sentry errors, Dependabot alerts and `TODO(factory)` comments, which wait for your approval, and closes them if the error, alert or comment goes away first |
+| Give a web app's repo a [`preview`](docs/using.md#screenshots-on-the-pr) | Runs the app once a change passes its gates, screenshots the pages it touches at desktop and phone sizes (before and after, if you like), shows them to the reviewer, and keeps one comment on the PR with them |
 
 Only someone with write access to the repo can start work, so outsiders can
 file issues and you choose which ones to build. See
@@ -102,9 +103,9 @@ file issues and you choose which ones to build. See
 | Guide | What's in it |
 | --- | --- |
 | [Setup](docs/setup.md) | Dependencies, what setup asks, running as a service, upgrades, manual setup with a GitHub App, WSL2 |
-| [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, keeping main green, issues from Sentry, Dependabot and TODOs, `factory pull`, `eval` and `compare` |
-| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, main health, sources, Claude-only review |
+| [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, keeping main green, issues from Sentry, Dependabot and TODOs, screenshots on the PR, `factory pull`, `eval` and `compare` |
+| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, main health, sources, PR previews, Claude-only review |
 | [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, the feature map, readiness, hidden scenarios, metrics, the replay set |
-| [Security](docs/security.md) | Who can start work, how jobs are isolated, sources' tokens and untrusted text, the egress allowlist, the control room's login |
+| [Security](docs/security.md) | Who can start work, how jobs are isolated, sources' tokens and untrusted text, running a preview, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |
 | [Status](docs/status.md) | What's built, and where this differs from [SPEC.md](SPEC.md) |

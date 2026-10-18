@@ -396,12 +396,22 @@ func (Local) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error) {
 	cmd.Stdout = stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = stderrTo(&stderr, s.Stderr)
+	// A child the command left running (an app started with &) can hold
+	// its output open: past WaitDelay the pipes are closed and Run returns.
+	cmd.WaitDelay = WaitDelay
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // the command itself exited 0
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return -1, ErrTimeout
 	}
 	return exitCode(err, stderr.String())
 }
+
+// WaitDelay is how long Local waits for a command's output to close
+// once the command has exited or been killed.
+const WaitDelay = 5 * time.Second
 
 func (Local) Alive(context.Context, string) bool { return false }
 func (Local) Kill(context.Context, string) error { return nil }

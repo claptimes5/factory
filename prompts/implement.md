@@ -14,7 +14,8 @@ Rules:
 4. If the repo has a `features.yaml`, keep it true:{{end}} when you add a user-facing feature, or move the code or tests of one, update its entry (`paths`, `tests`). The factory reads the map from the base branch to decide what your change touches, so edits to it take effect after merge.
 5. Commit your work with `git commit`{{if .Members}} in each repository you changed{{end}} (do not push). Stop after the commit.
 6. Finally, write `{{.OutDir}}/verdict.json` with exactly these fields:
-   `{"status": "done" | "blocked", "summary": "<what you changed>", "tests_added": ["<TestName>", ...], "blocker": "<why, if blocked, else empty>"}`
+   `{"status": "done" | "blocked", "summary": "<what you changed>", "tests_added": ["<TestName>", ...], "blocker": "<why, if blocked, else empty>"{{if .Preview}}, "pages": ["/<path>", ...]{{end}}}`{{if .Preview}}
+   The factory runs the app after its checks pass and screenshots its main pages for the reviewer and the PR. In `pages`, list the URL paths of the pages your change shows up on (`/settings`, `/orders/1`), most important first, or `[]` if it changes none.{{end}}
 
 Issue #{{.Issue.Number}}: {{.Issue.Title}}
 

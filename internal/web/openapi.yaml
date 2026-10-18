@@ -42,6 +42,24 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Diff" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/preview:
+    get:
+      summary: The screenshots of the item's newest build that took any
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Preview" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/preview/{file}:
+    get:
+      summary: One screenshot, as a PNG
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { name: file, in: path, required: true, schema: { type: string } }
+        - { name: job, in: query, description: "The build whose screenshot this is, as the shot's url names it", schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: The image, content: { image/png: { schema: { type: string, format: binary } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /items/{id}/park:
     post:
       summary: Park an item with a question for the human
@@ -462,6 +480,26 @@ components:
         job_id: { type: integer }
         patch: { type: string }
         findings: { type: array, items: { $ref: "#/components/schemas/Finding" } }
+    Preview:
+      type: object
+      required: [job_id, head, base, at, shots, notes]
+      properties:
+        job_id: { type: integer, description: The implement job that took them }
+        head: { type: string }
+        base: { type: string, description: "The base commit, when before screenshots were taken; else empty" }
+        at: { type: string }
+        shots: { type: array, items: { $ref: "#/components/schemas/PreviewShot" } }
+        notes: { type: array, items: { type: string }, description: "What couldn't be captured. Quotes the app: untrusted text." }
+    PreviewShot:
+      type: object
+      required: [url, page, viewport, side, width, height]
+      properties:
+        url: { type: string }
+        page: { type: string }
+        viewport: { type: string }
+        side: { type: string, enum: [before, after] }
+        width: { type: integer }
+        height: { type: integer }
     Feed:
       type: object
       required: [events]

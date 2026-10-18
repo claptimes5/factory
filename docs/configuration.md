@@ -21,6 +21,7 @@ change something by hand.
 - [Budgets](#budgets)
 - [Tuning](#tuning)
 - [Learning from your edits](#learning-from-your-edits)
+- [PR previews](#pr-previews)
 - [Claude-only review](#claude-only-review)
 
 The gates, the coverage floor, risk and the feature map are in
@@ -655,6 +656,81 @@ Read-only* repository permission: setup's app has it, and an app made
 before this needs it added (then accept it on the installation page). A
 `GITHUB_TOKEN` needs the `security_events` scope, or for a fine-grained
 token *Dependabot alerts: read*.
+
+## PR previews
+
+For a web app, the factory can screenshot the pages a change touches once
+it passes its gates, show them to the reviewer, and put them on the PR
+(see [Screenshots on the PR](using.md#screenshots-on-the-pr)). A repo opts
+in with a `preview` block; the only thing it needs is the command that
+runs the app:
+
+```yaml
+repos:
+  - name: acme/web
+    gates:
+      install: npm ci
+    preview:
+      start: npm run dev -- --port $PORT --host 127.0.0.1
+      # port: 3000              # where it listens; $PORT is set to it
+      # ready: /                # polled until it answers below 500
+      # wait: 60s               # how long it has to get there
+      pages: [/, /pricing]      # always captured; the builder adds its own
+      # viewports: [desktop, phone]
+      # before: true            # the base branch too, side by side
+      # url: https://pr-{pr}.preview.acme.dev   # your own per-PR deploy
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `start` | required | Runs the app, in the export the gates passed on, after `install`. `$PORT` is set. Bind to `127.0.0.1` or `0.0.0.0`. |
+| `port` | `3000` | Where the app listens. |
+| `ready` | `/` | The path polled every half second until it answers with a status below 500. |
+| `wait` | `previews.wait` | How long the app has to answer `ready`. |
+| `pages` | `/` | Paths always captured, in this order. The builder lists the pages its change shows up on, and those follow. |
+| `viewports` | `previews.viewports` | `desktop` (1280×800), `tablet` (820×1180), `phone` (390×844), or `WIDTHxHEIGHT`. |
+| `before` | `false` | Also runs the base branch, installed on its own export, so each page shows before and after. It roughly doubles the time a preview takes. |
+| `url` | none | A link to a live preview your own hosting (Vercel, Netlify, a review app) deploys for each PR, with `{pr}`, `{branch}` and `{sha}` filled in. The factory only links it. |
+
+The top-level `previews` block holds the defaults and limits for every
+repo:
+
+```yaml
+previews:
+  enabled: true          # false turns every repo's preview off
+  timeout: 5m            # one capture: start, wait and every screenshot
+  wait: 60s
+  max_screenshots: 12    # per build, before and after together
+  viewports: [desktop, phone]
+  keep_for: 336h         # how long a PR's images stay up
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | Each repo still needs its own `preview`. |
+| `timeout` | `5m` | One capture, from starting the app to the last screenshot; at least `30s`. Past it, the screenshots taken so far are kept. |
+| `wait` | `60s` | The default `wait`. |
+| `max_screenshots` | `12` | Images per build, at most 50. Pages × viewports × sides stays under it: the builder's pages are dropped first, then pages, then viewports. |
+| `viewports` | `desktop`, `phone` | The default `viewports`. |
+| `keep_for` | `336h` | How long the images on an open PR stay after its last build; at least `1h`. A PR's images are removed as soon as it merges or closes. |
+
+**The job image needs Chromium.** Screenshots are taken with the job
+image's own Playwright, so the repo doesn't depend on it. `factory images`
+builds a repo's image with `--build-arg PLAYWRIGHT=1` once it has a
+`preview`; run `factory images --force` after adding one. An image you
+build yourself needs Playwright installed globally (`npm install -g
+playwright && playwright install --with-deps chromium`, with `NODE_PATH`
+pointing at the global modules). Without it, the PR says so and the build
+goes on.
+
+**On GitLab**, the factory's token needs the Maintainer role and GitLab
+17.2 or later to remove the images when a PR closes. With less, they're
+uploaded and shown as usual, but stay until you delete them (Settings >
+General > Uploads); the comment says so.
+
+A page with a long scroll is cut at 4000 pixels. Previews aren't
+supported for a repo in a [workspace](#workspaces-one-change-across-repos)
+yet.
 
 ## Claude-only review
 

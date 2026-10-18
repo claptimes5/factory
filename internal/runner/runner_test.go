@@ -59,3 +59,19 @@ func TestRunnersCopyStderrOnAFailedRun(t *testing.T) {
 		}
 	}
 }
+
+// A command that leaves a child holding its output still returns once
+// it exits, and a killed one once it's killed.
+func TestLocalDoesntWaitForLeftoverChildren(t *testing.T) {
+	var out strings.Builder
+	start := time.Now()
+	code, err := Local{}.Run(context.Background(), Spec{Cmd: []string{"sh", "-c", "sleep 30 & echo hi"}}, &out)
+	if err != nil || code != 0 || out.String() != "hi\n" || time.Since(start) > 15*time.Second {
+		t.Fatalf("exit %d %v %q after %s", code, err, out.String(), time.Since(start))
+	}
+	start = time.Now()
+	_, err = Local{}.Run(context.Background(), Spec{Cmd: []string{"sh", "-c", "sleep 30 & sleep 30"}, Timeout: time.Second}, &out)
+	if !errors.Is(err, ErrTimeout) || time.Since(start) > 15*time.Second {
+		t.Fatalf("%v after %s", err, time.Since(start))
+	}
+}

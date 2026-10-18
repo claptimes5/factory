@@ -10,6 +10,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +26,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -310,6 +314,9 @@ new file mode 100644
 	if err := os.WriteFile(filepath.Join(jobs, fmt.Sprint(rev), "diff.patch"), []byte(patch), 0o644); err != nil {
 		return err
 	}
+	if err := seedPreview(filepath.Join(jobs, fmt.Sprint(impl), preview.Dir)); err != nil {
+		return err
+	}
 	if _, err := job(102, "implement", "sonnet", state.Running, 0, ""); err != nil {
 		return err
 	}
@@ -405,4 +412,47 @@ func seedHealth(ctx context.Context, st *store.Store) error {
 		}
 	}
 	return st.SetHealthIssue(ctx, store.HealthIssue{Repo: "acme/api", Check: "test", Kind: store.HealthFlaky, State: store.HealthFlaky, HeadSHA: "9f2c1e0", IssueNumber: 106})
+}
+
+// seedPreview writes screenshots of a made-up page at two sizes, before
+// and after, as a build with previews would leave them.
+func seedPreview(dir string) error {
+	m := &preview.Manifest{Head: "3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39", Base: "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2a9c1d", At: store.Now(),
+		Notes: []string{"/admin at phone: net::ERR_ABORTED"}}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, side := range []string{preview.Before, preview.After} {
+		for _, vp := range []struct {
+			name string
+			w, h int
+		}{{"desktop", 320, 200}, {"phone", 98, 211}} {
+			img := image.NewRGBA(image.Rect(0, 0, vp.w, vp.h))
+			bar := color.RGBA{0x94, 0xa3, 0xb8, 0xff}
+			if side == preview.After {
+				bar = color.RGBA{0x25, 0x63, 0xeb, 0xff}
+			}
+			for y := 0; y < vp.h; y++ {
+				for x := 0; x < vp.w; x++ {
+					c := color.RGBA{0xff, 0xff, 0xff, 0xff}
+					if y < vp.h/6 {
+						c = bar
+					}
+					img.Set(x, y, c)
+				}
+			}
+			name := side + "-01-" + vp.name + ".png"
+			f, err := os.Create(filepath.Join(dir, name))
+			if err != nil {
+				return err
+			}
+			err = png.Encode(f, img)
+			f.Close()
+			if err != nil {
+				return err
+			}
+			m.Shots = append(m.Shots, preview.Shot{File: name, Page: "/settings", Viewport: vp.name, Side: side, Width: vp.w, Height: vp.h})
+		}
+	}
+	return m.Save(dir)
 }

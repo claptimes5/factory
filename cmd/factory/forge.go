@@ -29,6 +29,8 @@ var (
 	_ forge                = (*gitlab.Client)(nil)
 	_ pipeline.HealthForge = (*github.Client)(nil)
 	_ pipeline.HealthForge = (*gitlab.Client)(nil)
+	_ pipeline.Previewer   = (*github.Client)(nil)
+	_ pipeline.Previewer   = (*gitlab.Client)(nil)
 )
 
 // gitlabAPI overrides the GitLab API base for every host; tests set it.
@@ -49,7 +51,7 @@ func newForge(cfg *config.Config, repo string, ts github.TokenSource) forge {
 	if rc := repoFor(cfg, repo); rc.GitLab() {
 		return &gitlab.Client{Project: rc.Path(), Host: rc.Host, BaseURL: gitlabAPI, Tokens: ts}
 	}
-	return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: ts}
+	return &github.Client{Repo: repo, BaseURL: githubAPI, WebURL: githubWeb, Tokens: ts}
 }
 
 // gitlabToken is the token for GitLab repos.

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
@@ -237,6 +238,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	if data.Members == nil {
 		data.Install, data.Checks = p.repoConf(it.Repo).Gates.Install, p.requiredChecks(it.Repo)
+		_, data.Preview = p.Cfg.PreviewFor(it.Repo)
 	}
 	for _, pt := range parts {
 		data.Coverage = data.Coverage || p.repoConf(pt.repo).Gates.Coverage != ""
@@ -316,6 +318,11 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	line := gates.VerdictLine(results)
 	if !gates.Passed(results) {
 		return fail(run, state.Failed, line+"\n\n"+gateDetails(results))
+	}
+	if len(members) == 1 {
+		// Only code that passed its gates runs as a preview, in the
+		// export they passed on.
+		p.capturePreview(ctx, j.ID, touched[0], filepath.Join(dir, "gate"+touched[0].sfx()), v.Pages)
 	}
 
 	primary := touched[0]
@@ -500,6 +507,9 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n-- // not into the middle of a character
+	}
 	return s[:n] + "…"
 }
 
@@ -631,12 +641,21 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.renderStep(j, "review", partRepos(parts), PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it)})
+	work := agentDir(dir, parts, false)
+	var shots []PromptShot
+	if !ws {
+		shots = p.reviewShots(in.ImplementJob, out, p.Runner.Paths(specFor(work, out)).Out)
+	}
+	prompt, err := p.renderStep(j, "review", partRepos(parts), PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Features: in.Features, Risk: riskOrLow(it.Risk), Diff: diff, Fence: fence(diff), Members: p.promptMembers(parts), TextOnly: textOnly(it), Screenshots: shots})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("review")
-	run := p.runAgent(ctx, p.members(it)[0], j, agentDir(dir, parts, false), out, prompt, schema, true, p.Cfg.Timeout("review"))
+	x := agentExtras{repo: p.members(it)[0]}
+	for _, s := range shots {
+		x.images = append(x.images, s.Path)
+	}
+	run := p.runAgentWith(ctx, j, work, out, prompt, schema, p.Cfg.Timeout("review"), x)
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -772,6 +791,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if err := p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{PRNumber: &n}); err != nil {
 		return err
 	}
+	p.postPreview(ctx, it, pr, in)
 	if err := p.Store.SetStage(ctx, it.ID, state.AwaitingHuman, "daemon", fmt.Sprintf("draft PR #%d ready", pr.Number)); err != nil {
 		return err
 	}

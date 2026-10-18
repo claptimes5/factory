@@ -133,6 +133,8 @@ type Repo struct {
 	// Files are copied from a checkout on this machine into each of this
 	// repo's job checkouts, and never committed. See Files.
 	Files *Files `yaml:"files,omitempty"`
+	// Preview screenshots the repo's web app for each PR. See Preview.
+	Preview *Preview `yaml:"preview,omitempty"`
 }
 
 // Files are files a repo needs to build or test but doesn't commit, such
@@ -169,7 +171,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil && r.Preview == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -301,6 +303,8 @@ type Config struct {
 	// Sources file issues from Sentry, Dependabot and TODO comments, for
 	// you to approve. See Sources.
 	Sources Sources `yaml:"sources"`
+	// Previews are the defaults and limits of each repo's preview.
+	Previews Previews `yaml:"previews"`
 
 	Budgets struct {
 		PerJob           map[string]float64 `yaml:"per_job"`
@@ -492,6 +496,7 @@ func (c *Config) defaults() {
 	c.learningDefaults()
 	c.healthDefaults()
 	c.sourcesDefaults()
+	c.previewDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
 	}
@@ -774,6 +779,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkLearning()...)
 	errs = append(errs, c.checkHealth()...)
 	errs = append(errs, c.checkSources()...)
+	errs = append(errs, c.checkPreviews()...)
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}

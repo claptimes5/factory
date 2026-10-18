@@ -101,8 +101,9 @@ func setupChecks(ctx context.Context, p *prompter, cfgPath string, cfg *config.C
 
 // jobImage is one image jobs run in, and how to build it.
 type jobImage struct {
-	tag, from string // from "" builds on the Dockerfile's default base
-	repos     []string
+	tag, from  string // from "" builds on the Dockerfile's default base
+	repos      []string
+	playwright bool // a repo on it takes screenshots, so it needs Chromium
 }
 
 // jobImages lists the images the configured repos need that the factory
@@ -111,13 +112,15 @@ type jobImage struct {
 func jobImages(cfg *config.Config) []jobImage {
 	var out []jobImage
 	add := func(tag, from, repo string) {
+		_, pw := cfg.PreviewFor(repo)
 		for i := range out {
 			if out[i].tag == tag {
 				out[i].repos = append(out[i].repos, repo)
+				out[i].playwright = out[i].playwright || pw
 				return
 			}
 		}
-		out = append(out, jobImage{tag: tag, from: from, repos: []string{repo}})
+		out = append(out, jobImage{tag: tag, from: from, repos: []string{repo}, playwright: pw})
 	}
 	for _, n := range cfg.RepoNames() {
 		r, _ := cfg.RepoConf(n)
@@ -135,6 +138,9 @@ func (im jobImage) buildArgs(dir string) []string {
 	a := []string{"build", "-t", im.tag}
 	if im.from != "" {
 		a = append(a, "--build-arg", "BASE="+im.from)
+	}
+	if im.playwright {
+		a = append(a, "--build-arg", "PLAYWRIGHT=1")
 	}
 	return append(a, dir)
 }

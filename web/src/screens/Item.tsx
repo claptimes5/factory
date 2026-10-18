@@ -3,6 +3,7 @@ import { ExternalLink } from "lucide-react";
 import { useItem, type Event } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
 import { PRPanel } from "@/components/PRPanel";
+import { Screenshots } from "@/components/Screenshots";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ago, duration, money } from "@/lib/utils";
 
@@ -69,6 +70,7 @@ export function ItemScreen() {
               </dl>
             </CardContent>
           </Card>
+          <Screenshots itemId={it.id} />
           <Card>
             <CardHeader>
               <CardTitle>Jobs</CardTitle>

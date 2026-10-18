@@ -193,6 +193,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The screenshots of the item's newest build that took any */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Preview"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{id}/preview/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One screenshot, as a PNG */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description The build whose screenshot this is, as the shot's url names it */
+                    job?: number;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                    file: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The image */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/png": string;
+                    };
+                };
+                400: components["responses"]["Error"];
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/park": {
         parameters: {
             query?: never;
@@ -1108,6 +1191,26 @@ export interface components {
             job_id: number;
             patch: string;
             findings: components["schemas"]["Finding"][];
+        };
+        Preview: {
+            /** @description The implement job that took them */
+            job_id: number;
+            head: string;
+            /** @description The base commit, when before screenshots were taken; else empty */
+            base: string;
+            at: string;
+            shots: components["schemas"]["PreviewShot"][];
+            /** @description What couldn't be captured. Quotes the app: untrusted text. */
+            notes: string[];
+        };
+        PreviewShot: {
+            url: string;
+            page: string;
+            viewport: string;
+            /** @enum {string} */
+            side: "before" | "after";
+            width: number;
+            height: number;
         };
         Feed: {
             events: components["schemas"]["Event"][];

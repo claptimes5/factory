@@ -81,20 +81,37 @@ func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, 
 	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
-// send makes a request; a response it returns is a 2xx, its body for the
-// caller to read and close.
+// send makes a request with in as its JSON body; a response it returns is
+// a 2xx, its body for the caller to read and close.
 func (c *Client) send(ctx context.Context, method, path string, in any) (*http.Response, error) {
-	tok, err := c.Tokens.Token(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var body io.Reader
+	ct := ""
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return nil, err
 		}
-		body = bytes.NewReader(b)
+		body, ct = bytes.NewReader(b), "application/json"
+	}
+	return c.sendBody(ctx, method, path, body, ct)
+}
+
+// upload is a request with a body of its own type, such as a form, and
+// its response's body.
+func (c *Client) upload(ctx context.Context, method, path string, body io.Reader, contentType string) ([]byte, error) {
+	resp, err := c.sendBody(ctx, method, path, body, contentType)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// sendBody is send with the body as given.
+func (c *Client) sendBody(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	tok, err := c.Tokens.Token(ctx)
+	if err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base()+path, body)
 	if err != nil {
@@ -105,8 +122,8 @@ func (c *Client) send(ctx context.Context, method, path string, in any) (*http.R
 		// leaves the host. GitLab takes every kind of token this way.
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	hc := c.HTTP
 	if hc == nil {
