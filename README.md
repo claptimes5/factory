@@ -384,6 +384,30 @@ A repo's `gates` override the top-level ones field by field. Its
 the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
 `scenarios_dir: none` to turn one off for that repo.
 
+### GitLab repos
+
+Repos can be on GitLab, gitlab.com or self-hosted, alongside GitHub ones.
+Name them by host and path:
+
+```yaml
+repos:
+  - you/api                          # GitHub
+  - gitlab.com/team/web              # gitlab.com
+  - git.example.com/platform/infra/deploy   # self-hosted, nested groups
+```
+
+The factory works them the same way: it picks up issues labeled
+`factory:ready` and opens a draft merge request for each. It reaches GitLab
+with `GITLAB_TOKEN`, which `factory setup` asks for and checks against each
+project. A project access token limits it to one project; for several, use
+a group access token or a personal token for a bot account. The token
+needs the `api` and `write_repository` scopes and the Developer role, or
+Maintainer if Developers can't push to the base branch.
+
+Two differences from GitHub: GitLab doesn't record why an issue was closed,
+so the readiness check never files a gap again once its issue is closed.
+The dashboard's CI panel shows the commit's pipeline jobs.
+
 ### How ready a repo is
 
 The factory can only prove its changes work as far as the repo's checks

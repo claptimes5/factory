@@ -124,3 +124,8 @@ func (m *Memory) CreateIssue(_ context.Context, title, body string, labels []str
 	m.issues[m.next] = &Issue{Number: m.next, Title: title, Body: body, Labels: labels}
 	return m.next, nil
 }
+
+// LabelPR is AddLabels: PRs and issues share numbers here, as on GitHub.
+func (m *Memory) LabelPR(ctx context.Context, n int, ls ...string) error {
+	return m.AddLabels(ctx, n, ls...)
+}

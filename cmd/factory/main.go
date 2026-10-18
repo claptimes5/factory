@@ -179,6 +179,9 @@ func envOr(k, def string) string {
 // tokens returns GitHub credentials for one repo. App tokens are scoped to
 // that repo alone.
 func tokens(cfg *config.Config, repo string) (github.TokenSource, error) {
+	if rc, ok := cfg.RepoConf(repo); ok && rc.GitLab() {
+		return gitlabToken()
+	}
 	if app := os.Getenv("FACTORY_GITHUB_APP_ID"); app != "" {
 		key, err := github.LoadAppKey(os.Getenv("FACTORY_GITHUB_APP_KEY"))
 		if err != nil {
@@ -189,7 +192,7 @@ func tokens(cfg *config.Config, repo string) (github.TokenSource, error) {
 		// one since dropped from the config) has its own looked up instead.
 		inst := os.Getenv("FACTORY_GITHUB_INSTALLATION_ID")
 		owner, _, _ := strings.Cut(repo, "/")
-		for _, r := range append(cfg.RepoNames(), repo) {
+		for _, r := range append(githubRepos(cfg), repo) {
 			if o, _, _ := strings.Cut(r, "/"); !strings.EqualFold(o, owner) {
 				inst = ""
 			}
@@ -233,8 +236,13 @@ func newRunner(cfg *config.Config) runner.Runner {
 
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	// Fail at start, not on the first job, when credentials are missing.
-	if _, err := tokens(cfg, cfg.RepoNames()[0]); err != nil {
-		return nil, err
+	for _, repos := range [][]string{githubRepos(cfg), gitlabRepos(cfg)} {
+		if len(repos) == 0 {
+			continue
+		}
+		if _, err := tokens(cfg, repos[0]); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
 		// Its container runs this binary as the MCP bridge.
@@ -251,7 +259,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 				ts = github.StaticToken("") // checked above; fails each call if the env changed
 			}
 			return pipeline.RepoClients{
-				GH:  &github.Client{Repo: repo, Tokens: ts},
+				GH:  newForge(cfg, repo, ts),
 				Git: repoGit(cfg, repo, ts),
 			}
 		},
@@ -315,11 +323,18 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 	srv := &web.Server{Store: st, Actions: p, Repos: cfg.RepoNames(), DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
+	// A repo since dropped from the config still links to its host.
+	links := func(repo string) config.Repo {
+		h, n := config.SplitRepo("", repo)
+		return config.Repo{Name: n, Host: h}
+	}
+	srv.IssueURL = func(repo string, n int) string { return links(repo).IssueURL(n) }
+	srv.PRURL = func(repo string, n int) string { return links(repo).PRURL(n) }
 	srv.Issue = web.CachedIssue(func(ctx context.Context, repo string, n int) (*github.Issue, error) {
 		return p.GitHubFor(repo).GetIssue(ctx, n)
 	}, 5*time.Minute)
 	srv.Checks = web.CachedChecks(func(ctx context.Context, repo, sha string) ([]github.CheckRun, error) {
-		c, ok := p.GitHubFor(repo).(*github.Client)
+		c, ok := p.GitHubFor(repo).(forge)
 		if !ok {
 			return nil, nil
 		}

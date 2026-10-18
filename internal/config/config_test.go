@@ -165,3 +165,33 @@ func TestRepoImagesAndEnvAreChecked(t *testing.T) {
 		}
 	}
 }
+
+func TestGitLabRepos(t *testing.T) {
+	b, _ := os.ReadFile("../../factory.yaml")
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	c, err := Parse([]byte("repos:\n  - o/api\n  - https://gitlab.com/team/web.git\n  - {name: platform/infra/deploy, host: git.example.com}\n  - github.com/o/cli\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.RepoNames(), ","); got != "o/api,gitlab.com/team/web,git.example.com/platform/infra/deploy,o/cli" {
+		t.Fatalf("names %s", got)
+	}
+	web, _ := c.RepoConf("GitLab.com/team/web")
+	if !web.GitLab() || web.Host != "gitlab.com" || web.Path() != "team/web" || web.CloneURL() != "https://gitlab.com/team/web.git" ||
+		web.IssueURL(3) != "https://gitlab.com/team/web/-/issues/3" || web.PRURL(4) != "https://gitlab.com/team/web/-/merge_requests/4" {
+		t.Fatalf("%+v", web)
+	}
+	api, _ := c.RepoConf("o/api")
+	if api.GitLab() || api.Path() != "o/api" || api.PRURL(4) != "https://github.com/o/api/pull/4" {
+		t.Fatalf("%+v", api)
+	}
+	deploy, _ := c.RepoConf("git.example.com/platform/infra/deploy")
+	if out, _ := yaml.Marshal(deploy); strings.TrimSpace(string(out)) == "" || strings.Contains(string(out), "host:") {
+		t.Fatalf("marshal: %s", out)
+	}
+	for _, bad := range []string{"gitlab.com/onlyone", "o/a/b"} {
+		if _, err := Parse([]byte("repos: [" + bad + "]\n" + base)); err == nil {
+			t.Errorf("%s: want an error", bad)
+		}
+	}
+}

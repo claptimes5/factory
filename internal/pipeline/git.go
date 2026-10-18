@@ -27,6 +27,9 @@ type Git struct {
 	Tokens     github.TokenSource // nil for unauthenticated remotes
 	Author     string             // "name <email>" for commits the daemon makes
 	AskPassDir string             // where the askpass script is created ("" = os.TempDir)
+	// User is the username sent with the token: x-access-token (GitHub's)
+	// when empty; GitLab takes oauth2.
+	User string
 
 	askOnce sync.Once
 	askPath string
@@ -71,7 +74,7 @@ func (g *Git) askPass() (string, error) {
 			g.askErr = err
 			return
 		}
-		// Username is in the URL (x-access-token); the password comes from env.
+		// Username is in the URL; the password comes from env.
 		_, err = f.WriteString("#!/bin/sh\nprintf '%s\\n' \"$FACTORY_GIT_PASSWORD\"\n")
 		if cerr := f.Close(); err == nil {
 			err = cerr
@@ -86,7 +89,11 @@ func (g *Git) askPass() (string, error) {
 
 func (g *Git) remote() string {
 	if g.Tokens != nil && strings.HasPrefix(g.RemoteURL, "https://") {
-		return "https://x-access-token@" + strings.TrimPrefix(g.RemoteURL, "https://")
+		user := g.User
+		if user == "" {
+			user = "x-access-token"
+		}
+		return "https://" + user + "@" + strings.TrimPrefix(g.RemoteURL, "https://")
 	}
 	return g.RemoteURL
 }

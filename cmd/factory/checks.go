@@ -13,8 +13,8 @@ import (
 	"github.com/claptimes5/factory/internal/stack"
 )
 
-// ghFiles reads a repo's default branch through the GitHub API.
-type ghFiles struct{ gh *github.Client }
+// ghFiles reads a repo's default branch through its host's API.
+type ghFiles struct{ gh forge }
 
 func (f ghFiles) List(ctx context.Context, dir string) ([]string, error) {
 	return f.gh.ListDir(ctx, dir)
@@ -34,7 +34,7 @@ func setupChecks(ctx context.Context, p *prompter, cfgPath string, cfg *config.C
 			p.say("%s already has its own checks or image in %s; keeping them.", r.Name, cfgPath)
 			continue
 		}
-		gh, err := client(r.Name)
+		gh, _, err := client(r.Name)
 		if err != nil {
 			p.say("%s: %v", r.Name, err)
 			continue

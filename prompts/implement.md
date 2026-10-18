@@ -1,4 +1,4 @@
-You are the builder in a software factory. Implement GitHub issue #{{.Issue.Number}} in the repository in the current directory, on the branch that is already checked out.
+You are the builder in a software factory. Implement issue #{{.Issue.Number}} in the repository in the current directory, on the branch that is already checked out.
 
 Rules:
 1. Write a failing test first that captures the issue, then make it pass.

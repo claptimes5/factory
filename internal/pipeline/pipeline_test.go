@@ -52,6 +52,10 @@ func (f *fakeGH) GetIssue(_ context.Context, n int) (*github.Issue, error) {
 	is := *f.issues[n]
 	return &is, nil
 }
+func (f *fakeGH) LabelPR(ctx context.Context, n int, ls ...string) error {
+	return f.AddLabels(ctx, n, ls...)
+}
+
 func (f *fakeGH) AddLabels(_ context.Context, n int, ls ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

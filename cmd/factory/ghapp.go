@@ -41,8 +41,8 @@ var appPermissions = map[string]string{
 // and GitHub sends back a code this exchanges for the app's ID and key.
 // It returns the app's ID, slug and the path the key was saved to.
 func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir string) (id, slug, keyPath string, err error) {
-	// The app belongs to the first repo's owner.
-	first := cfg.RepoNames()[0]
+	// The app belongs to the first GitHub repo's owner.
+	first := githubRepos(cfg)[0]
 	owner, name, _ := strings.Cut(first, "/")
 	org, err := github.IsOrg(ctx, githubAPI, owner)
 	if err != nil {
@@ -109,7 +109,7 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", local(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = manifestPage.Execute(w, map[string]string{"Action": newURL + "?state=" + state, "Manifest": string(manifest), "Repo": strings.Join(cfg.RepoNames(), ", ")})
+		_ = manifestPage.Execute(w, map[string]string{"Action": newURL + "?state=" + state, "Manifest": string(manifest), "Repo": strings.Join(githubRepos(cfg), ", ")})
 	}))
 	mux.HandleFunc("GET /callback", local(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -186,7 +186,7 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 	app := &github.AppTokens{AppID: appID, Key: key, BaseURL: githubAPI}
 	byOwner := owners(cfg)
 	for i := 0; ; i++ {
-		first, missing, err := installations(ctx, app, cfg.RepoNames())
+		first, missing, err := installations(ctx, app, githubRepos(cfg))
 		if err == nil && len(missing) == 0 {
 			return first, nil
 		}
@@ -202,7 +202,7 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 			if len(missing) > 1 {
 				p.say("Then open the same link again for the next account.")
 			}
-			if appOwner, _, _ := strings.Cut(cfg.RepoNames()[0], "/"); slices.ContainsFunc(missing, func(o string) bool { return !strings.EqualFold(o, appOwner) }) {
+			if appOwner, _, _ := strings.Cut(githubRepos(cfg)[0], "/"); slices.ContainsFunc(missing, func(o string) bool { return !strings.EqualFold(o, appOwner) }) {
 				p.say("If GitHub doesn't offer an account other than %s, the app is private. Make it", appOwner)
 				p.say("public first: open the app's settings, go to Advanced, and click \"Make public\".")
 			}
@@ -217,10 +217,10 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 	}
 }
 
-// owners groups the configured repos by owner (lowercased).
+// owners groups the configured GitHub repos by owner (lowercased).
 func owners(cfg *config.Config) map[string][]string {
 	m := map[string][]string{}
-	for _, r := range cfg.RepoNames() {
+	for _, r := range githubRepos(cfg) {
 		o, _, _ := strings.Cut(r, "/")
 		m[strings.ToLower(o)] = append(m[strings.ToLower(o)], r)
 	}

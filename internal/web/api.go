@@ -261,11 +261,11 @@ func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
 		Risk: it.Risk, Priority: it.Priority, ParentID: it.ParentID, Branch: it.Branch, PRNumber: it.PRNumber,
 		CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
 		Repo: it.Repo, Ref: s.ref(it.Repo, it.IssueNumber),
-		IssueURL: fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
+		IssueURL: s.issueURL(it.Repo, it.IssueNumber),
 		NeedsYou: it.Stage == state.AwaitingHuman || it.Stage == state.Parked,
 	}
 	if it.PRNumber > 0 {
-		a.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)
+		a.PRURL = s.prURL(it.Repo, it.PRNumber)
 	}
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
@@ -515,7 +515,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	}
 	p := APIPRPanel{PRNumber: it.PRNumber, Checks: []APICheck{}, Gates: []APIGate{}}
 	if it.PRNumber > 0 {
-		p.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)
+		p.PRURL = s.prURL(it.Repo, it.PRNumber)
 	}
 	for i := len(jobs) - 1; i >= 0; i-- {
 		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" {

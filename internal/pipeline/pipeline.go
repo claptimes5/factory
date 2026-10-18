@@ -59,11 +59,13 @@ func Labels(intake string) []Label {
 // again doesn't file them twice.
 const LabelReadiness = "factory:readiness"
 
-// GitHub is the subset of the GitHub client the pipeline uses.
+// GitHub is the subset of the GitHub client the pipeline uses. The GitLab
+// client has the same methods, with merge requests for pull requests.
 type GitHub interface {
 	ListIssues(ctx context.Context, label string) ([]github.Issue, error)
 	GetIssue(ctx context.Context, n int) (*github.Issue, error)
 	AddLabels(ctx context.Context, n int, labels ...string) error
+	LabelPR(ctx context.Context, n int, labels ...string) error
 	RemoveLabel(ctx context.Context, n int, label string) error
 	Comment(ctx context.Context, n int, body string) error
 	FindPR(ctx context.Context, branch string) (*github.PR, error)

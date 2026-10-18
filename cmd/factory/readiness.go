@@ -61,7 +61,7 @@ func marker(key string) string { return "<!-- factory-readiness: " + key + " -->
 // decided against it. A gap whose issue was closed as done is back, so it
 // is filed again. Once the repo is ready, waiting are the open issues
 // filed without the intake label while it had blockers.
-func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report, intake string) (todo []readiness.Finding, waiting []int, skipped int, err error) {
+func planIssues(ctx context.Context, gh forge, r *readiness.Report, intake string) (todo []readiness.Finding, waiting []int, skipped int, err error) {
 	if r.Incomplete {
 		return nil, nil, 0, nil
 	}
@@ -83,7 +83,9 @@ func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report, int
 		dup := false
 		for _, o := range filed {
 			same := strings.Contains(o.Body, marker(f.Issue.Key)) || strings.EqualFold(o.Title, f.Issue.Title)
-			dup = dup || (same && (o.State != "closed" || o.StateReason == "not_planned"))
+			// Only a close known to be done (GitHub's "completed") lets it
+			// back in; GitLab gives no reason, so a closed issue stays closed.
+			dup = dup || (same && (o.State != "closed" || o.StateReason != "completed"))
 		}
 		if dup {
 			skipped++
@@ -98,7 +100,7 @@ func planIssues(ctx context.Context, gh *github.Client, r *readiness.Report, int
 // intake label, so the factory starts on them; while the repo has
 // blockers only those are queued, since every other job would fail until
 // they are fixed.
-func fileIssues(ctx context.Context, gh *github.Client, r *readiness.Report, todo []readiness.Finding, intake string, queue bool) (filed []int, err error) {
+func fileIssues(ctx context.Context, gh forge, r *readiness.Report, todo []readiness.Finding, intake string, queue bool) (filed []int, err error) {
 	for _, f := range todo {
 		labels := []string{pipeline.LabelReadiness}
 		if queue && (r.Ready || f.Level == readiness.Blocker) {
@@ -126,7 +128,7 @@ func untouched(o github.Issue, intake string) bool {
 }
 
 // queueIssues gives issues the intake label.
-func queueIssues(ctx context.Context, gh *github.Client, issues []int, intake string) error {
+func queueIssues(ctx context.Context, gh forge, issues []int, intake string) error {
 	for _, n := range issues {
 		if err := gh.AddLabels(ctx, n, intake); err != nil {
 			return err
@@ -187,9 +189,9 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 		}
 		return nil
 	}
-	gh, ok := p.GitHubFor(repo).(*github.Client)
+	gh, ok := p.GitHubFor(repo).(forge)
 	if !ok {
-		return fmt.Errorf("no GitHub client")
+		return fmt.Errorf("no client for its host")
 	}
 	todo, waiting, skipped, err := planIssues(ctx, gh, r, cfg.Intake.Label)
 	if err != nil {
@@ -221,11 +223,11 @@ func skippedNote(n int) string {
 // the work that makes it verifiable.
 func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client clientFor) {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: newRunner(cfg), JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
-		gh, err := client(repo)
+		gh, ts, err := client(repo)
 		if err != nil {
-			gh = &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: github.StaticToken("")}
+			gh, ts = newForge(cfg, repo, github.StaticToken("")), nil
 		}
-		return pipeline.RepoClients{GH: gh, Git: repoGit(cfg, repo, gh.Tokens)}
+		return pipeline.RepoClients{GH: gh, Git: repoGit(cfg, repo, ts)}
 	}}
 	p.say("This clones each repo, runs its install and checks on its base branch, runs the")
 	p.say("tests twice to catch flakiness, and looks for end-to-end tests, a feature map and CI.")
@@ -248,7 +250,7 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		if len(r.Issues()) == 0 {
 			continue
 		}
-		gh, err := client(repo)
+		gh, _, err := client(repo)
 		if err != nil {
 			p.say("%s: %v", repo, err)
 			continue
@@ -297,9 +299,4 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			p.say("Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", repo)
 		}
 	}
-}
-
-// repoGit is how the factory reaches a repo with git.
-func repoGit(cfg *config.Config, repo string, ts github.TokenSource) *pipeline.Git {
-	return &pipeline.Git{RemoteURL: "https://github.com/" + repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)}
 }
