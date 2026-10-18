@@ -164,8 +164,8 @@ type fakeHarness struct {
 	prompts map[string][]string
 	plant   string // a verdict file written where a planted hook could write it
 	orch    func(req harness.RunRequest) (string, error)
-	resumes []string // Resume of each implement call
-	noSess  bool     // fail any resumed run, as if the session were gone
+	resumes []string            // Resume of each implement call
+	noSess  bool                // fail any resumed run, as if the session were gone
 	nets    map[string][]string // Services of each call, by stage
 }
 

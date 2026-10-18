@@ -119,9 +119,9 @@ type Pipeline struct {
 	gateSeq    atomic.Int64    // unique suffix for gate container names
 	svcMu      sync.Mutex
 	svcNets    map[int64]string // job ID -> its services network
-	inflight   sync.Map        // item id -> job id while a job for it, and its follow-ups, run
-	cancelled  sync.Map        // job id -> true for running jobs a human cancelled
-	jobCancel  sync.Map        // job id -> context.CancelFunc of a running job
+	inflight   sync.Map         // item id -> job id while a job for it, and its follow-ups, run
+	cancelled  sync.Map         // job id -> true for running jobs a human cancelled
+	jobCancel  sync.Map         // job id -> context.CancelFunc of a running job
 	// act serializes state-changing actions that check and then act:
 	// intake, human actions and the orchestrator's tools.
 	act    sync.Mutex
@@ -883,7 +883,7 @@ type PromptData struct {
 	Findings        string
 	PreviousFailure string
 	Gates           string
-	Features        string // the change's blast radius, when the repo has a feature map
+	Features        string   // the change's blast radius, when the repo has a feature map
 	Risk            string   // low, medium or high
 	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
