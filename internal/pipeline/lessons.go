@@ -14,8 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/pathglob"
 	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/state"
@@ -121,15 +123,30 @@ var (
 	blanketLine = regexp.MustCompile(`(?i)\b(any|all|every|anything|everything|never flag|always approve|approve|skip|ignore)\b`)
 )
 
-// riskyReviewLine says why a learned line can't go in REVIEW.md, or "".
-func riskyReviewLine(l string) string {
+// riskyReviewLine says why a learned line can't go in REVIEW.md, or "":
+// it names security-sensitive code, by its words or by a path in it that
+// the sensitive list (areas) has.
+func riskyReviewLine(l string, areas []pathglob.Area) string {
 	switch {
-	case reviewmd.Sensitive(l) || riskyLine.MatchString(l):
+	case reviewmd.Sensitive(l) || riskyLine.MatchString(l) || slices.ContainsFunc(linePaths(l), func(f string) bool { return reviewmd.SensitiveIn(areas, f) }):
 		return "it's about security-sensitive code"
 	case blanketLine.MatchString(l):
 		return "it's a blanket rule, not one false alarm"
 	}
 	return ""
+}
+
+// linePaths are the words of a line that look like paths: with a / or a
+// dot inside, such as internal/upload/ or jwt.go.
+func linePaths(l string) []string {
+	var out []string
+	for _, w := range strings.FieldsFunc(l, func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune("`'\"()[]{}<>,;", r) }) {
+		w = strings.TrimRight(w, ".:!?")
+		if strings.Trim(w, "./") != "" && strings.ContainsAny(w, "/.") {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // overruled says how a finding that blocked was overruled, or "" if it
@@ -741,7 +758,7 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		v.ReviewLines = nil
 	}
 	v.ReviewLines = slices.DeleteFunc(v.ReviewLines, func(l verdict.Lesson) bool {
-		if why := riskyReviewLine(l.Line); why != "" {
+		if why := riskyReviewLine(l.Line, p.Cfg.SensitiveAreas()); why != "" {
 			p.log().Info("lessons: REVIEW.md line refused", "line", oneLine(l.Line), "why", why)
 			return true
 		}

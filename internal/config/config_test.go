@@ -653,7 +653,7 @@ func TestRiskSettings(t *testing.T) {
 	c := load(t)
 	r := c.RiskRules()
 	if r.MediumLines != 150 || r.HighLines != 300 || r.MediumFiles != 10 || r.HighFiles != 25 || len(r.HighPaths) != 0 ||
-		!slices.Contains(r.Auth, "auth") || !slices.Contains(r.Migrations, "migrations/") || !slices.Contains(r.MediumPaths, "Dockerfile") ||
+		!slices.Equal(areaNames(r.Auth), authAreas) || !slices.Equal(areaNames(r.Migrations), []string{"migrations"}) || !slices.Contains(r.MediumPaths, "Dockerfile") ||
 		!slices.Equal(r.NeedsPerson, []string{"migrations", "new_dependencies", "auth", "deleted_tests"}) {
 		t.Fatalf("defaults %+v", r)
 	}
@@ -666,7 +666,7 @@ func TestRiskSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r := c.RiskRules(); r.HighLines != 0 || r.MediumLines != 150 || r.MediumFiles != 5 || !slices.Equal(r.HighPaths, []string{"billing/"}) ||
-		!slices.Equal(r.Auth, []string{"login*"}) || r.NeedsPerson == nil || len(r.NeedsPerson) != 0 {
+		len(r.Auth) != 5 || r.Auth[4].Name != "auth" || !slices.Equal(r.Auth[4].Globs, []string{"login*"}) || r.NeedsPerson == nil || len(r.NeedsPerson) != 0 {
 		t.Fatalf("set: %+v", r)
 	}
 	for _, bad := range []struct{ risk, err string }{
@@ -674,7 +674,7 @@ func TestRiskSettings(t *testing.T) {
 		{"{auth_paths: ['[']}", "risk.auth_paths"},
 		{"{medium_lines: 500}", "risk.medium_lines (500) is above risk.high_lines (300)"},
 		{"{high_files: -2}", "risk.high_files must be a positive number"},
-		{"{migration_paths: [/]}", "risk.migration_paths: an empty pattern"},
+		{"{migration_paths: [/]}", `risk.migration_paths: glob "/": is empty`},
 	} {
 		if _, err := set(bad.risk); err == nil || !strings.Contains(err.Error(), bad.err) {
 			t.Errorf("%s: %v", bad.risk, err)

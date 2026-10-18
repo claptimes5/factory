@@ -40,10 +40,10 @@ func (p *Pipeline) CheckSecurityPrompt() error {
 }
 
 // securityWhy says why review job j's change gets a security pass, or nil
-// when it doesn't: a changed file matches security.paths, it touches a
-// high-risk feature in the feature map on the base branch, the code it
-// adds does something risky (security.content), or an earlier pass's
-// finding is still open, which only a pass may rule on. What can't be
+// when it doesn't: a changed file is sensitive (see SecurityMatch), it
+// touches a high-risk feature in the feature map on the base branch, the
+// code it adds does something risky (security.content), or an earlier
+// pass's finding is still open, which only a pass may rule on. What can't be
 // read is a reason too: the pass runs rather than be skipped on a guess.
 func (p *Pipeline) securityWhy(ctx context.Context, j *store.Job, parts []*part, diff string, rr *reviewRound) []string {
 	sec := p.Cfg.Security
@@ -64,7 +64,7 @@ func (p *Pipeline) securityWhy(ctx context.Context, j *store.Job, parts []*part,
 			why = append(why, "the changed files couldn't be listed: "+err.Error())
 			continue
 		}
-		why = append(why, securityPaths(sec.Match, changed, in)...)
+		why = append(why, securityPaths(p.Cfg.SecurityMatch, changed, in)...)
 		m, err := p.loadMap(ctx, pt.repo, pt.ws.Repo, pt.base)
 		if err != nil {
 			why = append(why, "the feature map couldn't be read, so its high-risk features can't be ruled out: "+err.Error())

@@ -18,6 +18,7 @@ change something by hand.
 - [Skill sets](#skill-sets)
 - [Models and escalation](#models-and-escalation)
 - [Auto-merge](#auto-merge)
+- [Sensitive code](#sensitive-code)
 - [Risk from the diff](#risk-from-the-diff)
 - [Budgets](#budgets)
 - [Asking before costly builds](#asking-before-costly-builds)
@@ -505,6 +506,81 @@ you as usual. On GitLab, `method: rebase` and `merge` both follow the
 project's own merge method; only `squash` changes it. PRs waiting to
 auto-merge count toward `awaiting_human_max` until they merge.
 
+## Sensitive code
+
+One list says which code is sensitive: where a mistake is an exploit, a
+leak or lost money. The security pass, risk from the diff and REVIEW.md's
+`skip` all read it, so a path is treated the same by each:
+
+- A change to a file in any area gets a [security pass](#the-security-pass).
+- A change to code in `auth`, `crypto`, `secrets` or `payments` is the
+  `auth` kind of change, and one in `migrations` a migration: both high
+  risk, and waiting for you while `risk.needs_person` lists them (see
+  [Risk from the diff](#risk-from-the-diff)).
+- REVIEW.md's `skip` never covers a file in any area, nor one whose name
+  has a word such as auth, secret, token, payment or billing in it, which
+  config can't take away.
+
+The `sensitive` block names areas, each a list of globs:
+
+```yaml
+sensitive:
+  payments: [internal/ledger/, "*payment*"]  # replaces payments' defaults
+  sql: []                                     # turns sql off
+  reports: [internal/export/]                 # an area of your own
+```
+
+Setting an area replaces its defaults, `[]` turns it off, and an area of
+another name (lowercase letters, digits, `_` and `-`) is added: it gets
+the security pass and REVIEW.md's guard, but isn't auth code. The block
+applies to every repo. A glob the daemon can't read refuses the config.
+
+A glob ignores case. One with no `/` matches any one part of a path, a
+directory's name or the file's: `*auth*` catches `internal/auth/check.go`,
+`AuthController.php` and `authors.go` alike (a false start is cheaper
+than a miss); ending in `/`, only a directory's (`migrations/` matches
+`db/migrations/0003.sql` at any depth). Any other is matched from the
+repo's root, part by part, where `*` stops at `/` and a part that is only
+`**` matches any number of parts (`app/**/keys.rb`). It matches what it
+names and everything under it, so `internal/billing` names the directory
+too; ending in `/`, only what's under it. A leading `/` or `./` changes
+nothing. `\`, empty, `.` and `..` parts, and `**` inside a part (`a**b`)
+are refused. The same globs, read the same way, are used by
+`security.paths` and `risk`'s paths. The defaults:
+
+- **`auth`:** `*auth*`, `*oidc*`, `*saml*`, `*jwt*`, `sso`, `sso.*`,
+  `sso_*`, `*login*`, `*logout*`, `*signin*`, `*signup*`, `*session*`,
+  `*cookie*`, `*password*`, `passwd*`, `*permission*`, `*rbac*`, `acl`,
+  `acl.*`, `*accesscontrol*`, `*access_control*`, `*csrf*`, `*cors*`,
+  `*middleware*`, `devise*`.
+- **`crypto`:** `*crypt*`, `*cipher*`, `*hmac*`, `tls`, `tls.*`, `cert`,
+  `certs`, `cert.*`, `cert_*`, `cert-*`, `*certificate*`.
+- **`secrets`:** `*.pem`, `*.key`, `*.crt`, `*.p12`, `*.pfx`, `id_rsa*`,
+  `*secret*`, `*credential*`, `*token*`, `*apikey*`, `*api_key*`, `.env`,
+  `.env.*`, `*.env`, `.npmrc`, `.pypirc`.
+- **`payments`:** `*payment*`, `*billing*`, `*invoice*`, `*checkout*`,
+  `*wallet*`, `*stripe*`.
+- **`input`** (untrusted input, files and outbound requests):
+  `*sanitiz*`, `*upload*`, `*download*`, `*multipart*`, `*serializ*`,
+  `*webhook*`, `*redirect*`, `*proxy*`, `*unzip*`, `*untar*`, `*archive*`.
+- **`exec`:** `exec`, `exec.*`, `exec_*`, `exec-*`, `*exec`, `*exec.*`,
+  `*_exec_*`, `*shell*`, `*subprocess*`.
+- **`sql`:** `*.sql`, `*sql*`.
+- **`migrations`:** `migrations`, `migrate`, `migrate.*`, `migration/`,
+  `alembic/`, `flyway/`, `liquibase/`.
+- **`ci`:** `.github/workflows/`, `.gitlab-ci.yml`.
+- **`dependencies`:** `go.mod`, `go.sum`, `go.work`, `vendor`,
+  `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`,
+  `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `requirements*.txt`,
+  `Pipfile`, `Pipfile.lock`, `poetry.lock`, `pyproject.toml`, `uv.lock`,
+  `setup.py`, `Gemfile`, `Gemfile.lock`, `*.gemspec`, `Cargo.toml`,
+  `Cargo.lock`, `composer.json`, `composer.lock`, `pom.xml`,
+  `build.gradle`, `build.gradle.kts`, `gradle.lockfile`, `*.csproj`,
+  `packages.lock.json`, `mix.exs`, `mix.lock`, `Package.swift`,
+  `Package.resolved`.
+- **`infra`:** `Dockerfile`, `Dockerfile.*`, `*.dockerfile`,
+  `Containerfile`, `docker-compose*.y*ml`, `*.tf`.
+
 ## Risk from the diff
 
 Once a change is built, the factory rates its risk again from the diff and
@@ -519,7 +595,7 @@ risk:
   medium_files: 10      # changed files for medium risk
   high_files: 25        # ... and for high
   high_paths: []        # e.g. [billing/, "config/secrets*"]
-  # medium_paths, auth_paths, migration_paths: see below
+  # medium_paths: see below; auth code and migrations: the sensitive list
   needs_person: [migrations, new_dependencies, auth, deleted_tests]
 ```
 
@@ -529,23 +605,16 @@ risk:
 | `medium_files`, `high_files` | `10`, `25` | The same for the number of changed files. |
 | `medium_paths` | deploy and infrastructure files: `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `docker-compose*.yml`/`.yaml`, `*.tf`, `terraform/`, `infra/`, `deploy/`, `k8s/`, `helm/`, `Procfile`, `fly.toml`, `vercel.json`, `netlify.toml` | A change touching one is at least medium risk. |
 | `high_paths` | none | A change touching one is high risk. |
-| `auth_paths` | names of auth code: `auth`, `auth.*`, `auth_*`, `*_auth`, `authn*`, `authz*`, `authenticat*`, `authoriz*`, `oauth*`, `oidc*`, `saml*`, `sso`, `*jwt*`, `login*`, `logout*`, `session`, `sessions_*`, `password*`, `credential*`, `permission*`, `rbac*`, `acl`, `devise*` and a few more | A change to a file matching one is auth code: high risk. Tests, docs and images (`.md`, `.txt`, `.png` and the like) and vendored code (`vendor/`, `node_modules/`, `third_party/`) don't count. |
-| `migration_paths` | `migrations/`, `migration/`, `migrate/`, `alembic/`, `flyway/`, `liquibase/` | A change to a file under one, other than a test or a doc, is a migration: high risk. |
+| `auth_paths` | none | Globs added to the [sensitive list](#sensitive-code)'s `auth`, `crypto`, `secrets` and `payments` areas. A change to a file matching one of those is the `auth` kind of change: high risk. Tests, docs and images (`.md`, `.txt`, `.png` and the like) and vendored code (`vendor/`, `node_modules/`, `third_party/`) don't count. |
+| `migration_paths` | none | Globs added to the sensitive list's `migrations` area. A change to a file matching one, other than a test or a doc, is a migration: high risk. |
 | `needs_person` | all four | The kinds of change that never merge themselves, whatever their risk: `migrations`, `new_dependencies`, `auth`, `deleted_tests`. `[]` lists none; the kinds still raise the risk. |
 
-Setting a list replaces its defaults, so to add to `auth_paths`, list the
-defaults you want to keep too.
-
-A pattern ignores case. One with a `/` inside is matched against the whole
-path (`db/schema.rb`, `app/*/auth.rb`), and one ending in `/` against the
-path's leading directories (`config/initializers/`). One without a `/` is
-matched against each part of the path: `auth` matches
-`internal/auth/token.go`, and `session*` matches
-`app/controllers/sessions_controller.rb`. Ending in `/`, it matches only a
-directory (`migrations/` matches `db/migrations/0003.sql` at any depth).
-`*` stops at `/`. A leading `/` or `./` is taken off (every path is from
-the repo's root anyway), and `**` is refused: a pattern without a `/`
-already matches at any depth.
+Setting `medium_paths` or `high_paths` replaces its defaults, so list the
+defaults you want to keep too. Which code is auth code or a migration is
+the [sensitive list](#sensitive-code)'s to say; `auth_paths` and
+`migration_paths` only add to it. The reason names the area and the
+glob: "changes crypto code: `*crypt*` in `internal/crypto/aes.go`".
+Patterns match as the sensitive list's globs do.
 
 The block applies to every repo. A diff the factory can't rate (it can't
 read a manifest, say) waits for you as if it needed a person.
@@ -1098,7 +1167,7 @@ changes it:
 ```yaml
 security:
   enabled: true
-  paths: [...]                     # left out: the defaults below
+  paths: [...]                     # left out: the sensitive list
   extra_paths: [internal/billing/] # added to paths
   content: true                    # risky added code starts a pass too
 ```
@@ -1106,51 +1175,16 @@ security:
 | Key | Default | What it does |
 | --- | --- | --- |
 | `enabled` | `true` | `false` turns the pass off: no change gets one. |
-| `paths` | the defaults below | Globs of files whose change starts a pass. Setting it replaces the defaults. |
-| `extra_paths` | none | Globs added to `paths`, to extend the defaults without repeating them. |
+| `paths` | the [sensitive list](#sensitive-code) | Globs of files whose change starts a pass. Setting it replaces the sensitive list for the pass; prefer setting `sensitive`. |
+| `extra_paths` | none | Globs added to `paths`, or to the sensitive list. |
 | `content` | `true` | Code a change adds that runs a command, builds SQL from strings, evaluates code, deserializes an unsafe format, writes raw HTML or turns off TLS checks starts a pass too, in any file but tests and docs. |
 
-A glob ignores case. One with no `/` matches any one part of a path, a
-directory's name or the file's: `*auth*` catches `internal/auth/check.go`,
-`AuthController.php` and `authors.go` alike (a pass that finds nothing
-is cheaper than a miss). Any other is matched from the repo's root, part
-by part, where `*` stops at `/` and a part that is only `**` matches any
-number of parts (`app/**/keys.rb`). It matches what it names and
-everything under it, so `internal/billing` and `internal/billing/` both
-name the directory; a leading `/` or `./` changes nothing. `\`, empty,
-`.` and `..` parts, and `**` inside a part (`a**b`) are refused. Tests
+Left out, `paths` is every area of the [sensitive list](#sensitive-code),
+which is where to say what is sensitive: `paths` and `extra_paths` still
+work, but set, `paths` replaces that list for the pass alone, and
+nothing else reads them. Globs match as the sensitive list's do. Tests
 and docs (`.md`, `.rst`, `.adoc`) never start a pass. `paths: []` leaves
-only `content` and the feature map to start one. The defaults:
-
-- **Authentication, sessions and permissions:** `*auth*`, `*oidc*`,
-  `*saml*`, `jwt*`, `*_jwt*`, `*login*`, `*logout*`, `*signin*`,
-  `*signup*`, `*session*`, `*cookie*`, `*password*`, `*permission*`,
-  `*rbac*`, `acl`, `acl.*`, `*accesscontrol*`, `*access_control*`,
-  `*csrf*`, `*cors*`, `*middleware*`.
-- **Cryptography, keys and secrets:** `*crypt*`, `*cipher*`, `*hmac*`,
-  `tls`, `tls.*`, `cert`, `certs`, `cert.*`, `cert_*`, `cert-*`,
-  `*certificate*`, `*.pem`, `*.key`, `*.crt`, `*.p12`, `*.pfx`, `id_rsa*`,
-  `*secret*`, `*credential*`, `*token*`, `*apikey*`, `*api_key*`, `.env`,
-  `.env.*`, `*.env`, `.npmrc`, `.pypirc`.
-- **Untrusted input, files and outbound requests:** `*sanitiz*`,
-  `*upload*`, `*download*`, `*multipart*`, `*serializ*`, `*webhook*`,
-  `*redirect*`, `*proxy*`, `*unzip*`, `*untar*`, `*archive*`.
-- **Running commands:** `exec`, `exec.*`, `exec_*`, `exec-*`, `*exec`,
-  `*exec.*`, `*_exec_*`, `*shell*`, `*subprocess*`.
-- **SQL and migrations:** `*.sql`, `*sql*`, `migrations`, `migrate`,
-  `migrate.*`.
-- **CI:** `.github/workflows/`, `.gitlab-ci.yml`.
-- **Dependencies, images and infrastructure:** `go.mod`, `go.sum`,
-  `go.work`, `vendor`, `package.json`, `package-lock.json`,
-  `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`,
-  `bun.lockb`, `requirements*.txt`, `Pipfile`, `Pipfile.lock`,
-  `poetry.lock`, `pyproject.toml`, `uv.lock`, `setup.py`, `Gemfile`,
-  `Gemfile.lock`, `*.gemspec`, `Cargo.toml`, `Cargo.lock`,
-  `composer.json`, `composer.lock`, `pom.xml`, `build.gradle`,
-  `build.gradle.kts`, `gradle.lockfile`, `*.csproj`, `packages.lock.json`,
-  `mix.exs`, `mix.lock`, `Package.swift`, `Package.resolved`,
-  `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `Containerfile`,
-  `docker-compose*.y*ml`, `*.tf`.
+only `content` and the feature map to start one.
 
 A change to a `high` feature in the [feature map](quality.md#feature-map)
 gets a pass whatever these say.

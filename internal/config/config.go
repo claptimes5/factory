@@ -368,6 +368,9 @@ type Config struct {
 	// Risk says how a built change's diff raises its risk, and which
 	// kinds of change always wait for you. See Risk.
 	Risk Risk `yaml:"risk"`
+	// Sensitive is the one list of sensitive code the security pass, risk
+	// and REVIEW.md's skip all read. See Sensitive.
+	Sensitive Sensitive `yaml:"sensitive"`
 	// Security is the security pass for changes that touch auth, input
 	// handling, commands, SQL or dependencies. See Security.
 	Security Security `yaml:"security"`
@@ -917,6 +920,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.checkReview()...)
 	errs = append(errs, c.checkRisk()...)
 	errs = append(errs, c.checkPlan()...)
+	errs = append(errs, c.checkSensitive()...)
 	errs = append(errs, c.checkSecurity()...)
 	errs = append(errs, c.checkHunt()...)
 	switch c.PR.CheckOutput {

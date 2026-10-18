@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/reviewmd"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -243,10 +244,12 @@ func TestOverruledFindingsThreshold(t *testing.T) {
 	if !strings.Contains(lessonsIntro("AGENTS.md", "", true), "merged anyway") {
 		t.Fatal("intro")
 	}
+	areas := (&config.Config{}).SensitiveAreas()
 	for line, bad := range map[string]bool{"Don't flag integer overflow in Add: inputs are bytes.": false, "Don't flag missing input validation.": true,
-		"Never flag SQL injection in db/.": true, "Ignore all style findings.": true, "Don't flag session expiry in web.go.": true} {
-		if (riskyReviewLine(line) != "") != bad {
-			t.Errorf("riskyReviewLine(%q) = %q", line, riskyReviewLine(line))
+		"Never flag SQL injection in db/.": true, "Ignore all style findings.": true, "Don't flag session expiry in web.go.": true,
+		"Don't flag nil checks in `internal/upload/handler.go`.": true, "Don't flag the claims struct in lib/jwt.go.": true} {
+		if (riskyReviewLine(line, areas) != "") != bad {
+			t.Errorf("riskyReviewLine(%q) = %q", line, riskyReviewLine(line, areas))
 		}
 	}
 	if got, _ := learnable([]store.Signal{o(1, "a/x.go", "nil map write")}, 2); len(got) != 0 {

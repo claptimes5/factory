@@ -47,10 +47,17 @@ routing:
 #   incremental: true         # after round one, review only what changed since the last review
 #   context_bytes: 20000      # a re-review also gets the whole diff when it's this small, else a file list
 
+# Sensitive code, which the security pass, risk and REVIEW.md's skip all
+# read; see docs/configuration.md#sensitive-code. Setting an area replaces
+# its defaults, [] turns it off, and a new name adds one.
+# sensitive:
+#   payments: ["*payment*", internal/ledger/]
+#   sql: []
+
 # The security pass; see docs/configuration.md#the-security-pass.
 # security:
 #   enabled: true             # its critical findings block whatever the reviewer says
-#   paths: [...]              # globs that start a pass; left out, the defaults (auth, crypto, SQL, lockfiles, ...)
+#   paths: [...]              # globs that start a pass; left out, the sensitive list
 #   extra_paths: [internal/billing/]   # added to paths
 #   content: true             # added code that runs a command, builds SQL from strings, ... starts one too
 

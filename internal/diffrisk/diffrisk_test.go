@@ -3,12 +3,15 @@ package diffrisk
 import (
 	"strings"
 	"testing"
+
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 var rules = Rules{
 	MediumLines: 150, HighLines: 300, MediumFiles: 10, HighFiles: 25,
 	HighPaths: []string{"deploy/"}, MediumPaths: []string{"Dockerfile"},
-	Auth: []string{"auth", "auth.*", "session*", "login*"}, Migrations: []string{"migrations/", "migrate/"},
+	Auth:        []pathglob.Area{{Name: "auth", Globs: []string{"auth", "auth.*", "session*", "login*"}}, {Name: "crypto", Globs: []string{"*crypt*"}}},
+	Migrations:  []pathglob.Area{{Name: "migrations", Globs: []string{"migrations/", "migrate/"}}},
 	NeedsPerson: Kinds,
 }
 
@@ -72,7 +75,8 @@ func TestRate(t *testing.T) {
 		{"a medium path", change("", []File{{Path: "web/Dockerfile", Status: "M", Added: 1}}, nil, nil), "medium", KindPaths, "risk.medium_paths: `web/Dockerfile`", false},
 		{"a new migration", change("", []File{{Path: "db/migrate/2_add_users.rb", Status: "A", Added: 9}}, nil, nil), "high", Migrations, "adds or changes a migration: `db/migrate/2_add_users.rb`", true},
 		{"a migration folder's readme isn't one", change("", []File{{Path: "db/migrate/README.md", Status: "M", Added: 1}}, nil, nil), "low", "", "", false},
-		{"auth code", change("", []File{{Path: "internal/auth/token.go", Status: "M", Added: 2}}, nil, nil), "high", Auth, "changes auth code: `internal/auth/token.go`", true},
+		{"auth code", change("", []File{{Path: "internal/auth/token.go", Status: "M", Added: 2}}, nil, nil), "high", Auth, "changes auth code: `auth` in `internal/auth/token.go`", true},
+		{"crypto code counts as auth", change("", []File{{Path: "internal/crypto/aes.go", Status: "M", Added: 2}}, nil, nil), "high", Auth, "changes crypto code: `*crypt*` in `internal/crypto/aes.go`", true},
 		{"auth by file name", change("", []File{{Path: "app/controllers/sessions_controller.rb", Status: "M", Added: 2}}, nil, nil), "high", Auth, "sessions_controller.rb", true},
 		{"an auth test isn't auth code", change("", []File{{Path: "internal/auth/token_test.go", Status: "M", Added: 2}}, nil, nil), "low", "", "", false},
 		{"auth docs aren't auth code", change("", []File{{Path: "docs/auth.md", Status: "M"}, {Path: "web/login.png", Status: "M"}}, nil, nil), "low", "", "", false},
@@ -259,42 +263,8 @@ func TestMerge(t *testing.T) {
 	var b Assessment
 	b.Unreadable("couldn't read the diff", "")
 	a.Merge(b, "web")
-	if a.Risk != "high" || a.Reasons[0].Label != "api" || a.Reasons[0].What != "changes auth code" || a.Reasons[0].Text(Code) != "`api`: changes auth code: `auth.go`" ||
+	if a.Risk != "high" || a.Reasons[0].Label != "api" || a.Reasons[0].What != "changes auth code" || a.Reasons[0].Text(Code) != "`api`: changes auth code: `auth.*` in `auth.go`" ||
 		len(a.Unread) != 1 || a.Unread[0].Label != "web" {
 		t.Fatalf("%+v", a)
-	}
-}
-
-func TestMatch(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		pattern, file string
-		want          bool
-	}{
-		{"auth", "internal/auth/token.go", true},
-		{"auth", "author.go", false},
-		{"auth.*", "pkg/Auth.go", true},
-		{"session*", "app/controllers/sessions_controller.rb", true},
-		{"migrations/", "internal/store/migrations/0018.sql", true},
-		{"migrations/", "docs/migrations", false}, // a file, not a directory
-		{"db/migrate/", "db/migrate/1.rb", true},
-		{"/db/migrate/", "db/migrate/1.rb", true},
-		{"./deploy/*.yaml", "deploy/prod.yaml", true},
-		{"db/migrate/", "app/db/migrate/1.rb", false},
-		{"deploy/*.yaml", "deploy/prod.yaml", true},
-		{"deploy/*.yaml", "deploy/eu/prod.yaml", false},
-		{"Dockerfile", "web/Dockerfile", true},
-	} {
-		if got := Match(c.pattern, c.file); got != c.want {
-			t.Errorf("Match(%q, %q) = %v, want %v", c.pattern, c.file, got, c.want)
-		}
-	}
-	for _, bad := range []string{"[", "/", "./", "**/auth", "src/**"} {
-		if ValidPattern(bad) == nil {
-			t.Errorf("ValidPattern(%q) passed", bad)
-		}
-	}
-	if ValidPattern("auth*") != nil || ValidPattern("/db/migrate/") != nil {
-		t.Fatal("ValidPattern refused a good one")
 	}
 }

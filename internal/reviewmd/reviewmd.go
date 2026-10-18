@@ -26,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/claptimes5/factory/internal/features"
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 // Files are where REVIEW.md may be, in the order they are looked for: the
@@ -138,7 +139,7 @@ func (g *Guide) settings(y string) {
 
 // Skips says whether REVIEW.md's skip list covers a path. Whether a skip
 // applies at all is the caller's to decide: never on a protected or
-// security-sensitive path (see Sensitive).
+// security-sensitive path (see SensitiveIn).
 func (g *Guide) Skips(path string) bool {
 	if g == nil || path == "" {
 		return false
@@ -152,8 +153,20 @@ func (g *Guide) Skips(path string) bool {
 var sensitive = regexp.MustCompile(`(?i)auth|login|logout|session|passw|secret|credential|crypt|token|oauth|saml|sso|permission|acl|rbac|security|payment|billing|invoice|checkout|wallet|\.env|(^|/)dockerfile|(^|/)\.github/|(^|/)\.gitlab|migrat`)
 
 // Sensitive says whether a path looks security-sensitive by its name, so
-// REVIEW.md can't skip it.
+// REVIEW.md can't skip it. It is the floor SensitiveIn adds the sensitive
+// list to, for where there's no config.
 func Sensitive(path string) bool { return sensitive.MatchString(path) }
+
+// SensitiveIn says whether a path is security-sensitive: it matches one
+// of areas (the sensitive list), or Sensitive, which config can't take
+// away.
+func SensitiveIn(areas []pathglob.Area, path string) bool {
+	if Sensitive(path) {
+		return true
+	}
+	_, _, ok := pathglob.InAreas(areas, path)
+	return ok
+}
 
 // Summary is the guide as a reviewer is shown it: its settings, then its
 // text. It is still the repo's text, for the caller to fence.

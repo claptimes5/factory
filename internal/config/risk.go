@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/claptimes5/factory/internal/diffrisk"
+	"github.com/claptimes5/factory/internal/pathglob"
 )
 
 // Risk says how the factory rates a change from its diff once it's
@@ -23,12 +24,13 @@ type Risk struct {
 	HighFiles   int `yaml:"high_files,omitempty"`
 	// MediumPaths and HighPaths: a change touching one is at least medium
 	// or high risk. Medium defaults to deploy and infrastructure files;
-	// high to none. See diffrisk.Match for the patterns.
+	// high to none. See pathglob.Match for the patterns.
 	MediumPaths []string `yaml:"medium_paths,omitempty"`
 	HighPaths   []string `yaml:"high_paths,omitempty"`
-	// AuthPaths are auth code (login, sessions, tokens, permissions) and
-	// MigrationPaths a database's migrations; a change to either is high
-	// risk. Each has defaults; setting one replaces them.
+	// AuthPaths are auth code and MigrationPaths a database's migrations,
+	// added to the sensitive list's: its auth, crypto, secrets and
+	// payments areas are auth code, and its migrations area migrations.
+	// A change to either is high risk. Set the sensitive list instead.
 	AuthPaths      []string `yaml:"auth_paths,omitempty"`
 	MigrationPaths []string `yaml:"migration_paths,omitempty"`
 	// NeedsPerson are the kinds of change that never merge themselves,
@@ -42,11 +44,6 @@ type Risk struct {
 var (
 	defaultMediumPaths = []string{"Dockerfile", "Dockerfile.*", "*.dockerfile", "docker-compose*.yml", "docker-compose*.yaml",
 		"*.tf", "terraform/", "infra/", "deploy/", "k8s/", "helm/", "Procfile", "fly.toml", "vercel.json", "netlify.toml"}
-	defaultAuthPaths = []string{"auth", "auth.*", "auth_*", "auth-*", "*_auth", "*_auth.*", "*-auth", "*-auth.*",
-		"authn*", "authz*", "authenticat*", "authoriz*", "oauth*", "oidc*", "saml*", "sso", "sso.*", "sso_*",
-		"*jwt*", "login*", "logout*", "session", "session.*", "session_*", "sessions", "sessions.*", "sessions_*",
-		"password*", "passwd*", "credential*", "permission*", "rbac*", "acl", "acl.*", "devise*"}
-	defaultMigrationPaths = []string{"migrations/", "migration/", "migrate/", "alembic/", "flyway/", "liquibase/"}
 )
 
 func (c *Config) riskDefaults() {
@@ -61,12 +58,6 @@ func (c *Config) riskDefaults() {
 	}
 	if r.MediumPaths == nil {
 		r.MediumPaths = slices.Clone(defaultMediumPaths)
-	}
-	if r.AuthPaths == nil {
-		r.AuthPaths = slices.Clone(defaultAuthPaths)
-	}
-	if r.MigrationPaths == nil {
-		r.MigrationPaths = slices.Clone(defaultMigrationPaths)
 	}
 	if r.NeedsPerson == nil {
 		r.NeedsPerson = slices.Clone(diffrisk.Kinds)
@@ -95,8 +86,8 @@ func (c *Config) checkRisk() []error {
 		ps   []string
 	}{{"medium_paths", r.MediumPaths}, {"high_paths", r.HighPaths}, {"auth_paths", r.AuthPaths}, {"migration_paths", r.MigrationPaths}} {
 		for _, p := range l.ps {
-			if err := diffrisk.ValidPattern(p); err != nil {
-				errs = append(errs, fmt.Errorf("risk.%s: %v", l.name, err))
+			if err := pathglob.Valid(p); err != nil {
+				errs = append(errs, fmt.Errorf("risk.%s: glob %q: %v", l.name, p, err))
 			}
 		}
 	}
@@ -112,8 +103,15 @@ func (c *Config) checkRisk() []error {
 func (c *Config) RiskRules() diffrisk.Rules {
 	r := c.Risk
 	on := func(n int) int { return max(n, 0) } // -1 is off
+	auth, migrations := c.SensitiveAreas(authAreas...), c.SensitiveAreas("migrations")
+	if r.AuthPaths != nil {
+		auth = append(auth, pathglob.Area{Name: "auth", Globs: r.AuthPaths})
+	}
+	if r.MigrationPaths != nil {
+		migrations = append(migrations, pathglob.Area{Name: "migrations", Globs: r.MigrationPaths})
+	}
 	return diffrisk.Rules{
 		MediumLines: on(r.MediumLines), HighLines: on(r.HighLines), MediumFiles: on(r.MediumFiles), HighFiles: on(r.HighFiles),
-		MediumPaths: r.MediumPaths, HighPaths: r.HighPaths, Auth: r.AuthPaths, Migrations: r.MigrationPaths, NeedsPerson: r.NeedsPerson,
+		MediumPaths: r.MediumPaths, HighPaths: r.HighPaths, Auth: auth, Migrations: migrations, NeedsPerson: r.NeedsPerson,
 	}
 }

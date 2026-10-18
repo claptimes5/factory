@@ -68,7 +68,7 @@ func TestSecurityPassBlocksWhenTheReviewerPasses(t *testing.T) {
 		t.Fatalf("security jobs %+v", sj)
 	}
 	sp := e.claude.prompts["security"]
-	for _, want := range []string{"it changes auth.go (matches *auth*)", "+func Allowed", "Leave `earlier` empty"} {
+	for _, want := range []string{"it changes auth.go (matches auth: *auth*)", "+func Allowed", "Leave `earlier` empty"} {
 		if !strings.Contains(sp[0], want) {
 			t.Errorf("first security prompt missing %q:\n%s", want, sp[0])
 		}
@@ -306,13 +306,13 @@ func TestWithSecurityKeepsEachSidesBlocks(t *testing.T) {
 
 func TestSecurityPathsSkipTests(t *testing.T) {
 	t.Parallel()
-	sec := config.Security{}
-	got := securityPaths(sec.Match, []string{"auth_test.go", "add.go", "internal/auth/login.go", "go.sum", "web/src/Login.test.tsx", "docs/auth.md"}, "api/")
-	want := "it changes api/internal/auth/login.go (matches *auth*), api/go.sum (matches go.sum)"
+	c := &config.Config{}
+	got := securityPaths(c.SecurityMatch, []string{"auth_test.go", "add.go", "internal/auth/login.go", "go.sum", "web/src/Login.test.tsx", "docs/auth.md"}, "api/")
+	want := "it changes api/internal/auth/login.go (matches auth: *auth*), api/go.sum (matches dependencies: go.sum)"
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %q", got)
 	}
-	if got := securityPaths(sec.Match, []string{"add.go", "README.md", "auth_test.go"}, ""); got != nil {
+	if got := securityPaths(c.SecurityMatch, []string{"add.go", "README.md", "auth_test.go"}, ""); got != nil {
 		t.Fatalf("unrelated files started a pass: %q", got)
 	}
 }
@@ -459,8 +459,9 @@ func TestARefutedSecurityFindingStopsAutoMerge(t *testing.T) {
 	e := setup(t)
 	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
 	// Auth code alone neither raises the risk nor needs a person here,
-	// so only the refuted finding keeps auto-merge off.
-	e.p.Cfg.Risk.AuthPaths, e.p.Cfg.Risk.NeedsPerson = []string{"no-such-path"}, []string{}
+	// but still gets a pass, so only the refuted finding keeps auto-merge
+	// off.
+	e.p.Cfg.Sensitive, e.p.Cfg.Security.ExtraPaths, e.p.Cfg.Risk.NeedsPerson = config.Sensitive{"auth": {}}, []string{"*auth*"}, []string{}
 	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
 	e.addIssue(1)
 	e.claude.builds = []func(string) error{authBuild}
@@ -568,7 +569,7 @@ func TestSecurityPassInAWorkspace(t *testing.T) {
 	if st := w.item(t, 1).Stage; st != state.AwaitingHuman {
 		t.Fatalf("stage %s", st)
 	}
-	if sp := w.claude.prompts["security"]; len(sp) != 1 || !strings.Contains(sp[0], "it changes web/package.json (matches package.json)") {
+	if sp := w.claude.prompts["security"]; len(sp) != 1 || !strings.Contains(sp[0], "it changes web/package.json (matches dependencies: package.json)") {
 		t.Fatalf("security prompts %q", sp)
 	}
 }
