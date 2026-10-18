@@ -46,6 +46,9 @@ func (actions) Park(_ context.Context, id int64, reason string) error {
 func (actions) ApproveEstimate(_ context.Context, id int64) error {
 	return fmt.Errorf("devserver: would approve the estimate of item %d", id)
 }
+func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
+	return fmt.Errorf("devserver: would reset auto-merge's breaker for %s", repo)
+}
 
 // restarter pretends one job is still running, so a restart stays pending.
 type restarter struct{ pending atomic.Bool }
@@ -112,6 +115,13 @@ func main() {
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
+		Breakers: func(context.Context) []web.APIBreaker {
+			return []web.APIBreaker{
+				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},
+				{Repo: "acme/web", On: true, Tripped: true, TrippedAt: store.Now(), Strikes: 2, Threshold: 2, WindowHours: 168,
+					Reason: "2 factory PRs in 7 days: acme/web#41 reverted by commit 1a2b3c4; acme/web#44 turned main red (test)"},
+			}
+		},
 		Issue: func(_ context.Context, _ string, n int) (*github.Issue, error) {
 			return &github.Issue{Number: n, Body: fmt.Sprintf("Issue #%d.\n\nThe parser drops the last token when the input has no trailing newline.\n\nExpected: every token is kept.\nVerify: `go test ./parser`.", n)}, nil
 		},

@@ -62,6 +62,11 @@ type PR struct {
 	// MergeCommit is the commit the merge made on the base branch (a merge
 	// or squash commit), once merged.
 	MergeCommit string `json:"merge_commit_sha"`
+	// SquashCommit is GitLab's squash commit when the merge made a merge
+	// commit too; "" otherwise.
+	SquashCommit string `json:"-"`
+	// MergedAt is when it merged, once merged.
+	MergedAt *time.Time `json:"merged_at"`
 }
 
 // TokenSource returns a valid token for the repository.

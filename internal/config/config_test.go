@@ -466,6 +466,29 @@ func TestAutoMergeLevels(t *testing.T) {
 	}
 }
 
+func TestAutoMergeBreaker(t *testing.T) {
+	var none *AutoMerge
+	if none.BreakerThreshold() != 2 || none.BreakerWindow() != 7*24*time.Hour || none.BreakerCoolOff() != 0 || none.On() {
+		t.Fatal("defaults")
+	}
+	never := &AutoMerge{UpTo: "low", Breaker: &Breaker{Threshold: -1, Window: Duration{72 * time.Hour}, CoolOff: Duration{24 * time.Hour}}}
+	if never.BreakerThreshold() != 0 || never.BreakerWindow() != 72*time.Hour || never.BreakerCoolOff() != 24*time.Hour || !never.On() {
+		t.Fatalf("set: %+v", never.Breaker)
+	}
+	b, _ := os.ReadFile("../../factory.yaml")
+	c, err := ParseIn([]byte(strings.Replace(string(b), "\nrouting:", "\nauto_merge: {up_to: low, breaker: {threshold: 3, window: 48h}}\nrouting:", 1)), "../..")
+	if err != nil || c.AutoMerge.BreakerThreshold() != 3 || c.AutoMerge.BreakerWindow() != 48*time.Hour {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, b := range []*Breaker{{Threshold: -2}, {CoolOff: Duration{time.Minute}}, {Window: Duration{-time.Hour}}} {
+		c := load(t)
+		c.AutoMerge = &AutoMerge{UpTo: "low", Breaker: b}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "breaker") {
+			t.Errorf("%+v: %v", b, err)
+		}
+	}
+}
+
 func TestFastMode(t *testing.T) {
 	c := load(t)
 	r := c.Routing["implement.L"] // opus

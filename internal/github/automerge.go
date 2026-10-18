@@ -14,22 +14,13 @@ import (
 // but only when sha has CI checks and all of them passed: GitHub would
 // otherwise merge a repo with no required checks untested.
 func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error {
-	var pr struct {
-		NodeID string `json:"node_id"`
-		Draft  bool   `json:"draft"`
-	}
-	if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", c.Repo, n), nil, &pr); err != nil {
+	id, err := c.markReady(ctx, n)
+	if err != nil {
 		return err
 	}
-	if pr.Draft {
-		if err := c.mutate(ctx, `mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { clientMutationId } }`,
-			map[string]any{"id": pr.NodeID}); err != nil {
-			return fmt.Errorf("mark ready: %w", err)
-		}
-	}
-	err := c.mutate(ctx, `mutation($id: ID!, $method: PullRequestMergeMethod!, $sha: GitObjectID!) {
+	err = c.mutate(ctx, `mutation($id: ID!, $method: PullRequestMergeMethod!, $sha: GitObjectID!) {
   enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $sha}) { clientMutationId }
-}`, map[string]any{"id": pr.NodeID, "method": strings.ToUpper(method), "sha": sha})
+}`, map[string]any{"id": id, "method": strings.ToUpper(method), "sha": sha})
 	if err != nil && strings.Contains(err.Error(), "clean status") {
 		// Nothing left to wait for, so GitHub won't queue it.
 		runs, cerr := c.CheckRuns(ctx, sha)

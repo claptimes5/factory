@@ -324,6 +324,10 @@ still get none.
 - the share of checked findings the verifier refuted;
 - rounds to pass: the review rounds an item that passed review took, 1
   for a first-round pass;
+- the revert rate: factory PRs merged in the last 30 days that a later
+  commit or PR reverted on the base branch, overall and per repo, and how
+  many turned main red (see
+  [Auto-merge guard rails](using.md#auto-merge-guard-rails));
 - hours spent awaiting you.
 
 Escapes say what the reviewer missed; precision says how much of what it

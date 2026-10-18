@@ -275,7 +275,9 @@ type rawMR struct {
 	Desc   string `json:"description"`
 	Merge  string `json:"merge_commit_sha"`
 	Squash string `json:"squash_commit_sha"`
-	Refs   struct {
+	// MergedAt is when it merged, once merged.
+	MergedAt *time.Time `json:"merged_at"`
+	Refs     struct {
 		Base string `json:"base_sha"`
 	} `json:"diff_refs"`
 	// They differ for a merge request from a fork.
@@ -291,11 +293,13 @@ func (r rawMR) pr() *github.PR {
 	case "closed":
 		pr.State = "closed"
 	}
-	pr.Head.SHA, pr.Base.SHA, pr.Title, pr.Body = r.SHA, r.Refs.Base, r.Title, r.Desc
+	pr.Head.SHA, pr.Base.SHA, pr.Title, pr.Body, pr.MergedAt = r.SHA, r.Refs.Base, r.Title, r.Desc, r.MergedAt
 	// A fast-forward merge makes no commit of its own; a squash makes one.
 	pr.MergeCommit = r.Merge
 	if pr.MergeCommit == "" {
 		pr.MergeCommit = r.Squash
+	} else if r.Squash != r.Merge {
+		pr.SquashCommit = r.Squash // a revert may name either
 	}
 	return pr
 }
@@ -644,13 +648,22 @@ func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error
 		rawMR
 		Pipeline *struct {
 			SHA    string `json:"sha"`
+			Ref    string `json:"ref"`
 			Status string `json:"status"`
 		} `json:"head_pipeline"`
 	}
 	if err := c.do(ctx, "GET", fmt.Sprintf("%s/merge_requests/%d", c.project(), n), nil, &r); err != nil {
 		return err
 	}
-	if r.Pipeline == nil || r.Pipeline.SHA != sha {
+	tested := r.Pipeline != nil && r.Pipeline.SHA == sha
+	if r.Pipeline != nil && !tested {
+		ok, err := c.mergedResults(ctx, n, r.Pipeline.Ref, r.Pipeline.SHA, sha)
+		if err != nil {
+			return err
+		}
+		tested = ok
+	}
+	if !tested {
 		return fmt.Errorf("no pipeline has run on the verified commit, so GitLab would merge it untested")
 	}
 	// A pipeline that already finished without passing would not hold the
@@ -669,6 +682,21 @@ func (c *Client) AutoMerge(ctx context.Context, n int, sha, method string) error
 	return c.do(ctx, "PUT", fmt.Sprintf("%s/merge_requests/%d/merge", c.project(), n), map[string]any{
 		"sha": sha, "squash": method == "squash", "auto_merge": true, "merge_when_pipeline_succeeds": true,
 	}, nil)
+}
+
+// mergedResults says whether a pipeline is a merged results (or merge
+// train) pipeline for merge request n that tested sha: it ran at the
+// request's merge or train ref, on a commit that merges sha into the
+// target branch, so sha is one of that commit's parents.
+func (c *Client) mergedResults(ctx context.Context, n int, ref, pipelineSHA, sha string) (bool, error) {
+	if ref != fmt.Sprintf("refs/merge-requests/%d/merge", n) && ref != fmt.Sprintf("refs/merge-requests/%d/train", n) {
+		return false, nil
+	}
+	parents, err := c.parents(ctx, pipelineSHA)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(parents, sha), nil
 }
 
 // undraft strips a draft prefix from a merge request title.

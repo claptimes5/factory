@@ -82,6 +82,23 @@ paths:
         "200": { $ref: "#/components/responses/Action" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
+  /auto-merge/reset:
+    post:
+      summary: Reset a repo's tripped auto-merge breaker, so its PRs may merge themselves again
+      description: Needs the password, or a request from this machine (403 otherwise), as settings do. PRs whose auto-merge the breaker cancelled still wait for you.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties: { repo: { type: string, description: "owner/name" } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
   /jobs/{id}:
     get:
       summary: One job with its gate results
@@ -279,8 +296,12 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge]
       properties:
+        auto_merge:
+          type: array
+          description: Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped
+          items: { $ref: "#/components/schemas/Breaker" }
         main_health:
           type: array
           description: Each repo's base branch CI, as main health last read it; empty while it's off
@@ -296,6 +317,20 @@ components:
         running: { type: integer }
         queued: { type: integer }
         version: { type: string }
+    Breaker:
+      type: object
+      required: [repo, on, tripped, tripped_at, reason, strikes, threshold, window_hours, cool_off_hours, can_reset]
+      properties:
+        repo: { type: string }
+        on: { type: boolean, description: "auto_merge lets the repo's PRs merge themselves" }
+        tripped: { type: boolean, description: "The breaker turned auto-merge off until it's reset" }
+        tripped_at: { type: string, description: "When it tripped; empty while it hasn't" }
+        reason: { type: string, description: "The strikes that tripped it" }
+        strikes: { type: integer, description: "Reverted or main-breaking factory PRs in the window since the last reset" }
+        threshold: { type: integer, description: "Strikes that trip it; 0 when it never trips" }
+        window_hours: { type: integer }
+        cool_off_hours: { type: integer, description: "0 when only a human resets it" }
+        can_reset: { type: boolean, description: "This request may reset it (tripped, and behind the password or on this machine)" }
     MainHealth:
       type: object
       required: [repo, branch, state, sha, detail, checks]
@@ -646,7 +681,7 @@ components:
         precision: { type: number, description: "0..1, or -1 with no data" }
     Metrics:
       type: object
-      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, awaiting_human_hours, awaiting_human_mean_hours, weekly]
+      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, revert_window_days, revert_merged, reverted, revert_rate, broke_main, reverts_by_repo, awaiting_human_hours, awaiting_human_mean_hours, weekly]
       properties:
         items: { type: integer }
         merged: { type: integer }
@@ -663,9 +698,24 @@ components:
         precision_by_reviewer: { type: array, items: { $ref: "#/components/schemas/Precision" } }
         verifier_refute_rate: { type: number, description: "Share of checked findings the verifier refuted, 0..1, or -1" }
         rounds_to_pass: { type: number, description: "Mean review rounds of items that passed review, or -1" }
+        revert_window_days: { type: integer, description: "The days the revert rate covers" }
+        revert_merged: { type: integer, description: "Factory PRs merged in that window" }
+        reverted: { type: integer, description: "Of those, how many a later commit or PR reverted" }
+        revert_rate: { type: number, description: "reverted / revert_merged: 0..1, or -1 with no data" }
+        broke_main: { type: integer, description: "Of those, how many main health saw a check go red on" }
+        reverts_by_repo: { type: array, items: { $ref: "#/components/schemas/RepoReverts" } }
         awaiting_human_hours: { type: number }
         awaiting_human_mean_hours: { type: number }
         weekly: { type: array, items: { $ref: "#/components/schemas/Week" } }
+    RepoReverts:
+      type: object
+      required: [repo, merged, reverted, revert_rate, broke_main]
+      properties:
+        repo: { type: string }
+        merged: { type: integer }
+        reverted: { type: integer }
+        revert_rate: { type: number, description: "0..1, or -1 with no data" }
+        broke_main: { type: integer }
     SettingValue:
       description: A number, text, true or false, or a list of names; null when unset
       type: [number, string, boolean, array, "null"]

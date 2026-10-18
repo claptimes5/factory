@@ -51,6 +51,16 @@ type Report struct {
 	// RoundsToPass is the mean number of review rounds an item that passed
 	// review took, 1 for a first-round pass; -1 with none.
 	RoundsToPass float64 `json:"rounds_to_pass"`
+	// Reverts are the factory PRs merged in the revert window (the last
+	// RevertWindowDays days, or the report's period) and how many of them
+	// a later commit or PR reverted on the base branch; RevertRate is the
+	// share. BrokeMain counts those main health saw a check go red on.
+	RevertWindowDays int           `json:"revert_window_days"`
+	RevertMerged     int           `json:"revert_merged"`
+	Reverted         int           `json:"reverted"`
+	RevertRate       float64       `json:"revert_rate"`
+	BrokeMain        int           `json:"broke_main"`
+	RevertsByRepo    []RepoReverts `json:"reverts_by_repo"`
 	// AwaitingHours is the total and mean time items sat in awaiting_human.
 	AwaitingHours     float64 `json:"awaiting_human_hours"`
 	AwaitingMeanHours float64 `json:"awaiting_human_mean_hours"`
@@ -99,6 +109,65 @@ type Precision struct {
 	Fixed     int     `json:"fixed"`
 	Refuted   int     `json:"refuted"` // of those, ones the verifier refuted
 	Precision float64 `json:"precision"`
+}
+
+// RepoReverts is one repo's revert rate.
+type RepoReverts struct {
+	Repo       string  `json:"repo"`
+	Merged     int     `json:"merged"`
+	Reverted   int     `json:"reverted"`
+	RevertRate float64 `json:"revert_rate"`
+	BrokeMain  int     `json:"broke_main"`
+}
+
+// RevertWindow is the period the revert rate covers when the report's
+// isn't bounded.
+const RevertWindow = 30 * 24 * time.Hour
+
+// reverts fills the report's revert rate from the factory merges in
+// [from, to); a zero from is the last RevertWindow.
+func reverts(ctx context.Context, st *store.Store, r *Report, from, to time.Time) error {
+	if from.IsZero() {
+		from = time.Now().Add(-RevertWindow)
+	}
+	end := to
+	if end.IsZero() {
+		end = time.Now()
+	}
+	r.RevertWindowDays = int((end.Sub(from) + 12*time.Hour) / (24 * time.Hour))
+	ms, err := st.FactoryMerges(ctx, "", from.UTC().Format(store.TimeFormat))
+	if err != nil {
+		return err
+	}
+	by := map[string]*RepoReverts{}
+	for _, m := range ms {
+		if !to.IsZero() && m.MergedAt >= to.UTC().Format(store.TimeFormat) {
+			continue
+		}
+		rr := by[m.Repo]
+		if rr == nil {
+			rr = &RepoReverts{Repo: m.Repo}
+			by[m.Repo] = rr
+		}
+		rr.Merged++
+		r.RevertMerged++
+		if m.RevertedAt != "" {
+			rr.Reverted++
+			r.Reverted++
+		}
+		if m.RedAt != "" {
+			rr.BrokeMain++
+			r.BrokeMain++
+		}
+	}
+	r.RevertRate = rate(r.Reverted, r.RevertMerged)
+	r.RevertsByRepo = []RepoReverts{}
+	for _, rr := range by {
+		rr.RevertRate = rate(rr.Reverted, rr.Merged)
+		r.RevertsByRepo = append(r.RevertsByRepo, *rr)
+	}
+	sort.Slice(r.RevertsByRepo, func(a, b int) bool { return r.RevertsByRepo[a].Repo < r.RevertsByRepo[b].Repo })
+	return nil
 }
 
 // Slice is how the builds of one size, or that started on one model, went.
@@ -384,6 +453,9 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 		r.Precision = append(r.Precision, *x)
 	}
 	sort.Slice(r.Precision, func(a, b int) bool { return r.Precision[a].Key < r.Precision[b].Key })
+	if err := reverts(ctx, st, r, from, to); err != nil {
+		return nil, nil, err
+	}
 	if awaitingStays > 0 {
 		r.AwaitingMeanHours = r.AwaitingHours / float64(awaitingStays)
 	}

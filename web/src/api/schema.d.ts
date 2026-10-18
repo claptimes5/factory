@@ -348,6 +348,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto-merge/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a repo's tripped auto-merge breaker, so its PRs may merge themselves again
+         * @description Needs the password, or a request from this machine (403 otherwise), as settings do. PRs whose auto-merge the breaker cancelled still wait for you.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name */
+                        repo: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{id}": {
         parameters: {
             query?: never;
@@ -1036,6 +1077,8 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped */
+            auto_merge: components["schemas"]["Breaker"][];
             /** @description Each repo's base branch CI, as main health last read it; empty while it's off */
             main_health: components["schemas"]["MainHealth"][];
             /** @description Why no job is starting for lack of disk; empty when there's room */
@@ -1053,6 +1096,26 @@ export interface components {
             running: number;
             queued: number;
             version: string;
+        };
+        Breaker: {
+            repo: string;
+            /** @description auto_merge lets the repo's PRs merge themselves */
+            on: boolean;
+            /** @description The breaker turned auto-merge off until it's reset */
+            tripped: boolean;
+            /** @description When it tripped; empty while it hasn't */
+            tripped_at: string;
+            /** @description The strikes that tripped it */
+            reason: string;
+            /** @description Reverted or main-breaking factory PRs in the window since the last reset */
+            strikes: number;
+            /** @description Strikes that trip it; 0 when it never trips */
+            threshold: number;
+            window_hours: number;
+            /** @description 0 when only a human resets it */
+            cool_off_hours: number;
+            /** @description This request may reset it (tripped, and behind the password or on this machine) */
+            can_reset: boolean;
         };
         MainHealth: {
             repo: string;
@@ -1405,9 +1468,28 @@ export interface components {
             verifier_refute_rate: number;
             /** @description Mean review rounds of items that passed review, or -1 */
             rounds_to_pass: number;
+            /** @description The days the revert rate covers */
+            revert_window_days: number;
+            /** @description Factory PRs merged in that window */
+            revert_merged: number;
+            /** @description Of those, how many a later commit or PR reverted */
+            reverted: number;
+            /** @description reverted / revert_merged: 0..1, or -1 with no data */
+            revert_rate: number;
+            /** @description Of those, how many main health saw a check go red on */
+            broke_main: number;
+            reverts_by_repo: components["schemas"]["RepoReverts"][];
             awaiting_human_hours: number;
             awaiting_human_mean_hours: number;
             weekly: components["schemas"]["Week"][];
+        };
+        RepoReverts: {
+            repo: string;
+            merged: number;
+            reverted: number;
+            /** @description 0..1, or -1 with no data */
+            revert_rate: number;
+            broke_main: number;
         };
         /** @description A number, text, true or false, or a list of names; null when unset */
         SettingValue: number | string | boolean | string[] | null;

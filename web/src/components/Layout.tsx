@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
-import { useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
+import { useQueryClient } from "@tanstack/react-query";
+import { act, useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
+import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useBrowserNotifications } from "@/lib/notify";
 import { setRepo, useRepo } from "@/lib/repo";
@@ -175,6 +177,7 @@ export function Layout() {
         </div>
       </header>
       {o && <MainHealth o={o} />}
+      {o && <AutoMergeBreaker o={o} />}
       {o?.disk_low && (
         <div role="alert" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm text-warning md:px-6">
           <div className="mx-auto max-w-[1680px]">{o.disk_low}</div>
@@ -304,6 +307,53 @@ function MainHealth({ o }: { o: Overview }) {
                 ))}
           </li>
         ))}
+      </ul>
+    </section>
+  );
+}
+
+/** A line per repo whose auto-merge breaker tripped, with its Reset button. */
+function AutoMergeBreaker({ o }: { o: Overview }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const tripped = o.auto_merge.filter((b) => b.tripped);
+  if (tripped.length === 0 && !msg) return null;
+  const reset = async (repo: string) => {
+    setBusy(repo);
+    const r = await act("/auto-merge/reset", { repo });
+    setBusy("");
+    setMsg({ ok: r.ok, text: r.message });
+    void qc.invalidateQueries();
+  };
+  return (
+    <section aria-label="Auto-merge breaker" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm md:px-6">
+      <ul className="mx-auto max-w-[1680px] space-y-1">
+        {tripped.map((b) => (
+          <li key={b.repo} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words">
+            <span className="min-w-0">
+              <span className="font-medium text-warning">
+                Auto-merge is off{o.repos.length > 1 ? ` for ${repoName(b.repo)}` : ""}
+              </span>
+              {": "}
+              {b.reason}. New PRs wait for you.
+            </span>
+            {b.can_reset ? (
+              <Button size="sm" variant="outline" disabled={busy === b.repo} onClick={() => reset(b.repo)}>
+                Reset
+              </Button>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Reset it with <span className="font-mono">factory automerge reset {b.repo}</span>, or here behind a dashboard password.
+              </span>
+            )}
+          </li>
+        ))}
+        {msg && (
+          <li role="status" className={cn(msg.ok ? "text-success" : "text-destructive")}>
+            {msg.text}
+          </li>
+        )}
       </ul>
     </section>
   );

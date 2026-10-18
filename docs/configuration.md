@@ -413,6 +413,10 @@ auto_merge:
   up_to: low        # the highest risk that merges itself: low or medium
   max_size: S       # the largest triage size: XS, S (default), M or L
   method: squash    # merge (default), squash or rebase
+  breaker:          # optional; these are the defaults
+    threshold: 2    # strikes that turn auto-merge off; -1 never
+    window: 168h    # the rolling period strikes count in
+    # cool_off: 72h # unset: stays off until you reset it
 
 repos:
   - name: you/payments
@@ -424,12 +428,18 @@ has had its say) is at or below `up_to` and its size is at or below
 `max_size`. High-risk changes, workspace changes, and changes whose feature
 map couldn't be read always wait for you. For a qualifying PR, the factory:
 
-1. Marks the draft ready and turns on GitHub's auto-merge (or GitLab's
+1. Makes sure it's tested against the current base branch: where the
+   base has a merge queue (GitHub's, or GitLab's merge trains) the PR goes
+   into it; otherwise, if the branch is behind, the factory merges the
+   base into it and waits for CI there first (see
+   [Auto-merge guard rails](using.md#auto-merge-guard-rails)).
+2. Marks the draft ready and turns on GitHub's auto-merge (or GitLab's
    "merge when the pipeline succeeds") for the commit the gates and
-   reviewer passed. GitHub refuses if the branch has moved since.
-2. Labels the PR and issue `factory:auto-merge` instead of
+   reviewer passed, or the up-to-date commit CI passed. GitHub refuses if
+   the branch has moved since.
+3. Labels the PR and issue `factory:auto-merge` instead of
    `factory:awaiting-you`, and notifies you.
-3. Lets GitHub merge it when the branch's required checks and reviews pass.
+4. Lets GitHub merge it when the branch's required checks and reviews pass.
    If CI fails, nothing merges and the PR waits for you.
 
 To stop one, park the item, turn off auto-merge on the PR, or close it. The
@@ -454,6 +464,33 @@ The repo has to be set up for it:
   PRs merge without you, require status checks but no review. If you use
   rulesets, put the review rule in its own ruleset and give the factory's
   GitHub App a bypass on that one only, so the checks still apply to it.
+
+**The breaker.** A factory PR that's reverted on the base branch, or
+whose merge commit main health sees a check go red on, is a strike
+against its repo. `threshold` strikes within `window` turn auto-merge off
+for that repo: new PRs wait for you, the PRs waiting to merge themselves
+have their auto-merge turned off, and you're told once. It stays off until
+you run `factory automerge reset owner/name` or press Reset on the
+dashboard, or, with `cool_off` set, until that long after it tripped.
+Every merged factory PR counts, whether you merged it or it merged
+itself. A strike from red needs the check to have passed on the commit
+before the merge. A cool-off counts from when it ends:
+strikes after that count at once. See
+[Auto-merge guard rails](using.md#auto-merge-guard-rails), which also
+covers how reverts are found and what that costs in API calls.
+
+A GitHub merge queue merges with its own method, so `method` doesn't apply
+to PRs that go through one. On GitLab with merged results pipelines on
+(with or without merge trains), the factory turns on auto-merge directly,
+since each pipeline already tests the request merged with its target.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `breaker.threshold` | `2` | Strikes within the window that trip it. `-1` never trips. |
+| `breaker.window` | `168h` | The rolling period strikes count in. |
+| `breaker.cool_off` | unset | How long after tripping it resets itself, at least `1h`. Unset, only you reset it. |
+
+A repo's `auto_merge` replaces the top level's whole, breaker included.
 
 If the factory can't turn on auto-merge, it says why and the PR waits for
 you as usual. On GitLab, `method: rebase` and `merge` both follow the
@@ -645,7 +682,7 @@ main_health:
 | Key | Default | What it does |
 | --- | --- | --- |
 | `enabled` | `false` | Reads CI on each repo's `base_branch` and files issues. |
-| `every` | `10m` | How often. Each reading is a few API calls per repo. |
+| `every` | `10m` | How often. Each reading is a few API calls per repo. The [revert watch](using.md#auto-merge-guard-rails) runs on this cadence too, on or off. |
 | `daily_issue_cap` | `3` | Issues it may file per repo per UTC day. Past it, a red check is tracked and filed the next day. |
 | `require_approval` | `false` | Off, an issue is filed with `factory:ready` and built at once, approved as the factory: its text has no CI output, and its fix never merges itself. On, it's filed with the output quoted, and waits for someone with write access to add the label. Either way the fix goes first in the queue and through the gates and review. |
 
