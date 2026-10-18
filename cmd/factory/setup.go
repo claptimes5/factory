@@ -195,7 +195,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 		if !slices.Equal(names, cfg.RepoNames()) {
 			if err := setRepos(cfgPath, names); err != nil {
-				return fmt.Errorf("%w\nIts repos: list has settings of its own, so edit it there and run setup again", err)
+				return err
 			}
 			c, err := config.Load(cfgPath)
 			if err != nil {
@@ -557,19 +557,48 @@ func parseRepoList(in string) ([]string, error) {
 // setRepos writes the repo list to the config: `repo: x` for one, or
 // `repos: [x, y]`. A repos: list with per-repo settings is left alone.
 func setRepos(path string, names []string) error {
+	cur, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	for _, r := range cur.Repos {
+		if r.BaseBranch != "" || r.Gates != nil {
+			return fmt.Errorf("%s gives %s settings of its own; change its repos: list there and run setup again", path, r.Name)
+		}
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	line := "repo: " + names[0]
+	block := "repo: " + names[0] + "\n"
 	if len(names) > 1 {
-		line = "repos: [" + strings.Join(names, ", ") + "]"
+		block = "repos:\n"
+		for _, n := range names {
+			block += "  - " + n + "\n"
+		}
 	}
-	re := regexp.MustCompile(`(?m)^repos?:[ \t]*[^\s#]*`)
-	if !re.Match(b) {
+	// Replace the top-level repo: or repos: line and whatever belongs to
+	// it: indented lines and "- item" lines of a block list.
+	lines := strings.SplitAfter(string(b), "\n")
+	var out strings.Builder
+	found := false
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		isRepo := strings.HasPrefix(l, "repo:") || strings.HasPrefix(l, "repos:")
+		if found || !isRepo {
+			out.WriteString(l)
+			continue
+		}
+		found = true
+		out.WriteString(block)
+		for i+1 < len(lines) && (strings.HasPrefix(lines[i+1], " ") || strings.HasPrefix(lines[i+1], "\t") || strings.HasPrefix(lines[i+1], "-")) {
+			i++
+		}
+	}
+	if !found {
 		return fmt.Errorf("%s has no repo: line to update", path)
 	}
-	return writeConfig(path, re.ReplaceAllLiteral(b, []byte(line)))
+	return writeConfig(path, []byte(out.String()))
 }
 
 // setYAML rewrites one top-level `key: value` line of the config file,

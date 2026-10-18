@@ -373,10 +373,15 @@ repos:
   - you/api                     # takes the top-level base_branch and gates
   - name: you/web
     base_branch: develop
-    gates:                      # replaces the top-level gates for this repo
+    gates:                      # overrides the top-level gates for this repo
       required: [types, test]
       commands: {types: npm run typecheck, test: npm test}
 ```
+
+A repo's `gates` override the top-level ones field by field. Its
+`commands` replace the top-level commands; anything it leaves out, such as
+the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
+`scenarios_dir: none` to turn one off for that repo.
 
 `repo: you/api` is the short form for one repo. With a GitHub App, install
 it on every repo (setup walks you through this). Repos under different

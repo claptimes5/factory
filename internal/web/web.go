@@ -66,7 +66,7 @@ type Server struct {
 }
 
 func (s *Server) ref(repo string, n int) string {
-	if len(s.Repos) > 1 {
+	if len(s.Repos) > 1 && repo != "" {
 		return fmt.Sprintf("%s#%d", repo, n)
 	}
 	return fmt.Sprintf("#%d", n)

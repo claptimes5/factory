@@ -242,8 +242,11 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	}
 	// One repo is checked out in the agent's directory; several each get a
 	// folder there named owner__name.
+	// A repo that can't be checked out is left out, so one bad repo doesn't
+	// stop the orchestrator for the rest.
 	names := p.Cfg.RepoNames()
 	var work string
+	var missing []string
 	for _, name := range names {
 		rc := p.repoConf(name)
 		sub := dir
@@ -252,7 +255,9 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		}
 		ws, err := p.git(name).Prepare(ctx, sub, rc.BaseBranch, "", false, false)
 		if err != nil {
-			return fail(agentRun{}, state.Failed, name+": "+err.Error())
+			p.log().Warn("orchestrator checkout", "repo", name, "err", err)
+			missing = append(missing, fmt.Sprintf("%s could not be checked out this run (%s); its code is not in your directory", name, truncate(err.Error(), 200)))
+			continue
 		}
 		work = ws.Repo
 		if len(names) > 1 {
@@ -268,6 +273,9 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 			}
 			work = filepath.Join(dir, "repos")
 		}
+	}
+	if work == "" {
+		return fail(agentRun{}, state.Failed, "no repo could be checked out: "+strings.Join(missing, "; "))
 	}
 	sockDir := filepath.Join(dir, "run")
 	if err := os.MkdirAll(sockDir, 0o700); err != nil {
@@ -294,7 +302,7 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	}})
 
 	snapshot, _ := p.statusText(ctx)
-	prompt, err := p.render("orchestrate", PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: in.Reasons, Summary: in.Summary, Status: snapshot})
+	prompt, err := p.render("orchestrate", PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -535,14 +543,18 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				if strings.TrimSpace(a.Reason) == "" {
 					return "", errors.New("reason is required")
 				}
+				if a.Parent != 0 {
+					parent, err := p.Store.GetItem(ctx, a.Parent)
+					if err != nil {
+						return "", fmt.Errorf("refused: no parent item %d", a.Parent)
+					}
+					if a.Repo == "" {
+						a.Repo = parent.Repo // an epic's children go in its repo unless named
+					}
+				}
 				repo, err := p.pickRepo(a.Repo)
 				if err != nil {
 					return "", err
-				}
-				if a.Parent != 0 {
-					if _, err := p.Store.GetItem(ctx, a.Parent); err != nil {
-						return "", fmt.Errorf("refused: no parent item %d", a.Parent)
-					}
 				}
 				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
 					return "", err
@@ -939,7 +951,7 @@ func (p *Pipeline) unblock(ctx context.Context) error {
 }
 
 // repoProp is the optional repo argument of tools that act on GitHub.
-const repoProp = `"repo":{"type":"string","description":"owner/name; defaults to the first configured repo"}`
+const repoProp = `"repo":{"type":"string","description":"owner/name; defaults to the parent epic's repo, else the first configured repo"}`
 
 // pickRepo resolves a tool's repo argument to a configured repo.
 func (p *Pipeline) pickRepo(name string) (string, error) {

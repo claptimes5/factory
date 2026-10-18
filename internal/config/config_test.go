@@ -44,8 +44,13 @@ func TestSeveralRepos(t *testing.T) {
 	if api.BaseBranch != "main" || len(api.Gates.Required) < 2 {
 		t.Fatalf("o/api should take the defaults: %+v", api)
 	}
-	if web.BaseBranch != "develop" || web.Gates.Commands["test"] != "npm test" || web.Gates.DiffGuard.MaxChangedLines != 400 {
+	if web.BaseBranch != "develop" || web.Gates.Commands["test"] != "npm test" || len(web.Gates.Required) != 1 {
 		t.Fatalf("o/web: %+v", web.Gates)
+	}
+	// What o/web leaves out is inherited: above all the diff guard.
+	if web.Gates.DiffGuard.MaxChangedLines != c.Gates.DiffGuard.MaxChangedLines || len(web.Gates.DiffGuard.ProtectedPaths) == 0 ||
+		web.Gates.DiffGuard.MaxChangedLines == 0 || web.Gates.ProvesFix != c.Gates.ProvesFix {
+		t.Fatalf("o/web should inherit the diff guard and proves_fix: %+v", web.Gates)
 	}
 	for name, bad := range map[string]string{
 		"both forms":     "repo: o/x\n" + y,

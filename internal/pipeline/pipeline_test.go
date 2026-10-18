@@ -807,7 +807,7 @@ func TestSeveralRepos(t *testing.T) {
 		}
 		want := "diff_guard,proves_fix,test,types"
 		if c.repo == "o/web" {
-			want = "built,diff_guard"
+			want = "built,diff_guard,proves_fix" // proves_fix is inherited
 		}
 		if strings.Join(names, ",") != want {
 			t.Fatalf("%s gates = %v, want %s", c.repo, names, want)

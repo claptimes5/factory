@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -132,6 +133,8 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"pem": string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}))})
 	case r.URL.Path == "/app/installations":
 		j([]map[string]any{{"id": 77, "account": map[string]string{"login": "someone-else"}}, {"id": 55, "account": map[string]string{"login": "O"}}})
+	case r.URL.Path == "/repos/o/r/installation":
+		j(map[string]any{"id": 55})
 	case r.URL.Path == "/app/installations/55/access_tokens":
 		j(map[string]any{"token": "ghs_inst", "expires_at": time.Now().Add(time.Hour)})
 	case r.URL.Path == "/repos/o/r/branches/main":
@@ -180,6 +183,44 @@ func TestSetupWithSeveralRepos(t *testing.T) {
 	}
 	if !strings.Contains(out, "OK: the factory can reach o/web.") {
 		t.Fatalf("o/web not checked:\n%s", out)
+	}
+}
+
+func TestSetReposTwice(t *testing.T) {
+	path := testConfig(t, "o/r")
+	for _, want := range [][]string{{"o/a", "o/b"}, {"o/b"}, {"o/a", "o/c", "o/b"}, {"o/c", "o/a"}} {
+		if err := setRepos(path, want); err != nil {
+			t.Fatalf("%v: %v", want, err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(cfg.RepoNames(), want) {
+			t.Fatalf("repos = %v, want %v", cfg.RepoNames(), want)
+		}
+		if cfg.Gates.DiffGuard.MaxChangedLines == 0 || cfg.Intake.Label == "" {
+			t.Fatalf("lost the rest of the file: %+v", cfg)
+		}
+	}
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "  - o/a\n", "  - name: o/a\n    base_branch: dev\n", 1)), 0o644)
+	if err := setRepos(path, []string{"o/a"}); err == nil || !strings.Contains(err.Error(), "o/a settings of its own") {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+}
+
+func TestRemoteIs(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/o/Web.git": true,
+		"git@github.com:o/web.git":     true,
+		"ssh://git@github.com/o/web":   true,
+		"https://github.com/o/api.git": false,
+		"https://github.com/xo/web":    false,
+	} {
+		if remoteIs(url, "o/web") != want {
+			t.Errorf("remoteIs(%s) = %v", url, !want)
+		}
 	}
 }
 

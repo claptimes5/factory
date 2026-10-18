@@ -40,7 +40,10 @@ type Gates struct {
 type Repo struct {
 	Name       string `yaml:"name"` // owner/name
 	BaseBranch string `yaml:"base_branch"`
-	// Gates replaces the top-level gates for this repo when set.
+	// Gates overrides the top-level gates field by field: what it leaves
+	// out (the diff guard's protected paths, say) is inherited, and its
+	// commands replace the top level's. proves_fix or scenarios_dir "none"
+	// turns one off.
 	Gates *Gates `yaml:"gates"`
 }
 
@@ -248,10 +251,8 @@ func (c *Config) defaults() {
 	for i := range c.Repos {
 		r := &c.Repos[i]
 		r.Name = strings.TrimSuffix(strings.TrimPrefix(r.Name, "https://github.com/"), ".git")
-		// An unset base_branch or gates follows the top-level one (see RepoConf).
-		if r.Gates != nil && r.Gates.DiffGuard.MaxChangedLines == 0 {
-			r.Gates.DiffGuard.MaxChangedLines = 400
-		}
+		r.Name = strings.TrimPrefix(r.Name, "github.com/")
+		// Unset base_branch and gates follow the top level (see RepoConf).
 	}
 }
 
@@ -376,10 +377,42 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {
 		r.BaseBranch = c.BaseBranch
 	}
-	if r.Gates == nil {
-		r.Gates = &c.Gates
-	}
+	r.Gates = mergeGates(c.Gates, r.Gates)
 	return r
+}
+
+// mergeGates lays a repo's gates over the top-level ones.
+func mergeGates(top Gates, own *Gates) *Gates {
+	if own == nil {
+		return &top
+	}
+	g := *own
+	if g.Required == nil {
+		g.Required = top.Required
+	}
+	// Commands replace the top level's rather than add to them: a
+	// TypeScript repo shouldn't run the Go repo's test command.
+	if g.Commands == nil {
+		g.Commands = top.Commands
+	}
+	if g.ProvesFix == "" {
+		g.ProvesFix = top.ProvesFix
+	}
+	if g.ScenariosDir == "" {
+		g.ScenariosDir = top.ScenariosDir
+	}
+	for _, s := range []*string{&g.ProvesFix, &g.ScenariosDir} {
+		if *s == "none" {
+			*s = ""
+		}
+	}
+	if g.DiffGuard.MaxChangedLines == 0 {
+		g.DiffGuard.MaxChangedLines = top.DiffGuard.MaxChangedLines
+	}
+	if g.DiffGuard.ProtectedPaths == nil {
+		g.DiffGuard.ProtectedPaths = top.DiffGuard.ProtectedPaths
+	}
+	return &g
 }
 
 // Path resolves p against the config file's directory.

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -200,6 +201,10 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 			}
 			if len(missing) > 1 {
 				p.say("Then open the same link again for the next account.")
+			}
+			if appOwner, _, _ := strings.Cut(cfg.RepoNames()[0], "/"); slices.ContainsFunc(missing, func(o string) bool { return !strings.EqualFold(o, appOwner) }) {
+				p.say("If GitHub doesn't offer an account other than %s, the app is private. Make it", appOwner)
+				p.say("public first: open the app's settings, go to Advanced, and click \"Make public\".")
 			}
 			p.ask("Press Enter here once it's installed", "")
 			continue

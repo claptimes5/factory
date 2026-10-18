@@ -170,11 +170,12 @@ func tokens(cfg *config.Config, repo string) (github.TokenSource, error) {
 		if err != nil {
 			return nil, fmt.Errorf("FACTORY_GITHUB_APP_KEY: %w", err)
 		}
-		// The saved installation is the app's install on one account. With
-		// repos under several accounts, each one's is looked up instead.
+		// The saved installation is the app's install on the first repo's
+		// account. A repo under any other account (repos under several, or
+		// one since dropped from the config) has its own looked up instead.
 		inst := os.Getenv("FACTORY_GITHUB_INSTALLATION_ID")
 		owner, _, _ := strings.Cut(repo, "/")
-		for _, r := range cfg.RepoNames() {
+		for _, r := range append(cfg.RepoNames(), repo) {
 			if o, _, _ := strings.Cut(r, "/"); !strings.EqualFold(o, owner) {
 				inst = ""
 			}
@@ -486,6 +487,14 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 // pull hands an item over for local work: it fetches the item's branch into
 // the git repository in the current directory and copies the item's job
 // transcripts (and Claude sessions, when kept) next to it.
+// remoteIs reports whether a git remote URL (https or ssh) points at the
+// GitHub repo owner/name.
+func remoteIs(url, repo string) bool {
+	u := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git"))
+	r := strings.ToLower(repo)
+	return strings.HasSuffix(u, "/"+r) || strings.HasSuffix(u, ":"+r)
+}
+
 func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) error {
 	repo, n, err := parseIssue(cfg, arg)
 	if err != nil {
@@ -499,7 +508,17 @@ func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) 
 	if branch == "" {
 		branch = fmt.Sprintf("factory/issue-%d", n)
 	}
-	// The user's own git and credentials: this runs in their checkout.
+	// The user's own git and credentials: this runs in their checkout,
+	// which with several repos must be the checkout of this one.
+	if len(cfg.Repos) > 1 {
+		out, err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output()
+		if err != nil {
+			return fmt.Errorf("pull: reading this checkout's origin: %w", err)
+		}
+		if !remoteIs(strings.TrimSpace(string(out)), repo) {
+			return fmt.Errorf("pull: this checkout's origin is %s, not %s; run it in a checkout of %s", strings.TrimSpace(string(out)), repo, repo)
+		}
+	}
 	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", "+refs/heads/"+branch+":refs/heads/"+branch)
 	fetch.Stdout, fetch.Stderr = os.Stdout, os.Stderr
 	if err := fetch.Run(); err != nil {
