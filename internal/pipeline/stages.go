@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,9 +24,13 @@ const (
 	maxReviewAttempts = 2
 )
 
+// issue fetches the item's issue: the text that was approved, or errEdited.
 func (p *Pipeline) issue(ctx context.Context, it *store.WorkItem) (github.Issue, error) {
 	is, err := p.gh(it.Repo).GetIssue(ctx, it.IssueNumber)
 	if err != nil {
+		return github.Issue{}, err
+	}
+	if err := p.unchanged(ctx, it, *is); err != nil {
 		return github.Issue{}, err
 	}
 	return *is, nil
@@ -66,6 +71,11 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 		return p.park(ctx, it, "Triage failed twice: "+msg)
 	}
 	is, err := p.issue(ctx, it)
+	if errors.Is(err, errEdited) {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
+		p.parkEdited(ctx, it, err)
+		return nil
+	}
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -164,6 +174,11 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 
 	is, err := p.issue(ctx, it)
+	if errors.Is(err, errEdited) {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
+		p.parkEdited(ctx, it, err)
+		return nil
+	}
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -534,6 +549,11 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return p.park(ctx, it, fmt.Sprintf("The %s stage could not produce a valid verdict (%s).", j.Kind, msg))
 	}
 	is, err := p.issue(ctx, it)
+	if errors.Is(err, errEdited) {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
+		p.parkEdited(ctx, it, err)
+		return nil
+	}
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -629,6 +649,9 @@ func (p *Pipeline) afterReview(ctx context.Context, it *store.WorkItem, kind str
 		return p.enqueueReview(ctx, it, "critic", 1, in)
 	}
 	is, err := p.issue(ctx, it)
+	if p.parkEdited(ctx, it, err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

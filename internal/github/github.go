@@ -81,6 +81,9 @@ type Client struct {
 	BaseURL string // default https://api.github.com
 	Tokens  TokenSource
 	HTTP    *http.Client
+
+	selfOnce  sync.Mutex
+	selfLogin string // who the factory acts as, once looked up
 }
 
 func (c *Client) base() string {
@@ -120,8 +123,12 @@ func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return defaultHTTP()
 }
+
+func defaultHTTP() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+
+var timeNow = time.Now
 
 func doJSON(ctx context.Context, hc *http.Client, method, u, auth string, in, out any) error {
 	var body io.Reader

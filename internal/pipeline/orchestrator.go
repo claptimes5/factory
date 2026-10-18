@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/mcp"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
@@ -205,12 +206,26 @@ func (p *Pipeline) intakeEpics(ctx context.Context, repo string) error {
 		return err
 	}
 	for _, is := range epics {
+		fresh, err := p.isNew(ctx, repo, is.Number)
+		if err != nil {
+			return err
+		}
+		if !fresh {
+			continue // already an epic, or already being built as a normal item
+		}
+		who, ok := p.approvedBy(ctx, repo, is, LabelEpic)
+		if !ok {
+			continue
+		}
 		it, created, err := p.Store.UpsertItemIn(ctx, repo, is.Number, is.Title, state.Epic)
 		if err != nil {
 			return err
 		}
 		if !created {
-			continue // already an epic, or already being built as a normal item
+			continue
+		}
+		if err := p.approve(ctx, it, is, who); err != nil {
+			return err
 		}
 		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
 	}
@@ -578,6 +593,10 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				it, created, err := p.Store.UpsertItem(ctx, repo, num, a.Title)
 				if err != nil {
 					return "", err
+				}
+				if created {
+					// The factory wrote it: approved as written.
+					p.warn(p.approve(ctx, it, github.Issue{Title: a.Title, Body: a.Body + "\n\n_Opened by the factory orchestrator._"}, "the factory orchestrator"), "approve")
 				}
 				if a.Parent != 0 {
 					p.warn(p.Store.SetParent(ctx, it.ID, a.Parent), "SetParent")

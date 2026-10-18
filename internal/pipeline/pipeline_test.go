@@ -31,6 +31,18 @@ type fakeGH struct {
 	nextPR   int
 
 	failCreatePR int
+	labeledBy    map[int]string // who added labels to an issue; "maintainer" unless set
+	outsiders    map[string]bool
+}
+
+func (f *fakeGH) Approver(_ context.Context, n int, _ string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	who := f.labeledBy[n]
+	if who == "" {
+		who = "maintainer"
+	}
+	return who, !f.outsiders[who], nil
 }
 
 func newFakeGH() *fakeGH {

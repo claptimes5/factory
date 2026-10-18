@@ -607,6 +607,36 @@ func (s *Store) SetJobHead(ctx context.Context, id int64, sha string) error {
 	})
 }
 
+// Approval is what was approved for an item, and by whom.
+type Approval struct {
+	IssueHash  string
+	ApprovedBy string
+}
+
+// SetApproval records the issue text an approver approved for an item,
+// replacing any earlier approval.
+func (s *Store) SetApproval(ctx context.Context, itemID int64, a Approval) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO approvals(item_id, issue_hash, approved_by) VALUES (?, ?, ?)
+			ON CONFLICT(item_id) DO UPDATE SET issue_hash = excluded.issue_hash, approved_by = excluded.approved_by, at = excluded.at`,
+			itemID, a.IssueHash, a.ApprovedBy)
+		return err
+	})
+}
+
+// ItemApproval is an item's approval, or nil when it has none.
+func (s *Store) ItemApproval(ctx context.Context, itemID int64) (*Approval, error) {
+	var a Approval
+	err := s.read.QueryRowContext(ctx, `SELECT issue_hash, approved_by FROM approvals WHERE item_id = ?`, itemID).Scan(&a.IssueHash, &a.ApprovedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // RepoHead is a commit in one repo of a workspace.
 type RepoHead struct {
 	Repo string
