@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func rules(t *testing.T, ss ...string) []Rule {
@@ -101,8 +103,19 @@ func TestProxyForwardsOnlyAllowedHosts(t *testing.T) {
 func TestProxyTunnels(t *testing.T) {
 	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "secure") }))
 	defer up.Close()
-	_, port, _ := net.SplitHostPort(strings.TrimPrefix(up.URL, "https://"))
-	px := newProxy(t, map[string]string{"api.example.com": "127.0.0.1"}, rules(t, "api.example.com:"+port))
+	// The client asks for api.example.com:443; the test server stands in.
+	p := &Proxy{Rules: rules(t, "api.example.com"),
+		Resolve: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+		Dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(up.URL, "https://"))
+		},
+		Blocked: func(netip.Addr) bool { return false },
+	}
+	px := httptest.NewServer(p)
+	defer px.Close()
+	port := "443"
 	pu, _ := url.Parse(px.URL)
 	tr := up.Client().Transport.(*http.Transport).Clone()
 	tr.Proxy = http.ProxyURL(pu)
@@ -145,5 +158,105 @@ func TestBlocked(t *testing.T) {
 	}
 	if !privateOnly(netip.MustParseAddr("10.0.0.5")) || privateOnly(netip.MustParseAddr("127.0.0.1")) || privateOnly(netip.MustParseAddr("169.254.169.254")) {
 		t.Error("privateOnly")
+	}
+}
+
+// A tunnel to 443 that sends no ClientHello in time is closed, not
+// passed through unchecked.
+func TestSilentTLSTunnelIsClosed(t *testing.T) {
+	old := helloWait
+	helloWait = 200 * time.Millisecond
+	defer func() { helloWait = old }()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan []byte, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		b, _ := io.ReadAll(c)
+		got <- b
+	}()
+	p := &Proxy{Rules: rules(t, "api.example.com"),
+		Resolve: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+		Dial: func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+		},
+		Blocked: func(netip.Addr) bool { return false },
+	}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	io.WriteString(conn, "CONNECT api.example.com:443 HTTP/1.1\r\nHost: api.example.com:443\r\n\r\n")
+	br := bufio.NewReader(conn)
+	if r, err := http.ReadResponse(br, nil); err != nil || r.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v %v", r, err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	conn.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5})
+	select {
+	case b := <-got:
+		if len(b) > 0 {
+			t.Fatalf("upstream got %q after the wait", b)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the tunnel stayed open")
+	}
+}
+
+// A long download the client sends nothing back on outlives the idle
+// limit: only silence both ways closes a tunnel.
+func TestIdleCountsBothWays(t *testing.T) {
+	old := tunnelIdle
+	tunnelIdle = 300 * time.Millisecond
+	defer func() { tunnelIdle = old }()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for i := range 10 { // a second of trickle
+			fmt.Fprintf(c, "chunk%d\n", i)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	p := &Proxy{Rules: rules(t, "dl.example.com:"+port),
+		Resolve: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+		Blocked: func(netip.Addr) bool { return false },
+	}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "CONNECT dl.example.com:%s HTTP/1.1\r\nHost: dl.example.com:%s\r\n\r\n", port, port)
+	br := bufio.NewReader(conn)
+	if r, err := http.ReadResponse(br, nil); err != nil || r.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v %v", r, err)
+	}
+	b, _ := io.ReadAll(br)
+	if !strings.Contains(string(b), "chunk9") {
+		t.Fatalf("download cut short: %q", b)
 	}
 }

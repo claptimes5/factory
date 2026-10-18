@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -248,6 +249,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // this long; maxConns bounds the proxy's open requests and tunnels.
 var (
 	tunnelIdle = 10 * time.Minute
+	helloWait  = 30 * time.Second // for a ClientHello on 443
 	maxConns   = 1024
 )
 
@@ -280,46 +282,58 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	if _, err := down.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
 		return
 	}
-	// What the client sends first: with TLS, its ClientHello must name the
-	// host it asked for, so a tunnel to an allowed name can't carry a
-	// session to another name on the same CDN.
-	var first bytes.Buffer
 	in := io.MultiReader(buf.Reader, down)
-	_ = down.SetReadDeadline(time.Now().Add(30 * time.Second))
-	sni, isTLS, err := clientHelloSNI(io.TeeReader(in, &first))
-	_ = down.SetReadDeadline(time.Time{})
-	switch {
-	case isTLS && err != nil:
-		p.Log.Warn("egress denied", "to", addr, "why", "unreadable TLS ClientHello: "+err.Error())
-		return
-	case isTLS && strings.TrimSuffix(strings.ToLower(sni), ".") != host:
-		p.Log.Warn("egress denied", "to", addr, "why", fmt.Sprintf("TLS names %q, not %s", sni, host))
-		return
-	case !isTLS && strings.HasSuffix(addr, ":443"):
-		p.Log.Warn("egress denied", "to", addr, "why", "not TLS on port 443")
-		return
+	if _, port, _ := net.SplitHostPort(addr); port == "443" {
+		// Port 443 carries TLS whose ClientHello names the host asked
+		// for: a tunnel can't open a session under another name. (That
+		// doesn't stop a Host header inside TLS naming another site on a
+		// shared CDN.) Anything else, unreadable or late, is refused.
+		var first bytes.Buffer
+		_ = down.SetReadDeadline(time.Now().Add(helloWait))
+		sni, isTLS, err := clientHelloSNI(io.TeeReader(in, &first))
+		_ = down.SetReadDeadline(time.Time{})
+		switch {
+		case err != nil:
+			p.Log.Warn("egress denied", "to", addr, "why", "no readable TLS ClientHello: "+err.Error())
+			return
+		case !isTLS:
+			p.Log.Warn("egress denied", "to", addr, "why", "not TLS on port 443")
+			return
+		case strings.TrimSuffix(strings.ToLower(sni), ".") != host:
+			p.Log.Warn("egress denied", "to", addr, "why", fmt.Sprintf("TLS names %q, not %s", sni, host))
+			return
+		}
+		if _, err := up.Write(first.Bytes()); err != nil {
+			return
+		}
 	}
-	if _, err := up.Write(first.Bytes()); err != nil {
-		return
-	}
+	var last atomic.Int64 // unix nanos of the last byte either way
+	last.Store(time.Now().UnixNano())
 	done := make(chan struct{}, 2)
-	go func() { pipe(up, in, down); done <- struct{}{} }()
-	go func() { pipe(down, up, up); done <- struct{}{} }()
+	go func() { pipe(up, in, down, &last); done <- struct{}{} }()
+	go func() { pipe(down, up, up, &last); done <- struct{}{} }()
 	<-done
 	<-done
 }
 
-// pipe copies src to dst until either ends or src is idle for tunnelIdle;
-// conn is src's connection, whose read deadline marks idleness.
-func pipe(dst net.Conn, src io.Reader, conn net.Conn) {
+// pipe copies src to dst until either ends, or until nothing has moved
+// either way for tunnelIdle: last is shared by both directions, so a
+// download the client sends nothing back on isn't cut. conn is src's
+// connection, whose read deadline wakes the check.
+func pipe(dst net.Conn, src io.Reader, conn net.Conn, last *atomic.Int64) {
 	b := make([]byte, 32<<10)
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(tunnelIdle))
 		n, err := src.Read(b)
 		if n > 0 {
+			last.Store(time.Now().UnixNano())
 			if _, werr := dst.Write(b[:n]); werr != nil {
 				break
 			}
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() && time.Since(time.Unix(0, last.Load())) < tunnelIdle {
+			continue // the other way is busy
 		}
 		if err != nil {
 			break

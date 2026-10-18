@@ -86,14 +86,27 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if time.Since(d.egressAt) < 30*time.Second && d.egressFP == fp {
 		return nil
 	}
-	name := e.name()
-	up := func() bool {
-		out, err := exec.CommandContext(ctx, d.bin(), "inspect", "-f", `{{.State.Running}} {{index .Config.Labels "factory.egress"}}`, name).Output()
-		return err == nil && strings.TrimSpace(string(out)) == "true "+fp
+	name := e.name() // the fingerprint is in it: same name, same rules
+	status := func() string {
+		out, err := exec.CommandContext(ctx, d.bin(), "inspect", "-f", "{{.State.Status}}", name).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
 	}
-	if up() {
-		d.egressAt, d.egressFP = time.Now(), fp
-		return nil
+	ok := func() error { d.egressAt, d.egressFP = time.Now(), fp; return nil }
+	switch status() {
+	case "running":
+		return ok()
+	case "created":
+		// Another process with the same rules is setting it up.
+		if d.waitEgress(ctx, name) == nil {
+			return ok()
+		}
+	case "exited", "dead":
+		if exec.CommandContext(ctx, d.bin(), "start", name).Run() == nil && d.waitEgress(ctx, name) == nil {
+			return ok()
+		}
 	}
 	if err := d.isolatedGateways(ctx); err != nil {
 		return fmt.Errorf("the egress allowlist: %w (or set runner.egress.mode: open)", err)
@@ -106,7 +119,9 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 			return err
 		}
 	}
-	_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", name).Run()
+	if st := status(); st != "" && st != "running" {
+		_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", name).Run() // broken: start afresh
+	}
 	args := []string{"create", "--name", name, "--label", "factory.egress=" + fp, "--restart", "unless-stopped",
 		"--network", EgressNet, "--user", "65534:65534", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--read-only", "--memory", "256m", "--pids-limit", "512",
@@ -114,9 +129,9 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 		"-e", "FACTORY_EGRESS_ALLOW=" + strings.Join(e.Allow, ","), "-e", "FACTORY_EGRESS_PRIVATE=" + strings.Join(e.Private, ","),
 		egressImage, "egress-proxy", "-listen", ":" + egressPort}
 	if out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput(); err != nil {
-		if up() { // another process with the same rules just made it
-			d.egressAt, d.egressFP = time.Now(), fp
-			return nil
+		// Another process with the same rules made it first: use theirs.
+		if strings.Contains(string(out), "already in use") && d.waitEgress(ctx, name) == nil {
+			return ok()
 		}
 		return fmt.Errorf("creating the egress proxy: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -124,6 +139,7 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if outer == "" {
 		outer = "bridge"
 	}
+	// Only the container this call made is removed on failure.
 	fail := func(what string, err error, out []byte) error {
 		_ = exec.Command(d.bin(), "rm", "-f", name).Run()
 		return fmt.Errorf("%s: %v: %s", what, err, strings.TrimSpace(string(out)))
@@ -134,19 +150,26 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if out, err := exec.CommandContext(ctx, d.bin(), "start", name).CombinedOutput(); err != nil {
 		return fail("starting the egress proxy", err, out)
 	}
-	deadline := time.Now().Add(EgressWait)
-	for {
-		logs, _ := exec.CommandContext(ctx, d.bin(), "logs", name).CombinedOutput()
-		if strings.Contains(string(logs), "egress proxy listening") {
-			break
-		}
-		if !d.Alive(ctx, name) || time.Now().After(deadline) || ctx.Err() != nil {
-			return fail("the egress proxy didn't start", fmt.Errorf("not listening"), []byte(tail(string(logs), 1500)))
-		}
-		time.Sleep(200 * time.Millisecond)
+	if err := d.waitEgress(ctx, name); err != nil {
+		return fail("the egress proxy didn't start", err, nil)
 	}
 	d.egressAt, d.egressFP = time.Now(), fp
 	return nil
+}
+
+// waitEgress waits for the proxy to listen.
+func (d *Docker) waitEgress(ctx context.Context, name string) error {
+	deadline := time.Now().Add(EgressWait)
+	for {
+		logs, _ := exec.CommandContext(ctx, d.bin(), "logs", name).CombinedOutput()
+		if strings.Contains(string(logs), "egress proxy listening") && d.Alive(ctx, name) {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("not listening after %s: %s", EgressWait, tail(string(logs), 1500))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // egressNet makes the jobs' network, or checks the one there is: a
@@ -195,24 +218,28 @@ func (d *Docker) importEmptyImage(ctx context.Context) error {
 	return nil
 }
 
-// StaleEgressProxies removes proxies left by other rules or binaries,
-// keeping this runner's. Only the daemon calls it, at start: a factory
-// eval running beside it keeps its proxy.
+// StaleEgressProxies removes proxies left by other rules or binaries
+// (and the one name earlier versions used), keeping this runner's. Only
+// the daemon calls it, at start, and not while any job container is on
+// the jobs' network: a factory eval running beside it keeps its proxy.
 func (d *Docker) StaleEgressProxies(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-aq", "--filter", "label=factory.egress", "--filter", "name=^"+EgressProxy).Output()
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--filter", "network="+EgressNet, "--format", "{{.Names}}").Output()
 	if err != nil {
 		return err
+	}
+	for _, n := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(n, EgressProxy) && n != "factory-egress-proxy" {
+			return nil // something else is using a proxy
+		}
 	}
 	keep := ""
 	if d.Egress != nil {
 		keep = d.Egress.name()
 	}
-	for _, id := range strings.Fields(string(out)) {
-		n, err := exec.CommandContext(ctx, d.bin(), "inspect", "-f", "{{.Name}}", id).Output()
-		if err == nil && strings.TrimPrefix(strings.TrimSpace(string(n)), "/") == keep {
-			continue
+	for _, n := range strings.Fields(string(out)) {
+		if n != keep {
+			_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", n).Run()
 		}
-		_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", id).Run()
 	}
 	return nil
 }

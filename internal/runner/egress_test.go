@@ -33,7 +33,14 @@ func fakeEgressDocker(t *testing.T) (*Docker, string) {
 	script := `#!/bin/sh
 echo "$@" >> ` + log + `
 case "$1 $2" in
-  "inspect -f") exit 1 ;;
+  "inspect -f")
+    case "$3" in
+      *Status*) test -f ` + dir + `/up && echo running || exit 1 ;;
+      *Running*) test -f ` + dir + `/up && echo true || exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
+  "ps -a") ;;
+  "start "*) touch ` + dir + `/up ;;
   "version --format") echo 28.1.0 ;;
   "network inspect") test -f ` + dir + `/net && echo 'true isolated isolated' || exit 1 ;;
   "network create") touch ` + dir + `/net ;;
@@ -87,7 +94,7 @@ func TestEnsureEgressStartsTheProxyOnce(t *testing.T) {
 func TestEgressRefusesAnOpenNetwork(t *testing.T) {
 	d, _ := fakeEgressDocker(t)
 	script, _ := os.ReadFile(d.Bin)
-	if err := os.WriteFile(d.Bin, []byte(strings.Replace(string(script), "test -f", "echo 'false  '; exit 0; test -f", 1)), 0o755); err != nil {
+	if err := os.WriteFile(d.Bin, []byte(strings.Replace(string(script), "test -f "+filepath.Dir(d.Bin)+"/net", "echo 'false  '; exit 0; test -f", 1)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_, err := d.Run(context.Background(), Spec{Name: "factory-job-1", Image: "img", Cmd: []string{"true"}}, io.Discard)

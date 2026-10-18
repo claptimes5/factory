@@ -25,8 +25,24 @@ it back through triage.
 
 ## Setup
 
-You need a Linux machine (or WSL2 on Windows) with Docker and Go 1.26+, and
-admin rights on the GitHub repo you want the factory to work on.
+You need a Linux machine (or WSL2 on Windows) and admin rights on the
+GitHub repo you want the factory to work on.
+
+### Dependencies
+
+| What | Version | Why |
+| --- | --- | --- |
+| Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
+| Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
+| git | any recent | Worktrees and pushes. |
+| Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
+| A Claude API key or subscription token | | The builder and Claude reviewers. |
+| An OpenAI API key | | Only if a reviewer uses Codex. |
+
+You don't install Claude Code, Codex or Playwright yourself: they're
+pinned in the job image (`deploy/job-image/Dockerfile`), which setup builds.
+The binary has no other runtime dependencies (SQLite is built in, so
+`CGO_ENABLED=0` works).
 
 ```sh
 git clone https://github.com/claptimes5/factory && cd factory
@@ -778,8 +794,11 @@ secrets the jobs don't need out of `env`.
   this binary, run from an empty image in a locked-down container on that
   network and on the usual one.
 - **The proxy forwards only to listed host names,** on ports 443 and 80.
-  A TLS connection must name the same host it asked for, so a tunnel to an
-  allowed name can't be pointed at another site on the same CDN. It never
+  A TLS connection on port 443 must name (in its SNI) the host it asked
+  for. That stops a client from naming a different site there, but not
+  from sending another site's `Host` header inside the encrypted stream
+  (domain fronting) or hiding the name with Encrypted Client Hello, so an
+  allowed CDN name can still reach other sites behind that CDN. It never
   forwards to IP addresses, or to names that resolve to private, loopback
   or link-local addresses. That rules out the cloud metadata service and
   your LAN.
