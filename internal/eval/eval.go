@@ -286,6 +286,7 @@ func caseConfig(o Options, repo, dir string) (*config.Config, config.Repo, bool)
 	cfg.Previews.Off()               // nor is there a PR to show them on
 	cfg.Budgets.ConfirmOver = 0      // nobody is there to say go
 	cfg.Grooming.Off()               // nor is its backlog the run's
+	cfg.Plan.Off()                   // nor anyone to approve a plan
 	cfg.NoGuard = true               // nor are its reverts, nor its breaker
 	rc, known := o.Cfg.RepoConf(repo)
 	if !known {

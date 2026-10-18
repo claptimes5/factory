@@ -47,6 +47,7 @@ A work item moves through these stages; each arrow is one job. Triage can also p
 - A crashed or hung container is killed at its timeout and counts as one failed attempt.
 - On daemon restart, `running` jobs with no live container go back to `queued`.
 - Only the daemon changes states. Agents report through `verdict.json`; the daemon decides the transition.
+- **Plan check for big items.** After triage, an item of a size in `plan.sizes` (default `L`) gets a read-only `plan` job before implement: the builder's route for its size writes a short plan (approach, files, risks, tests; at most 600 words) as its verdict, and the daemon posts it, fenced, on the issue. The item stays Blocked until someone with write access adds `factory:go`; when its cost estimate is over `confirm_over` too, one comment asks for both and the same `factory:go` (or the dashboard's Approve estimate) approves both. A comment plus `factory:replan` sends the plan back once with that comment; a second `factory:replan` parks the item. With `plan.medium: critic` (default off), an M item's plan goes to a `plan_check` job on `routing.critic` instead, which approves it or raises concerns that send it back once; the build then goes on by itself. The approved plan is given, fenced, to the builder and the reviewer. Nothing new is stored: the plan is the plan job's verdict, and its state is events on that job (`plan_waiting`, `plan_announced`, `plan_approved`, `plan_replan`). Main health fixes never plan.
 
 ## SQLite schema
 

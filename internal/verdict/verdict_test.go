@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -252,5 +253,30 @@ func TestABlockWithoutFindingsIsKept(t *testing.T) {
 	}
 	if r, _ := ParseReview([]byte(`{"decision":"pass","findings":[],"challenged_assumptions":[]}`)); r.BlockedWithoutFinding {
 		t.Fatal("a pass marked as a block")
+	}
+}
+
+func TestPlanVerdicts(t *testing.T) {
+	t.Parallel()
+	var p Plan
+	if err := Parse([]byte(`{"approach":"split the parser","files":["a.go"],"risks":[],"tests":"a table test"}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		`{"approach":"","files":[],"risks":[],"tests":"x"}`,
+		`{"approach":"x","files":[],"risks":[],"tests":""}`,
+		`{"approach":"x","risks":[],"tests":"y"}`,
+		`{"approach":"` + strings.Repeat("word ", MaxPlanWords) + `","files":[],"risks":[],"tests":"y"}`,
+	} {
+		if err := Parse([]byte(bad), &Plan{}); err == nil {
+			t.Errorf("took %.60s", bad)
+		}
+	}
+	var c PlanCheck
+	if err := Parse([]byte(`{"decision":"concerns","concerns":["no migration"]}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if err := Parse([]byte(`{"decision":"concerns","concerns":[]}`), &PlanCheck{}); err == nil {
+		t.Fatal("concerns without one")
 	}
 }

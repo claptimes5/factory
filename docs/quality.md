@@ -327,6 +327,47 @@ real runs, and are to be looked at again once the metrics have data:
   close together are filed one at a time at best, and the same bug moved
   further by edits, and worded anew, can come back.
 
+## A plan before big builds
+
+A big change that goes the wrong way costs a whole build and a review
+round to find out. So an item triage rates `L` (the sizes are
+`plan.sizes`) is planned before it's built: the builder's own route
+reads the repo, read-only, and writes a short plan (the approach, the
+files it will touch, the risks, and how it will test it), which goes on
+the issue. Nothing is built until someone approves it with `factory:go`.
+Correcting a plan takes a comment; correcting a finished PR takes
+another build.
+
+When the item's cost estimate waits too, the plan and the estimate are
+asked about in one comment, and one `factory:go` approves both. To change
+the plan, comment what you want and add `factory:replan`: the builder
+plans once more with your comment, and if you ask again the item parks
+rather than loop. The approved plan goes to the builder, which is told to
+follow it and say where it departed, and to the reviewer, which checks
+the change against it. Plan and comment are fenced in both prompts, and
+the issue in the planner's.
+
+Medium items can have the critic check their plan instead
+(`plan.medium: critic`): it approves the plan or raises concerns, which
+send it back once, and the build goes on without anyone. It's off by
+default, because it's two more runs on every M item. See
+[Plans before big builds](configuration.md#plans-before-big-builds).
+
+**To revisit after real use.**
+- Only `L` waits for a person, and `M` gets no plan unless you turn the
+  critic on. Whether plans on M catch enough to pay for two runs is for
+  the metrics to say.
+- The re-plan after the critic's concerns is built without another
+  check, and a critic's check that fails twice lets the build go on
+  without it: the gates and the review still hold the change.
+- The plan job's cost isn't in the cost estimate's history yet (it counts
+  implement, review and critic jobs), so an `L` estimate leaves out one
+  read-only run.
+- A change request is the labeler's latest comment on the issue; one
+  written before the plan, with nothing newer, would be taken as one.
+- The dashboard's **Approve estimate** button shows only when the
+  estimate waits; a plan waiting alone is approved with the label.
+
 ## Security pass
 
 A change that touches code where a mistake is an exploit gets a security

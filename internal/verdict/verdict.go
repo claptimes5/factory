@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -18,6 +19,24 @@ type Triage struct {
 	Risk       string `json:"risk"`       // low|high
 	Question   string `json:"question"`   // set when parking: what is missing
 	Summary    string `json:"summary"`
+}
+
+// Plan is the short plan a big item's builder writes before the build.
+type Plan struct {
+	Approach string   `json:"approach"` // how it will make the change
+	Files    []string `json:"files"`    // the files it expects to touch
+	Risks    []string `json:"risks"`    // what could go wrong, or is unclear
+	Tests    string   `json:"tests"`    // how the change will be proven
+}
+
+// MaxPlanWords is the longest plan the factory takes: the prompt asks
+// for about 400 words, a plan is read by a person.
+const MaxPlanWords = 600
+
+// PlanCheck is the critic's verdict on a plan.
+type PlanCheck struct {
+	Decision string   `json:"decision"` // approve|concerns
+	Concerns []string `json:"concerns"`
 }
 
 // Implement is the builder's report. The daemon re-runs every gate itself;
@@ -249,6 +268,38 @@ func (t *Triage) Validate() error {
 	return errors.Join(errs...)
 }
 
+func (p *Plan) Validate() error {
+	var errs []error
+	if strings.TrimSpace(p.Approach) == "" {
+		errs = append(errs, errors.New("approach is empty"))
+	}
+	if strings.TrimSpace(p.Tests) == "" {
+		errs = append(errs, errors.New("tests is empty"))
+	}
+	if p.Files == nil || p.Risks == nil {
+		errs = append(errs, errors.New("files and risks are required (use [])"))
+	}
+	n := len(strings.Fields(p.Approach)) + len(strings.Fields(p.Tests))
+	for _, s := range append(slices.Clone(p.Files), p.Risks...) {
+		n += len(strings.Fields(s))
+	}
+	if n > MaxPlanWords {
+		errs = append(errs, fmt.Errorf("the plan is %d words, over %d", n, MaxPlanWords))
+	}
+	return errors.Join(errs...)
+}
+
+func (c *PlanCheck) Validate() error {
+	errs := []error{oneOf("decision", c.Decision, "approve", "concerns")}
+	if c.Decision == "concerns" && len(c.Concerns) == 0 {
+		errs = append(errs, errors.New("concerns needs at least one concern"))
+	}
+	if c.Concerns == nil {
+		errs = append(errs, errors.New("concerns is required (use [])"))
+	}
+	return errors.Join(errs...)
+}
+
 func (i *Implement) Validate() error {
 	errs := []error{oneOf("status", i.Status, "done", "blocked")}
 	for n, a := range i.Answers {
@@ -397,6 +448,18 @@ var schemas = map[string]string{
  "risk":{"type":"string","enum":["low","high"]},
  "question":{"type":"string"},
  "summary":{"type":"string"}}}`,
+	"plan": `{"type":"object","additionalProperties":false,
+"required":["approach","files","risks","tests"],
+"properties":{
+ "approach":{"type":"string"},
+ "files":{"type":"array","items":{"type":"string"}},
+ "risks":{"type":"array","items":{"type":"string"}},
+ "tests":{"type":"string"}}}`,
+	"plan_check": `{"type":"object","additionalProperties":false,
+"required":["decision","concerns"],
+"properties":{
+ "decision":{"type":"string","enum":["approve","concerns"]},
+ "concerns":{"type":"array","items":{"type":"string"}}}}`,
 	"implement": `{"type":"object","additionalProperties":false,
 "required":["status","summary","tests_added","blocker"],
 "properties":{

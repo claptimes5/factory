@@ -274,11 +274,23 @@ func (p *Pipeline) isHealthFix(ctx context.Context, it *store.WorkItem) (bool, e
 	return p.Store.IsHealthIssue(ctx, it.Repo, it.IssueNumber)
 }
 
-// announceWait tells people an item waits on its estimate: a factory:go
+// announceWait tells people an item waits on its estimate, its plan, or
+// both in one comment (est is nil when only the plan waits): a factory:go
 // from before the wait comes off first, so only one added after this
 // comment approves it. Recorded once it's all out; until then intake
 // tries again and no factory:go counts.
 func (p *Pipeline) announceWait(ctx context.Context, it *store.WorkItem, est *store.Estimate) {
+	pl, err := p.currentPlan(ctx, it.ID)
+	if err != nil {
+		p.warn(err, "currentPlan")
+		return
+	}
+	if pl != nil && !pl.waiting {
+		pl = nil
+	}
+	if est == nil && pl == nil {
+		return
+	}
 	gh := p.gh(it.Repo)
 	is, err := gh.GetIssue(ctx, it.IssueNumber)
 	if err != nil {
@@ -300,16 +312,43 @@ func (p *Pipeline) announceWait(ctx context.Context, it *store.WorkItem, est *st
 	note := ""
 	if stale {
 		note = fmt.Sprintf("\n\nThe `%s` label that was already on was taken off: it has to be added after this comment, for this estimate.", LabelGo)
+		if pl != nil {
+			note = fmt.Sprintf("\n\nThe `%s` label that was already on was taken off: it has to be added after this comment, for this plan.", LabelGo)
+		}
 	}
-	if err := gh.Comment(ctx, it.IssueNumber, fmt.Sprintf("**Factory: waiting for your OK on the cost.**\n\n"+
-		"Triage rated this %s. Estimated cost: **%s** (%s). That's over the %s limit (`confirm_over`), so nothing is built until someone approves.\n\n"+
-		"To go ahead, someone with write access adds the `%s` label, or presses **Approve estimate** on the item in the dashboard.%s",
-		it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), LabelGo, note)); err != nil {
+	var body, msg string
+	switch {
+	case pl == nil:
+		body = fmt.Sprintf("**Factory: waiting for your OK on the cost.**\n\n"+
+			"Triage rated this %s. Estimated cost: **%s** (%s). That's over the %s limit (`confirm_over`), so nothing is built until someone approves.\n\n"+
+			"To go ahead, someone with write access adds the `%s` label, or presses **Approve estimate** on the item in the dashboard.%s",
+			it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), LabelGo, note)
+		msg = fmt.Sprintf("%s waits for your OK: estimated %s, over the %s limit. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo)
+	case est == nil:
+		body = fmt.Sprintf("**Factory: waiting for your OK on the plan.**\n\n"+
+			"Triage rated this %s, so the builder planned it first. Nothing is built until someone approves the plan: a plan is cheaper to correct than a finished PR.\n\n%s\n"+
+			"To build it, someone with write access adds the `%s` label. To change the plan, comment what to change, then add `%s`: the builder plans once more with your comment.%s",
+			it.Complexity, planSection(pl), LabelGo, LabelReplan, note)
+		msg = fmt.Sprintf("%s waits for your OK on its plan. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), LabelGo)
+	default:
+		body = fmt.Sprintf("**Factory: waiting for your OK on the cost and the plan.**\n\n"+
+			"Triage rated this %s. Estimated cost: **%s** (%s). That's over the %s limit (`confirm_over`), and the builder planned it first, so nothing is built until someone approves both.\n\n%s\n"+
+			"To build it, someone with write access adds the `%s` label, which approves the cost and the plan at once, or presses **Approve estimate** on the item in the dashboard. "+
+			"To change the plan, comment what to change, then add `%s`: the builder plans once more with your comment.%s",
+			it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), planSection(pl), LabelGo, LabelReplan, note)
+		msg = fmt.Sprintf("%s waits for your OK on its plan and its cost: estimated %s, over the %s limit. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo)
+	}
+	if err := gh.Comment(ctx, it.IssueNumber, body); err != nil {
 		p.warn(err, "Comment")
 		return
 	}
-	p.notify(ctx, fmt.Sprintf("%s waits for your OK: estimated %s, over the %s limit. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo))
-	p.warn(p.Store.SetEstimateAnnounced(ctx, it.ID), "SetEstimateAnnounced")
+	p.notify(ctx, msg)
+	if est != nil {
+		p.warn(p.Store.SetEstimateAnnounced(ctx, it.ID), "SetEstimateAnnounced")
+	}
+	if pl != nil {
+		p.warn(p.planEvent(ctx, it, pl.job.ID, "daemon", evPlanAnnounced, "asked for an OK on the plan"), "AddEvent")
+	}
 }
 
 func (p *Pipeline) waitingReason(e *store.Estimate) string {
@@ -346,18 +385,26 @@ func (p *Pipeline) approveEstimate(ctx context.Context, itemID int64, by string)
 	if err != nil {
 		return err
 	}
-	if it.Stage != state.Blocked || !p.estimateWaiting(ctx, itemID) {
-		return fmt.Errorf("item %d isn't waiting for an OK on its estimate", itemID)
-	}
-	if ok, err := p.Store.ApproveEstimate(ctx, itemID, by); err != nil || !ok {
-		if err == nil {
-			err = fmt.Errorf("item %d isn't waiting for an OK on its estimate", itemID)
-		}
+	// One OK covers the estimate and the plan, whichever wait.
+	estWait := p.estimateWaiting(ctx, itemID)
+	pl, err := p.currentPlan(ctx, itemID)
+	if err != nil {
 		return err
 	}
-	e, _ := p.Store.ItemEstimate(ctx, itemID)
+	planWait := pl != nil && pl.waiting
+	if it.Stage != state.Blocked || !estWait && !planWait {
+		return fmt.Errorf("item %d isn't waiting for an OK on its estimate", itemID)
+	}
+	if estWait {
+		if ok, err := p.Store.ApproveEstimate(ctx, itemID, by); err != nil || !ok {
+			if err == nil {
+				err = fmt.Errorf("item %d isn't waiting for an OK on its estimate", itemID)
+			}
+			return err
+		}
+	}
 	rng := ""
-	if e != nil {
+	if e, _ := p.Store.ItemEstimate(ctx, itemID); e != nil && estWait {
 		rng = " (" + e.Range() + ")"
 	}
 	actor := "human"
@@ -366,11 +413,27 @@ func (p *Pipeline) approveEstimate(ctx context.Context, itemID int64, by string)
 	} else {
 		by = "by @" + by
 	}
-	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: actor, ItemID: &it.ID, Type: "estimate_approved", Reason: "approved " + by + rng}), "AddEvent")
+	what, reason := "the estimate"+rng, "estimate"
+	if estWait {
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: actor, ItemID: &it.ID, Type: "estimate_approved", Reason: "approved " + by + rng}), "AddEvent")
+	}
+	if planWait {
+		if err := p.planEvent(ctx, it, pl.job.ID, actor, evPlanApproved, by); err != nil {
+			return err
+		}
+		what, reason = "the plan", "plan"
+		if estWait {
+			what, reason = "the estimate"+rng+" and the plan", "estimate and plan"
+		}
+	}
 	gh := p.gh(it.Repo)
 	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
-	p.warn(gh.Comment(ctx, it.IssueNumber, "**Factory:** the estimate"+rng+" was approved "+by+"; building it."), "Comment")
-	if err := p.Store.SetStage(ctx, it.ID, state.Ready, actor, "estimate approved "+by); err != nil {
+	verb := " was approved "
+	if estWait && planWait {
+		verb = " were approved "
+	}
+	p.warn(gh.Comment(ctx, it.IssueNumber, "**Factory:** "+what+verb+by+"; building it."), "Comment")
+	if err := p.Store.SetStage(ctx, it.ID, state.Ready, actor, reason+" approved "+by); err != nil {
 		return err
 	}
 	if ok, err := p.depsDone(ctx, it.ID); err != nil {
@@ -398,7 +461,12 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 		if !strings.EqualFold(it.Repo, repo) {
 			continue
 		}
-		if e, err := p.Store.ItemEstimate(ctx, it.ID); err == nil && e != nil && e.Status == store.EstimateWaiting && !e.Announced {
+		e, err := p.Store.ItemEstimate(ctx, it.ID)
+		if err != nil || e != nil && e.Status != store.EstimateWaiting {
+			e = nil
+		}
+		pl, err := p.currentPlan(ctx, it.ID)
+		if e != nil && !e.Announced || err == nil && pl != nil && pl.waiting && !pl.announced {
 			p.announceWait(ctx, it, e)
 		}
 	}
@@ -411,6 +479,7 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 		// Only an item that isn't there is not waiting; a failed read
 		// leaves the label for the next poll.
 		var est *store.Estimate
+		var pl *planState
 		it, err := p.Store.ItemByIssue(ctx, repo, is.Number)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -422,9 +491,15 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 				p.warn(err, "ItemEstimate")
 				continue
 			}
+			if pl, err = p.currentPlan(ctx, it.ID); err != nil {
+				p.warn(err, "currentPlan")
+				continue
+			}
 		}
-		waiting := it != nil && it.Stage == state.Blocked && est != nil && est.Status == store.EstimateWaiting
-		if waiting && !est.Announced {
+		estWait := est != nil && est.Status == store.EstimateWaiting
+		planWait := pl != nil && pl.waiting
+		waiting := it != nil && it.Stage == state.Blocked && (estWait || planWait)
+		if waiting && (estWait && !est.Announced || planWait && !pl.announced) {
 			continue // announceWait takes it off before it may count
 		}
 		if !waiting {
@@ -432,7 +507,7 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 				p.warn(err, "RemoveLabel")
 				continue
 			}
-			p.warn(gh.Comment(ctx, is.Number, fmt.Sprintf("**Factory:** `%s` was taken off: it only approves an item that's waiting for an OK on its cost estimate, and this one isn't. "+
+			p.warn(gh.Comment(ctx, is.Number, fmt.Sprintf("**Factory:** `%s` was taken off: it only approves an item that's waiting for an OK on its cost estimate or its plan, and this one isn't. "+
 				"If it waits later, add it again then.", LabelGo)), "Comment")
 			continue
 		}

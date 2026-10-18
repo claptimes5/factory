@@ -660,6 +660,32 @@ is, including issues the orchestrator files and ones from
 item waits and how to approve it, see
 [Cost estimates](using.md#cost-estimates).
 
+## Plans before big builds
+
+An item triage rates `L` gets a short plan before it's built, posted on
+the issue, and waits for your `factory:go` (see
+[Plans before big builds](using.md#plans-before-big-builds)):
+
+```yaml
+plan:
+  enabled: true      # the default; false turns plans off
+  sizes: [L]         # sizes whose plan waits for you (default [L])
+  medium: off        # critic: the critic checks an M item's plan instead
+```
+
+The plan runs on the builder's route for the item's size
+(`routing.implement.L` for an L item), read-only, with `budgets.review`
+as its cap and `timeouts.plan` (default 15m) as its limit. The critic's
+check runs on `routing.critic` (else `implement.L`). A size in `sizes`
+waits for you even if `medium` is `critic`. Main health fixes never plan.
+An item re-sized to a planned size after triage (by the orchestrator's
+`enqueue`), or retried from an old build on the dashboard with no plan
+since its triage, is planned first. A plan already asked for keeps
+holding the build if you later drop its size or turn plans off: it waits
+for its `factory:go`, or `factory:retry` to start over.
+`factory eval` and `compare` turn plans off: nobody is there to approve
+one.
+
 ## Tuning
 
 The [tuning loop](using.md#tuning) proposes changes to the settings from

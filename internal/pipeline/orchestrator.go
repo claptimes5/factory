@@ -944,6 +944,9 @@ func (p *Pipeline) enqueueStage(ctx context.Context, itemID int64, stage, comple
 	if p.estimateNeedsOK(ctx, it.ID) {
 		return errEstimateWaiting
 	}
+	if p.planNeedsOK(ctx, it) {
+		return errPlanWaiting
+	}
 	if complexity != "" && complexity != it.Complexity {
 		if err := p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Complexity: &complexity}); err != nil {
 			return err
@@ -961,6 +964,12 @@ func (p *Pipeline) enqueueStage(ctx context.Context, itemID int64, stage, comple
 	}
 	if it.Complexity == "" {
 		return errors.New("refused: the item has no complexity; triage it or pass one")
+	}
+	// A size that needs a plan (say, re-sized to L) is planned first.
+	if held, err := p.holdForPlan(ctx, it, "orchestrator"); err != nil {
+		return err
+	} else if held {
+		return errPlanWaiting
 	}
 	if it.Stage != state.Ready {
 		if err := p.Store.SetStage(ctx, it.ID, state.Ready, "orchestrator", "enqueue implement"); err != nil {
@@ -1003,7 +1012,7 @@ func (p *Pipeline) unblock(ctx context.Context) error {
 	}
 	for _, it := range blocked {
 		ok, err := p.depsDone(ctx, it.ID)
-		if err != nil || !ok || it.Complexity == "" || p.estimateNeedsOK(ctx, it.ID) {
+		if err != nil || !ok || it.Complexity == "" || p.estimateNeedsOK(ctx, it.ID) || p.planNeedsOK(ctx, it) {
 			continue
 		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Ready, "daemon", "dependencies done"); err != nil {

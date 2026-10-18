@@ -53,7 +53,8 @@ func Labels(intake string) []Label {
 		{LabelAwaitingYou, "1d76db", "Factory: draft PR ready for your review"},
 		{LabelAutoMerge, "0e8a16", "Factory: merges itself once its checks pass (auto_merge)"},
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
-		{LabelGo, "0e8a16", "Factory: build it, though its cost estimate is over confirm_over"},
+		{LabelGo, "0e8a16", "Factory: build it: approves its cost estimate over confirm_over, and its plan"},
+		{LabelReplan, "5319e7", "Factory: plan it again, with your last comment"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
 		{LabelMainHealth, "b60205", "Factory: a check is red or flaky on the base branch; first in the queue"},
@@ -708,6 +709,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 		p.warn(p.intakeEpics(ctx, repo), "epics")
 	}
 	p.warn(p.intakeGo(ctx, repo), "factory:go")
+	p.warn(p.intakeReplan(ctx, repo), "factory:replan")
 	retries, err := gh.ListIssues(ctx, LabelRetry)
 	if err != nil {
 		return err
@@ -906,6 +908,8 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 			heads = p.jobHeads(ctx, it, last)
 		}
 		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Heads: heads, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
+	case last.Kind == "plan" || last.Kind == "plan_check":
+		return p.resumePlan(ctx, it, last)
 	default:
 		var in ImplementInput
 		_ = json.Unmarshal([]byte(last.Input), &in)
@@ -971,6 +975,11 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 	// that needs a human's OK stops it.
 	if p.estimateNeedsOK(ctx, it.ID) {
 		return false, errEstimateWaiting
+	}
+	if held, err := p.holdForPlan(ctx, it, "daemon"); err != nil {
+		return false, err
+	} else if held {
+		return false, errPlanWaiting
 	}
 	size := it.Complexity
 	if in.Size != "" {
@@ -1235,6 +1244,10 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runTriage(ctx, j, it)
 	case "implement":
 		err = p.runImplement(ctx, j, it)
+	case "plan":
+		err = p.runPlan(ctx, j, it)
+	case "plan_check":
+		err = p.runPlanCheck(ctx, j, it)
 	case "review", "critic":
 		err = p.runReview(ctx, j, it)
 	case "orchestrate":
@@ -1300,6 +1313,11 @@ type PromptData struct {
 	Screenshots     []PromptShot   // the change's screenshots, for the reviewer
 	Guide           string         // the repo's REVIEW.md from the base branch, fenced, for reviewers
 	GuideFile       string         // where Guide is from, such as `REVIEW.md`
+	IssueText       string         // the issue's title and text, fenced
+	Plan            string         // the approved plan, fenced, for the builder and the reviewer
+	PlanBy          string         // how it was approved
+	PlanFeedback    string         // a re-plan: the earlier plan and what to change, fenced
+	PlanFrom        string         // who asked for the re-plan
 }
 
 func (p *Pipeline) render(stage string, d any) (string, error) {
