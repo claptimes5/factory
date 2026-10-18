@@ -71,6 +71,18 @@ Nothing the builder writes is trusted:
   `.gitlab-ci.yml` and `.gitlab/`.
 - **The review is pinned to the verified commit.** If the branch moved
   after the gates ran, the item parks.
+- **The PR description quotes the checks, never the reverse.** By default
+  (`pr.check_output: private`) the end of each passing check's output goes
+  only on PRs in repos the forge reports as private, and in a workspace
+  only on its own repo's PR. It's redacted whole before it's cut: known
+  secret values (model keys, `env`, services' `env`, each line of a
+  multi-line value, the values in the repo's `files`, read through links
+  as they're copied), token shapes, and any line that sets a variable or
+  names a token, secret, password or key. If the repo's `files` can't all
+  be read, nothing is quoted. It sits in a code block it can't close. The
+  repo's PR template is read from the base branch as layout only: just its
+  headings are kept, cleaned, and no part of it reaches a prompt. See
+  [The PR description](using.md#the-pr-description).
 - **The model keys** reach each job container as env vars and are never
   written into a job's files. Agents can read `env`, so it is not for
   secrets. Claude jobs get `ANTHROPIC_API_KEY` or

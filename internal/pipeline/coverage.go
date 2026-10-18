@@ -96,11 +96,11 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 	if len(head) == 0 {
 		switch {
 		case err != nil || code != 0:
-			r.Status, r.Detail = gates.Fail, fmt.Sprintf("the coverage run failed (exit %d %v)\n%s", code, err, tail(out, 2000))
+			r.Status, r.Detail = gates.Fail, fmt.Sprintf("the coverage run failed (exit %d %v)\n%s", code, err, gates.TailLines(out, 2000))
 		case strings.Contains(out, "[no statements]") || strings.Contains(out, "[no test files]"):
-			r.Status, r.Detail = gates.Pass, "nothing to measure in the changed packages\n"+tail(out, 1000)
+			r.Status, r.Detail = gates.Pass, "nothing to measure in the changed packages\n"+gates.TailLines(out, 1000)
 		default:
-			r.Status, r.Detail = gates.Misconfigured, "the coverage command printed no coverage lines\n"+tail(out, 1000)
+			r.Status, r.Detail = gates.Misconfigured, "the coverage command printed no coverage lines\n"+gates.TailLines(out, 1000)
 		}
 		return r
 	}
@@ -118,7 +118,7 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 	// can't measure has no floor to hold the change to.
 	if g.Install != "" {
 		if code, out, err := p.gateExec(ctx, jobID, baseDir, g.Install, gateRun{repo: pt.repo, install: true}); err != nil || code != 0 {
-			r.Status, r.Detail = gates.Pass, fmt.Sprintf("couldn't install the base, so no floor: exit %d %v\n%s", code, err, tail(out, 1000))
+			r.Status, r.Detail = gates.Pass, fmt.Sprintf("couldn't install the base, so no floor: exit %d %v\n%s", code, err, gates.TailLines(out, 1000))
 			return r
 		}
 	}
@@ -174,7 +174,7 @@ func (p *Pipeline) coverage(ctx context.Context, jobID int64, pt *part, gateDir 
 	}
 	r.Status, r.Detail = gates.Pass, strings.Join(lines, "\n")
 	if baseErr != nil || baseCode != 0 {
-		r.Detail += fmt.Sprintf("\nthe base run failed (exit %d %v), so packages it didn't measure have no floor:\n%s", baseCode, baseErr, tail(baseOut, 1000))
+		r.Detail += fmt.Sprintf("\nthe base run failed (exit %d %v), so packages it didn't measure have no floor:\n%s", baseCode, baseErr, gates.TailLines(baseOut, 1000))
 	}
 	return r
 }

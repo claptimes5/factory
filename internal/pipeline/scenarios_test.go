@@ -50,7 +50,7 @@ func TestHiddenScenarioFailsWithoutLeaking(t *testing.T) {
 	if err != nil || !strings.Contains(string(log), "SCENARIO-SECRET") {
 		t.Fatalf("the human's copy of the output: %q %v", log, err)
 	}
-	if body := e.gh.comments[it.PRNumber][0]; !strings.Contains(body, "| scenario:1 | pass |") || !strings.Contains(body, "| scenario:2 | pass |") {
+	if body := e.gh.comments[it.PRNumber][0]; !strings.Contains(body, "| `scenario:1` | pass |") || !strings.Contains(body, "| `scenario:2` | pass |") {
 		t.Fatalf("PR body lacks scenario results:\n%s", body)
 	}
 }

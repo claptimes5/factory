@@ -157,6 +157,7 @@ type Pipeline struct {
 	svcNets    map[int64]string // job ID -> its services network
 	inflight   sync.Map         // item id -> job id while a job for it, and its follow-ups, run
 	cancelled  sync.Map         // job id -> true for running jobs a human cancelled
+	privacy    sync.Map         // lower-case repo -> whether the forge says it's private
 	jobCancel  sync.Map         // job id -> context.CancelFunc of a running job
 	// act serializes state-changing actions that check and then act:
 	// intake, human actions and the orchestrator's tools.
@@ -971,6 +972,13 @@ type ReviewInput struct {
 	Heads    []store.RepoHead `json:"heads,omitempty"`
 	Gates    string           `json:"gates"`
 	Features string           `json:"features,omitempty"` // the blast radius, from the feature map
+	// For the PR's description only, never a prompt: each check's outcome
+	// with its output redacted, the files changed in each repo, and each
+	// repo's PR template from its base branch.
+	Checks    []CheckRun          `json:"checks,omitempty"`
+	Changed   map[string][]string `json:"changed,omitempty"`
+	Templates map[string]string   `json:"templates,omitempty"`
+	Unchecked map[string]int      `json:"unchecked,omitempty"` // revert-relevant files past maxChanged
 }
 
 func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind string, attempt int, in ReviewInput) error {
