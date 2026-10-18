@@ -193,8 +193,8 @@ type Config struct {
 	} `yaml:"runner"`
 
 	Web struct {
-		// Listen is the control room address. Keep it on localhost or a
-		// Tailscale address: there is no login in v1.
+		// Listen is the control room address. Anywhere but localhost or a
+		// Tailscale address needs FACTORY_WEB_PASSWORD.
 		Listen string `yaml:"listen"`
 		// Hosts are extra names the control room answers to (for example
 		// a Tailscale name); anything else is refused.

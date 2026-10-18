@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
-import { Activity, Bell, LayoutGrid, Moon, Radio, Search, Sun } from "lucide-react";
+import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useBrowserNotifications } from "@/lib/notify";
@@ -145,6 +145,17 @@ export function Layout() {
               {inbox > 0 && <Count n={inbox} className="absolute -top-1.5 -right-1.5" />}
             </Link>
             {theme}
+            {o?.signed_in && (
+              <form method="post" action="/logout">
+                <button
+                  aria-label="Sign out"
+                  title="Sign out"
+                  className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-card text-foreground hover:bg-accent md:size-9"
+                >
+                  <LogOut className="size-4" />
+                </button>
+              </form>
+            )}
           </div>
 
           {/* Phone: what's running and the day's spend under the logo. */}

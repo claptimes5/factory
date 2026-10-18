@@ -1,7 +1,7 @@
 // Package web is the control room: server-rendered HTML with htmx, embedded
 // in the binary. It binds to localhost by default; reach it remotely over
-// Tailscale or an SSH tunnel. There is no login in v1, so never expose it on
-// a public port.
+// Tailscale or an SSH tunnel. With FACTORY_WEB_PASSWORD set it asks for a
+// password (see Login); without one it refuses to listen beyond those.
 package web
 
 import (
@@ -67,7 +67,9 @@ type Server struct {
 	Checks CheckFunc
 	// Exec builds the command a live terminal runs for a running job
 	// (nil when the runner has no containers to attach to).
-	Exec       ExecFunc
+	Exec ExecFunc
+	// Login, with a password set, makes everyone sign in first.
+	Login      *Login
 	tmpl       *template.Template
 	pollPeriod time.Duration
 }
@@ -146,6 +148,9 @@ func (s *Server) Handler() (http.Handler, error) {
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}
+	if s.Login != nil && s.Login.Password != "" {
+		return s.guard(s.Login.wrap(mux)), nil
+	}
 	return s.guard(mux), nil
 }
 
@@ -183,6 +188,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 func (s *Server) render(w http.ResponseWriter, name string, data map[string]any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	data["Page"] = name
+	data["SignedIn"] = s.Login != nil && s.Login.Password != ""
 	if err := s.tmpl.ExecuteTemplate(w, name+".html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -641,6 +647,11 @@ func TTYDAttach(st *store.Store, host string) func(ctx context.Context, jobID in
 		name := fmt.Sprintf("factory-job-%d", jobID)
 		manual := "docker exec -it " + name + " sh"
 		if _, err := exec.LookPath("ttyd"); err != nil {
+			return manual, nil
+		}
+		// ttyd has no login of its own: only where the control room needs
+		// none may it listen. Elsewhere the in-page terminal does instead.
+		if NeedsLogin(net.JoinHostPort(host, "0")) {
 			return manual, nil
 		}
 		l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))

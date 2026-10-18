@@ -381,6 +381,18 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 		srv.Attach = web.TTYDAttach(st, host)
 		srv.Exec = web.DockerExec(st)
 	}
+	if pw := os.Getenv("FACTORY_WEB_PASSWORD"); pw != "" {
+		if len(pw) < web.MinPassword {
+			return fmt.Errorf("FACTORY_WEB_PASSWORD is %d characters; use at least %d", len(pw), web.MinPassword)
+		}
+		secret, err := web.LoadSecret(filepath.Join(cfg.Path(cfg.DataDir), "web.secret"))
+		if err != nil {
+			return err
+		}
+		srv.Login = &web.Login{Password: pw, Secret: secret}
+	} else if web.NeedsLogin(cfg.Web.Listen) {
+		return fmt.Errorf("web.listen %s reaches beyond this machine and a tailnet: set FACTORY_WEB_PASSWORD in factory.env so the control room asks for it", cfg.Web.Listen)
+	}
 	h, err := srv.Handler()
 	if err != nil {
 		return err
