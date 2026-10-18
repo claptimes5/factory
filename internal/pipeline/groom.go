@@ -84,6 +84,13 @@ type openIssueLister interface {
 	OpenIssues(ctx context.Context, max int) ([]github.OpenIssue, error)
 }
 
+// duplicateCloser closes an issue as a duplicate, or as not planned
+// (GitHub).
+type duplicateCloser interface {
+	notPlannedCloser
+	CloseDuplicate(ctx context.Context, n int) error
+}
+
 // commentLister is a client that lists an issue's comments and says who
 // the factory is; both real ones can.
 type commentLister interface {
@@ -256,6 +263,15 @@ func (p *Pipeline) gatherGroom(ctx context.Context, repo string, open []github.O
 		if pr.Kind != store.GroomSplit {
 			g.scope.NotCanonical[pr.IssueNumber] = true // proposed closed already
 		}
+	}
+	// A source closes its own unapproved issues when what they were filed
+	// for goes away: an issue closed in favor of one would be lost.
+	srcs, err := p.unapprovedSourceIssues(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	for n := range srcs {
+		g.scope.NotCanonical[n] = true
 	}
 	children, err := p.Store.GroomChildren(ctx, repo, 0)
 	if err != nil {
@@ -846,12 +862,36 @@ func (p *Pipeline) confirmGroom(ctx context.Context, g store.GroomProposal) erro
 	}
 	if IssueHash(text) != g.IssueHash {
 		return p.dropGroom(ctx, g, true, store.GroomGone, "changed",
-			fmt.Sprintf("the issue's title or text changed since backlog grooming flagged it, so the proposal may no longer fit. Take `%s` off; the next grooming run looks at it afresh", groomLabel(g.Kind)))
+			"the issue's title or text changed since backlog grooming flagged it, so the proposal may no longer fit. The next grooming run looks at the issue again")
 	}
 	if g.Kind == store.GroomSplit {
 		return p.groomSplit(ctx, g, who, text)
 	}
 	return p.groomClose(ctx, g, who)
+}
+
+// unapprovedSourceIssues are the repo's issues a source filed that the
+// factory has no item for: nobody approved them, and the source closes
+// them itself once what they were filed for is gone.
+func (p *Pipeline) unapprovedSourceIssues(ctx context.Context, repo string) (map[int]bool, error) {
+	sis, err := p.Store.SourceIssues(ctx, "", "")
+	if err != nil {
+		return nil, err
+	}
+	out := map[int]bool{}
+	for _, si := range sis {
+		if !strings.EqualFold(si.Repo, repo) {
+			continue
+		}
+		_, err := p.Store.ItemByIssue(ctx, repo, si.IssueNumber)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			out[si.IssueNumber] = true
+		case err != nil:
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // groomCloseBlocked says why a confirmed close mustn't happen now, or "":
@@ -877,6 +917,13 @@ func (p *Pipeline) groomCloseBlocked(ctx context.Context, g store.GroomProposal)
 	case c.State == "closed":
 		return fmt.Sprintf("#%d, which this duplicates, is closed now, so this issue may be the one left to track it", g.Canonical), nil
 	}
+	srcs, err := p.unapprovedSourceIssues(ctx, g.Repo)
+	if err != nil {
+		return "", err
+	}
+	if srcs[g.Canonical] {
+		return fmt.Sprintf("#%d, which this duplicates, was filed by a source and nobody has approved it, so the factory may close it on its own", g.Canonical), nil
+	}
 	props, err := p.Store.GroomProposals(ctx, g.Repo, g.Canonical)
 	if err != nil {
 		return "", err
@@ -900,6 +947,12 @@ func (p *Pipeline) groomClose(ctx context.Context, g store.GroomProposal, who st
 	}
 	gh := p.gh(g.Repo)
 	switch c := gh.(type) {
+	case duplicateCloser:
+		if g.Kind == store.GroomDuplicate {
+			err = c.CloseDuplicate(ctx, g.IssueNumber)
+		} else {
+			err = c.CloseNotPlanned(ctx, g.IssueNumber)
+		}
 	case notPlannedCloser:
 		err = c.CloseNotPlanned(ctx, g.IssueNumber)
 	case issueCloser:
@@ -1032,8 +1085,18 @@ func (p *Pipeline) adoptGroomChild(ctx context.Context, it *store.WorkItem) {
 		p.warn(err, "GroomParent")
 		return
 	}
-	if ep, err := p.Store.ItemByIssue(ctx, it.Repo, parent); err == nil {
-		p.warn(p.Store.SetParent(ctx, it.ID, ep.ID), "SetParent")
+	ep, err := p.Store.ItemByIssue(ctx, it.Repo, parent)
+	if err != nil {
+		// The split is still filing its sub-issues, so its epic doesn't
+		// exist yet: settleGroomChildren adopts this one once it does.
+		if !errors.Is(err, sql.ErrNoRows) {
+			p.warn(err, "ItemByIssue")
+		}
+		return
+	}
+	if err := p.Store.SetParent(ctx, it.ID, ep.ID); err != nil {
+		p.warn(err, "SetParent")
+		return
 	}
 	p.warn(p.Store.ClearGroomChild(ctx, it.Repo, it.IssueNumber), "ClearGroomChild")
 }

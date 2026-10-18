@@ -29,6 +29,7 @@ type fakeGroomGH struct {
 
 	failLabel  string // AddLabels of this label fails
 	loseCreate int    // CreateIssue files the issue, then fails, this many times
+	loseAfter  int    // after this many have gone through
 	created    int
 }
 
@@ -97,7 +98,7 @@ func (f *fakeGroomGH) CreateIssue(ctx context.Context, title, body string, label
 	f.issues[n].State = "open"
 	f.authors[n] = factorySelf
 	f.created++
-	if f.loseCreate > 0 {
+	if f.loseCreate > 0 && f.created > f.loseAfter {
 		f.loseCreate--
 		return 0, errors.New("github: HTTP 502 after filing it")
 	}
@@ -828,5 +829,140 @@ func TestGroomBudgetStoreError(t *testing.T) {
 	_ = e.p.Store.Close()
 	if why := e.p.groomBudget(context.Background()); !strings.Contains(why, "can't be read") {
 		t.Fatalf("groomBudget = %q", why)
+	}
+}
+
+// An issue a source filed and nobody approved may be closed by the source
+// itself, so no issue is closed as its duplicate: not when proposing, and
+// not on confirmation.
+func TestGroomSourceIssueIsNoCanonical(t *testing.T) {
+	ctx := context.Background()
+	e, fg, _ := groomSetup(t)
+	src := store.SourceIssue{Repo: "o/r", Source: "sentry", Key: "k6", IssueNumber: 6}
+	if err := e.p.Store.SetSourceIssue(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	e.gh.issues[8] = &github.Issue{Number: 8, Title: "Handler panics", Body: "It crashes.", State: "open"}
+	e.claude.groom = func(harness.RunRequest) (string, error) {
+		return `{"duplicates":[{"canonical":6,"duplicates":[8],"why":"Same panic."}],"stale":[],"too_big":[],"summary":""}`, nil
+	}
+	runGroomNow(t, e)
+	if len(fg.comments[8]) != 0 {
+		t.Fatalf("proposed closing #8 in favor of an unapproved source issue: %q", fg.comments[8])
+	}
+	if v := lastGroomJob(t, e).Verdict; !strings.Contains(v, "canonical #6 is itself proposed closed") {
+		t.Fatalf("verdict %s", v)
+	}
+
+	// Proposed before the source tracked it: refused at confirm time.
+	e.p.Store.ClearSourceIssue(ctx, "o/r", "sentry", "k6")
+	runGroomNow(t, e)
+	if len(fg.comments[8]) != 1 {
+		t.Fatalf("not flagged once the source let go: %q", fg.comments[8])
+	}
+	if err := e.p.Store.SetSourceIssue(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.gh.AddLabels(ctx, 8, LabelClose)
+	groomPoll(ctx, e)
+	if e.gh.issues[8].State == "closed" || !strings.Contains(lastComment(fg, 8), "filed by a source and nobody has approved it") {
+		t.Fatalf("closed in favor of an unapproved source issue: %q", lastComment(fg, 8))
+	}
+	// Once someone approves it, it's the factory's work and may be kept.
+	if _, _, err := e.p.Store.UpsertItem(ctx, "o/r", 6, "Sentry"); err != nil {
+		t.Fatal(err)
+	}
+	if srcs, _ := e.p.unapprovedSourceIssues(ctx, "o/r"); srcs[6] {
+		t.Fatal("an approved source issue still counts as unapproved")
+	}
+}
+
+// A duplicate is closed as a duplicate where the forge can say so; a stale
+// issue as not planned.
+func TestGroomClosesAsDuplicate(t *testing.T) {
+	ctx := context.Background()
+	e, _ := flagged(t)
+	dg := &dupGH{fakeGroomGH: e.p.GH.(*fakeGroomGH)}
+	e.p.GH = dg
+	_ = e.gh.AddLabels(ctx, 2, LabelClose)
+	_ = e.gh.AddLabels(ctx, 1, LabelClose)
+	groomPoll(ctx, e)
+	if jsonOf(dg.dups) != "[2]" || jsonOf(dg.closed) != "[1,2]" && jsonOf(dg.closed) != "[2,1]" {
+		t.Fatalf("as duplicates %v, all closed %v", dg.dups, dg.closed)
+	}
+}
+
+type dupGH struct {
+	*fakeGroomGH
+	dups []int
+}
+
+func (f *dupGH) CloseDuplicate(ctx context.Context, n int) error {
+	f.dups = append(f.dups, n)
+	return f.CloseNotPlanned(ctx, n)
+}
+
+// A sub-issue approved while its split is half filed is adopted once the
+// epic exists.
+func TestGroomChildApprovedMidSplit(t *testing.T) {
+	ctx := context.Background()
+	e, fg := flagged(t)
+	fg.loseCreate, fg.loseAfter = 1, 1 // the second sub-issue's filing fails
+	_ = e.gh.AddLabels(ctx, 4, LabelSplit)
+	groomPoll(ctx, e)
+	ps, _ := e.p.Store.GroomProposals(ctx, "o/r", 4)
+	first := ps[0].Children[0].Issue
+	if first <= 0 || ps[0].Children[1].Issue != childFiling {
+		t.Fatalf("children %+v", ps[0].Children)
+	}
+	if _, err := e.p.Store.ItemByIssue(ctx, "o/r", 4); err == nil {
+		t.Fatal("the epic exists before the split is filed")
+	}
+	// Approved before the split finishes.
+	_ = e.gh.AddLabels(ctx, first, "factory:ready")
+	e.claude.triage = `{"decision":"park","complexity":"","risk":"","question":"which?","summary":""}`
+	e.p.lastPoll = time.Time{}
+	if err := e.p.Intake(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := e.p.Store.GroomParent(ctx, "o/r", first); p != 4 {
+		t.Fatalf("forgot its parent before the epic existed: %d", p)
+	}
+	groomPoll(ctx, e)
+	parent := e.item(t, 4)
+	e.p.groomChildAt = time.Time{}
+	groomPoll(ctx, e)
+	child := e.item(t, first)
+	if child.ParentID == nil || *child.ParentID != parent.ID {
+		t.Fatalf("child %+v, epic %d", child, parent.ID)
+	}
+	if p, _ := e.p.Store.GroomParent(ctx, "o/r", first); p != 0 {
+		t.Fatal("still waiting after adoption")
+	}
+}
+
+// A split's sub-issue is no exemption from the cost-estimate gate.
+func TestGroomChildGoesThroughEstimates(t *testing.T) {
+	ctx := context.Background()
+	e, _ := flagged(t)
+	_ = e.gh.AddLabels(ctx, 4, LabelSplit)
+	groomPoll(ctx, e)
+	ps, _ := e.p.Store.GroomProposals(ctx, "o/r", 4)
+	kid := ps[0].Children[0].Issue
+	e.p.Cfg.Budgets.ConfirmOver = 1
+	_ = e.gh.AddLabels(ctx, kid, "factory:ready")
+	e.p.lastPoll = time.Time{}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, kid)
+	if it.Stage != state.Blocked || e.claude.calls["implement"] != 0 {
+		t.Fatalf("stage %s, %d builds", it.Stage, e.claude.calls["implement"])
+	}
+	if est, _ := e.p.Store.ItemEstimate(ctx, it.ID); est == nil || est.Status != store.EstimateWaiting {
+		t.Fatalf("estimate %+v", est)
+	}
+	if it.ParentID == nil || *it.ParentID != e.item(t, 4).ID {
+		t.Fatalf("not the epic's child: %+v", it)
 	}
 }

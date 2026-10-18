@@ -446,6 +446,11 @@ func (c *Client) CloseNotPlanned(ctx context.Context, n int) error {
 	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "not_planned"}, nil)
 }
 
+// CloseDuplicate closes an issue as a duplicate.
+func (c *Client) CloseDuplicate(ctx context.Context, n int) error {
+	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "duplicate"}, nil)
+}
+
 // CloseIssue closes an issue as completed.
 func (c *Client) CloseIssue(ctx context.Context, n int) error {
 	return c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", c.Repo, n), map[string]any{"state": "closed", "state_reason": "completed"}, nil)

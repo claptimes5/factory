@@ -96,6 +96,10 @@ func TestGroomSift(t *testing.T) {
 		"   ":                    "is empty",
 		"javascript:alert(1)":    "has a link",
 		"x\u202etxt.exe":         "control",
+		"a\u200bhidden space":    "control",
+		"bell\a":                 "control",
+		"escape \x1b[31m":        "control",
+		"tab\tand\nnewline":      "",
 	} {
 		err := scope.text(text, MaxGroomWhy, false)
 		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {

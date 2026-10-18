@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -243,7 +244,7 @@ func (s GroomScope) text(t string, max int, oneLine bool) error {
 		return errors.New("has HTML")
 	case glRefRE.MatchString(t):
 		return errors.New("has a reference to something else")
-	case strings.ContainsAny(t, "\x00\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"):
+	case strings.IndexFunc(t, hidden) >= 0:
 		return errors.New("has control characters")
 	}
 	for _, l := range strings.Split(t, "\n") {
@@ -257,6 +258,13 @@ func (s GroomScope) text(t string, max int, oneLine bool) error {
 		}
 	}
 	return nil
+}
+
+// hidden is a character that isn't text a reader sees: a control
+// character other than a newline or tab, or a format character (zero
+// width, direction changing), as SafeText drops.
+func hidden(r rune) bool {
+	return (unicode.IsControl(r) && r != '\n' && r != '\t') || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
 }
 
 func init() {

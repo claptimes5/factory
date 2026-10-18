@@ -309,4 +309,7 @@ func TestIssueAuthorAndNotPlanned(t *testing.T) {
 	if err := c.CloseNotPlanned(context.Background(), 4); err != nil || closed["state_reason"] != "not_planned" {
 		t.Fatalf("close %v %v", closed, err)
 	}
+	if err := c.CloseDuplicate(context.Background(), 4); err != nil || closed["state_reason"] != "duplicate" || closed["state"] != "closed" {
+		t.Fatalf("close as duplicate %v %v", closed, err)
+	}
 }

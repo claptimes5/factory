@@ -577,7 +577,7 @@ label: `factory:duplicate?`, `factory:stale?` or `factory:split?`. Then:
 
 | You | The factory |
 | --- | --- |
-| Add `factory:close` to a duplicate or stale issue | Closes it (as not planned on GitHub) with a note: for a duplicate, which issue to follow instead |
+| Add `factory:close` to a duplicate or stale issue | Closes it (on GitHub, as a duplicate or as not planned) with a note: for a duplicate, which issue to follow instead |
 | Add `factory:split` to an issue flagged too big | Opens the proposed sub-issues, each waiting for `factory:ready` like any other, and makes the issue their [epic](#epics-and-dependencies) |
 | Take the `?` label off | Drops the proposal, and doesn't make it again for that issue unless the issue's title or text changes |
 | Close the issue yourself | Forgets the proposal |
@@ -591,7 +591,9 @@ a comment says why. The factory also refuses, takes both labels off and
 says why, when the issue's title or text changed since it was flagged, an
 open PR would now close it, or, for a duplicate, the issue to keep has
 closed or is itself proposed closed: of two issues, only one is ever
-closed as the other's duplicate. A confirming label on an issue with no
+closed as the other's duplicate. Nor is an issue closed in favor of one a
+source filed that nobody has approved, since the source may close that
+one itself. A confirming label on an issue with no
 matching proposal does nothing.
 
 **Splits.** The sub-issues say they're part of the original and carry no
