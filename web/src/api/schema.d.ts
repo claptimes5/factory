@@ -854,11 +854,22 @@ export interface components {
             model: string;
             cost_usd: number;
         };
+        /** @description A usage-limit window a harness last reported (subscriptions only). */
+        Usage: {
+            harness: string;
+            /** @description 5h, weekly, or the CLI's own name */
+            window: string;
+            used_percent: number;
+            /** @description When it resets; empty when unknown */
+            resets_at: string;
+            seen_at: string;
+        };
         Spend: {
             days: components["schemas"]["DaySpend"][];
             week_usd: number;
             daily_cap_usd: number;
             by_model: components["schemas"]["ModelSpend"][];
+            usage: components["schemas"]["Usage"][];
         };
         Notification: {
             id: string;

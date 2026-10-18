@@ -420,10 +420,25 @@ values below are this repo's.
 | `concurrent_jobs` | Jobs running at once (3). |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
+| `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
 build budget. `factory compare` arms split what's left of today's budget.
+
+**Subscription usage limits.** On a Claude or ChatGPT subscription, each
+harness has a five-hour and a weekly usage window. The factory records the
+latest reading each run reports, and `factory status`, the dashboard's
+**Metrics** page and the orchestrator show how much is used and when it
+resets. When a window reaches `pause_at_usage`, that harness's jobs wait
+in the queue until it resets, instead of failing and using up retries. The
+other harness keeps working, and you're notified when it pauses and
+resumes. With API keys there are no windows, so nothing pauses.
+
+Codex writes these readings to its session file, which the factory reads
+inside the job container (the Docker runner only). Claude Code reports
+them in its output on subscriptions, but this isn't in its documentation,
+so a Claude reading may be missing.
 
 Set a spend alert on both API accounts as well. Spend from a job killed
 mid-run is not recorded (the CLIs report cost only at the end), so the

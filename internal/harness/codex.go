@@ -3,7 +3,10 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
+	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -37,7 +40,59 @@ func (codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	if req.Effort != "" {
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", req.Effort))
 	}
-	return append(args, "-"), nil
+	args = append(args, "-")
+	if req.CaptureLimits {
+		// Codex writes its usage-limit windows only to its session file:
+		// keep the last reading, and Codex's exit code.
+		script := `codex "$@"; s=$?; f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1); ` +
+			`if [ -n "$f" ]; then grep '"rate_limits"' "$f" | tail -n 1 > ` + path.Join(p.Out, codexLimitsFile) + `; fi; exit $s`
+		args = append([]string{"sh", "-c", script, "sh"}, args[1:]...)
+	}
+	return args, nil
+}
+
+const codexLimitsFile = "codex-limits.json"
+
+// limitsAfter reads the usage-limit windows the wrapper saved.
+func (codexAdapter) limitsAfter(outDir string, res *Result) {
+	b, err := os.ReadFile(filepath.Join(outDir, codexLimitsFile))
+	if err != nil {
+		return
+	}
+	var rec struct {
+		Timestamp time.Time `json:"timestamp"`
+		Payload   struct {
+			RateLimits map[string]*struct {
+				UsedPercent     float64 `json:"used_percent"`
+				WindowMinutes   int     `json:"window_minutes"`
+				ResetsInSeconds int64   `json:"resets_in_seconds"`
+				ResetsAt        int64   `json:"resets_at"`
+			} `json:"rate_limits"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(b, &rec) != nil {
+		return
+	}
+	for _, key := range []string{"primary", "secondary"} {
+		w := rec.Payload.RateLimits[key]
+		if w == nil {
+			continue
+		}
+		lim := Limit{Window: key, UsedPercent: w.UsedPercent}
+		switch {
+		case w.WindowMinutes > 0 && w.WindowMinutes <= 6*60:
+			lim.Window = "5h"
+		case w.WindowMinutes >= 6*24*60:
+			lim.Window = "weekly"
+		}
+		switch {
+		case w.ResetsAt > 0:
+			lim.ResetsAt = time.Unix(w.ResetsAt, 0).UTC()
+		case w.ResetsInSeconds > 0 && !rec.Timestamp.IsZero():
+			lim.ResetsAt = rec.Timestamp.Add(time.Duration(w.ResetsInSeconds) * time.Second).UTC()
+		}
+		res.setLimit(lim)
+	}
 }
 
 type codexLine struct {

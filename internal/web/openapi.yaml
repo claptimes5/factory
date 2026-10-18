@@ -388,14 +388,25 @@ components:
       properties:
         model: { type: string }
         cost_usd: { type: number }
+    Usage:
+      type: object
+      description: A usage-limit window a harness last reported (subscriptions only).
+      required: [harness, window, used_percent, resets_at, seen_at]
+      properties:
+        harness: { type: string }
+        window: { type: string, description: "5h, weekly, or the CLI's own name" }
+        used_percent: { type: number }
+        resets_at: { type: string, description: "When it resets; empty when unknown" }
+        seen_at: { type: string }
     Spend:
       type: object
-      required: [days, week_usd, daily_cap_usd, by_model]
+      required: [days, week_usd, daily_cap_usd, by_model, usage]
       properties:
         days: { type: array, items: { $ref: "#/components/schemas/DaySpend" } }
         week_usd: { type: number }
         daily_cap_usd: { type: number }
         by_model: { type: array, items: { $ref: "#/components/schemas/ModelSpend" } }
+        usage: { type: array, items: { $ref: "#/components/schemas/Usage" } }
     Notification:
       type: object
       required: [id, kind, title, detail, item_id, at]

@@ -6,6 +6,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -83,7 +84,13 @@ type claudeLine struct {
 	TotalCostUSD     *float64        `json:"total_cost_usd"`
 	NumTurns         int             `json:"num_turns"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
-	Usage            *struct {
+	RateLimit        *struct {
+		Status      string   `json:"status"`        // allowed, allowed_warning, rejected
+		ResetsAt    int64    `json:"resetsAt"`      // Unix seconds
+		Type        string   `json:"rateLimitType"` // five_hour, seven_day, ...
+		Utilization *float64 `json:"utilization"`   // 0 to 1
+	} `json:"rate_limit_info"`
+	Usage *struct {
 		InputTokens              int64 `json:"input_tokens"`
 		OutputTokens             int64 `json:"output_tokens"`
 		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
@@ -116,6 +123,29 @@ func (claudeAdapter) parse(line []byte, res *Result, emit func(Event)) {
 		}
 	case "user":
 		emit(Event{Kind: "tool_result", Payload: line})
+	case "rate_limit_event":
+		// Subscriptions only, and not in Claude Code's documented stream:
+		// read it when it's there.
+		if rl := l.RateLimit; rl != nil && rl.Type != "" {
+			lim := Limit{Window: windowName(rl.Type)}
+			switch {
+			case rl.Utilization != nil && *rl.Utilization <= 1:
+				lim.UsedPercent = *rl.Utilization * 100
+			case rl.Utilization != nil:
+				lim.UsedPercent = *rl.Utilization
+			case rl.Status == "rejected":
+				lim.UsedPercent = 100
+			default:
+				return // no reading
+			}
+			if rl.Status == "rejected" {
+				lim.UsedPercent = 100
+			}
+			if rl.ResetsAt > 0 {
+				lim.ResetsAt = time.Unix(rl.ResetsAt, 0).UTC()
+			}
+			res.setLimit(lim)
+		}
 	case "result":
 		res.Final = l.Result
 		if len(l.StructuredOutput) > 0 && string(l.StructuredOutput) != "null" {
@@ -140,4 +170,15 @@ func (claudeAdapter) parse(line []byte, res *Result, emit func(Event)) {
 		emit(Event{Kind: "usage", Payload: line})
 		emit(Event{Kind: "final", Payload: line})
 	}
+}
+
+// windowName gives a limit window a short name: 5h, weekly or the CLI's.
+func windowName(t string) string {
+	switch t {
+	case "five_hour":
+		return "5h"
+	case "seven_day", "weekly":
+		return "weekly"
+	}
+	return t
 }

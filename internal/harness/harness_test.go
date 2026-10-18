@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
 )
@@ -165,5 +166,52 @@ func TestClaudeFastMode(t *testing.T) {
 		if got := strings.Contains(strings.Join(fr.spec.Cmd, " "), `--settings {"fastMode":true}`); got != fast {
 			t.Errorf("fast=%v: cmd %q", fast, fr.spec.Cmd)
 		}
+	}
+}
+
+func TestClaudeReadsRateLimitEvents(t *testing.T) {
+	fr := &fakeRunner{out: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1760800000,"rateLimitType":"five_hour","utilization":0.82}}
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1761000000,"rateLimitType":"seven_day"}}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","utilization":0.9}}
+{"type":"result","subtype":"success","result":"ok","num_turns":1,"total_cost_usd":0.01}
+`}
+	res, err := NewClaude(fr).Run(context.Background(), req(t, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Limit{{Window: "5h", UsedPercent: 90}, {Window: "weekly", UsedPercent: 100, ResetsAt: time.Unix(1761000000, 0).UTC()}}
+	if len(res.Limits) != 2 || res.Limits[0].Window != want[0].Window || int(res.Limits[0].UsedPercent) != 90 || res.Limits[1] != want[1] {
+		t.Fatalf("limits = %+v", res.Limits)
+	}
+}
+
+func TestCodexCapturesLimitsFromItsSessionFile(t *testing.T) {
+	r := req(t, true)
+	cmd, err := codexAdapter{}.command(RunRequest{Model: "m", CaptureLimits: true}, runner.Paths{Work: "/w", Out: "/out", Home: "/home/agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd[0] != "sh" || !strings.Contains(cmd[2], "/out/codex-limits.json") || cmd[4] != "exec" || cmd[len(cmd)-1] != "-" {
+		t.Fatalf("cmd = %q", cmd)
+	}
+	plain, _ := codexAdapter{}.command(RunRequest{Model: "m"}, runner.Paths{Work: "/w", Out: "/out"})
+	if plain[0] != "codex" {
+		t.Fatalf("without CaptureLimits: %q", plain)
+	}
+	rec := `{"timestamp":"2026-10-18T10:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":42.5,"window_minutes":299,"resets_in_seconds":3600},"secondary":{"used_percent":12,"window_minutes":10079,"resets_at":1761000000}}}}`
+	if err := os.MkdirAll(r.OutDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.OutDir, codexLimitsFile), []byte(rec+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := &Result{}
+	codexAdapter{}.limitsAfter(r.OutDir, res)
+	want := []Limit{
+		{Window: "5h", UsedPercent: 42.5, ResetsAt: time.Date(2026, 10, 18, 11, 0, 0, 0, time.UTC)},
+		{Window: "weekly", UsedPercent: 12, ResetsAt: time.Unix(1761000000, 0).UTC()},
+	}
+	if len(res.Limits) != 2 || res.Limits[0] != want[0] || res.Limits[1] != want[1] {
+		t.Fatalf("limits = %+v", res.Limits)
 	}
 }

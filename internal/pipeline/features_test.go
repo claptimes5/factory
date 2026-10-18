@@ -6,8 +6,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -392,5 +394,60 @@ func TestFastModeJobs(t *testing.T) {
 	}
 	if body := e.gh.comments[e.item(t, 1).PRNumber][0]; !strings.Contains(body, "| opus (fast) |") {
 		t.Errorf("PR body should show fast mode:\n%s", body)
+	}
+}
+
+func TestJobsWaitWhileAHarnessIsAtItsUsageLimit(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	var notes []string
+	e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
+	soon := time.Now().UTC().Add(time.Hour).Format(store.TimeFormat)
+	if err := e.p.Store.SetLimit(ctx, store.Limit{Harness: "codex", Window: "5h", UsedPercent: 97, ResetsAt: soon}); err != nil {
+		t.Fatal(err)
+	}
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Claude built it; Codex's review waits rather than fail.
+	if it := e.item(t, 1); it.PRNumber != 0 {
+		t.Fatalf("reviewed while codex was at its limit: %+v", it)
+	}
+	if n, _ := e.p.Store.CountJobs(ctx, state.Queued, "review"); n != 1 {
+		t.Fatalf("queued reviews = %d", n)
+	}
+	if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "codex's 5h limit is 97% used") }) {
+		t.Fatalf("notes = %q", notes)
+	}
+	// The window resets: the review runs and the PR opens.
+	past := time.Now().UTC().Add(-time.Minute).Format(store.TimeFormat)
+	if err := e.p.Store.SetLimit(ctx, store.Limit{Harness: "codex", Window: "5h", UsedPercent: 97, ResetsAt: past}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if it := e.item(t, 1); it.PRNumber == 0 {
+		t.Fatalf("no PR after the reset: %s", it.Stage)
+	}
+	if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "codex's usage limit has reset") }) {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestRunsRecordTheirUsageLimits(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	reset := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	e.p.recordLimits(ctx, "claude", &harness.Result{Limits: []harness.Limit{{Window: "5h", UsedPercent: 40, ResetsAt: reset}, {Window: "weekly", UsedPercent: 10}}})
+	ls, err := e.p.Store.Limits(ctx)
+	if err != nil || len(ls) != 2 || ls[0].Window != "5h" || ls[0].ResetsAt != reset.Format(store.TimeFormat) || ls[1].ResetsAt != "" {
+		t.Fatalf("limits %+v %v", ls, err)
+	}
+	if s := store.FormatLimits(ls); s != "claude 5h 40% (resets Jan 1 00:00 UTC), claude weekly 10%" {
+		t.Fatalf("formatted %q", s)
 	}
 }

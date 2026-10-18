@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,7 +126,8 @@ type Pipeline struct {
 	clientsBy  map[string]RepoClients
 	running    int
 	lastPoll   time.Time
-	budgetHalt string // day the daily cap halted dequeuing, to notify once
+	budgetHalt string            // day the daily cap halted dequeuing, to notify once
+	limitHalt  map[string]string // harness -> the window that paused it, to notify once
 	wg         sync.WaitGroup
 	jobCtx     context.Context // outlives Serve's ctx so jobs get a shutdown grace
 	gateSeq    atomic.Int64    // unique suffix for gate container names
@@ -367,7 +369,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...)
+		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic"), p.pausedHarnesses(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -376,10 +378,68 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	if len(except) > 0 {
-		return p.Store.ClaimJobExcept(ctx, except...)
+	return p.Store.ClaimJobSkipping(ctx, except, p.pausedHarnesses(ctx))
+}
+
+// pausedHarnesses are the harnesses whose subscription window is used up
+// to budgets.pause_at_usage: their jobs wait in the queue until it resets,
+// rather than fail and burn retries.
+func (p *Pipeline) pausedHarnesses(ctx context.Context) []string {
+	limits, err := p.Store.Limits(ctx)
+	if err != nil {
+		return nil
 	}
-	return p.Store.ClaimJob(ctx)
+	at := p.Cfg.PauseAtUsage()
+	now := time.Now().UTC()
+	var out []string
+	why := map[string]string{}
+	for _, l := range limits {
+		resets, err := time.Parse(store.TimeFormat, l.ResetsAt)
+		if l.UsedPercent < at || err != nil || !resets.After(now) {
+			continue // a window with no reset time can't be waited out
+		}
+		if _, ok := why[l.Harness]; !ok {
+			out = append(out, l.Harness)
+			why[l.Harness] = fmt.Sprintf("%s's %s limit is %.0f%% used; its jobs wait until it resets at %s UTC.", l.Harness, l.Window, l.UsedPercent, resets.Format("Jan 2 15:04"))
+		}
+	}
+	var notes []string
+	p.mu.Lock()
+	if p.limitHalt == nil {
+		p.limitHalt = map[string]string{}
+	}
+	for h, msg := range why {
+		if p.limitHalt[h] != msg {
+			p.limitHalt[h] = msg
+			notes = append(notes, msg)
+		}
+	}
+	for h := range p.limitHalt {
+		if _, ok := why[h]; !ok {
+			delete(p.limitHalt, h)
+			notes = append(notes, h+"'s usage limit has reset; its jobs are starting.")
+		}
+	}
+	p.mu.Unlock()
+	sort.Strings(notes)
+	for _, n := range notes {
+		p.notify(ctx, n)
+	}
+	return out
+}
+
+// recordLimits saves the usage-limit windows a run reported.
+func (p *Pipeline) recordLimits(ctx context.Context, harnessName string, res *harness.Result) {
+	if res == nil {
+		return
+	}
+	for _, l := range res.Limits {
+		resets := ""
+		if !l.ResetsAt.IsZero() {
+			resets = l.ResetsAt.UTC().Format(store.TimeFormat)
+		}
+		p.warn(p.Store.SetLimit(ctx, store.Limit{Harness: harnessName, Window: l.Window, UsedPercent: l.UsedPercent, ResetsAt: resets}), "SetLimit")
+	}
 }
 
 // buildSpend is today's spend on building, without orchestration, which
@@ -785,7 +845,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	res, err := h.Run(ctx, harness.RunRequest{
 		Name: p.containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Fast: j.Fast, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
-		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image,
+		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image, CaptureLimits: p.Cfg.Runner.Kind == "docker",
 		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume, Services: p.servicesOf(j.ID),
 	}, events)
 	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
@@ -805,6 +865,7 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	}
 	close(events)
 	<-done
+	p.recordLimits(ctx, j.Harness, res)
 	run := agentRun{res: res, err: err}
 	if res != nil && res.SessionID != "" {
 		p.warn(os.WriteFile(filepath.Join(p.jobDir(j.ID), "session"), []byte(res.SessionID), 0o644), "save session")

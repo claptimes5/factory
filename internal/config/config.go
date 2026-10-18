@@ -292,6 +292,10 @@ type Config struct {
 		// FastMultiplier scales the dollar cap of a job in fast mode;
 		// default 2.
 		FastMultiplier float64 `yaml:"fast_multiplier,omitempty"`
+		// PauseAtUsage holds a harness's jobs in the queue once a
+		// subscription usage window it reports is this full, in percent,
+		// until the window resets. Default 95; 100 waits for a hard limit.
+		PauseAtUsage float64 `yaml:"pause_at_usage,omitempty"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -670,6 +674,9 @@ func (c *Config) Validate() error {
 	if len(c.Escalation.Implement) == 0 {
 		bad("escalation.implement needs at least one model tier")
 	}
+	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
+		bad("budgets.pause_at_usage is a percentage, 1 to 100")
+	}
 	if c.Budgets.DailyTotal <= 0 {
 		bad("budgets.daily_total must be > 0")
 	}
@@ -1000,6 +1007,14 @@ func (c *Config) FastBudget(usd float64, fast bool) float64 {
 		m = 2
 	}
 	return usd * m
+}
+
+// PauseAtUsage is budgets.pause_at_usage with its default.
+func (c *Config) PauseAtUsage() float64 {
+	if c.Budgets.PauseAtUsage <= 0 {
+		return 95
+	}
+	return c.Budgets.PauseAtUsage
 }
 
 // FastFor says whether a job on route r with this model runs in fast mode.

@@ -443,6 +443,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	}
 	spent, _ := st.SpendOn(ctx, store.Today())
 	fmt.Fprintf(w, "spend today:\t$%.2f of $%.2f\n", spent, cfg.Budgets.DailyTotal)
+	if limits, _ := st.Limits(ctx); len(limits) > 0 {
+		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
+	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})
 	if err != nil {
 		return err
