@@ -681,7 +681,7 @@ export interface components {
             issue: number;
             title: string;
             stage: components["schemas"]["Stage"];
-            /** @description S, M, L, or empty before triage */
+            /** @description XS, S, M, L, or empty before triage */
             complexity: string;
             risk: string;
             priority: number;
