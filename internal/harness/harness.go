@@ -85,6 +85,9 @@ type Result struct {
 func (r *Result) setLimit(l Limit) {
 	for i := range r.Limits {
 		if r.Limits[i].Window == l.Window {
+			if l.ResetsAt.IsZero() {
+				l.ResetsAt = r.Limits[i].ResetsAt
+			}
 			r.Limits[i] = l
 			return
 		}

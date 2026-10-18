@@ -351,7 +351,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobExcept(ctx, append(except, "triage", "implement", "review", "critic")...); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic"), p.pausedHarnesses(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -393,14 +393,21 @@ func (p *Pipeline) pausedHarnesses(ctx context.Context) []string {
 	now := time.Now().UTC()
 	var out []string
 	why := map[string]string{}
+	window := map[string]string{}
 	for _, l := range limits {
+		// Only the windows every model shares: a model's own weekly
+		// window, or overage, shouldn't hold the harness's other jobs.
+		if l.Window != "5h" && l.Window != "weekly" {
+			continue
+		}
 		resets, err := time.Parse(store.TimeFormat, l.ResetsAt)
 		if l.UsedPercent < at || err != nil || !resets.After(now) {
 			continue // a window with no reset time can't be waited out
 		}
 		if _, ok := why[l.Harness]; !ok {
 			out = append(out, l.Harness)
-			why[l.Harness] = fmt.Sprintf("%s's %s limit is %.0f%% used; its jobs wait until it resets at %s UTC.", l.Harness, l.Window, l.UsedPercent, resets.Format("Jan 2 15:04"))
+			window[l.Harness] = l.Window
+			why[l.Harness] = fmt.Sprintf("%s's %s limit is %.0f%% used; its jobs wait until it resets at %s UTC. `factory limits clear %s` starts them sooner.", l.Harness, l.Window, l.UsedPercent, resets.Format("Jan 2 15:04"), l.Harness)
 		}
 	}
 	var notes []string
@@ -408,9 +415,11 @@ func (p *Pipeline) pausedHarnesses(ctx context.Context) []string {
 	if p.limitHalt == nil {
 		p.limitHalt = map[string]string{}
 	}
+	// Once per pause, not per reading: jobs still running keep reporting
+	// a fuller window.
 	for h, msg := range why {
-		if p.limitHalt[h] != msg {
-			p.limitHalt[h] = msg
+		if p.limitHalt[h] != window[h] {
+			p.limitHalt[h] = window[h]
 			notes = append(notes, msg)
 		}
 	}

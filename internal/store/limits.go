@@ -18,19 +18,23 @@ type Limit struct {
 	SeenAt      string
 }
 
-// SetLimit records a window's latest reading.
+// SetLimit records a window's latest reading. A reading with no reset
+// time keeps the one already known, while that is still to come.
 func (s *Store) SetLimit(ctx context.Context, l Limit) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO harness_limits(harness, window, used_percent, resets_at, seen_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(harness, window) DO UPDATE SET used_percent = excluded.used_percent, resets_at = excluded.resets_at, seen_at = excluded.seen_at`,
+		ON CONFLICT(harness, window) DO UPDATE SET used_percent = excluded.used_percent, seen_at = excluded.seen_at,
+			resets_at = CASE WHEN excluded.resets_at = '' AND harness_limits.resets_at > excluded.seen_at THEN harness_limits.resets_at ELSE excluded.resets_at END`,
 			l.Harness, l.Window, l.UsedPercent, l.ResetsAt, Now())
 		return err
 	})
 }
 
-// Limits lists every harness's latest readings, by harness and window.
+// Limits lists every harness's latest readings, by harness and window,
+// leaving out windows that have reset since: their reading is out of date.
 func (s *Store) Limits(ctx context.Context) ([]Limit, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT harness, window, used_percent, resets_at, seen_at FROM harness_limits ORDER BY harness, window`)
+	rows, err := s.read.QueryContext(ctx, `SELECT harness, window, used_percent, resets_at, seen_at FROM harness_limits
+		WHERE resets_at = '' OR resets_at > ? ORDER BY harness, window`, Now())
 	if err != nil {
 		return nil, err
 	}
@@ -58,4 +62,19 @@ func FormatLimits(ls []Limit) string {
 		parts = append(parts, p)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// ClearLimits forgets a harness's readings, or every harness's when it is
+// "", so its jobs start again before the window the reading named resets.
+func (s *Store) ClearLimits(ctx context.Context, harness string) (int64, error) {
+	var n int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := tx.Exec(`DELETE FROM harness_limits WHERE ? = '' OR harness = ?`, harness, harness)
+		if err != nil {
+			return err
+		}
+		n, err = r.RowsAffected()
+		return err
+	})
+	return n, err
 }

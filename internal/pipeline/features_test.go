@@ -451,3 +451,44 @@ func TestRunsRecordTheirUsageLimits(t *testing.T) {
 		t.Fatalf("formatted %q", s)
 	}
 }
+
+func TestUsagePausesOnceAndOnlyOnSharedWindows(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	var notes []string
+	e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
+	soon := time.Now().UTC().Add(time.Hour).Format(store.TimeFormat)
+	set := func(l store.Limit) {
+		t.Helper()
+		if err := e.p.Store.SetLimit(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A model's own window shows but doesn't pause the harness.
+	set(store.Limit{Harness: "claude", Window: "seven_day_opus", UsedPercent: 100, ResetsAt: soon})
+	if h := e.p.pausedHarnesses(ctx); len(h) != 0 {
+		t.Fatalf("paused %v on a model's own window", h)
+	}
+	set(store.Limit{Harness: "claude", Window: "5h", UsedPercent: 96, ResetsAt: soon})
+	e.p.pausedHarnesses(ctx)
+	// A fuller reading, and one with no reset time, while paused: still
+	// paused, and no second notification.
+	set(store.Limit{Harness: "claude", Window: "5h", UsedPercent: 99})
+	if h := e.p.pausedHarnesses(ctx); !slices.Equal(h, []string{"claude"}) {
+		t.Fatalf("paused %v after a reading with no reset time", h)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "claude's 5h limit is 96% used") {
+		t.Fatalf("notes = %q", notes)
+	}
+	if n, err := e.p.Store.ClearLimits(ctx, "claude"); err != nil || n != 2 {
+		t.Fatalf("cleared %d %v", n, err)
+	}
+	if h := e.p.pausedHarnesses(ctx); len(h) != 0 || !strings.Contains(notes[len(notes)-1], "has reset") {
+		t.Fatalf("paused %v, notes %q", h, notes)
+	}
+	// A window that has reset since its reading isn't shown.
+	set(store.Limit{Harness: "codex", Window: "5h", UsedPercent: 100, ResetsAt: time.Now().UTC().Add(-time.Minute).Format(store.TimeFormat)})
+	if ls, _ := e.p.Store.Limits(ctx); len(ls) != 0 {
+		t.Fatalf("limits %+v", ls)
+	}
+}

@@ -232,7 +232,6 @@ type APIModelSpend struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
-// APISpend is spend by day (newest first, 30 days) and by model.
 // APIUsage is a usage-limit window a harness last reported.
 type APIUsage struct {
 	Harness     string  `json:"harness"`
@@ -242,6 +241,7 @@ type APIUsage struct {
 	SeenAt      string  `json:"seen_at"`
 }
 
+// APISpend is spend by day (newest first, 30 days) and by model.
 type APISpend struct {
 	Days        []APIDaySpend   `json:"days"`
 	WeekUSD     float64         `json:"week_usd"`

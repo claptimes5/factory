@@ -675,7 +675,7 @@ func (c *Config) Validate() error {
 		bad("escalation.implement needs at least one model tier")
 	}
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
-		bad("budgets.pause_at_usage is a percentage, 1 to 100")
+		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}
 	if c.Budgets.DailyTotal <= 0 {
 		bad("budgets.daily_total must be > 0")

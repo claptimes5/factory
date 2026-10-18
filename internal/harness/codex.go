@@ -45,7 +45,7 @@ func (codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 		// Codex writes its usage-limit windows only to its session file:
 		// keep the last reading, and Codex's exit code.
 		script := `codex "$@"; s=$?; f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1); ` +
-			`if [ -n "$f" ]; then grep '"rate_limits"' "$f" | tail -n 1 > ` + path.Join(p.Out, codexLimitsFile) + `; fi; exit $s`
+			`if [ -n "$f" ]; then grep -E '"rate_limits": ?\{' "$f" | tail -n 1 > ` + path.Join(p.Out, codexLimitsFile) + `; fi; exit $s`
 		args = append([]string{"sh", "-c", script, "sh"}, args[1:]...)
 	}
 	return args, nil
