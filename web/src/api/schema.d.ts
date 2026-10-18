@@ -696,7 +696,7 @@ export interface paths {
                             value: components["schemas"]["SettingValue"];
                         }[];
                         /** @description The version the GET returned; a save over a file changed since is refused (409) */
-                        version?: string;
+                        version: string;
                     };
                 };
             };
@@ -731,6 +731,36 @@ export interface paths {
         get?: never;
         put?: never;
         /** Restart the factory once running jobs finish, to apply saved settings */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/restart/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call off a restart that is still waiting for jobs */
         post: {
             parameters: {
                 query?: never;

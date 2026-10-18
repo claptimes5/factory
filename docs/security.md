@@ -141,8 +141,9 @@ the factory won't start.
 
 **Changing settings from the dashboard** (the Settings screen, see
 [Settings](using.md#settings)) needs the password, or `web.listen` on a
-loopback address. On a tailnet address without a password, the screen is
-read-only: someone who can reach your tailnet can look, but not change
+loopback address and a page opened as `localhost`. Through a tailnet
+address or a proxy such as `tailscale serve` without a password, the
+screen is read-only: someone who can reach your tailnet can look, but not change
 budgets or models, or restart the factory. Nothing that runs commands or
 opens the network (gates, repos, the runner, egress) can be changed there.
 

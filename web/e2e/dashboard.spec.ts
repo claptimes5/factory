@@ -168,10 +168,10 @@ test("settings save to factory.yaml and restart once jobs finish", async ({ page
   await expect(budgets.getByLabel("Pause at usage (%)")).toHaveAttribute("placeholder", "95");
   const cap = budgets.getByLabel("Daily cap", { exact: true });
 
-  // An invalid file is refused with the config's own words, and nothing is written.
+  // A value that would stop the factory is refused, and nothing is written.
   await cap.fill("0");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("alert")).toContainText("budgets.daily_total must be > 0");
+  await expect(page.getByRole("alert")).toContainText("budgets.daily_total must be at least 0.01");
 
   await cap.fill(phone(info) ? "31" : "30");
   await page.getByRole("button", { name: "Save" }).click();

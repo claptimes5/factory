@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Lock, RotateCw, Save } from "lucide-react";
-import { act, saveSettings, useSettings, type Setting, type Settings, type SettingValue } from "@/api/client";
+import { act, APIError, saveSettings, useSettings, type Setting, type Settings, type SettingValue } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,15 +70,23 @@ function SettingsForm({ s }: { s: Settings }) {
       setSaved(true);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+      // Changed on disk since: load it, keeping what was typed here.
+      if (e instanceof APIError && e.status === 409) void qc.invalidateQueries({ queryKey: ["settings"] });
     } finally {
       setSaving(false);
     }
   };
-  const restart = async () => {
-    const r = await act("/settings/restart");
-    setRestartMsg(r.ok ? "" : r.message);
+  const press = async (path: string) => {
+    try {
+      const r = await act(path);
+      setRestartMsg(r.ok ? "" : r.message);
+    } catch (e) {
+      setRestartMsg(e instanceof Error ? e.message : String(e));
+    }
     void qc.invalidateQueries({ queryKey: ["settings"] });
   };
+  const restart = () => press("/settings/restart");
+  const cancelRestart = () => press("/settings/restart/cancel");
   const draft = (f: Setting) => (key(f) in drafts ? drafts[key(f)] : initial(f));
 
   return (
@@ -93,9 +101,16 @@ function SettingsForm({ s }: { s: Settings }) {
       )}
       {s.restart_pending ? (
         <Notice>
-          {s.running_jobs > 0
-            ? `Restart pending, waiting for ${s.running_jobs} running ${s.running_jobs === 1 ? "job" : "jobs"}. No new jobs start until then.`
-            : "Restarting…"}
+          <span className="min-w-0 flex-1">
+            {s.running_jobs > 0
+              ? `Restart pending, waiting for ${s.running_jobs} running ${s.running_jobs === 1 ? "job" : "jobs"}. No new jobs start until then.`
+              : "Restarting…"}
+          </span>
+          {!ro && s.running_jobs > 0 && (
+            <Button size="sm" variant="outline" onClick={cancelRestart}>
+              Cancel restart
+            </Button>
+          )}
         </Notice>
       ) : (
         s.changed && (

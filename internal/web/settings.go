@@ -23,6 +23,7 @@ import (
 // Restarter restarts the daemon once its running jobs finish.
 type Restarter interface {
 	RequestRestart(ctx context.Context) int // returns how many jobs still run
+	CancelRestart(ctx context.Context) bool // says whether one was waiting
 	RestartPending() bool
 	Running() int
 }
@@ -69,30 +70,42 @@ func ConfigVersion(b []byte) string {
 }
 
 // settingsWritable says whether settings may be changed from the browser:
-// only behind a password, or on an address no other machine can reach.
-func (s *Server) settingsWritable() (bool, string) {
+// only behind a password, or from this machine itself. A loopback listener
+// can still be published by a proxy (tailscale serve, Caddy), so the
+// request must name a localhost address too, and not come through one.
+func (s *Server) settingsWritable(r *http.Request) (bool, string) {
 	if s.Login != nil && s.Login.Password != "" {
 		return true, ""
 	}
-	if host, _, err := net.SplitHostPort(s.Listen); err == nil {
-		if a, err := netip.ParseAddr(strings.Trim(host, "[]")); host == "localhost" || err == nil && a.Unmap().IsLoopback() {
-			return true, ""
-		}
+	if loopback(s.Listen) && (r == nil || loopback(r.Host) && r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("Forwarded") == "") {
+		return true, ""
 	}
 	return false, "Changing settings here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or edit factory.yaml."
 }
 
-func (s *Server) settings(ctx context.Context) (APISettings, []config.SettingGroup, error) {
+// loopback says whether a host or host:port is this machine only.
+func loopback(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	a, err := netip.ParseAddr(host)
+	return strings.EqualFold(host, "localhost") || err == nil && a.Unmap().IsLoopback()
+}
+
+func (s *Server) settings(r *http.Request) (APISettings, []config.SettingGroup, []byte, error) {
+	ctx := r.Context()
 	b, err := os.ReadFile(s.ConfigPath)
 	if err != nil {
-		return APISettings{}, nil, err
+		return APISettings{}, nil, nil, err
 	}
 	groups, err := config.Settings(b)
 	if err != nil {
-		return APISettings{}, nil, fmt.Errorf("%s: %w", s.ConfigPath, err)
+		return APISettings{}, nil, nil, fmt.Errorf("%s: %w", s.ConfigPath, err)
 	}
 	out := APISettings{Path: s.ConfigPath, Version: ConfigVersion(b), Groups: []APISettingsGroup{}}
-	out.Writable, out.Reason = s.settingsWritable()
+	out.Writable, out.Reason = s.settingsWritable(r)
 	out.Changed = s.StartedConfig != "" && s.StartedConfig != out.Version
 	if s.Restarter != nil {
 		out.RestartPending, out.RunningJobs = s.Restarter.RestartPending(), s.Restarter.Running()
@@ -110,7 +123,7 @@ func (s *Server) settings(ctx context.Context) (APISettings, []config.SettingGro
 		}
 		out.Groups = append(out.Groups, ag)
 	}
-	return out, groups, nil
+	return out, groups, b, nil
 }
 
 func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +131,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusNotFound, "this control room has no config file to edit")
 		return
 	}
-	out, _, err := s.settings(r.Context())
+	out, _, _, err := s.settings(r)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -134,7 +147,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusNotFound, "this control room has no config file to edit")
 		return
 	}
-	if ok, why := s.settingsWritable(); !ok {
+	if ok, why := s.settingsWritable(r); !ok {
 		apiErr(w, http.StatusForbidden, why)
 		return
 	}
@@ -153,12 +166,12 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	// One save at a time: each reads the file the last one wrote.
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
-	cur, groups, err := s.settings(r.Context())
+	cur, groups, src, err := s.settings(r)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if in.Version != "" && in.Version != cur.Version {
+	if in.Version != cur.Version {
 		apiErr(w, http.StatusConflict, "factory.yaml changed since this page loaded it; reload to see what changed")
 		return
 	}
@@ -176,11 +189,6 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		changes = append(changes, config.Change{Path: c.Path, Value: v})
 	}
-	src, err := os.ReadFile(s.ConfigPath)
-	if err != nil {
-		apiErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	out, err := config.Edit(src, changes)
 	if err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
@@ -196,7 +204,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	res, _, err := s.settings(r.Context())
+	res, _, _, err := s.settings(r)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -208,12 +216,17 @@ func (s *Server) apiRestart(w http.ResponseWriter, r *http.Request) {
 	if !jsonOnly(w, r) {
 		return
 	}
-	if ok, why := s.settingsWritable(); !ok {
+	if ok, why := s.settingsWritable(r); !ok {
 		apiErr(w, http.StatusForbidden, why)
 		return
 	}
 	if s.Restarter == nil {
 		s.act(w, fmt.Errorf("this control room can't restart the factory"), "")
+		return
+	}
+	// A file someone broke by hand since would keep the factory down.
+	if err := s.configLoads(); err != nil {
+		s.act(w, fmt.Errorf("not restarting: %w", err), "")
 		return
 	}
 	n := s.Restarter.RequestRestart(r.Context())
@@ -225,6 +238,37 @@ func (s *Server) apiRestart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.act(w, nil, msg)
+}
+
+func (s *Server) apiCancelRestart(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(w, r) {
+		return
+	}
+	if ok, why := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, why)
+		return
+	}
+	if s.Restarter == nil || !s.Restarter.CancelRestart(r.Context()) {
+		s.act(w, fmt.Errorf("no restart is waiting"), "")
+		return
+	}
+	s.act(w, nil, "Restart called off; jobs are starting again.")
+}
+
+// configLoads checks the config file as the daemon will load it.
+func (s *Server) configLoads() error {
+	if s.ConfigPath == "" {
+		return nil
+	}
+	b, err := os.ReadFile(s.ConfigPath)
+	if err != nil {
+		return err
+	}
+	dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
+	if _, err := config.ParseIn(b, dir); err != nil {
+		return fmt.Errorf("%s doesn't load: %w", s.ConfigPath, err)
+	}
+	return nil
 }
 
 // writeAtomic replaces the file at path with b, keeping its mode: a

@@ -43,6 +43,7 @@ func (actions) Park(_ context.Context, id int64, reason string) error {
 type restarter struct{ pending atomic.Bool }
 
 func (r *restarter) RequestRestart(context.Context) int { r.pending.Store(true); return 1 }
+func (r *restarter) CancelRestart(context.Context) bool { return r.pending.Swap(false) }
 func (r *restarter) RestartPending() bool               { return r.pending.Load() }
 func (r *restarter) Running() int                       { return 1 }
 

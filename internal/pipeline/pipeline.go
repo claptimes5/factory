@@ -258,8 +258,9 @@ var ErrRestart = errors.New("restart to apply new settings")
 // once the running ones finish (see ErrRestart). It returns how many are
 // still running. Asking again changes nothing.
 func (p *Pipeline) RequestRestart(ctx context.Context) int {
-	n := p.Running()
-	if p.restart.CompareAndSwap(false, true) {
+	first := p.restart.CompareAndSwap(false, true)
+	n := p.Running() // after the flag, so no job starts uncounted
+	if first {
 		msg := "Restarting to apply new settings."
 		if n > 0 {
 			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s.", n, plural(n, "job finishes", "jobs finish"))
@@ -267,6 +268,16 @@ func (p *Pipeline) RequestRestart(ctx context.Context) int {
 		p.notify(ctx, msg)
 	}
 	return n
+}
+
+// CancelRestart calls off a restart that is still waiting, and says
+// whether there was one.
+func (p *Pipeline) CancelRestart(ctx context.Context) bool {
+	if !p.restart.CompareAndSwap(true, false) {
+		return false
+	}
+	p.notify(ctx, "Restart called off; jobs are starting again.")
+	return true
 }
 
 // RestartPending says whether a restart is waiting on running jobs.

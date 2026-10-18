@@ -30,6 +30,9 @@ type Setting struct {
 	// Default is what applies then, nil when the key is required.
 	Value   any
 	Default any
+	// Min and Max bound a number: the config accepts values, such as no
+	// jobs at once, that would quietly stop the factory. Max 0 is none.
+	Min, Max float64
 }
 
 // SettingGroup is one card of the Settings screen.
@@ -56,11 +59,15 @@ func Settings(src []byte) ([]SettingGroup, error) {
 		root = doc.Content[0]
 	}
 	num := func(path, label, help string, def any) Setting {
-		return Setting{Path: strings.Split(path, "."), Label: label, Help: help, Kind: "number", Default: def}
+		return Setting{Path: strings.Split(path, "."), Label: label, Help: help, Kind: "number", Default: def, Min: 0.01}
 	}
 	integer := func(path, label, help string, def any) Setting {
 		s := num(path, label, help, def)
-		s.Kind = "integer"
+		s.Kind, s.Min = "integer", 1
+		return s
+	}
+	bounded := func(s Setting, lo, hi float64) Setting {
+		s.Min, s.Max = lo, hi
 		return s
 	}
 	groups := []SettingGroup{
@@ -74,14 +81,14 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			num("budgets.per_job.L", "Per L job", "The cap for one L build.", nil),
 			num("budgets.triage", "Per triage", "The cap for one triage job.", nil),
 			num("budgets.review", "Per review", "The cap for one review job.", nil),
-			num("budgets.pause_at_usage", "Pause at usage (%)", "Jobs wait once a subscription's usage window is this full.", 95),
-			num("budgets.fast_multiplier", "Fast mode multiplier", "Scales a job's cap when it runs in fast mode.", 2),
+			bounded(num("budgets.pause_at_usage", "Pause at usage (%)", "Jobs wait once a subscription's usage window is this full.", 95), 1, 100),
+			bounded(num("budgets.fast_multiplier", "Fast mode multiplier", "Scales a job's cap when it runs in fast mode.", 2), 1, 0),
 		}},
 		{Name: "Models", Help: "Which harness and model run each step. A reviewer must differ from the builder in harness or model.", Settings: routes(root)},
 		{Name: "Escalation", Help: "What happens when a build fails its gates or review.", Settings: []Setting{
 			{Path: []string{"escalation", "implement"}, Label: "Model tiers", Help: "Models a failing build moves up through, cheapest first.", Kind: "list"},
 			integer("escalation.max_attempts_per_tier", "Attempts per tier", "Tries on each model before moving up a tier.", 2),
-			integer("escalation.max_review_rounds", "Review rounds", "Times the reviewer may send a build back before it's parked.", 2),
+			bounded(integer("escalation.max_review_rounds", "Review rounds", "Times the reviewer may send a build back before it's parked.", 2), 0, 0),
 		}},
 		{Name: "Auto-merge", Help: "Small, low-risk PRs can merge themselves once CI passes. Repos' own settings are edited in factory.yaml.", Settings: []Setting{
 			{Path: []string{"auto_merge", "up_to"}, Label: "Up to risk", Help: "The highest risk that merges on its own; none waits for you.", Kind: "select", Options: []string{"", "none", "low", "medium"}, Default: "none"},
@@ -202,6 +209,12 @@ func (s Setting) Coerce(v any) (any, error) {
 		if s.Kind == "integer" && f != math.Trunc(f) {
 			return nil, fmt.Errorf("%s must be a whole number", name)
 		}
+		if f < s.Min || s.Max > 0 && f > s.Max {
+			if s.Max > 0 {
+				return nil, fmt.Errorf("%s must be from %g to %g", name, s.Min, s.Max)
+			}
+			return nil, fmt.Errorf("%s must be at least %g", name, s.Min)
+		}
 		return f, nil
 	case "bool":
 		b, ok := v.(bool)
@@ -243,8 +256,12 @@ func (s Setting) Coerce(v any) (any, error) {
 	case s.Kind == "select" && !slices.Contains(s.Options, str):
 		return nil, fmt.Errorf("%s must be one of %s", name, strings.Join(slices.DeleteFunc(slices.Clone(s.Options), func(o string) bool { return o == "" }), ", "))
 	case s.Kind == "duration":
-		if _, err := time.ParseDuration(str); err != nil {
+		d, err := time.ParseDuration(str)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %v", name, err)
+		}
+		if d < 10*time.Second {
+			return nil, fmt.Errorf("%s must be at least 10s", name)
 		}
 	case strings.ContainsAny(str, "\n\r"):
 		return nil, errors.New(name + " must be one line")
