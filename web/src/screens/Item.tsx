@@ -1,18 +1,21 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ExternalLink } from "lucide-react";
-import { useItem, type Event } from "@/api/client";
+import { useQueryClient } from "@tanstack/react-query";
+import { act, useItem, type Estimate, type Event } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
 import { PRPanel } from "@/components/PRPanel";
 import { Screenshots } from "@/components/Screenshots";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ago, duration, money } from "@/lib/utils";
+import { ago, cn, duration, money } from "@/lib/utils";
 
 export function ItemScreen() {
   const id = Number(useParams().id);
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { item: it, jobs, events, depends_on, issue_body, spec } = data!;
+  const { item: it, jobs, events, depends_on, issue_body, spec, estimate } = data!;
   const live = jobs.find((j) => j.state === "running");
   return (
     <div className="space-y-4">
@@ -38,6 +41,7 @@ export function ItemScreen() {
       </div>
       <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
         <div className="min-w-0 space-y-4">
+          {estimate && <EstimateCard itemId={it.id} e={estimate} waiting={it.estimate_waiting} />}
           <Card>
             <CardHeader>
               <CardTitle>Issue</CardTitle>
@@ -132,6 +136,72 @@ export function ItemScreen() {
         </div>
       </div>
     </div>
+  );
+}
+
+const statusText: Record<string, string> = {
+  off: "No limit is set for this repo.",
+  under: "Under the limit, so it went ahead.",
+  exempt: "Over the limit, but a fix for a red main goes ahead.",
+  waiting: "Over the limit: waiting for your OK.",
+  parked: "Over the limit, and parked while it waited: it still needs an OK. Add factory:retry to triage it again.",
+  approved: "Over the limit; approved",
+};
+
+/** Triage's cost estimate, what it's based on, and the OK when it waits for one. */
+function EstimateCard({ itemId, e, waiting }: { itemId: number; e: Estimate; waiting: boolean }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const approve = async () => {
+    setBusy(true);
+    const r = await act(`/items/${itemId}/approve-estimate`);
+    setBusy(false);
+    setMsg({ ok: r.ok, text: r.message });
+    void qc.invalidateQueries();
+  };
+  const status = statusText[e.status] + (e.status === "approved" && e.approved_by ? ` by ${e.approved_by}.` : e.status === "approved" ? "." : "");
+  return (
+    <Card data-testid="estimate" className={cn(waiting && "border-warning/60")}>
+      <CardHeader>
+        <CardTitle>Cost estimate</CardTitle>
+        {e.threshold_usd > 0 && <span className="text-xs text-muted-foreground">limit {money(e.threshold_usd)}</span>}
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="font-mono text-lg font-semibold">{e.range}</p>
+        <p className="text-muted-foreground">{e.detail}</p>
+        <p>{status}</p>
+        {e.finished && (
+          <p className="text-xs text-muted-foreground">
+            It cost {money(e.actual_usd)} to build, against a median of {money(e.total_median_usd)} and a p75 of {money(e.total_p75_usd)}.
+          </p>
+        )}
+        {waiting && (
+          <div className="flex flex-col gap-2">
+            {e.can_approve ? (
+              <>
+                <div>
+                  <Button size="sm" disabled={busy} onClick={approve}>
+                    Approve estimate
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Or add the factory:go label on the issue.</p>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                To approve, add the factory:go label on the issue. Approving here needs a dashboard password (FACTORY_WEB_PASSWORD), or opening the
+                dashboard on this machine.
+              </p>
+            )}
+          </div>
+        )}
+        {msg && (
+          <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>
+            {msg.text}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

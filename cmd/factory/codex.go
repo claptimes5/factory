@@ -42,6 +42,12 @@ func codexAuth() (string, error) {
 	}
 }
 
+// codexAuthMode is codexAuth's mode; an invalid one fails the build.
+func codexAuthMode() string {
+	m, _ := codexAuth()
+	return m
+}
+
 // codexAuthFile is the factory's own copy of Codex's ChatGPT sign-in.
 // Jobs get a copy of it, and the daemon saves back the one Codex refreshes.
 func codexAuthFile(cfg *config.Config) string {

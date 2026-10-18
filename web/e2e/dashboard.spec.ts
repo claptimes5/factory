@@ -36,7 +36,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
   await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(3);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(4);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -45,6 +45,22 @@ test("the floor puts what needs you first, with live work and repo chips", async
   } else {
     await expect(board.getByRole("region", { name: "Blocked" })).toContainText("Waits on #102");
   }
+});
+
+test("an item over the cost limit waits for an OK on its estimate", async ({ page }, info) => {
+  await page.goto("/app/");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  const card = needs.getByTestId("card").filter({ hasText: "Rewrite the job scheduler" }).filter({ visible: true });
+  await expect(card).toContainText("Cost check");
+  await expect(card).toContainText("$9.40–$16.20");
+  await card.getByRole("link", { name: "See the estimate" }).click();
+  const est = page.getByTestId("estimate");
+  await expect(est).toContainText("based on 6 past L items across all repos");
+  await expect(est).toContainText("waiting for your OK");
+  await est.getByRole("button", { name: "Approve estimate" }).click();
+  await expect(est.getByRole("status")).toContainText("devserver: would approve the estimate of item");
+  await shot(page, info, "estimate");
+  if (phone(info)) await noSidewaysScroll(page);
 });
 
 test("a change across a workspace links a PR per repo, in merge order", async ({ page }, info) => {

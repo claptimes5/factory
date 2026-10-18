@@ -218,8 +218,8 @@ The orchestrator is a short-lived, headless Claude Code run (Opus-tier) that pla
 | `list_items`, `get_item`, `queue_status`, `get_job_log` | Read state | none |
 | `create_issue(title, body, parent, labels)` | Opens a GitHub issue + work item | daily issue cap |
 | `set_dependencies(item, depends_on[])` | Writes `dependencies` | rejects cycles |
-| `set_priority(item, n)` | Reorders the queue | none |
-| `enqueue(item, stage, complexity?)` | Queues a job | stage allowed for item's state; concurrency and review-queue caps; budget |
+| `set_priority(item, n)` | Reorders the queue | refuses 100 and up, kept for main health fixes |
+| `enqueue(item, stage, complexity?)` | Queues a job | stage allowed for item's state; concurrency and review-queue caps; budget; an item waiting on its cost estimate, or one a new complexity puts over `confirm_over` |
 | `retry(job, tier?)` | Requeues, optionally one model tier up | max attempts; budget |
 | `park(item, reason)` | Moves to `parked`, notifies a human | none |
 | `notify_human(message, item?)` | Sends to the notifier | rate limit |

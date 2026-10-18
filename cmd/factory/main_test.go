@@ -104,3 +104,39 @@ func TestSentryTokenLeavesTheEnvironment(t *testing.T) {
 		t.Fatal("no client with a token")
 	}
 }
+
+func TestEstimateCellAndPlanBilled(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "t")
+	if c := estimateCell(ctx, st, it.ID); c != "-" {
+		t.Fatalf("no estimate: %q", c)
+	}
+	st.SetEstimate(ctx, store.Estimate{ItemID: it.ID, Size: "M", MedianUSD: 1.8, P75USD: 3.1, TotalMedianUSD: 1.8, TotalP75USD: 3.1, Basis: "repo", Detail: "d", Status: store.EstimateWaiting})
+	if c := estimateCell(ctx, st, it.ID); c != "$1.80–$3.10 (needs your OK)" {
+		t.Fatalf("waiting: %q", c)
+	}
+	none := func(string) string { return "" }
+	plan := map[string]map[string]string{"claude": {"CLAUDE_CODE_OAUTH_TOKEN": "x"}}
+	if !planBilled(plan, none, codexAPIKey)["claude"] || planBilled(plan, none, codexAPIKey)["codex"] {
+		t.Fatal("a subscription token alone is a plan")
+	}
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"} {
+		if planBilled(map[string]map[string]string{"claude": {"CLAUDE_CODE_OAUTH_TOKEN": "x", k: "1"}}, none, codexAPIKey)["claude"] {
+			t.Fatalf("%s bills dollars", k)
+		}
+		env := func(e string) string { return map[bool]string{true: "1"}[e == k] }
+		if planBilled(plan, env, codexAPIKey)["claude"] {
+			t.Fatalf("%s in the daemon's environment bills dollars", k)
+		}
+	}
+	for mode, want := range map[string]bool{codexAPIKey: false, codexChatGPT: true, codexAccessToken: true} {
+		if planBilled(nil, none, mode)["codex"] != want {
+			t.Errorf("codex signed in by %q: plan %v, want %v", mode, !want, want)
+		}
+	}
+}

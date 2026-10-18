@@ -177,6 +177,9 @@ func TestMainRedFilesAFixFirstAndClosesItWhenGreen(t *testing.T) {
 	if err != nil || it.Priority != HealthPriority {
 		t.Fatalf("item %+v %v", it, err)
 	}
+	if ok, _ := e.p.Store.IsHealthItem(ctx, it.ID); !ok {
+		t.Fatal("not marked a main health fix")
+	}
 	if a, _ := e.p.Store.ItemApproval(ctx, it.ID); a == nil || a.IssueHash != IssueHash(*is) {
 		t.Fatalf("approval %+v", a)
 	}
@@ -253,6 +256,9 @@ func TestMainHealthRequireApproval(t *testing.T) {
 	it, err := e.p.Store.ItemByIssue(ctx, "o/r", 1)
 	if err != nil || it.Priority != HealthPriority {
 		t.Fatalf("item %+v %v", it, err)
+	}
+	if ok, _ := e.p.Store.IsHealthItem(ctx, it.ID); !ok {
+		t.Fatal("not marked a main health fix")
 	}
 	if j, _ := e.p.Store.ClaimJob(ctx); j == nil || *j.ItemID != it.ID {
 		t.Fatalf("claimed %+v", j)

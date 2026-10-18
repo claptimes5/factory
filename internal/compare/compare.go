@@ -178,13 +178,16 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	arm := Arm{Skillset: set, Branch: fmt.Sprintf("factory/compare-%d-%s", is.Number, set)}
 	dir := filepath.Join(o.Dir, set)
 	cfg := *o.Cfg
-	cfg.Repos = []config.Repo{o.repoConf()}
+	rc := o.repoConf()
+	rc.ConfirmOver = nil // nobody is there to say go
+	cfg.Repos = []config.Repo{rc}
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Orchestrator.On = false
 	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
 	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
 	cfg.Previews.Off()               // nor is there a PR to show them on
+	cfg.Budgets.ConfirmOver = 0      // nor anyone to say go
 	if budget > 0 {
 		cfg.Budgets.DailyTotal = budget
 	}

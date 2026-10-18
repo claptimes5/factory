@@ -61,6 +61,10 @@ func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp 
 		}
 		return err
 	}
+	// Whatever the stage: one parked while it waited still needs the OK.
+	if j.Kind == "implement" && p.estimateNeedsOK(ctx, it.ID) {
+		return fmt.Errorf("item %d needs an OK on its cost estimate before it's built; approve that first, or send it back through triage with %s", it.ID, LabelRetry)
+	}
 	if tierUp && j.Kind != "implement" {
 		return errors.New("only implement jobs have model tiers")
 	}

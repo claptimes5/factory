@@ -46,6 +46,13 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	}
 	_ = p.cancelAutoMerge(ctx, it, "the item was parked") // it notifies on failure
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
+	// A wait that ends in a park still needs the OK: the estimate says
+	// parked, not waiting, so nothing reads it as waiting for approval.
+	if ok, err := p.Store.SetEstimateStatus(ctx, it.ID, store.EstimateWaiting, store.EstimateParked); err != nil {
+		p.warn(err, "SetEstimateStatus")
+	} else if ok {
+		p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+	}
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
 	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
 		"\n\nAdd the `"+LabelRetry+"` label to send it back through triage."), "Comment")
@@ -121,6 +128,9 @@ func (p *Pipeline) afterTriage(ctx context.Context, it *store.WorkItem, v *verdi
 		return err
 	}
 	it.Complexity, it.Risk = v.Complexity, v.Risk
+	if held, err := p.checkEstimate(ctx, it); err != nil || held {
+		return err
+	}
 	if ok, err := p.depsDone(ctx, it.ID); err != nil {
 		return err
 	} else if !ok {

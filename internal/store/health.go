@@ -151,3 +151,18 @@ func (s *Store) CountEventsFor(ctx context.Context, typ, reason, since string) (
 	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE type = ? AND reason = ? AND at >= ?`, typ, reason, since).Scan(&n)
 	return n, err
 }
+
+// MarkHealthItem records that an item is a main health fix.
+func (s *Store) MarkHealthItem(ctx context.Context, itemID int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE work_items SET main_health = 1 WHERE id = ?`, itemID)
+		return err
+	})
+}
+
+// IsHealthItem says whether an item was filed as a main health fix.
+func (s *Store) IsHealthItem(ctx context.Context, itemID int64) (bool, error) {
+	var v int
+	err := s.read.QueryRowContext(ctx, `SELECT main_health FROM work_items WHERE id = ?`, itemID).Scan(&v)
+	return v == 1, err
+}

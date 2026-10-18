@@ -73,6 +73,15 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Action" }
         "409": { $ref: "#/components/responses/Action" }
+  /items/{id}/approve-estimate:
+    post:
+      summary: Approve an item whose cost estimate waits for a human's OK
+      description: Needs the password, or a request from this machine (403 otherwise), as settings do.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
   /jobs/{id}:
     get:
       summary: One job with its gate results
@@ -309,7 +318,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -331,8 +340,10 @@ components:
         updated_at: { type: string }
         issue_url: { type: string }
         pr_url: { type: string }
-        needs_you: { type: boolean, description: Awaiting review or parked }
+        needs_you: { type: boolean, description: Awaiting review, parked, or waiting for an OK on its cost }
         blocked_note: { type: string, description: Why it is parked or blocked }
+        estimate: { type: string, description: "Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty" }
+        estimate_waiting: { type: boolean, description: It waits for your OK on its cost estimate }
     LinkedPR:
       type: object
       required: [repo, number, ref, url]
@@ -416,7 +427,7 @@ components:
         data: { type: string, description: JSON }
     ItemDetail:
       type: object
-      required: [item, jobs, events, depends_on, issue_body, spec]
+      required: [item, jobs, events, depends_on, issue_body, spec, estimate]
       properties:
         item: { $ref: "#/components/schemas/Item" }
         jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
@@ -424,6 +435,37 @@ components:
         depends_on: { type: array, items: { type: integer } }
         issue_body: { type: string }
         spec: { type: string }
+        estimate:
+          oneOf:
+            - $ref: "#/components/schemas/Estimate"
+            - type: "null"
+    Estimate:
+      type: object
+      required: [range, detail, status, size, median_usd, p75_usd, total_median_usd, total_p75_usd, threshold_usd, basis, samples, approved_by, created_at, actual_usd, finished, can_approve]
+      properties:
+        range: { type: string, description: "Median to p75 in a line: $1.80–$3.10, + plan usage, or on your plan" }
+        detail: { type: string, description: "What it's based on: based on 14 past M items in o/api: median $1.80, p75 $3.10" }
+        status: { type: string, enum: [off, under, exempt, waiting, parked, approved], description: "parked: parked while it waited, so it still needs an OK" }
+        size: { type: string }
+        median_usd: { type: number, description: Billed dollars }
+        p75_usd: { type: number, description: Billed dollars; compared with threshold_usd }
+        total_median_usd: { type: number, description: All the work, plan runs at the cost they report }
+        total_p75_usd: { type: number }
+        threshold_usd: { type: number, description: "confirm_over for its repo; 0 is off" }
+        basis: { type: string, enum: [repo, all, default] }
+        samples: { type: integer }
+        approved_by: { type: string }
+        created_at: { type: string }
+        actual_usd: { type: number, description: "What building it has cost so far in this estimate's cycle (since its triage), triage left out" }
+        finished: { type: boolean, description: The build is over, so actual_usd can be compared }
+        can_approve: { type: boolean, description: "It waits, and this request may approve it here (the password, or a request from this machine); else the factory:go label it is" }
+    Estimates:
+      type: object
+      required: [compared, within, median_miss_usd]
+      properties:
+        compared: { type: integer, description: Finished builds with an estimate }
+        within: { type: integer, description: Of those, the ones that cost at most their p75 }
+        median_miss_usd: { type: number, description: "Median of actual minus estimated median; positive is over" }
     JobDetail:
       type: object
       required: [job, gates, can_attach]
@@ -546,13 +588,14 @@ components:
         seen_at: { type: string }
     Spend:
       type: object
-      required: [days, week_usd, daily_cap_usd, by_model, usage]
+      required: [days, week_usd, daily_cap_usd, by_model, usage, estimates]
       properties:
         days: { type: array, items: { $ref: "#/components/schemas/DaySpend" } }
         week_usd: { type: number }
         daily_cap_usd: { type: number }
         by_model: { type: array, items: { $ref: "#/components/schemas/ModelSpend" } }
         usage: { type: array, items: { $ref: "#/components/schemas/Usage" } }
+        estimates: { $ref: "#/components/schemas/Estimates" }
     Notification:
       type: object
       required: [id, kind, title, detail, item_id, at]

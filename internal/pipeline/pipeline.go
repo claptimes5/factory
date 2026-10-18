@@ -53,6 +53,7 @@ func Labels(intake string) []Label {
 		{LabelAwaitingYou, "1d76db", "Factory: draft PR ready for your review"},
 		{LabelAutoMerge, "0e8a16", "Factory: merges itself once its checks pass (auto_merge)"},
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
+		{LabelGo, "0e8a16", "Factory: build it, though its cost estimate is over confirm_over"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
 		{LabelMainHealth, "b60205", "Factory: a check is red or flaky on the base branch; first in the queue"},
@@ -129,6 +130,9 @@ type Pipeline struct {
 	ConfigPath string
 	// Sentry reads Sentry for sources.sentry; nil without a token.
 	Sentry SentryAPI
+	// PlanBilled names the harnesses whose jobs draw on a subscription
+	// plan rather than bill dollars, for the cost estimate.
+	PlanBilled map[string]bool
 
 	mu         sync.Mutex
 	clientsMu  sync.Mutex
@@ -629,6 +633,9 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 					return err
 				}
 				it.Priority = HealthPriority
+				if err := p.Store.MarkHealthItem(ctx, it.ID); err != nil {
+					return err
+				}
 			}
 			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
 				return err
@@ -638,6 +645,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 	if p.Cfg.Orchestrator.On {
 		p.warn(p.intakeEpics(ctx, repo), "epics")
 	}
+	p.warn(p.intakeGo(ctx, repo), "factory:go")
 	retries, err := gh.ListIssues(ctx, LabelRetry)
 	if err != nil {
 		return err
@@ -872,6 +880,11 @@ type ImplementInput struct {
 }
 
 func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, attempt int, in ImplementInput) (bool, error) {
+	// Every road to a build passes here, so this is where an estimate
+	// that needs a human's OK stops it.
+	if p.estimateNeedsOK(ctx, it.ID) {
+		return false, errEstimateWaiting
+	}
 	r, ok := p.Cfg.Implement(it.Complexity, attempt)
 	if !ok {
 		return false, nil

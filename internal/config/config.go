@@ -135,6 +135,9 @@ type Repo struct {
 	Files *Files `yaml:"files,omitempty"`
 	// Preview screenshots the repo's web app for each PR. See Preview.
 	Preview *Preview `yaml:"preview,omitempty"`
+	// ConfirmOver replaces budgets.confirm_over for this repo; 0 turns
+	// it off here.
+	ConfirmOver *float64 `yaml:"confirm_over,omitempty"`
 }
 
 // Files are files a repo needs to build or test but doesn't commit, such
@@ -171,7 +174,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil && r.Preview == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil && r.Preview == nil && r.ConfirmOver == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -324,6 +327,10 @@ type Config struct {
 		// subscription usage window it reports is this full, in percent,
 		// until the window resets. Default 95; 100 waits for a hard limit.
 		PauseAtUsage float64 `yaml:"pause_at_usage,omitempty"`
+		// ConfirmOver holds an item before implement, for a human's OK,
+		// when triage's cost estimate (its p75) is over this many
+		// dollars. 0, the default, never holds one.
+		ConfirmOver float64 `yaml:"confirm_over,omitempty"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -378,6 +385,9 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	d.Duration = v
 	return nil
 }
+
+// MarshalYAML writes a duration as it's read back: 2m0s, 1h30m0s.
+func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 
 // Load reads and validates a config file. Relative paths in it resolve
 // against the file's directory.
@@ -657,6 +667,9 @@ func (c *Config) Validate() error {
 				bad("repo %s: files: %v", r.Name, err)
 			}
 		}
+		if r.ConfirmOver != nil && *r.ConfirmOver < 0 {
+			bad("repo %s: confirm_over is dollars, or 0 to turn it off for this repo", r.Name)
+		}
 	}
 	inWS := map[string]string{}
 	for _, name := range sortedKeys(c.Workspaces) {
@@ -785,6 +798,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Budgets.DailyTotal <= 0 {
 		bad("budgets.daily_total must be > 0")
+	}
+	if c.Budgets.ConfirmOver < 0 {
+		bad("budgets.confirm_over is dollars, or 0 (the default) to turn it off")
 	}
 	if c.Budgets.Triage <= 0 || c.Budgets.Review <= 0 {
 		bad("budgets.triage and budgets.review must be > 0")
@@ -1165,6 +1181,16 @@ func (c *Config) PauseAtUsage() float64 {
 		return 95
 	}
 	return c.Budgets.PauseAtUsage
+}
+
+// ConfirmOver is the estimate, in dollars, over which a repo's items wait
+// for a human's OK before implement: the repo's confirm_over, else
+// budgets.confirm_over. 0 is off.
+func (c *Config) ConfirmOver(repo string) float64 {
+	if r, ok := c.RepoConf(repo); ok && r.ConfirmOver != nil {
+		return *r.ConfirmOver
+	}
+	return c.Budgets.ConfirmOver
 }
 
 // FastFor says whether a job on route r with this model runs in fast mode.

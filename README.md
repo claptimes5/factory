@@ -89,6 +89,7 @@ See [How ready a repo is](docs/quality.md#how-ready-a-repo-is).
 | Label an issue `factory:ready` | Triages, builds, checks and reviews it, then opens a draft PR |
 | Review PRs labeled `factory:awaiting-you` and merge the good ones | Tells you how closely to read each one (`factory:risk-low`, `-medium`, `-high`) |
 | Read why an item parked (it leaves a comment), fix or answer it, then add `factory:retry` | Sends it back through triage |
+| Set [`budgets.confirm_over`](docs/using.md#cost-estimates), then OK the costly items with `factory:go` | Estimates each item's cost from its own history after triage, and holds anything over the limit for you before building it |
 | Glance at the dashboard's **Floor** or your phone | Notifies you when something parks, a PR is ready or the budget runs out |
 | Turn on [`main_health`](docs/using.md#keeping-main-green) | Files a fix first in the queue when a check goes red or flaky on your default branch, and closes it once the check passes |
 | Turn on [`sources`](docs/using.md#issues-from-sentry-dependabot-and-todos), then label the issues you want built | Files issues from Sentry errors, Dependabot alerts and `TODO(factory)` comments, which wait for your approval, and closes them if the error, alert or comment goes away first |

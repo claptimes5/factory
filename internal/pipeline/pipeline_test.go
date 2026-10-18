@@ -31,7 +31,9 @@ type fakeGH struct {
 	nextPR   int
 
 	failCreatePR int
-	labeledBy    map[int]string // who added labels to an issue; "maintainer" unless set
+	failComment  error
+	failList     map[string]error // ListIssues by label
+	labeledBy    map[int]string   // who added labels to an issue; "maintainer" unless set
 	outsiders    map[string]bool
 	editedAfter  map[int]bool // the issue changed after it was labeled
 
@@ -86,6 +88,9 @@ func newFakeGH() *fakeGH {
 func (f *fakeGH) ListIssues(_ context.Context, label string) ([]github.Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failList[label]; err != nil {
+		return nil, err
+	}
 	var out []github.Issue
 	for _, is := range f.issues {
 		if hasLabel(is.Labels, label) {
@@ -153,6 +158,9 @@ func (f *fakeGH) RemoveLabel(_ context.Context, n int, l string) error {
 func (f *fakeGH) Comment(_ context.Context, n int, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failComment != nil {
+		return f.failComment
+	}
 	f.comments[n] = append(f.comments[n], body)
 	return nil
 }

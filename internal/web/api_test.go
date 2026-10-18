@@ -45,7 +45,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Finding": APIFinding{}, "Review": APIReview{}, "Check": APICheck{}, "PRPanel": APIPRPanel{}, "Diff": APIDiff{},
 		"Feed": APIFeed{}, "Activity": APIActivity{}, "ActivityEntry": APIActivityEntry{}, "DaySpend": APIDaySpend{}, "ModelSpend": APIModelSpend{}, "Spend": APISpend{},
 		"Notification": APINotification{}, "Notifications": APINotifications{}, "ActionResult": APIActionResult{},
-		"Error": APIError{}, "Metrics": metrics.Report{}, "Group": metrics.Group{}, "Week": metrics.Week{},
+		"Error": APIError{}, "Estimate": APIEstimate{}, "Estimates": APIEstimates{}, "Metrics": metrics.Report{}, "Group": metrics.Group{}, "Week": metrics.Week{},
 		"Settings": APISettings{}, "SettingsGroup": APISettingsGroup{}, "Setting": APISetting{},
 		"Tuning": APITuning{}, "TuningProposal": APITuningProposal{}, "TuningChange": APITuningChange{},
 		"Preview": APIPreview{}, "PreviewShot": APIPreviewShot{},

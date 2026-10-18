@@ -141,7 +141,8 @@ func (p *Pipeline) drainedTrigger(ctx context.Context) {
 	}
 	var stuck []string
 	for _, it := range items {
-		if it.Stage == state.Blocked && p.depsMoving(ctx, it.ID) {
+		// Waiting on a human's OK on the cost is not stuck either.
+		if it.Stage == state.Blocked && (p.depsMoving(ctx, it.ID) || p.estimateNeedsOK(ctx, it.ID)) {
 			continue
 		}
 		stuck = append(stuck, p.ref(it.Repo, it.IssueNumber))
@@ -681,6 +682,9 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				if _, err := p.Store.GetItem(ctx, a.Item); err != nil {
 					return "", fmt.Errorf("no item %d", a.Item)
 				}
+				if a.Priority >= HealthPriority {
+					return "", fmt.Errorf("refused: priorities from %d up are kept for main health fixes", HealthPriority)
+				}
 				if err := audit(ctx, "set_priority", &a.Item, a.Reason, raw); err != nil {
 					return "", err
 				}
@@ -907,6 +911,9 @@ func (p *Pipeline) checkEnqueue(ctx context.Context, itemID int64, stage string)
 		default:
 			return fmt.Errorf("refused: implement needs an item that is ready or blocked, this one is %s", it.Stage)
 		}
+		if p.estimateNeedsOK(ctx, itemID) {
+			return errEstimateWaiting
+		}
 		if ok, err := p.depsDone(ctx, itemID); err != nil || !ok {
 			return errors.New("refused: the item's dependencies are not done")
 		}
@@ -928,11 +935,23 @@ func (p *Pipeline) enqueueStage(ctx context.Context, itemID int64, stage, comple
 	if stage == "triage" {
 		return p.enqueueTriage(ctx, it, 1, "")
 	}
-	if complexity != "" {
+	if p.estimateNeedsOK(ctx, it.ID) {
+		return errEstimateWaiting
+	}
+	if complexity != "" && complexity != it.Complexity {
 		if err := p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{Complexity: &complexity}); err != nil {
 			return err
 		}
 		it.Complexity = complexity
+		// The estimate was for triage's size: a new size is estimated, and
+		// held, again.
+		if p.Cfg.ConfirmOver(it.Repo) > 0 {
+			if held, err := p.reestimate(ctx, it); err != nil {
+				return err
+			} else if held {
+				return errEstimateWaiting
+			}
+		}
 	}
 	if it.Complexity == "" {
 		return errors.New("refused: the item has no complexity; triage it or pass one")
@@ -978,7 +997,7 @@ func (p *Pipeline) unblock(ctx context.Context) error {
 	}
 	for _, it := range blocked {
 		ok, err := p.depsDone(ctx, it.ID)
-		if err != nil || !ok || it.Complexity == "" {
+		if err != nil || !ok || it.Complexity == "" || p.estimateNeedsOK(ctx, it.ID) {
 			continue
 		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Ready, "daemon", "dependencies done"); err != nil {

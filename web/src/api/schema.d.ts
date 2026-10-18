@@ -313,6 +313,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/approve-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve an item whose cost estimate waits for a human's OK
+         * @description Needs the password, or a request from this machine (403 otherwise), as settings do.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{id}": {
         parameters: {
             query?: never;
@@ -1061,10 +1096,14 @@ export interface components {
             updated_at: string;
             issue_url: string;
             pr_url: string;
-            /** @description Awaiting review or parked */
+            /** @description Awaiting review */
             needs_you: boolean;
             /** @description Why it is parked or blocked */
             blocked_note: string;
+            /** @description Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty */
+            estimate: string;
+            /** @description It waits for your OK on its cost estimate */
+            estimate_waiting: boolean;
         };
         LinkedPR: {
             repo: string;
@@ -1148,6 +1187,47 @@ export interface components {
             depends_on: number[];
             issue_body: string;
             spec: string;
+            estimate: components["schemas"]["Estimate"] | null;
+        };
+        Estimate: {
+            /** @description Median to p75 in a line: $1.80–$3.10, + plan usage, or on your plan */
+            range: string;
+            /** @description What it's based on: based on 14 past M items in o/api: median $1.80, p75 $3.10 */
+            detail: string;
+            /**
+             * @description parked: parked while it waited, so it still needs an OK
+             * @enum {string}
+             */
+            status: "off" | "under" | "exempt" | "waiting" | "parked" | "approved";
+            size: string;
+            /** @description Billed dollars */
+            median_usd: number;
+            /** @description Billed dollars; compared with threshold_usd */
+            p75_usd: number;
+            /** @description All the work */
+            total_median_usd: number;
+            total_p75_usd: number;
+            /** @description confirm_over for its repo; 0 is off */
+            threshold_usd: number;
+            /** @enum {string} */
+            basis: "repo" | "all" | "default";
+            samples: number;
+            approved_by: string;
+            created_at: string;
+            /** @description What building it has cost so far in this estimate's cycle (since its triage), triage left out */
+            actual_usd: number;
+            /** @description The build is over */
+            finished: boolean;
+            /** @description It waits, and this request may approve it here (the password, or a request from this machine); else the factory:go label it is */
+            can_approve: boolean;
+        };
+        Estimates: {
+            /** @description Finished builds with an estimate */
+            compared: number;
+            /** @description Of those */
+            within: number;
+            /** @description Median of actual minus estimated median; positive is over */
+            median_miss_usd: number;
         };
         JobDetail: {
             job: components["schemas"]["Job"];
@@ -1256,6 +1336,7 @@ export interface components {
             daily_cap_usd: number;
             by_model: components["schemas"]["ModelSpend"][];
             usage: components["schemas"]["Usage"][];
+            estimates: components["schemas"]["Estimates"];
         };
         Notification: {
             id: string;
