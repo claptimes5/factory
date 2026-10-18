@@ -256,6 +256,8 @@ type fakeHarness struct {
 	security []string // successive verdicts of the security pass
 	// implVerdict replaces the builder's usual verdict.
 	implVerdict string
+	plans       []string // successive plan verdicts
+	planChecks  []string // successive verdicts of the critic's plan check
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -326,6 +328,16 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, fmt.Errorf("no scripted learn %d", n)
 		}
 		res.Final = h.learn[n]
+	case "plan":
+		if n >= len(h.plans) {
+			return nil, fmt.Errorf("no scripted plan %d", n)
+		}
+		res.Final = h.plans[n]
+	case "plan_check":
+		if n >= len(h.planChecks) {
+			return nil, fmt.Errorf("no scripted plan check %d", n)
+		}
+		res.Final = h.planChecks[n]
 	case "verify":
 		if n >= len(h.verifies) {
 			return nil, fmt.Errorf("no scripted verify %d", n)

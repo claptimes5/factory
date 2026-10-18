@@ -379,6 +379,31 @@ for a red or flaky main, marked so when they came in (they stay exempt
 after main is green again). A high priority alone exempts nothing, and
 the orchestrator can't set priorities from 100 up.
 
+## Plans before big builds
+
+An item triage rates `L` isn't built straight away. The builder first
+reads the repo and writes a short plan (approach, files, risks, tests),
+and the factory comments it on the issue, labels it
+`factory:awaiting-you` and notifies you. The item is Blocked until:
+
+- you add `factory:go`, after the comment, to build it. It counts only
+  from someone with write access, as for an estimate; or
+- you comment what to change, then add `factory:replan`: the builder
+  plans once more with your latest comment, and the new plan is asked
+  about the same way. A second `factory:replan` parks the item; edit the
+  issue and use `factory:retry` to start over.
+
+If the item's [cost estimate](#cost-estimates) waits too, one comment asks
+about both, and one `factory:go` (or **Approve estimate** on the item's
+page) approves both. Nothing builds the item meanwhile, not the
+orchestrator's `enqueue` either. The approved plan goes to the builder and
+the reviewer.
+
+With `plan.medium: critic`, an M item's plan is checked by the critic
+instead: it's posted for you to read, the critic approves it or sends it
+back once with its concerns, and the build goes on by itself. See
+[Plans before big builds](configuration.md#plans-before-big-builds).
+
 ## Keeping main green
 
 With `main_health.enabled` (see [Configuration](configuration.md#main-health)),

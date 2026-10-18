@@ -65,6 +65,13 @@ func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp 
 	if j.Kind == "implement" && p.estimateNeedsOK(ctx, it.ID) {
 		return fmt.Errorf("item %d needs an OK on its cost estimate before it's built; approve that first, or send it back through triage with %s", it.ID, LabelRetry)
 	}
+	if j.Kind == "implement" {
+		if held, err := p.holdForPlan(ctx, it, actor); err != nil {
+			return err
+		} else if held {
+			return fmt.Errorf("item %d needs its plan approved before it's built; it's on the issue (planning it first if it had none)", it.ID)
+		}
+	}
 	if tierUp && j.Kind != "implement" {
 		return errors.New("only implement jobs have model tiers")
 	}

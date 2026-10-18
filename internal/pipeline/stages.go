@@ -131,19 +131,12 @@ func (p *Pipeline) afterTriage(ctx context.Context, it *store.WorkItem, v *verdi
 		return err
 	}
 	it.Complexity, it.Risk = v.Complexity, v.Risk
-	if held, err := p.checkEstimate(ctx, it); err != nil || held {
+	// A big item's plan comes first; its cost estimate is asked about
+	// with it (see plan.go).
+	if held, err := p.checkPlan(ctx, it); err != nil || held {
 		return err
 	}
-	if ok, err := p.depsDone(ctx, it.ID); err != nil {
-		return err
-	} else if !ok {
-		// unblock queues the implement once every dependency is done.
-		return p.Store.SetStage(ctx, it.ID, state.Blocked, "daemon", "waiting on dependencies")
-	}
-	if _, err := p.enqueueImplement(ctx, it, 1, ImplementInput{}); err != nil {
-		return err
-	}
-	return p.Store.SetStage(ctx, it.ID, state.Implementing, "daemon", "implement queued")
+	return p.proceed(ctx, it)
 }
 
 // runFailure classifies a run that did not complete normally.
@@ -249,6 +242,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 			data.Risky = append(data.Risky, f)
 		}
 	}
+	data.Plan, data.PlanBy = p.approvedPlan(ctx, it)
 	if data.Members == nil {
 		data.Install, data.Checks = p.repoConf(it.Repo).Gates.Install, p.requiredChecks(it.Repo)
 		_, data.Preview = p.Cfg.PreviewFor(it.Repo)
@@ -710,6 +704,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	// The repo's REVIEW.md, from the base branch: the change can't edit it.
 	gs := p.reviewGuides(ctx, parts)
 	data.Guide, data.GuideFile = gs.prompt(), gs.file()
+	data.Plan, data.PlanBy = p.approvedPlan(ctx, it)
 	if !ws {
 		p.incremental(ctx, it, own, rr, diff, &data)
 	}
