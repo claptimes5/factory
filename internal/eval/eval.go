@@ -37,7 +37,8 @@ type Case struct {
 	Dir  string `yaml:"-"`
 	// Repo is a configured repo's owner/name (its gates and base branch
 	// apply), or a clone URL or path; default the first configured repo.
-	Repo    string `yaml:"repo"`
+	Repo    string `yaml:"repo,omitempty"`
+	Source  string `yaml:"source,omitempty"` // where the case came from, e.g. PR #14
 	BaseSHA string `yaml:"base_sha"`
 	Title   string `yaml:"title"`
 	Body    string `yaml:"body"`

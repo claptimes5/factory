@@ -379,12 +379,20 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 		t.Fatalf("spend not recorded: %v", spent)
 	}
 
-	// The human merges; the next poll closes the item out.
+	// The human changes the PR and merges it; the next poll closes the
+	// item out and suggests the change as a replay case.
+	var notes []string
+	e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
 	e.gh.prs["factory/issue-1"].Merged = true
+	e.gh.prs["factory/issue-1"].Head.SHA = "beef"
 	e.p.lastPoll = e.p.lastPoll.AddDate(0, 0, -1)
 	e.p.Drain(ctx)
 	if e.item(t, 1).Stage != state.Done {
 		t.Fatalf("stage after merge = %s", e.item(t, 1).Stage)
+	}
+	pr := e.gh.prs["factory/issue-1"].Number
+	if len(notes) != 1 || !strings.Contains(notes[0], fmt.Sprintf("`factory eval capture %d`", pr)) {
+		t.Fatalf("notes = %q", notes)
 	}
 }
 

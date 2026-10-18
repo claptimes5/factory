@@ -57,7 +57,8 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"iid": 5, "web_url": "https://gitlab.example/team/sub/web/-/merge_requests/5", "state": "opened", "draft": true, "sha": "abc", "source_project_id": 1, "target_project_id": 1},
 		})
 	case r.Method == "GET" && path == p+"/merge_requests/5":
-		j(map[string]any{"iid": 5, "state": "merged", "sha": "def"})
+		j(map[string]any{"iid": 5, "state": "merged", "sha": "def", "title": "Fix login", "description": "Closes #3",
+			"merge_commit_sha": nil, "squash_commit_sha": "sq1", "diff_refs": map[string]any{"base_sha": "b1"}})
 	case r.Method == "POST" && path == p+"/merge_requests":
 		if in["title"] != "Draft: Fix login (#3)" || in["source_branch"] != "factory/issue-3" || in["target_branch"] != "main" {
 			w.WriteHeader(400)
@@ -128,7 +129,8 @@ func TestClient(t *testing.T) {
 	if none, err := c.FindPR(ctx, "other"); err != nil || none != nil {
 		t.Fatalf("find other %+v %v", none, err)
 	}
-	if pr, err = c.GetPR(ctx, 5); err != nil || !pr.Merged || pr.State != "closed" {
+	// A squash merge's commit stands in for the merge commit.
+	if pr, err = c.GetPR(ctx, 5); err != nil || !pr.Merged || pr.State != "closed" || pr.MergeCommit != "sq1" || pr.Base.SHA != "b1" || pr.Body != "Closes #3" || pr.Title != "Fix login" {
 		t.Fatalf("get %+v %v", pr, err)
 	}
 	if pr, err = c.CreatePR(ctx, "Fix login (#3)", "body", "factory/issue-3", "main", true); err != nil || pr.Number != 6 {

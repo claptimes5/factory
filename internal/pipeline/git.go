@@ -312,6 +312,15 @@ func (g *Git) Freeze(ctx context.Context, bare, keep string) error {
 	return err
 }
 
+// FetchRef fetches one ref from the remote (a pull request's head, for
+// example) and returns the commit it points at.
+func (g *Git) FetchRef(ctx context.Context, repo, ref string) (string, error) {
+	if _, err := g.run(ctx, repo, nil, "fetch", "--quiet", "--no-tags", g.remote(), ref); err != nil {
+		return "", err
+	}
+	return g.run(ctx, repo, nil, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+}
+
 // CloneBare makes a bare copy of the remote at dst.
 func (g *Git) CloneBare(ctx context.Context, dst string) error {
 	_, err := g.run(ctx, "", nil, "clone", "--quiet", "--bare", "--no-tags", g.remote(), dst)

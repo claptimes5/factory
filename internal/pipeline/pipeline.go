@@ -447,6 +447,13 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
+			if changed {
+				// What the human changed is what the factory missed: worth
+				// a replay case, so the next config is measured against it.
+				arg := strings.TrimPrefix(p.ref(it.Repo, pr.Number), "#") // a bare # starts a shell comment
+				p.notify(ctx, fmt.Sprintf("PR #%d for %s was merged with your changes. If they fixed something the factory got wrong, `factory eval capture %s` turns it into a replay case.",
+					pr.Number, p.ref(it.Repo, it.IssueNumber), arg))
+			}
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 		} else if pr.State == "closed" {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
