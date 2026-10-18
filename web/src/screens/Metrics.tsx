@@ -56,6 +56,12 @@ export function MetricsScreen() {
         Human time: items sat {r.awaiting_human_hours.toFixed(1)} h awaiting review in total ({r.awaiting_human_mean_hours.toFixed(1)} h on average).
         Reviewer blocks: {r.review_blocks}.
       </p>
+      {sp.estimates.compared > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="estimate-accuracy">
+          Cost estimates: {sp.estimates.within} of {sp.estimates.compared} finished builds cost at most their p75; the median build came in{" "}
+          {sp.estimates.median_miss_usd >= 0 ? `${money(sp.estimates.median_miss_usd)} over` : `${money(-sp.estimates.median_miss_usd)} under`} its estimate's median.
+        </p>
+      )}
     </div>
   );
 }

@@ -593,6 +593,11 @@ func (p *Pipeline) startHealthFix(ctx context.Context, repo string, n int, title
 		return err
 	}
 	it.Priority = HealthPriority
+	// Recorded on the item, so it stays exempt from the cost check after
+	// main is green again and the health issue is cleared.
+	if err := p.Store.MarkHealthItem(ctx, it.ID); err != nil {
+		return err
+	}
 	return p.enqueueTriage(ctx, it, 1, "")
 }
 

@@ -31,6 +31,10 @@ func (f *fakeActions) Park(_ context.Context, id int64, reason string) error {
 	f.calls = append(f.calls, "park:"+reason)
 	return nil
 }
+func (f *fakeActions) ApproveEstimate(_ context.Context, id int64) error {
+	f.calls = append(f.calls, "approve-estimate")
+	return nil
+}
 
 func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	t.Helper()

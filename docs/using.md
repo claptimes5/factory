@@ -19,12 +19,12 @@ To reach it from another machine, or to put a password on it, see
 | **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with the question to answer. Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
 | **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The issue, triage's spec, the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
+| **Item** | The [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
-| **Spend** | Cost per merged PR, first-pass and escalation rates per week, daily spend against the cap, and cost by size and model. |
-| **Inbox** | PRs ready for review, parked items and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
+| **Spend** | Cost per merged PR, first-pass and escalation rates per week, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
+| **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
 When a repo's base branch is red or flaky (see
@@ -104,8 +104,9 @@ Set `FACTORY_NOTIFY_URL` in `factory.env` to one of:
 - a Slack incoming webhook;
 - a Discord webhook.
 
-You get a notification when an item parks, a PR is ready, the daily budget
-is hit, or the job image is missing. With the orchestrator on, it sends a
+You get a notification when an item parks, a PR is ready, an item waits
+for your OK on its [cost estimate](#cost-estimates), the daily budget is
+hit, or the job image is missing. With the orchestrator on, it sends a
 daily summary there too.
 
 The daemon also tells you when builds stop for
@@ -134,7 +135,7 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage, queue depth, today's spend, each repo's base branch CI (with main health on), recent jobs |
+| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, each repo's base branch CI (with main health on), recent jobs |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
 | `factory migrate` | Apply database migrations (a backup is written first) |
@@ -297,6 +298,65 @@ Its prompt is `prompts/tune.md`, and it runs on `routing.tune` (see
 [Configuration](configuration.md#tuning)). It runs whether or not the
 orchestrator is on.
 
+## Cost estimates
+
+After triage, every item gets a cost estimate: a range from the median to
+the p75 of what past items of its size cost to build, said with what it's
+based on ("based on 14 past M items in you/api: median $1.80, p75 $3.10").
+With too little history it's worked out from your budgets, and says so.
+[Asking before costly builds](configuration.md#asking-before-costly-builds)
+has how it's worked out, and what happens on a subscription plan.
+
+It shows on the item's page, on its card while it waits to build, and in
+`factory status`. Once the build is over, the item's page shows what it
+actually cost beside the estimate, and the Spend screen shows how many
+finished builds came in at or under their p75. Both count only the jobs
+since the item's latest triage, so a build retried after an earlier one
+parked is compared with its own estimate.
+
+**Approving one.** With `budgets.confirm_over` set, an item whose p75 is
+over it stops before implement. It goes to Blocked and to **Needs you**
+on the Floor, and the factory:
+
+1. Labels the issue `factory:awaiting-you`.
+2. Comments with the estimate, what it's based on, and how to approve it.
+3. Notifies you.
+
+If the forge or the notifier fails partway, the factory tries again on
+its next poll until all three went out.
+
+To build it, either:
+
+- add the `factory:go` label to the issue, after the factory's comment.
+  As with `factory:ready`, it counts only from someone with write access
+  (Developer or above on GitLab); from anyone else it always comes off,
+  with a note saying who can add it. A `factory:go` added before the
+  comment (say, while the item was in triage) comes off with that
+  comment, and one on an item that isn't waiting comes off with a note:
+  it approves only the estimate it was added for; or
+- press **Approve estimate** on the item's page. Like Settings, this needs
+  the control room's password, or a browser on the machine the factory
+  runs on (see [Control room login](security.md#control-room-login)).
+  Without either, the page says so instead of showing the button.
+
+Then it builds as usual, or waits on its dependencies if it has any.
+Nothing else builds it meanwhile: not the orchestrator's `enqueue`, not
+**Retry** on an old build job, and the orchestrator doesn't count it as
+stuck work. To drop it instead, park it. A parked item still needs the
+OK: its estimate shows "parked", and the way back is `factory:retry`,
+which triages and estimates it again.
+
+It's asked once per item. If the item parks and you send it back with
+`factory:retry`, it's triaged and estimated again, but it only waits
+again if the issue's text changed or the new estimate is higher than the
+one you approved. If the new estimate needn't wait, `factory:awaiting-you`
+comes off.
+
+The only items never held are main health fixes: ones the factory filed
+for a red or flaky main, marked so when they came in (they stay exempt
+after main is green again). A high priority alone exempts nothing, and
+the orchestrator can't set priorities from 100 up.
+
 ## Keeping main green
 
 With `main_health.enabled` (see [Configuration](configuration.md#main-health)),
@@ -335,7 +395,8 @@ doesn't file twice.
 **First in the queue.** The fix's item gets priority 100. Items start at
 0 and the orchestrator's and tuning runs at 10, so its triage, build and
 review jobs are claimed first. The orchestrator's `set_priority` can still
-move it, up or down, and the factory doesn't put it back.
+move it down, and the factory doesn't put it back, but it can't set a
+priority of 100 or more on anything.
 
 **Approval, and what it can't do on its own.** CI output is text that
 anyone who can shape what CI prints can write: a test that echoes its

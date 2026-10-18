@@ -367,11 +367,23 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 			"claude": harness.NewClaude(r),
 			"codex":  newCodex(cfg, r),
 		},
-		Secrets: secrets(),
-		Log:     slog.Default(),
-		Notify:  notifier(),
-		Sentry:  sentryClient(cfg),
+		Secrets:    secrets(),
+		PlanBilled: planBilled(secrets(), os.Getenv),
+		Log:        slog.Default(),
+		Notify:     notifier(),
+		Sentry:     sentryClient(cfg),
 	}, nil
+}
+
+// planBilled names the harnesses on a subscription plan: Claude signed in
+// with a subscription token and no API key, which Claude Code would use
+// first, nor an auth token or Bedrock or Vertex, all billed by use. Codex
+// always runs with an API key.
+func planBilled(sec map[string]map[string]string, getenv func(string) string) map[string]bool {
+	c := sec["claude"]
+	set := func(k string) bool { return c[k] != "" || getenv(k) != "" }
+	billed := set("ANTHROPIC_API_KEY") || set("ANTHROPIC_AUTH_TOKEN") || set("CLAUDE_CODE_USE_BEDROCK") || set("CLAUDE_CODE_USE_VERTEX")
+	return map[string]bool{"claude": set("CLAUDE_CODE_OAUTH_TOKEN") && !billed}
 }
 
 // sentryToken is SENTRY_AUTH_TOKEN, taken out of the environment.
@@ -515,7 +527,7 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "ITEM\tISSUE\tSTAGE\tSIZE\tRISK\tPR\tTITLE")
+	fmt.Fprintln(w, "ITEM\tISSUE\tSTAGE\tSIZE\tRISK\tESTIMATE\tPR\tTITLE")
 	for _, it := range items {
 		pr := "-"
 		if it.PRNumber > 0 {
@@ -528,7 +540,7 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 			}
 			pr = strings.Join(refs, ",")
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, issueRef(cfg, it.Repo, it.IssueNumber), it.Stage, dash(it.Complexity), dash(it.Risk), pr, it.Title)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, issueRef(cfg, it.Repo, it.IssueNumber), it.Stage, dash(it.Complexity), dash(it.Risk), estimateCell(ctx, st, it.ID), pr, it.Title)
 	}
 	fmt.Fprintln(w)
 	for _, s := range []state.JobState{state.Queued, state.Running} {
@@ -562,6 +574,24 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// estimateCell is an item's cost estimate for status: its range, and
+// whether it waits for your OK.
+func estimateCell(ctx context.Context, st *store.Store, itemID int64) string {
+	e, err := st.ItemEstimate(ctx, itemID)
+	if err != nil || e == nil {
+		return "-"
+	}
+	switch e.Status {
+	case store.EstimateWaiting:
+		return e.Range() + " (needs your OK)"
+	case store.EstimateParked:
+		return e.Range() + " (parked; needs an OK)"
+	case store.EstimateApproved:
+		return e.Range() + " (approved)"
+	}
+	return e.Range()
 }
 
 // mainHealthLines are status's lines on each repo's base branch CI, as

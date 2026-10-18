@@ -10,6 +10,7 @@ export type Board = S["Board"];
 export type Card = S["Card"];
 export type Item = S["Item"];
 export type ItemDetail = S["ItemDetail"];
+export type Estimate = S["Estimate"];
 export type Job = S["Job"];
 export type JobDetail = S["JobDetail"];
 export type Gate = S["Gate"];

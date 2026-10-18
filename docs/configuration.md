@@ -19,6 +19,7 @@ change something by hand.
 - [Models and escalation](#models-and-escalation)
 - [Auto-merge](#auto-merge)
 - [Budgets](#budgets)
+- [Asking before costly builds](#asking-before-costly-builds)
 - [Tuning](#tuning)
 - [Learning from your edits](#learning-from-your-edits)
 - [PR previews](#pr-previews)
@@ -469,6 +470,7 @@ values below are this repo's.
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
+| `confirm_over` | Dollars. An item whose cost estimate is over this waits for your OK before it's built (default 0, off). See [Asking before costly builds](#asking-before-costly-builds). |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
@@ -499,6 +501,67 @@ on a ChatGPT plan; on an API key there are no Codex readings to pause on.
 Set a spend alert on both API accounts as well. Spend from a job killed
 mid-run is not recorded (the CLIs report cost only at the end), so the
 daily cap can undercount after a crash.
+
+## Asking before costly builds
+
+After triage, the factory estimates what building an item will cost. With
+`budgets.confirm_over` set, an item whose estimate is over it waits for
+your OK before implement starts:
+
+```yaml
+budgets:
+  confirm_over: 5             # dollars; 0 or left out is off
+
+repos:
+  - name: you/api
+    confirm_over: 20          # this repo's own; 0 turns it off here
+  - you/web                   # uses budgets.confirm_over
+```
+
+The estimate is a range, from the median to the 75th percentile (p75) of
+what past items of the same size cost to build: every implement attempt
+and escalation, the gates, the review and the critic. Triage's own cost
+isn't in it, since it's spent by then. The factory picks its history in
+this order:
+
+1. Items of that size in the same repo, once there are at least 5.
+2. Items of that size in every repo, once there are at least 5.
+3. Your budgets: half to all of one build's `per_job` cap for that size,
+   plus one review's (and the critic's, for a high-risk item). With
+   `fast: true` on the route, the build's cap is scaled as for the job.
+
+Items count once nothing is queued or running for them, whether they
+merged, wait for your review, or parked along the way. Only an item's
+latest cycle counts: the jobs since its last triage, so a build sent back
+with `factory:retry` isn't counted twice. The estimate always
+says what it's based on, for example "based on 14 past M items in you/api:
+median $1.80, p75 $3.10".
+
+The p75 is what's compared with `confirm_over`, not the median. Half of
+all items cost more than their median, so a median under the limit would
+let through many items that end up over it. The p75 is what three in four
+items of that size came in under, without being set by the one build that
+went badly.
+
+**On a subscription plan.** When Claude Code runs on a subscription token
+(`CLAUDE_CODE_OAUTH_TOKEN`, with none of `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK` or
+`CLAUDE_CODE_USE_VERTEX`, which all bill by use), its work draws on
+your plan's usage windows instead of billing dollars. The estimate splits
+it out job by job, by the harness each past job ran on: only the dollars billed, such as a Codex review, count against
+`confirm_over`, and the plan's part is shown as "on your plan", with the
+cost Claude Code reports and how full its windows are now. An item built
+and reviewed entirely on the plan never waits. Plan runs are recorded at
+the cost Claude Code reports for them, which is what an API key would
+have paid, so the history works for both. Codex always runs on an API key.
+
+Main health fixes are never held: a red main is urgent. That's items the
+factory filed for a red or flaky main, marked when they came in; a high
+priority doesn't count. Everything else
+is, including issues the orchestrator files and ones from
+[sources](using.md#issues-from-sentry-dependabot-and-todos). For how an
+item waits and how to approve it, see
+[Cost estimates](using.md#cost-estimates).
 
 ## Tuning
 

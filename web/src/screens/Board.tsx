@@ -22,15 +22,18 @@ export function BoardScreen() {
   const repo = useRepo(repos);
   const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
   const [showDone, setShowDone] = useState(false);
-  const cols = useMemo(() => {
+  const [cols, held] = useMemo(() => {
     const m = new Map<string, CardT[]>();
     for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => !repo || k.repo === repo));
-    return m;
+    // An item waiting for your OK on its cost needs you, not its column.
+    const blocked = m.get("blocked") ?? [];
+    m.set("blocked", blocked.filter((k) => !k.estimate_waiting));
+    return [m, blocked.filter((k) => k.estimate_waiting)] as const;
   }, [data, repo]);
   if (isLoading) return <Loading what="Loading the floor" />;
   if (error) return <ErrorBox error={error} />;
 
-  const needs = [...(cols.get("awaiting_human") ?? []), ...(cols.get("parked") ?? [])];
+  const needs = [...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])];
   const shown = floor.filter((s) => !quiet.has(s) || (cols.get(s)?.length ?? 0) > 0);
   const done = cols.get("done") ?? [];
   const moving = shown.filter((s) => live.has(s)).flatMap((s) => cols.get(s) ?? []);
@@ -205,6 +208,7 @@ function Footer({ card: c, next }: { card: CardT; next?: boolean }) {
   if (!building && c.stage === "reviewing" && c.model) parts.push(`${c.model} built it`);
   if (c.live && c.live_since) parts.push(duration(c.live_since));
   if (!c.live && c.gates_total > 0) parts.push(`gates ${c.gates_passed}/${c.gates_total}`);
+  if (c.estimate && !c.live && ["ready", "blocked"].includes(c.stage)) parts.push(`est. ${c.estimate}`);
   if (parts.length === 0 && !c.complexity && !next) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -231,6 +235,7 @@ function Dot({ ok }: { ok: boolean | null }) {
 
 function NeedsYouCard({ card: c }: { card: CardT }) {
   const pr = c.stage === "awaiting_human";
+  const held = c.estimate_waiting;
   const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-lg px-3.5 text-sm md:h-9";
   return (
     <article
@@ -242,10 +247,12 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         {pr ? (
           <span className="rounded bg-warning-fill px-1.5 text-xs font-semibold text-warning-ink">PR ready</span>
         ) : (
-          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">Question</span>
+          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{held ? "Cost check" : "Question"}</span>
         )}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
-          {pr ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ") : c.complexity && `size ${c.complexity}`}
+          {pr
+            ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")
+            : [c.complexity && `size ${c.complexity}`, held && c.estimate].filter(Boolean).join(" · ")}
         </span>
       </div>
       <CardLink card={c} className="font-display text-[17px] leading-tight font-semibold" />
@@ -293,7 +300,12 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
             View diff
           </Link>
         )}
-        {!pr && c.issue_url && (
+        {held && (
+          <Link to={`/items/${c.id}`} className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+            See the estimate
+          </Link>
+        )}
+        {!pr && !held && c.issue_url && (
           <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
             Answer on the issue <ExternalLink className="size-3.5" aria-hidden />
           </a>

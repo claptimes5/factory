@@ -9,7 +9,7 @@ the control room.
 
 Anyone can open an issue on a public repo, but only someone who could push
 to it can start work there. The factory checks who added `factory:ready`
-(or `factory:retry`, or the epic label):
+(or `factory:retry`, `factory:go`, or the epic label):
 
 - **On GitHub** they need write or admin access. **On GitLab** they need
   Developer or higher. The factory's own app or bot account also counts,
@@ -30,6 +30,10 @@ to it can start work there. The factory checks who added `factory:ready`
   you.** They never carry `factory:ready` and are never approved as the
   factory, so the same check applies to them as to an outsider's issue
   (see [Sources](#sources-tokens-and-untrusted-text)).
+
+Approving a [cost estimate](using.md#cost-estimates) from the dashboard
+needs the control room's password, or a browser on the factory's own
+machine, as changing settings does: it lets the factory spend.
 
 Items that were already in the factory when you upgrade take their text,
 the next time it's read, as approved.

@@ -174,11 +174,13 @@ func runCase(ctx context.Context, o Options, c Case, dir, prefix string) (Result
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
 	cfg.Sources.Off()                // nor are its errors, alerts and TODOs
 	cfg.Previews.Off()               // nor is there a PR to show them on
+	cfg.Budgets.ConfirmOver = 0      // nobody is there to say go
 	rc, known := o.Cfg.RepoConf(c.Repo)
 	if !known {
 		rc = o.Cfg.Primary()
 		rc.Files = nil // the primary repo's files aren't this one's
 	}
+	rc.ConfirmOver = nil
 	cfg.Repos = []config.Repo{rc}
 	base := rc.BaseBranch
 	remote := filepath.Join(dir, "remote.git")

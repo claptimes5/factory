@@ -49,6 +49,42 @@ type APIItem struct {
 	PRURL       string        `json:"pr_url"`
 	NeedsYou    bool          `json:"needs_you"`
 	BlockedNote string        `json:"blocked_note"`
+	// Estimate is triage's cost estimate in a line ("$1.80–$3.10"), or "".
+	Estimate string `json:"estimate"`
+	// EstimateWaiting: the item waits for your OK on its estimate.
+	EstimateWaiting bool `json:"estimate_waiting"`
+}
+
+// APIEstimate is triage's cost estimate for an item, and what it cost.
+type APIEstimate struct {
+	Range          string  `json:"range"`
+	Detail         string  `json:"detail"`
+	Status         string  `json:"status"` // off, under, exempt, waiting, parked, approved
+	Size           string  `json:"size"`
+	MedianUSD      float64 `json:"median_usd"`
+	P75USD         float64 `json:"p75_usd"`
+	TotalMedianUSD float64 `json:"total_median_usd"`
+	TotalP75USD    float64 `json:"total_p75_usd"`
+	ThresholdUSD   float64 `json:"threshold_usd"`
+	Basis          string  `json:"basis"`
+	Samples        int     `json:"samples"`
+	ApprovedBy     string  `json:"approved_by"`
+	CreatedAt      string  `json:"created_at"`
+	// ActualUSD is what building it has cost so far, triage left out;
+	// Finished says the build is over, so the two can be compared.
+	ActualUSD float64 `json:"actual_usd"`
+	Finished  bool    `json:"finished"`
+	// CanApprove: it waits, and this request may approve it here (the
+	// password, or a request from this machine); else the label it is.
+	CanApprove bool `json:"can_approve"`
+}
+
+// APIEstimates is how the estimates of finished builds compare with what
+// they cost: within counts those at or under their p75.
+type APIEstimates struct {
+	Compared      int     `json:"compared"`
+	Within        int     `json:"within"`
+	MedianMissUSD float64 `json:"median_miss_usd"` // actual minus the estimate's median
 }
 
 // APILinkedPR is one PR of a change that spans a workspace's repos.
@@ -179,6 +215,8 @@ type APIItemDetail struct {
 	IssueBody string `json:"issue_body"`
 	// Spec is the triage stage's summary of what to build.
 	Spec string `json:"spec"`
+	// Estimate is triage's cost estimate; null before one is made.
+	Estimate *APIEstimate `json:"estimate"`
 }
 
 // APIJobDetail is one job with its gates.
@@ -291,6 +329,7 @@ type APISpend struct {
 	DailyCapUSD float64         `json:"daily_cap_usd"`
 	ByModel     []APIModelSpend `json:"by_model"`
 	Usage       []APIUsage      `json:"usage"`
+	Estimates   APIEstimates    `json:"estimates"`
 }
 
 // APINotification is one thing the human may need to act on.
@@ -335,6 +374,22 @@ func apiErr(w http.ResponseWriter, code int, msg string) {
 }
 
 func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
+	e, _ := s.Store.ItemEstimate(ctx, it.ID)
+	return s.apiItemWith(ctx, it, e)
+}
+
+// estimatesByItem reads every estimate at once, for a list of items.
+func (s *Server) estimatesByItem(ctx context.Context) map[int64]*store.Estimate {
+	out := map[int64]*store.Estimate{}
+	es, _ := s.Store.Estimates(ctx)
+	for _, e := range es {
+		out[e.ItemID] = e
+	}
+	return out
+}
+
+// apiItemWith is apiItem given the item's estimate, or nil.
+func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.Estimate) APIItem {
 	a := APIItem{
 		ID: it.ID, Issue: it.IssueNumber, Title: it.Title, Stage: string(it.Stage), Complexity: it.Complexity,
 		Risk: it.Risk, Priority: it.Priority, ParentID: it.ParentID, Branch: it.Branch, PRNumber: it.PRNumber,
@@ -347,7 +402,71 @@ func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}
+	if e != nil {
+		a.Estimate = e.Range()
+		a.EstimateWaiting = e.Status == store.EstimateWaiting && it.Stage == state.Blocked
+		a.NeedsYou = a.NeedsYou || a.EstimateWaiting
+	}
 	return a
+}
+
+// apiEstimate is an item's estimate with what it has cost, or nil.
+func (s *Server) apiEstimate(r *http.Request, it *store.WorkItem, jobs []*store.Job) *APIEstimate {
+	ctx := r.Context()
+	e, err := s.Store.ItemEstimate(ctx, it.ID)
+	if err != nil || e == nil {
+		return nil
+	}
+	a := &APIEstimate{Range: e.Range(), Detail: e.Detail, Status: e.Status, Size: e.Size, MedianUSD: e.MedianUSD, P75USD: e.P75USD,
+		TotalMedianUSD: e.TotalMedianUSD, TotalP75USD: e.TotalP75USD, ThresholdUSD: e.ThresholdUSD, Basis: e.Basis, Samples: e.Samples,
+		ApprovedBy: e.ApprovedBy, CreatedAt: e.CreatedAt}
+	// This estimate's cycle only: the jobs after the triage it came from.
+	for _, j := range jobs {
+		if j.ID > e.TriageJob && (j.Kind == "implement" || isReview(j)) {
+			a.ActualUSD += j.CostUSD
+		}
+	}
+	c, _ := s.Store.ItemCostOf(ctx, it.ID)
+	a.Finished = c != nil
+	if e.Status == store.EstimateWaiting && it.Stage == state.Blocked {
+		a.CanApprove, _ = s.settingsWritable(r)
+	}
+	return a
+}
+
+// estimates compares each finished build's estimate with its cost.
+func (s *Server) estimates(ctx context.Context) APIEstimates {
+	var out APIEstimates
+	es, err := s.Store.Estimates(ctx)
+	if err != nil || len(es) == 0 {
+		return out
+	}
+	byItem := map[int64]*store.Estimate{}
+	for _, e := range es {
+		byItem[e.ItemID] = e
+	}
+	costs, _ := s.Store.ItemCosts(ctx)
+	var misses []float64
+	for _, c := range costs {
+		e := byItem[c.ItemID]
+		if e == nil {
+			continue
+		}
+		out.Compared++
+		if c.Total() <= e.TotalP75USD+0.005 {
+			out.Within++
+		}
+		misses = append(misses, c.Total()-e.TotalMedianUSD)
+	}
+	if len(misses) > 0 {
+		sort.Float64s(misses)
+		m := len(misses) / 2
+		out.MedianMissUSD = misses[m]
+		if len(misses)%2 == 0 {
+			out.MedianMissUSD = (misses[m-1] + misses[m]) / 2
+		}
+	}
+	return out
 }
 
 // linkedPRs are an item's PRs across a workspace, and the URL of its main
@@ -469,6 +588,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/items/{id}/preview", s.apiPreview)
 	mux.HandleFunc("GET /api/v1/items/{id}/preview/{file}", s.apiPreviewImage)
 	mux.HandleFunc("POST /api/v1/items/{id}/park", s.apiPark)
+	mux.HandleFunc("POST /api/v1/items/{id}/approve-estimate", s.apiApproveEstimate)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.apiJobDetail)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/log", s.apiLog)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/terminal", s.apiTerminal)
@@ -546,6 +666,7 @@ func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
 	for _, st := range boardStages {
 		cols[st] = &APIColumn{Stage: string(st), Cards: []APICard{}}
 	}
+	ests := s.estimatesByItem(ctx)
 	for _, it := range items {
 		col, ok := cols[it.Stage]
 		if !ok {
@@ -556,7 +677,7 @@ func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		c := APICard{APIItem: s.apiItem(ctx, it)}
+		c := APICard{APIItem: s.apiItemWith(ctx, it, ests[it.ID])}
 		for _, j := range jobs {
 			c.CostUSD += j.CostUSD
 			if j.Kind == "implement" {
@@ -601,6 +722,7 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 	if d.DependsOn == nil {
 		d.DependsOn = []int64{}
 	}
+	d.Estimate = s.apiEstimate(r, it, jobs)
 	for _, j := range jobs {
 		d.Jobs = append(d.Jobs, apiJob(j))
 		if j.Kind == "triage" && j.State == state.Succeeded {
@@ -922,6 +1044,21 @@ func (s *Server) apiPark(w http.ResponseWriter, r *http.Request) {
 	s.act(w, s.Actions.Park(r.Context(), id, reason), "Parked.")
 }
 
+// apiApproveEstimate is the OK on an item whose cost estimate waits for
+// one. It spends money, so like settings it needs the password, or a
+// request from this machine.
+func (s *Server) apiApproveEstimate(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok || !jsonOnly(w, r) {
+		return
+	}
+	if ok, _ := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, "Approving spend here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or add the factory:go label on the issue.")
+		return
+	}
+	s.act(w, s.Actions.ApproveEstimate(r.Context(), id), "Approved. It builds next.")
+}
+
 func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var item int64
@@ -942,7 +1079,7 @@ func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	out := APISpend{Days: []APIDaySpend{}, DailyCapUSD: s.DailyCap, ByModel: []APIModelSpend{}, Usage: []APIUsage{}}
+	out := APISpend{Days: []APIDaySpend{}, DailyCapUSD: s.DailyCap, ByModel: []APIModelSpend{}, Usage: []APIUsage{}, Estimates: s.estimates(ctx)}
 	limits, err := s.Store.Limits(ctx)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
@@ -992,14 +1129,23 @@ func (s *Server) apiNotifications(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 	out := []APINotification{}
-	waiting, err := s.Store.ListItems(ctx, state.AwaitingHuman, state.Parked)
+	waiting, err := s.Store.ListItems(ctx, state.AwaitingHuman, state.Parked, state.Blocked)
 	if err != nil {
 		return nil, err
 	}
+	ests := s.estimatesByItem(ctx)
 	for _, it := range waiting {
 		id := it.ID
 		n := APINotification{ItemID: &id, At: it.UpdatedAt}
-		if it.Stage == state.AwaitingHuman {
+		e := ests[it.ID]
+		switch {
+		case it.Stage == state.Blocked && (e == nil || e.Status != store.EstimateWaiting):
+			continue // waiting on its dependencies, not on you
+		case it.Stage == state.Blocked:
+			n.Kind = "needs_input"
+			n.Title = s.ref(it.Repo, it.IssueNumber) + " waits for your OK on its cost"
+			n.Detail = fmt.Sprintf("Estimated %s, over the $%.2f limit: %s", e.Range(), e.ThresholdUSD, it.Title)
+		case it.Stage == state.AwaitingHuman:
 			n.Kind = "ready_for_review"
 			n.Title = s.ref(it.Repo, it.IssueNumber) + " is ready for your review"
 			n.Detail = it.Title
@@ -1012,7 +1158,7 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 			} else if it.PRNumber > 0 {
 				n.Detail = fmt.Sprintf("PR #%d: %s", it.PRNumber, it.Title)
 			}
-		} else {
+		default:
 			n.Kind = "needs_input"
 			n.Title = s.ref(it.Repo, it.IssueNumber) + " needs your input"
 			n.Detail = s.stageReason(ctx, it.ID, state.Parked)
@@ -1023,9 +1169,9 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 		// Stable while the item stays in the stage: priority or parent
 		// changes must not raise the same alert again.
 		n.ID = fmt.Sprintf("%s-%d", n.Kind, it.ID)
-		if e := s.stageEntry(ctx, it.ID, it.Stage); e != nil {
-			n.ID = fmt.Sprintf("%s-%d-%d", n.Kind, it.ID, e.ID)
-			n.At = e.At
+		if ent := s.stageEntry(ctx, it.ID, it.Stage); ent != nil {
+			n.ID = fmt.Sprintf("%s-%d-%d", n.Kind, it.ID, ent.ID)
+			n.At = ent.At
 		}
 		out = append(out, n)
 	}

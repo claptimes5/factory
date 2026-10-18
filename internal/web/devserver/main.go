@@ -43,6 +43,9 @@ func (actions) Cancel(_ context.Context, id int64) error {
 func (actions) Park(_ context.Context, id int64, reason string) error {
 	return fmt.Errorf("devserver: would park item %d: %s", id, reason)
 }
+func (actions) ApproveEstimate(_ context.Context, id int64) error {
+	return fmt.Errorf("devserver: would approve the estimate of item %d", id)
+}
 
 // restarter pretends one job is still running, so a restart stays pending.
 type restarter struct{ pending atomic.Bool }
@@ -73,6 +76,7 @@ budgets:
   review: 3
   daily_total: 25             # dollars a day
   concurrent_jobs: 3
+  confirm_over: 10            # ask before building anything estimated over $10
 
 pricing:
   gpt-6.1-sol: {input_per_mtok: 2, output_per_mtok: 10}
@@ -176,6 +180,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
 		{"acme/web", 109, "Show order totals on the checkout page", state.AwaitingHuman, "M"},
+		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"}, // over the cost limit
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -199,6 +204,9 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			}
 			if to == state.Blocked {
 				reason = "Waits on #102, which changes the same client."
+				if x.issue == 110 {
+					reason = "Waiting for your OK on the cost: estimated $9.40–$16.20, over the $10.00 limit. Add factory:go or approve it here."
+				}
 			}
 			if err := st.SetStage(ctx, it.ID, to, "daemon", reason); err != nil {
 				return err
@@ -359,6 +367,19 @@ new file mode 100644
 	}
 	if err := st.SetItemPRs(ctx, ids[109], []store.RepoPR{{Repo: "acme/api", Number: 91}, {Repo: "acme/web", Number: 92}}); err != nil {
 		return err
+	}
+	// 110 is over the cost limit and waits for an OK; 101 and 107 were under it.
+	for _, e := range []store.Estimate{
+		{ItemID: ids[110], Size: "L", MedianUSD: 9.4, P75USD: 16.2, TotalMedianUSD: 9.4, TotalP75USD: 16.2, Basis: "all", Samples: 6, ThresholdUSD: 10, Status: store.EstimateWaiting,
+			Detail: "based on 6 past L items across all repos (2 in acme/api, too few on their own): median $9.40, p75 $16.20"},
+		{ItemID: ids[101], Size: "S", MedianUSD: 1.6, P75USD: 2.4, TotalMedianUSD: 1.6, TotalP75USD: 2.4, Basis: "repo", Samples: 9, ThresholdUSD: 10, Status: store.EstimateUnder,
+			Detail: "based on 9 past S items in acme/web: median $1.60, p75 $2.40"},
+		{ItemID: ids[107], Size: "M", MedianUSD: 3.1, P75USD: 4.8, TotalMedianUSD: 3.1, TotalP75USD: 4.8, Basis: "default", ThresholdUSD: 10, Status: store.EstimateUnder,
+			Detail: "from your budgets, with too few past M items to go by (2; it takes 5): half to all of one M build's $6.00 cap and one review's $3.00"},
+	} {
+		if err := st.SetEstimate(ctx, e); err != nil {
+			return err
+		}
 	}
 	for _, e := range []store.Event{
 		{Actor: "orchestrator", ItemID: ptr(ids[103]), Type: "retry", Reason: "Sonnet failed the gates twice on the same lock-ordering bug; retrying one tier up."},

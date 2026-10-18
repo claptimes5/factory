@@ -40,6 +40,8 @@ type Actions interface {
 	Retry(ctx context.Context, jobID int64, tierUp bool) error
 	Cancel(ctx context.Context, jobID int64) error
 	Park(ctx context.Context, itemID int64, reason string) error
+	// ApproveEstimate lets an item whose cost estimate waits go on.
+	ApproveEstimate(ctx context.Context, itemID int64) error
 }
 
 // Server serves the control room.
