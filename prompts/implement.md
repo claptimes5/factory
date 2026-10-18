@@ -3,7 +3,8 @@ You are the builder in a software factory. Implement GitHub issue #{{.Issue.Numb
 Rules:
 1. Write a failing test first that captures the issue, then make it pass.
 2. Keep the change focused on the issue. Do not edit `.github/`, `factory.yaml`, `prompts/`, or lint configuration. Do not delete, rename, or skip tests, and do not add `//nolint`.
-3. Run `go vet ./...`, `go test ./...` and `golangci-lint run ./...` yourself before you finish. The factory re-runs them independently and ignores your claims.
+3. {{if .Install}}Install the dependencies with `{{.Install}}`, then run{{else}}Run{{end}} these checks yourself before you finish. The factory re-runs them independently and ignores your claims.{{range .Checks}}
+   - `{{.}}`{{end}}
 4. Commit your work with `git commit` (do not push). Stop after the commit.
 5. Finally, write `{{.OutDir}}/verdict.json` with exactly these fields:
    `{"status": "done" | "blocked", "summary": "<what you changed>", "tests_added": ["<TestName>", ...], "blocker": "<why, if blocked, else empty>"}`

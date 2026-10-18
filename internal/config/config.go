@@ -22,29 +22,51 @@ type Route struct {
 
 // Gates are the checks a change must pass before review.
 type Gates struct {
-	Required []string          `yaml:"required"`
-	Commands map[string]string `yaml:"commands"`
+	// Install runs first, on a writable export with the network on, to
+	// fetch dependencies (npm ci, bundle install). If it fails, nothing
+	// else runs.
+	Install  string            `yaml:"install,omitempty"`
+	Required []string          `yaml:"required,omitempty"`
+	Commands map[string]string `yaml:"commands,omitempty"`
 	// ProvesFix runs the changed tests against the base code; it must
 	// fail. {pkgs} is replaced by the packages holding changed tests.
-	ProvesFix string `yaml:"proves_fix"`
+	ProvesFix string `yaml:"proves_fix,omitempty"`
 	// ScenariosDir holds the hidden end-to-end scenarios. It must be
 	// outside the target repository so builders never see it.
-	ScenariosDir string `yaml:"scenarios_dir"`
+	ScenariosDir string `yaml:"scenarios_dir,omitempty"`
 	DiffGuard    struct {
-		MaxChangedLines int      `yaml:"max_changed_lines"`
-		ProtectedPaths  []string `yaml:"protected_paths"`
-	} `yaml:"diff_guard"`
+		MaxChangedLines int      `yaml:"max_changed_lines,omitempty"`
+		ProtectedPaths  []string `yaml:"protected_paths,omitempty"`
+	} `yaml:"diff_guard,omitempty"`
 }
 
 // Repo is one repository the factory works on.
 type Repo struct {
-	Name       string `yaml:"name"` // owner/name
-	BaseBranch string `yaml:"base_branch"`
+	Name       string `yaml:"name,omitempty"` // owner/name
+	BaseBranch string `yaml:"base_branch,omitempty"`
+	// Image is the job image for this repo's agents and gates; default
+	// runner.image. ImageFrom is the base `factory images` builds it on
+	// (for example ruby:3.4-bookworm), which then names it
+	// factory-job-<owner>-<name> unless Image says otherwise.
+	Image     string `yaml:"image,omitempty"`
+	ImageFrom string `yaml:"image_from,omitempty"`
+	// Env is set in this repo's agent and gate containers, on top of the
+	// top-level env. It is not for secrets: agents can read it.
+	Env map[string]string `yaml:"env,omitempty"`
 	// Gates overrides the top-level gates field by field: what it leaves
 	// out (the diff guard's protected paths, say) is inherited, and its
-	// commands replace the top level's. proves_fix or scenarios_dir "none"
+	// commands replace the top level's. install, proves_fix or scenarios_dir "none"
 	// turns one off.
-	Gates *Gates `yaml:"gates"`
+	Gates *Gates `yaml:"gates,omitempty"`
+}
+
+// MarshalYAML writes a repo with no settings of its own as a bare name.
+func (r Repo) MarshalYAML() (any, error) {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil {
+		return r.Name, nil
+	}
+	type plain Repo
+	return plain(r), nil
 }
 
 // UnmarshalYAML accepts a bare "owner/name" as well as a mapping.
@@ -62,8 +84,9 @@ type Config struct {
 	// filled from it. Use RepoNames and RepoConf rather than either field.
 	SingleRepo string `yaml:"repo"`
 	Repos      []Repo `yaml:"repos"`
-	// BaseBranch and Gates are the defaults for every repo.
-	BaseBranch string `yaml:"base_branch"`
+	// BaseBranch, Env and Gates are the defaults for every repo.
+	BaseBranch string            `yaml:"base_branch"`
+	Env        map[string]string `yaml:"env"`
 	DataDir    string `yaml:"data_dir"`
 	SkillsDir  string `yaml:"skills_dir"`
 	PromptsDir string `yaml:"prompts_dir"`
@@ -377,6 +400,20 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {
 		r.BaseBranch = c.BaseBranch
 	}
+	if r.Image == "" && r.ImageFrom != "" {
+		r.Image = "factory-job-" + strings.ToLower(strings.ReplaceAll(r.Name, "/", "-")) + ":latest"
+	}
+	if r.Image == "" {
+		r.Image = c.Runner.Image
+	}
+	env := map[string]string{}
+	for k, v := range c.Env {
+		env[k] = v
+	}
+	for k, v := range r.Env {
+		env[k] = v
+	}
+	r.Env = env
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	return r
 }
@@ -384,7 +421,7 @@ func (c *Config) resolve(r Repo) Repo {
 // mergeGates lays a repo's gates over the top-level ones.
 func mergeGates(top Gates, own *Gates) *Gates {
 	if own == nil {
-		return &top
+		own = &Gates{}
 	}
 	g := *own
 	if g.Required == nil {
@@ -401,7 +438,10 @@ func mergeGates(top Gates, own *Gates) *Gates {
 	if g.ScenariosDir == "" {
 		g.ScenariosDir = top.ScenariosDir
 	}
-	for _, s := range []*string{&g.ProvesFix, &g.ScenariosDir} {
+	if g.Install == "" {
+		g.Install = top.Install
+	}
+	for _, s := range []*string{&g.ProvesFix, &g.ScenariosDir, &g.Install} {
 		if *s == "none" {
 			*s = ""
 		}

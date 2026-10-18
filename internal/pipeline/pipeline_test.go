@@ -407,6 +407,72 @@ func TestGateFailureRetriesWithFailure(t *testing.T) {
 	}
 }
 
+// Install runs before the other gates, and nothing else runs when it fails.
+func TestInstallRunsFirst(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Gates.Install = `grep -q "func Add" add.go && touch deps-installed`
+	e.p.Cfg.Gates.Commands["test"] = "test -f deps-installed"
+	e.addIssue(2)
+	e.claude.builds = []func(string) error{badBuild, goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	if it.Stage != state.AwaitingHuman {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	names := func(id int64) string {
+		gr, _ := e.p.Store.GateResults(ctx, id)
+		var out []string
+		for _, g := range gr {
+			out = append(out, g.Gate+":"+g.Status)
+		}
+		return strings.Join(out, ",")
+	}
+	if pr := e.claude.prompts["implement"][0]; !strings.Contains(pr, "`grep -q \"func Add\" add.go && touch deps-installed`, then run") || !strings.Contains(pr, "- `test -f deps-installed`") {
+		t.Fatalf("the builder isn't told the repo's checks:\n%s", pr)
+	}
+	if got := names(jobs[1].ID); got != "diff_guard:pass,install:fail" {
+		t.Fatalf("failed attempt gates = %s", got)
+	}
+	if got := names(jobs[0].ID); !strings.Contains(got, "install:pass") || !strings.Contains(got, "test:pass") {
+		t.Fatalf("passing attempt gates = %s", got)
+	}
+}
+
+// Gates run in the repo's image with its env, and only install may write
+// the dependency cache.
+func TestGateContainers(t *testing.T) {
+	e := setup(t)
+	log := filepath.Join(t.TempDir(), "docker.log")
+	bin := filepath.Join(t.TempDir(), "docker")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\necho \"DB=$DATABASE_URL BUNDLE=$BUNDLE_PATH\" >> "+log+"\n"), 0o755)
+	e.p.Runner, e.p.GateExec = &runner.Docker{Bin: bin}, nil
+	e.p.Cfg.Repos = []config.Repo{{Name: "o/r", ImageFrom: "ruby:3.4-bookworm", Env: map[string]string{"DATABASE_URL": "postgres://db/test"}}}
+	ctx := context.Background()
+	os.MkdirAll(e.p.jobDir(1), 0o755)
+	for _, install := range []bool{true, false} {
+		if _, _, err := e.p.gateExec(ctx, 1, t.TempDir(), "true", gateRun{repo: "o/r", install: install}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("docker calls:\n%s", b)
+	}
+	cache := filepath.Join(e.p.Cfg.Path(e.p.Cfg.DataDir), "cache", "o__r") + ":/cache"
+	for i, want := range []string{cache + " ", cache + ":ro "} {
+		if !strings.Contains(lines[2*i], want) || !strings.Contains(lines[2*i], " factory-job-o-r:latest sh -c") {
+			t.Errorf("call %d = %s", i, lines[2*i])
+		}
+		if lines[2*i+1] != "DB=postgres://db/test BUNDLE=/cache/bundle" {
+			t.Errorf("env %d = %s", i, lines[2*i+1])
+		}
+	}
+}
+
 // Failures escalate one model tier, then park.
 func TestEscalationThenPark(t *testing.T) {
 	ctx := context.Background()

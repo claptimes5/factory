@@ -80,7 +80,7 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("triage")
-	run := p.runAgent(ctx, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("triage"))
+	run := p.runAgent(ctx, it.Repo, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("triage"))
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -176,12 +176,21 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
 
+	g := p.repoConf(it.Repo).Gates
+	var checks []string
+	for _, name := range g.Required {
+		if c := g.Commands[name]; c != "" {
+			checks = append(checks, c)
+		}
+	}
 	prompt, err := p.render("implement", PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(ws.Work, out)).Out,
-		Findings: in.Findings, PreviousFailure: in.PreviousFailure})
+		Install: g.Install, Checks: checks, Findings: in.Findings, PreviousFailure: in.PreviousFailure})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), p.sessionFor(ctx, j, in.FixRound))
+	x := p.sessionFor(ctx, j, in.FixRound)
+	x.repo = it.Repo
+	run := p.runAgentWith(ctx, j, ws.Work, out, prompt, "", p.Cfg.Timeout("implement"), x)
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
@@ -246,8 +255,21 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 	if err := p.git(it.Repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
 		return nil, err
 	}
+	if g.Install != "" {
+		r := gates.Result{Gate: "install", Status: gates.Pass}
+		code, out, err := p.gateExec(ctx, jobID, gateDir, g.Install, gateRun{repo: it.Repo, install: true})
+		switch {
+		case err != nil:
+			r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
+		case code != 0:
+			r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
+		}
+		if results = append(results, r); r.Status != gates.Pass {
+			return results, nil // nothing else can run without the dependencies
+		}
+	}
 	results = append(results, gates.Run(ctx, g.Required, g.Commands, func(ctx context.Context, cmd string) (int, string, error) {
-		return p.gateExec(ctx, jobID, gateDir, cmd)
+		return p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: it.Repo})
 	})...)
 	if g.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, it, g.ProvesFix, ws.Repo, base, head))
@@ -255,7 +277,7 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, 
 	// Scenarios are slow end-to-end checks: run them only on code that
 	// already passes everything else.
 	if gates.Passed(results) {
-		results = append(results, p.runScenarios(ctx, jobID, gateDir, g.ScenariosDir)...)
+		results = append(results, p.runScenarios(ctx, it.Repo, jobID, gateDir, g.ScenariosDir)...)
 	}
 	return results, nil
 }
@@ -309,7 +331,7 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkIte
 	}
 	sort.Strings(pkgs)
 	cmd := strings.ReplaceAll(command, "{pkgs}", strings.Join(pkgs, " "))
-	exit, output, err := p.gateExec(ctx, jobID, dir, cmd)
+	exit, output, err := p.gateExec(ctx, jobID, dir, cmd, gateRun{repo: it.Repo})
 	switch {
 	case err != nil:
 		r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
@@ -319,6 +341,14 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkIte
 		r.Status, r.Detail = gates.Pass, fmt.Sprintf("changed tests fail without the fix (exit %d)", exit)
 	}
 	return r
+}
+
+// tail keeps the last n bytes of s, where a failing command says why.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 func truncate(s string, n int) string {
@@ -429,7 +459,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("review")
-	run := p.runAgent(ctx, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("review"))
+	run := p.runAgent(ctx, it.Repo, j, ws.Repo, out, prompt, schema, true, p.Cfg.Timeout("review"))
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}

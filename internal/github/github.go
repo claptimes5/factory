@@ -407,6 +407,50 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 	return a.token, nil
 }
 
+// ListDir names the entries of a directory on the default branch ("" is
+// the root). Directories end in "/".
+func (c *Client) ListDir(ctx context.Context, dir string) ([]string, error) {
+	var list []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/contents/"+escapePath(dir), nil, &list); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(list))
+	for _, e := range list {
+		if e.Type == "dir" {
+			e.Name += "/"
+		}
+		names = append(names, e.Name)
+	}
+	return names, nil
+}
+
+// ReadFile returns a file's contents on the default branch.
+func (c *Client) ReadFile(ctx context.Context, path string) (string, error) {
+	var f struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/contents/"+escapePath(path), nil, &f); err != nil {
+		return "", err
+	}
+	if f.Encoding != "base64" {
+		return "", fmt.Errorf("github: %s: unexpected encoding %q", path, f.Encoding)
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(f.Content, "\n", ""))
+	return string(b), err
+}
+
+func escapePath(p string) string {
+	parts := strings.Split(p, "/")
+	for i, s := range parts {
+		parts[i] = url.PathEscape(s)
+	}
+	return strings.Join(parts, "/")
+}
+
 // DefaultBranch returns the repository's default branch.
 func (c *Client) DefaultBranch(ctx context.Context) (string, error) {
 	var r struct {

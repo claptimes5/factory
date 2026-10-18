@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -73,7 +72,7 @@ func (s scenario) command(dir string) string {
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // runScenarios runs every hidden scenario in dir against the exported checkout.
-func (p *Pipeline) runScenarios(ctx context.Context, jobID int64, gateDir, dir string) []gates.Result {
+func (p *Pipeline) runScenarios(ctx context.Context, repo string, jobID int64, gateDir, dir string) []gates.Result {
 	list, err := p.scenarios(dir)
 	if err != nil {
 		return []gates.Result{{Gate: "scenarios", Status: gates.Misconfigured, Detail: err.Error()}}
@@ -91,7 +90,7 @@ func (p *Pipeline) runScenarios(ctx context.Context, jobID int64, gateDir, dir s
 	var out []gates.Result
 	for i, s := range list {
 		cmd := fmt.Sprintf("export %sFACTORY_SCENARIOS=%s FACTORY_WORK=%s; %s", pathEnv, shellQuote(seen), shellQuote(work), s.command(seen))
-		code, output, err := p.gateExecWith(ctx, jobID, gateDir, cmd, mounts)
+		code, output, err := p.gateExec(ctx, jobID, gateDir, cmd, gateRun{repo: repo, mounts: mounts, noNet: true})
 		// Agents see an opaque id: even a scenario's name hints at the check.
 		id := fmt.Sprintf("scenario:%d", i+1)
 		if mkErr := os.MkdirAll(logDir, 0o755); mkErr == nil {
@@ -109,30 +108,11 @@ func (p *Pipeline) runScenarios(ctx context.Context, jobID int64, gateDir, dir s
 	return out
 }
 
-// gateExecWith is gateExec with extra mounts (the scenarios directory).
-func (p *Pipeline) gateExecWith(ctx context.Context, jobID int64, workdir, command string, mounts []runner.Mount) (int, string, error) {
-	if p.GateExec != nil || len(mounts) == 0 {
-		return p.gateExec(ctx, jobID, workdir, command)
-	}
-	var out bytes.Buffer
-	outDir, err := os.MkdirTemp(p.jobDir(jobID), "gate-out-")
-	if err != nil {
-		return -1, "", err
-	}
-	defer os.RemoveAll(outDir)
-	code, err := p.Runner.Run(ctx, runner.Spec{
-		Name: fmt.Sprintf("%s-gate-%d", p.containerName(jobID), p.gateSeq.Add(1)), Image: p.Cfg.Runner.Image, ReadOnly: true,
-		Workdir: workdir, OutDir: outDir, Mounts: mounts, Cmd: []string{"sh", "-c", command + " 2>&1"}, Timeout: p.Cfg.Timeout("gates"),
-		NoNetwork: true,
-	}, &out)
-	return code, out.String(), err
-}
-
-// Check runs one command against a checkout the way gates do (in the job
-// image, read-only). `factory eval` uses it for acceptance tests.
-func (p *Pipeline) Check(ctx context.Context, dir, command string) (int, string, error) {
+// Check runs one command against a checkout the way gates do, in the
+// repo's job image. `factory eval` uses it for acceptance tests.
+func (p *Pipeline) Check(ctx context.Context, repo, dir, command string) (int, string, error) {
 	if err := os.MkdirAll(p.jobDir(0), 0o755); err != nil {
 		return -1, "", err
 	}
-	return p.gateExec(ctx, 0, dir, command)
+	return p.gateExec(ctx, 0, dir, command, gateRun{repo: repo})
 }

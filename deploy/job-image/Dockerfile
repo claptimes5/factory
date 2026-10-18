@@ -1,6 +1,12 @@
-# Job image: one per repo. Toolchain plus pinned agent CLIs.
+# Job image: a repo's toolchain plus pinned agent CLIs.
 # Build: docker build -t factory-job:latest deploy/job-image
-FROM golang:1.27-bookworm
+# For another stack, build it on that stack's Debian or Ubuntu image (this
+# is what `factory images` does for a repo's image_from):
+#   docker build --build-arg BASE=ruby:3.4-bookworm -t factory-job-you-api deploy/job-image
+ARG BASE=golang:1.27-bookworm
+FROM ${BASE}
+# Devcontainer images often switch to a non-root user; installs need root.
+USER root
 
 ARG CLAUDE_CODE_VERSION=2.1.302
 ARG CODEX_VERSION=0.163.0
@@ -10,10 +16,14 @@ ARG NODE_MAJOR=24
 ARG PLAYWRIGHT=0
 ARG PLAYWRIGHT_VERSION=1.63.0
 
+# Node is installed unless the base already has a recent one (the agent
+# CLIs need it).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq ripgrep \
- && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
+ && if ! node -e 'process.exit(+process.versions.node.split(".")[0] < 20)' 2>/dev/null; then \
+      curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+      && apt-get install -y --no-install-recommends nodejs; \
+    fi \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
@@ -28,8 +38,16 @@ RUN if [ "$PLAYWRIGHT" = 1 ]; then \
       && npm cache clean --force && rm -rf /var/lib/apt/lists/*; \
     fi
 
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-    | sh -s -- -b /usr/local/bin "${GOLANGCI_LINT_VERSION}"
+RUN if command -v go >/dev/null; then \
+      curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+      | sh -s -- -b /usr/local/bin "${GOLANGCI_LINT_VERSION}"; \
+    fi
+
+# Jobs run as the daemon's uid, not root. /cache is where the daemon mounts
+# each repo's dependency cache; a Ruby image's gem home must be writable so
+# builders can bundle install.
+RUN mkdir -m 1777 -p /cache \
+ && if [ -d /usr/local/bundle ]; then chmod -R a+rwX /usr/local/bundle; fi
 
 # The daemon runs containers as its own uid with a tmpfs home, so caches
 # must live somewhere any uid can write.
