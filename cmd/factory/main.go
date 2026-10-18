@@ -229,7 +229,7 @@ func secrets() map[string]map[string]string {
 
 func newRunner(cfg *config.Config) runner.Runner {
 	if cfg.Runner.Kind == "docker" {
-		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid()}
+		return &runner.Docker{CPUs: cfg.Runner.CPUs, Memory: cfg.Runner.Memory, Network: cfg.Runner.Network, UID: os.Getuid(), GID: os.Getgid(), WSLDrive: cfg.Runner.WSLDrive}
 	}
 	return runner.Local{}
 }
@@ -323,6 +323,7 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 	srv := &web.Server{Store: st, Actions: p, Repos: cfg.RepoNames(), DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
+	srv.DiskLow = p.DiskLow
 	// A repo since dropped from the config still links to its host.
 	links := func(repo string) config.Repo {
 		h, n := config.SplitRepo("", repo)

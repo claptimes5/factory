@@ -96,6 +96,8 @@ type APIOverview struct {
 	Running       int      `json:"running"`
 	Queued        int      `json:"queued"`
 	Version       string   `json:"version"`
+	// DiskLow says why no job is starting for lack of disk, or "".
+	DiskLow string `json:"disk_low"`
 }
 
 // APIJob is one job.
@@ -440,7 +442,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
-		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v})
+		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow()})
 }
 
 func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {

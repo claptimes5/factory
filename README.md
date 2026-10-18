@@ -657,6 +657,26 @@ no services, the readiness check says so. It suggests the services to add,
 read from the repo's `docker-compose.yml` or `config/database.yml`,
 instead of filing an issue for a builder, who can't edit factory.yaml.
 
+### Disk space
+
+Each job checks out the repo, installs its dependencies and runs in a
+container, so a full disk fails jobs halfway, usually during install,
+where it reads like the builder's fault. Before starting a job the daemon
+checks the free space, at most once a minute, and starts nothing while any
+of these has less than `budgets.min_free_disk_gb` (default 10; negative
+turns the check off):
+
+- the data directory;
+- where Docker stores containers: its data root on this machine, or, with
+  Docker Desktop, whose disk lives in its own VM, the free space a
+  container sees;
+- under WSL, the Windows drive holding WSL's and Docker Desktop's virtual
+  disks (`runner.wsl_drive`, default `/mnt/c`). Inside WSL, `df` shows the
+  virtual disk's full size, not what's left on the drive under it.
+
+You're told once when jobs stop for lack of space and again when they
+start, and the control room shows a banner meanwhile.
+
 ### Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the

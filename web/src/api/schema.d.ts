@@ -656,6 +656,8 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description Why no job is starting for lack of disk; empty when there's room */
+            disk_low: string;
             /** @description the first repo; see repos */
             repo: string;
             /** @description every repo the factory works on, as owner/name */

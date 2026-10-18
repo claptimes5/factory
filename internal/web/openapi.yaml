@@ -168,8 +168,9 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low]
       properties:
+        disk_low: { type: string, description: "Why no job is starting for lack of disk; empty when there's room" }
         repo: { type: string, description: "the first repo; see repos" }
         repos: { type: array, items: { type: string }, description: "every repo the factory works on, as owner/name" }
         spent_today_usd: { type: number }

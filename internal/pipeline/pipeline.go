@@ -127,6 +127,11 @@ type Pipeline struct {
 	act    sync.Mutex
 	orchMu sync.Mutex // guards coalescing of orchestrator requests
 
+	diskMu   sync.Mutex
+	diskAt   time.Time // when the free space was last measured
+	diskMsg  string    // why there isn't room to start a job, or ""
+	diskHalt bool      // the low disk was announced
+
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
@@ -310,6 +315,16 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	p.mu.Unlock()
 	if running >= p.Cfg.Budgets.ConcurrentJobs {
 		return nil, nil
+	}
+	if msg := p.diskLow(ctx); msg != "" {
+		if !p.diskHalt {
+			p.diskHalt = true
+			p.notify(ctx, msg)
+		}
+		return nil, nil
+	} else if p.diskHalt {
+		p.diskHalt = false
+		p.notify(ctx, "There's room on disk again; jobs are starting.")
 	}
 	// One orchestrator at a time: its tools act on the whole queue.
 	var except []string

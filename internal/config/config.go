@@ -160,6 +160,9 @@ type Config struct {
 		Network string `yaml:"network"`
 		CPUs    string `yaml:"cpus"`
 		Memory  string `yaml:"memory"`
+		// WSLDrive is where WSL mounts the Windows drive that holds its
+		// virtual disks (and Docker Desktop's): default /mnt/c.
+		WSLDrive string `yaml:"wsl_drive"`
 	} `yaml:"runner"`
 
 	Web struct {
@@ -201,6 +204,10 @@ type Config struct {
 		DailyTotal       float64            `yaml:"daily_total"`
 		ConcurrentJobs   int                `yaml:"concurrent_jobs"`
 		AwaitingHumanMax int                `yaml:"awaiting_human_max"`
+		// MinFreeDiskGB is the free space no new job starts without, on
+		// the data directory and wherever Docker stores containers;
+		// default 10, negative to turn the check off.
+		MinFreeDiskGB float64 `yaml:"min_free_disk_gb"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -319,6 +326,12 @@ func (c *Config) defaults() {
 	}
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
+	}
+	if c.Budgets.MinFreeDiskGB == 0 {
+		c.Budgets.MinFreeDiskGB = 10
+	}
+	if c.Runner.WSLDrive == "" {
+		c.Runner.WSLDrive = "/mnt/c"
 	}
 	if c.Budgets.AwaitingHumanMax == 0 {
 		c.Budgets.AwaitingHumanMax = 5
