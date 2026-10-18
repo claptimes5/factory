@@ -514,6 +514,17 @@ Two differences from GitHub: GitLab doesn't record why an issue was closed,
 so the readiness check never files a gap again once its issue is closed.
 The dashboard's CI panel shows the commit's pipeline jobs.
 
+### Text-only changes
+
+Triage rates a change `XS` when it touches only text: copy, docs,
+comments, translations or config values, with no change to how the code
+behaves. An `XS` item builds on `routing.implement.XS` (Haiku by default,
+else `implement.S`), with its own budget (`budgets.per_job.XS`, else S's).
+The builder is told it needs no new test, and the reviewer is told to block
+anything that turns out to change behavior without one. Every gate still
+runs. On Go code the proves-fix check still asks for a test, and the
+coverage floor skips text.
+
 ### Review scaled by risk
 
 Every item has a risk: triage rates it `low` or `high`, and a feature map

@@ -22,6 +22,7 @@ runner:
 routing:
   orchestrate:       {harness: claude, model: opus}
   triage:            {harness: claude, model: haiku}
+  implement.XS:      {harness: claude, model: haiku}   # text only: copy, docs, config values
   implement.S:       {harness: claude, model: haiku}   # escalates to sonnet on a miss
   implement.M:       {harness: claude, model: sonnet}
   implement.L:       {harness: claude, model: opus}
@@ -55,7 +56,7 @@ orchestrator:
   notify_per_hour: 6
 
 budgets:
-  per_job: {S: 2, M: 6, L: 15}
+  per_job: {XS: 0.5, S: 2, M: 6, L: 15}
   triage: 0.5
   review: 3
   daily_total: 60

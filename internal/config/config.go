@@ -534,7 +534,7 @@ func (c *Config) Validate() error {
 			bad("routing.%s: skills must be a folder name under skills_dir", k)
 		}
 	}
-	for _, size := range []string{"S", "M", "L"} {
+	for _, size := range []string{"XS", "S", "M", "L"} {
 		b, ok := c.Routing["implement."+size]
 		if !ok {
 			continue
@@ -553,7 +553,7 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
-		if c.Budgets.PerJob[size] <= 0 {
+		if c.Budgets.PerJob[size] <= 0 && size != "XS" { // XS falls back to S's
 			bad("budgets.per_job.%s must be > 0", size)
 		}
 	}
@@ -811,6 +811,9 @@ func (c *Config) Path(p string) string {
 // attempts moves one tier up. ok is false once the top tier is exhausted.
 func (c *Config) Implement(complexity string, attempt int) (Route, bool) {
 	r, found := c.Routing["implement."+complexity]
+	if !found && complexity == "XS" {
+		r, found = c.Routing["implement.S"]
+	}
 	if !found {
 		r = c.Routing["implement.M"]
 	}
@@ -883,6 +886,9 @@ func (c *Config) JobBudget(kind, complexity string) float64 {
 		return c.Budgets.Review
 	}
 	if v, ok := c.Budgets.PerJob[complexity]; ok {
+		return v
+	}
+	if v, ok := c.Budgets.PerJob["S"]; ok && complexity == "XS" {
 		return v
 	}
 	return c.Budgets.PerJob["M"]

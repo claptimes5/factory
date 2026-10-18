@@ -11,6 +11,7 @@ For each finding give the severity (`critical`, `major` or `minor`), the file an
 
 {{if eq .Risk "high"}}This change is rated **high risk**: a mistake here costs a lot (security, money, data). Hold it to a higher bar. Block on any changed behavior no test proves, any unhandled error or edge case on these paths, and anything you can't verify from the code.
 {{else if eq .Risk "medium"}}This change is rated **medium risk**. Make sure every behavior it changes is proven by a test.
+{{end}}{{if .TextOnly}}Triage rated this a text-only change (copy, docs, comments, config values), so the builder was told it needs no new test. Check that it really changes only text: block any change to how the code behaves that no test proves.
 {{end}}
 Reply with only the JSON object described by the schema.
 

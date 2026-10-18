@@ -14,7 +14,7 @@ import (
 // Triage is the triage stage's verdict.
 type Triage struct {
 	Decision   string `json:"decision"`   // ready|park
-	Complexity string `json:"complexity"` // S|M|L
+	Complexity string `json:"complexity"` // XS|S|M|L
 	Risk       string `json:"risk"`       // low|high
 	Question   string `json:"question"`   // set when parking: what is missing
 	Summary    string `json:"summary"`
@@ -71,7 +71,7 @@ func oneOf(field, v string, allowed ...string) error {
 func (t *Triage) Validate() error {
 	errs := []error{oneOf("decision", t.Decision, "ready", "park")}
 	if t.Decision == "ready" {
-		errs = append(errs, oneOf("complexity", t.Complexity, "S", "M", "L"), oneOf("risk", t.Risk, "low", "high"))
+		errs = append(errs, oneOf("complexity", t.Complexity, "XS", "S", "M", "L"), oneOf("risk", t.Risk, "low", "high"))
 	}
 	if t.Decision == "park" && strings.TrimSpace(t.Question) == "" {
 		errs = append(errs, errors.New("park needs a question"))
@@ -164,7 +164,7 @@ var schemas = map[string]string{
 "required":["decision","complexity","risk","question","summary"],
 "properties":{
  "decision":{"type":"string","enum":["ready","park"]},
- "complexity":{"type":"string","enum":["S","M","L"]},
+ "complexity":{"type":"string","enum":["XS","S","M","L"]},
  "risk":{"type":"string","enum":["low","high"]},
  "question":{"type":"string"},
  "summary":{"type":"string"}}}`,

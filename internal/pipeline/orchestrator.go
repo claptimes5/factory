@@ -682,8 +682,8 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				}
 				return "ok", p.Store.SetPriority(ctx, a.Item, a.Priority)
 			})},
-		{Name: "enqueue", Description: "Queue a stage for an item: triage, or implement (optionally setting complexity S, M or L). Parked items are for humans to unpark.",
-			InputSchema: schema(`"item":{"type":"integer"},"stage":{"type":"string","enum":["triage","implement"]},"complexity":{"type":"string","enum":["S","M","L"]},`+reasonProp, "item", "stage", "reason"),
+		{Name: "enqueue", Description: "Queue a stage for an item: triage, or implement (optionally setting complexity XS, S, M or L). Parked items are for humans to unpark.",
+			InputSchema: schema(`"item":{"type":"integer"},"stage":{"type":"string","enum":["triage","implement"]},"complexity":{"type":"string","enum":["XS","S","M","L"]},`+reasonProp, "item", "stage", "reason"),
 			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a struct {
 					Item       int64  `json:"item"`

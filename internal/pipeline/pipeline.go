@@ -935,6 +935,7 @@ type PromptData struct {
 	Gates           string
 	Features        string   // the change's blast radius, when the repo has a feature map
 	Risk            string   // low, medium or high
+	TextOnly        bool     // triage rated it XS: text, not behavior
 	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
 	Fence           string         // a code fence the diff cannot close
