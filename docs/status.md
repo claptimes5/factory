@@ -18,8 +18,9 @@ Side-by-side skill comparison, services, workspaces across repos,
 [keeping main green](using.md#keeping-main-green),
 [issues from Sentry, Dependabot and TODOs](using.md#issues-from-sentry-dependabot-and-todos),
 [screenshots on the PR](using.md#screenshots-on-the-pr),
-[cost estimates](using.md#cost-estimates) and
-[backlog grooming](using.md#backlog-grooming) are in too.
+[cost estimates](using.md#cost-estimates),
+[backlog grooming](using.md#backlog-grooming) and
+[auto-merge's guard rails](using.md#auto-merge-guard-rails) are in too.
 
 ## Where this differs from SPEC.md
 
@@ -28,7 +29,9 @@ Side-by-side skill comparison, services, workspaces across repos,
   mounted into the container and deleted when the job ends.
 - **Auto-merge is opt-in:** SPEC.md keeps every merge human. With
   [`auto_merge`](configuration.md#auto-merge) set, small low-risk PRs merge
-  themselves once CI passes.
+  themselves once CI passes against the current base branch, and a
+  breaker turns it off for a repo whose factory PRs get reverted or break
+  main too often.
 - **Unparking is explicit:** a `factory:retry` label, not a removed label.
 - **A malformed review retries once, then parks**, so a broken reviewer
   never consumes a fix round or passes code.

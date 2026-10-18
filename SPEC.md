@@ -379,6 +379,14 @@ The number that matters is cost per merged PR; everything else explains it.
 - Reviewer value: review escapes (passed PRs a human changed or closed), and reviewer precision: the share of blocking findings that led to a fix, per reviewer route and model.
 - Rounds to pass: review rounds per item that passed review.
 - Human time proxy: hours items sat in `awaiting_human`.
+- Revert rate: share of factory PRs merged in the last 30 days that a later commit or PR reverted on the base branch.
+
+**Auto-merge guard rails.** Where auto-merge is turned on (a departure from v1's human-only merge; see docs/status.md), three rules hold:
+
+- The daemon records each factory PR's merge (`factory_merges`) and, on main health's cadence and only when the base branch head moved, reads the commits and merged PRs since for reverts of one. It never quotes that text, only matches it.
+- A revert that names a commit or PR counts only against that one; a bare `Revert "<title>"` counts only when exactly one standing factory PR has that title. On GitLab only `!N` names a merge request.
+- A strike is a factory PR that was reverted, or whose merge commit is the first commit main health saw a check red on, where the check passed on the merge's first parent (never a refiled issue). `auto_merge.breaker.threshold` strikes (default 2) in `window` (7 days) trip the repo's breaker (`auto_merge_guard`): no more auto-merges there, pending ones cancelled, one notification. It stays tripped until a human resets it (`factory automerge reset`, or the dashboard behind the settings password), or an optional `cool_off` passes (counted from when it ends, so later strikes count at once). The breaker is checked again under a per-repo lock right before auto-merge is turned on, so a PR opened as it trips doesn't slip through.
+- A PR merges itself only once tested against the current base: through the forge's merge queue or merge train where there is one, or directly on GitLab with merged results pipelines; otherwise the daemon merges the base into the branch, waits for CI on that head, and pins auto-merge to it, repeating (at most 3 times) if the base moves first.
 
 **Evals (replay set)**
 

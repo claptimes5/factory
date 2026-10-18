@@ -142,6 +142,25 @@ type APIOverview struct {
 	SignedIn bool `json:"signed_in"`
 	// MainHealth is each repo's base branch CI, as main health last read it.
 	MainHealth []APIMainHealth `json:"main_health"`
+	// AutoMerge is each repo's auto-merge breaker, where auto-merge is on
+	// or its breaker tripped.
+	AutoMerge []APIBreaker `json:"auto_merge"`
+}
+
+// APIBreaker is one repo's auto-merge circuit breaker.
+type APIBreaker struct {
+	Repo      string `json:"repo"`
+	On        bool   `json:"on"` // auto_merge lets the repo's PRs merge themselves
+	Tripped   bool   `json:"tripped"`
+	TrippedAt string `json:"tripped_at"`
+	Reason    string `json:"reason"`
+	Strikes   int    `json:"strikes"`
+	Threshold int    `json:"threshold"` // 0 when it never trips
+	// WindowHours and CoolOffHours (0 for none) are its settings.
+	WindowHours  int `json:"window_hours"`
+	CoolOffHours int `json:"cool_off_hours"`
+	// CanReset says whether this request may reset it (see settingsWritable).
+	CanReset bool `json:"can_reset"`
 }
 
 // APIMainHealth is one repo's base branch CI.
@@ -598,6 +617,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/items/{id}/preview/{file}", s.apiPreviewImage)
 	mux.HandleFunc("POST /api/v1/items/{id}/park", s.apiPark)
 	mux.HandleFunc("POST /api/v1/items/{id}/approve-estimate", s.apiApproveEstimate)
+	mux.HandleFunc("POST /api/v1/auto-merge/reset", s.apiResetAutoMerge)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.apiJobDetail)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/log", s.apiLog)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/terminal", s.apiTerminal)
@@ -637,7 +657,44 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
 		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != "",
-		MainHealth: s.mainHealth(ctx)})
+		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r)})
+}
+
+// breakers are the repos' auto-merge breakers worth showing.
+func (s *Server) breakers(r *http.Request) []APIBreaker {
+	out := []APIBreaker{}
+	if s.Breakers == nil {
+		return out
+	}
+	can, _ := s.settingsWritable(r)
+	for _, b := range s.Breakers(r.Context()) {
+		if b.On || b.Tripped {
+			b.CanReset = can && b.Tripped
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// apiResetAutoMerge resets a repo's tripped auto-merge breaker. It lets
+// PRs merge without you again, so like settings it needs the password,
+// or a request from this machine.
+func (s *Server) apiResetAutoMerge(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(w, r) {
+		return
+	}
+	if ok, _ := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, "Resetting auto-merge here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or run `factory automerge reset <repo>`.")
+		return
+	}
+	var in struct {
+		Repo string `json:"repo"`
+	}
+	if err := s.readBody(r, &in); err != nil || in.Repo == "" {
+		apiErr(w, http.StatusBadRequest, "send {\"repo\": \"owner/name\"}")
+		return
+	}
+	s.act(w, s.Actions.ResetAutoMerge(r.Context(), in.Repo, "the dashboard"), "Auto-merge is back on. PRs whose auto-merge the breaker cancelled still wait for you.")
 }
 
 func (s *Server) mainHealth(ctx context.Context) []APIMainHealth {

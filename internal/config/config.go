@@ -45,7 +45,56 @@ type AutoMerge struct {
 	MaxSize string `yaml:"max_size,omitempty"`
 	// Method is merge (the default), squash or rebase.
 	Method string `yaml:"method,omitempty"`
+	// Breaker turns auto-merge off for a repo once its merged PRs are
+	// reverted, or turn main red, too often. See Breaker.
+	Breaker *Breaker `yaml:"breaker,omitempty"`
 }
+
+// Breaker is auto-merge's circuit breaker. A strike is a factory PR that
+// was reverted on the base branch, or whose merge commit main health saw
+// a check go red on. Once a repo has Threshold strikes within Window, the
+// factory stops auto-merging there, cancels the auto-merges waiting, and
+// tells you; it stays off until you reset it, or CoolOff passes.
+type Breaker struct {
+	// Threshold is how many strikes trip it; default 2, -1 never trips.
+	Threshold int `yaml:"threshold,omitempty"`
+	// Window is the rolling period strikes count in; default 168h.
+	Window Duration `yaml:"window,omitempty"`
+	// CoolOff, when set, resets a tripped breaker after that long; unset,
+	// only a human resets it.
+	CoolOff Duration `yaml:"cool_off,omitempty"`
+}
+
+// BreakerThreshold is how many strikes trip the breaker, or 0 for never.
+func (a *AutoMerge) BreakerThreshold() int {
+	switch {
+	case a == nil || a.Breaker == nil || a.Breaker.Threshold == 0:
+		return 2
+	case a.Breaker.Threshold < 0:
+		return 0
+	}
+	return a.Breaker.Threshold
+}
+
+// BreakerWindow is the rolling period the breaker counts strikes in.
+func (a *AutoMerge) BreakerWindow() time.Duration {
+	if a == nil || a.Breaker == nil || a.Breaker.Window.Duration <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return a.Breaker.Window.Duration
+}
+
+// BreakerCoolOff is how long a tripped breaker stays tripped on its own,
+// or 0 for until a human resets it.
+func (a *AutoMerge) BreakerCoolOff() time.Duration {
+	if a == nil || a.Breaker == nil {
+		return 0
+	}
+	return a.Breaker.CoolOff.Duration
+}
+
+// On says whether the setting lets any PR merge itself.
+func (a *AutoMerge) On() bool { return a != nil && (a.UpTo == "low" || a.UpTo == "medium") }
 
 // Allows says whether a change of this risk and size merges on its own.
 func (a *AutoMerge) Allows(risk, size string) bool {
@@ -313,6 +362,10 @@ type Config struct {
 	Previews Previews `yaml:"previews"`
 	// Reviews says how review checks its own findings. See Reviews.
 	Reviews Reviews `yaml:"review"`
+	// NoGuard turns off auto-merge's guard rails' polling and breaker: the
+	// revert watch and the strikes that trip it. eval and compare set it,
+	// since the base branch they'd read is the real repo's, not the run's.
+	NoGuard bool `yaml:"-"`
 
 	Budgets struct {
 		PerJob map[string]float64 `yaml:"per_job"`
@@ -650,6 +703,17 @@ func (c *Config) Validate() error {
 		}
 		if a.Method != "" && !slices.Contains([]string{"merge", "squash", "rebase"}, a.Method) {
 			bad("%sauto_merge.method must be merge, squash or rebase", where)
+		}
+		if b := a.Breaker; b != nil {
+			if b.Threshold < -1 {
+				bad("%sauto_merge.breaker.threshold is a number of strikes, or -1 to never trip", where)
+			}
+			if b.Window.Duration < 0 || b.CoolOff.Duration < 0 {
+				bad("%sauto_merge.breaker: window and cool_off can't be negative", where)
+			}
+			if b.CoolOff.Duration > 0 && b.CoolOff.Duration < time.Hour {
+				bad("%sauto_merge.breaker.cool_off must be at least 1h, or left out so only you reset it", where)
+			}
 		}
 	}
 	checkAutoMerge("", c.AutoMerge)

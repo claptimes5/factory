@@ -76,7 +76,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -203,6 +203,8 @@ func run(args []string) error {
 		}
 		fmt.Printf("queued tuning run (job %d); its proposal shows on the dashboard's Settings screen\n", id)
 		return nil
+	case "automerge":
+		return automerge(ctx, os.Stdout, cfg, st, fs.Args()[1:])
 	case "groom":
 		// Queued for the daemon, like tune, whatever grooming.every says.
 		if fs.NArg() > 2 {
@@ -477,6 +479,14 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)
 	srv.Listen = cfg.Web.Listen
 	srv.Restarter = p
+	srv.Breakers = func(ctx context.Context) []web.APIBreaker {
+		var out []web.APIBreaker
+		for _, b := range p.Breakers(ctx) {
+			out = append(out, web.APIBreaker{Repo: b.Repo, On: b.On, Tripped: b.Tripped, TrippedAt: b.TrippedAt, Reason: pipeline.SafeText(b.Reason, 500),
+				Strikes: b.Strikes, Threshold: b.Threshold, WindowHours: int(b.Window.Hours()), CoolOffHours: int(b.CoolOff.Hours())})
+		}
+		return out
+	}
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		srv.StartedConfig = web.ConfigVersion(b)
 	}
@@ -581,6 +591,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		fmt.Fprintln(w, l)
 	}
 	for _, l := range groomLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
+	}
+	for _, l := range autoMergeLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)
 	}
 	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: 10})

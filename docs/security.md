@@ -124,6 +124,39 @@ other people control into issues the builder may later read:
 - **The TODO scan** is a shallow clone the daemon owns, read with
   `git grep` and `git show` and deleted after. Nothing in it runs.
 
+## Auto-merge's guard rails
+
+The [guard rails](using.md#auto-merge-guard-rails) read and write a few
+more things:
+
+- **Commit messages and PR text are only matched against.** Anyone who can
+  push to the base branch, or open a PR that gets merged, writes the text
+  the revert watch reads. It looks only for a reference to one of the
+  factory's own merged PRs (its number, merge commit or title) and never
+  quotes the text anywhere: notifications, `factory status` and the
+  dashboard name the reverting commit by its SHA or the PR by its number,
+  and the factory PR by its own title, cut to one line without control or
+  invisible characters. The worst a planted "This reverts commit ..." can
+  do is count a strike, which only turns auto-merge off. A bare title, or
+  a `revert-N-` branch name, counts for less: a title only when one
+  standing factory PR has it, a branch only when its PR also says it
+  reverts something.
+- **Bringing a PR up to date** is a merge the daemon makes itself, in a
+  clone of its own with hooks and other config that runs programs turned
+  off, as every git command it runs is. The clone is partial (no file
+  contents until the merge needs them), so every git command in it may
+  fetch from the remote and gets the token the same way clone and push
+  do: through GIT_ASKPASS in that command's environment, never on a
+  command line or on disk. It merges the base branch's commit
+  into the verified commit, pushes exactly that commit, and refuses if the
+  branch has moved. The merge commit adds only what's already on the base
+  branch, and CI must pass on it before auto-merge is turned on for it.
+  Anyone else's push to the branch while it waits hands the PR back to you.
+- **Resetting the breaker** lets PRs merge without you again, so from the
+  dashboard it needs the control room's password, or a request from the
+  factory's own machine, as saving settings does. `factory automerge reset`
+  runs on the host, with the database's access.
+
 ## Grooming: untrusted issue text
 
 [Backlog grooming](using.md#backlog-grooming) puts the text of open

@@ -189,6 +189,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	cfg.Previews.Off()               // nor is there a PR to show them on
 	cfg.Budgets.ConfirmOver = 0      // nor anyone to say go
 	cfg.Grooming.Off()               // nor is its backlog the run's
+	cfg.NoGuard = true               // nor are its reverts, nor its breaker
 	if budget > 0 {
 		cfg.Budgets.DailyTotal = budget
 	}

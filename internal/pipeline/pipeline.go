@@ -162,6 +162,9 @@ type Pipeline struct {
 	// intake, human actions and the orchestrator's tools.
 	act    sync.Mutex
 	orchMu sync.Mutex // guards coalescing of orchestrator requests
+	// guardMu holds a lock for each repo, between its auto-merge breaker
+	// tripping and a PR's auto-merge being turned on (see guardLock).
+	guardMu sync.Map
 
 	diskMu   sync.Mutex
 	diskAt   time.Time // when the free space was last measured
@@ -743,6 +746,7 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	tips := map[string]string{} // each repo's base head, read once for followMerge
 	for _, it := range waiting {
 		if prs, err := p.Store.ItemPRs(ctx, it.ID); err != nil {
 			return err
@@ -760,13 +764,21 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			continue
 		}
 		if pr.Merged {
-			// Metrics: did the human change the PR before merging it?
+			// Metrics: did the human change the PR before merging it? A
+			// head the factory brought up to date with the base is its own.
 			want, _ := headOf(p.lastHeads(ctx, it), it.Repo)
+			ms := p.mergeState(ctx, it)
+			if pr.Head.SHA != "" && slices.Contains(ms.Made, pr.Head.SHA) {
+				want = pr.Head.SHA
+			}
 			changed := pr.Head.SHA != "" && pr.Head.SHA != want
+			// Waiting for CI after being brought up to date, auto-merge is
+			// off on the forge: a merge then is a human's.
 			by := "human"
-			if !changed && p.autoMerged(ctx, it) {
+			if !changed && ms.Kind == "auto_merge" {
 				by = "daemon"
 			}
+			p.recordMerge(ctx, it, it.Repo, pr, by == "daemon")
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: by, ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, by, fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
@@ -788,6 +800,8 @@ func (p *Pipeline) closeOut(ctx context.Context) error {
 			p.dropPreview(ctx, it, "once it was closed")
 			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
+		} else {
+			p.followMerge(ctx, it, pr, tips)
 		}
 	}
 	if err := p.unblock(ctx); err != nil {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -848,6 +849,7 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if err := p.Store.UpdateItem(ctx, it.ID, store.ItemUpdate{PRNumber: &n}); err != nil {
 		return err
 	}
+	it.PRNumber = n // what autoMerged and cancelAutoMerge read
 	p.postPreview(ctx, it, pr, in)
 	if err := p.Store.SetStage(ctx, it.ID, state.AwaitingHuman, "daemon", fmt.Sprintf("draft PR #%d ready", pr.Number)); err != nil {
 		return err
@@ -974,9 +976,10 @@ const (
 )
 
 // autoMergeWanted says whether the item's PR should merge itself: the
-// repo's auto_merge covers its risk and size, it is one repo's change, and
-// the feature map that rates its risk could be read. A fix main health
-// started on its own never qualifies: no human read its issue.
+// repo's auto_merge covers its risk and size, it is one repo's change, the
+// feature map that rates its risk could be read, and the repo's auto-merge
+// breaker hasn't tripped. A fix main health started on its own never
+// qualifies: no human read its issue.
 func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in ReviewInput) bool {
 	if len(in.Heads) > 0 || p.inWorkspace(it) || in.Head == "" || p.healthApproved(ctx, it) {
 		return false
@@ -984,34 +987,37 @@ func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in R
 	if _, ok := p.gh(it.Repo).(AutoMerger); !ok {
 		return false
 	}
-	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob)
+	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob) && !p.breakerTripped(ctx, it.Repo)
 }
 
 // autoMerge hands a PR to the forge to merge once its checks pass, pinned
-// to the verified commit. It reports whether it did; otherwise the PR
+// to the verified commit, and once it's tested against the current base
+// branch (see startMerge). It reports whether it did; otherwise the PR
 // waits for a human as usual.
 func (p *Pipeline) autoMerge(ctx context.Context, it *store.WorkItem, is github.Issue, pr *github.PR, head string) bool {
-	am := p.repoConf(it.Repo).AutoMerge
-	m := p.gh(it.Repo).(AutoMerger)
-	// Recorded first: if the daemon stops between the forge turning it on
-	// and the record, a later park or build must still turn it off.
-	if err := p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge",
-		Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"head":%q,"method":%q}`, head, am.MergeMethod())}); err != nil {
-		p.log().Warn("auto-merge", "pr", pr.Number, "err", err)
-		return false
-	}
-	if err := m.AutoMerge(ctx, pr.Number, head, am.MergeMethod()); err != nil {
+	if _, err := p.startMerge(ctx, it, pr.Number, head); err != nil {
 		p.log().Warn("auto-merge", "pr", pr.Number, "err", err)
 		// It may have taken effect anyway (a timeout): make sure it's off.
 		_ = p.cancelAutoMerge(ctx, it, "turning it on failed")
-		p.notify(ctx, fmt.Sprintf("Couldn't turn on auto-merge for %s, so it waits for you: %v", p.ref(it.Repo, pr.Number), err))
+		if errors.Is(err, errBreakerTripped) {
+			p.notify(ctx, fmt.Sprintf("%s won't merge itself: auto-merge's breaker for %s tripped while it was opened. It waits for you.", p.ref(it.Repo, pr.Number), it.Repo))
+			return false
+		}
+		p.notify(ctx, fmt.Sprintf("Couldn't turn on auto-merge for %s, so it waits for you: %s", p.ref(it.Repo, pr.Number), SafeText(err.Error(), 300)))
 		return false
 	}
 	p.warn(p.gh(it.Repo).LabelPR(ctx, pr.Number, LabelAutoMerge), "LabelPR")
 	p.labelRisk(ctx, it, it.Repo, pr.Number)
 	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAutoMerge), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself once its checks pass: %s %s %s", capitalize(it.Risk), p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
+	how := "once its checks pass"
+	switch ms := p.mergeState(ctx, it); {
+	case ms.Queue:
+		how = "through the merge queue once its checks pass"
+	case ms.Kind == "auto_merge_wait":
+		how = fmt.Sprintf("once its checks pass: it was behind %s, so the factory merged %s into it (%s) and waits for CI there first", p.repoConf(it.Repo).BaseBranch, p.repoConf(it.Repo).BaseBranch, short(ms.Head))
+	}
+	p.notify(ctx, fmt.Sprintf("%s-risk PR will merge itself %s: %s %s %s", capitalize(it.Risk), how, p.ref(it.Repo, pr.Number), SafeText(is.Title, 100), pr.URL))
 	return true
 }
 
@@ -1029,7 +1035,7 @@ func (p *Pipeline) autoMerged(ctx context.Context, it *store.WorkItem) bool {
 	for _, e := range evs {
 		if e.Reason == fmt.Sprintf("PR #%d", it.PRNumber) {
 			switch e.Type {
-			case "auto_merge":
+			case "auto_merge", "auto_merge_wait":
 				on = true
 			case "auto_merge_off":
 				on = false

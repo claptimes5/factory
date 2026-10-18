@@ -35,6 +35,13 @@ type Git struct {
 	askOnce sync.Once
 	askPath string
 	askErr  error
+	// partial holds the partial clones' directories: any command in one
+	// may fetch a file's contents from the remote, so each gets the
+	// credentials, not only clone, fetch and push.
+	partial sync.Map
+	// trace, when set (tests), sees each command's directory, arguments
+	// and environment.
+	trace func(dir string, args, env []string)
 }
 
 // safe disables every config knob that would make git run a program,
@@ -46,6 +53,9 @@ func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...str
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1")
 	needsAuth := len(args) > 0 && (args[0] == "clone" || args[0] == "fetch" || args[0] == "push")
+	if _, ok := g.partial.Load(dir); ok && dir != "" {
+		needsAuth = true // checkout, merge and the like fetch missing blobs
+	}
 	if needsAuth && g.Tokens != nil {
 		tok, err := g.Tokens.Token(ctx)
 		if err != nil {
@@ -56,6 +66,9 @@ func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...str
 			return "", err
 		}
 		cmd.Env = append(cmd.Env, "GIT_ASKPASS="+ap, "FACTORY_GIT_PASSWORD="+tok)
+	}
+	if g.trace != nil {
+		g.trace(dir, args, cmd.Env)
 	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -155,11 +168,30 @@ func (g *Git) Prepare(ctx context.Context, dir, base, branch string, fresh, buil
 // PrepareAt is Prepare with the daemon's clone at repoDir and the
 // builder's at workDir ("" for none), for a workspace's repos side by side.
 func (g *Git) PrepareAt(ctx context.Context, repoDir, workDir, base, branch string, fresh bool) (*Workspace, error) {
+	return g.prepareAt(ctx, repoDir, workDir, base, branch, fresh)
+}
+
+// PrepareSync clones the remote into repoDir with branch checked out at
+// its remote head, for merging base into it: a partial clone, which reads
+// a file's contents only when the checkout or merge needs them, so it
+// stays quick on a large repository. (A local remote ignores the filter.)
+// Every git command in it then gets the remote's credentials, since any
+// may fetch contents; call DoneSync once it's no longer used.
+func (g *Git) PrepareSync(ctx context.Context, repoDir, base, branch string) (*Workspace, error) {
+	g.partial.Store(repoDir, true)
+	return g.prepareAt(ctx, repoDir, "", base, branch, false, "--filter=blob:none")
+}
+
+// DoneSync forgets a clone PrepareSync made.
+func (g *Git) DoneSync(repoDir string) { g.partial.Delete(repoDir) }
+
+func (g *Git) prepareAt(ctx context.Context, repoDir, workDir, base, branch string, fresh bool, clone ...string) (*Workspace, error) {
 	ws := &Workspace{Repo: repoDir}
 	if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
 		return nil, err
 	}
-	if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-tags", g.remote(), ws.Repo); err != nil {
+	args := append([]string{"clone", "--quiet", "--no-tags"}, clone...)
+	if _, err := g.run(ctx, "", nil, append(args, g.remote(), ws.Repo)...); err != nil {
 		return nil, err
 	}
 	name, email := g.ident()
@@ -381,6 +413,16 @@ func (g *Git) FetchRef(ctx context.Context, repo, ref string) (string, error) {
 		return "", err
 	}
 	return g.run(ctx, repo, nil, "rev-parse", "--verify", "refs/factory/fetched^{commit}")
+}
+
+// MergeInto merges ref into the checked-out branch of repo with a merge
+// commit, and returns it. On a conflict it leaves the branch as it was.
+func (g *Git) MergeInto(ctx context.Context, repo, ref, msg string) (string, error) {
+	if _, err := g.run(ctx, repo, nil, "merge", "--quiet", "--no-ff", "--no-edit", "-m", msg, ref); err != nil {
+		_, _ = g.run(ctx, repo, nil, "merge", "--abort")
+		return "", err
+	}
+	return g.run(ctx, repo, nil, "rev-parse", "HEAD")
 }
 
 // IsAncestor reports whether commit a is an ancestor of (or is) b.

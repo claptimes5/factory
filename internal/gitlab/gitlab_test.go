@@ -187,6 +187,15 @@ func TestAutoMerge(t *testing.T) {
 		// Finished red: GitLab would merge it at once.
 		{`{"sha":"abc","status":"failed"}`, ``, true},
 		{`{"sha":"abc","status":"skipped"}`, ``, true},
+		// A merged results or train pipeline runs on a commit merging abc
+		// into the target branch: it tested abc. (Fixtures: no train
+		// project to try it against.)
+		{`{"sha":"m1","ref":"refs/merge-requests/4/merge","status":"running"}`, `PUT title=Fix it|PUT merge {"auto_merge":true,"merge_when_pipeline_succeeds":true,"sha":"abc","squash":true}`, false},
+		{`{"sha":"m1","ref":"refs/merge-requests/4/train","status":"success"}`, `PUT title=Fix it|PUT merge {"auto_merge":true,"merge_when_pipeline_succeeds":true,"sha":"abc","squash":true}`, false},
+		// One that merged an older head, or another request's, didn't.
+		{`{"sha":"m2","ref":"refs/merge-requests/4/merge","status":"running"}`, ``, true},
+		{`{"sha":"m1","ref":"refs/merge-requests/5/merge","status":"running"}`, ``, true},
+		{`{"sha":"m1","ref":"main","status":"running"}`, ``, true},
 	} {
 		var calls []string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +203,10 @@ func TestAutoMerge(t *testing.T) {
 			switch p := r.URL.EscapedPath(); {
 			case r.Method == "GET" && strings.HasSuffix(p, "/merge_requests/4"):
 				w.Write([]byte(`{"iid":4,"title":"Draft: Fix it","head_pipeline":` + c.pipeline + `}`))
+			case r.Method == "GET" && strings.HasSuffix(p, "/repository/commits/m1"):
+				w.Write([]byte(`{"id":"m1","parent_ids":["target","abc"]}`))
+			case r.Method == "GET" && strings.HasSuffix(p, "/repository/commits/m2"):
+				w.Write([]byte(`{"id":"m2","parent_ids":["target","old"]}`))
 			case r.Method == "PUT" && strings.HasSuffix(p, "/merge_requests/4"):
 				var in map[string]string
 				json.Unmarshal(b, &in)

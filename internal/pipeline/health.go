@@ -78,24 +78,40 @@ type HealthForge interface {
 	Self(ctx context.Context) (string, error)
 }
 
-// healthTrigger reads main's CI when main_health.every has passed.
+// healthTrigger reads main's CI when main_health.every has passed, and
+// looks for reverts of the factory's PRs there. With main health off, it
+// still looks for reverts on that cadence, unless eval or compare turned
+// the guard rails off.
 func (p *Pipeline) healthTrigger(ctx context.Context, now time.Time) {
 	h := p.Cfg.MainHealth
-	if !h.Enabled || now.Sub(p.healthAt) < h.Every.Duration {
+	if !h.Enabled && p.Cfg.NoGuard || now.Sub(p.healthAt) < h.Every.Duration {
 		return
 	}
 	p.healthAt = now
-	p.CheckMainHealth(ctx)
+	if h.Enabled {
+		p.CheckMainHealth(ctx)
+		return
+	}
+	p.WatchMain(ctx)
 }
 
 // CheckMainHealth reads each repo's base branch CI once, files issues for
-// checks that went red or flaky, and closes them once they pass again.
+// checks that went red or flaky, and closes them once they pass again. It
+// reads the branch for reverts of factory PRs too, at the head it read.
 // CI is read, logs included, before taking the action lock.
 func (p *Pipeline) CheckMainHealth(ctx context.Context) {
 	for _, repo := range p.Cfg.RepoNames() {
 		r := p.readHealth(ctx, repo)
+		var rv *revertReading
+		if r.sha != "" {
+			// Even when its CI can't be read: reverts are read apart.
+			rv = p.readReverts(ctx, repo, r.sha)
+		}
 		p.act.Lock()
 		err := p.applyHealth(ctx, r)
+		if rv != nil {
+			p.applyReverts(ctx, rv)
+		}
 		p.act.Unlock()
 		if err != nil {
 			p.log().Warn("main health", "repo", repo, "err", err)
@@ -220,6 +236,10 @@ type healthReading struct {
 	err                    error  // a passing outage: nothing to act on
 	runs                   int
 	checks                 map[string]*checkState
+	// parent is the head's first parent and parentChecks its checks, read
+	// when the head is a factory merge and a check is newly red on it.
+	parent       string
+	parentChecks map[string]*checkState
 }
 
 // readHealth reads a repo's base branch head and its checks, and the logs
@@ -278,6 +298,7 @@ func (p *Pipeline) readHealth(ctx context.Context, repo string) *healthReading {
 		p.warn(err, "CheckLog")
 		c.Log = log
 	}
+	p.readParent(ctx, r, filed)
 	return r
 }
 
@@ -329,6 +350,11 @@ func (p *Pipeline) applyHealth(ctx context.Context, r *healthReading) error {
 	for _, n := range sortedNames(r.checks) {
 		if c := r.checks[n]; !seen[n] && (c.State == store.HealthRed || c.State == store.HealthFlaky) {
 			h := store.HealthIssue{Repo: r.repo, Check: n, Kind: c.State, State: c.State, HeadSHA: r.sha, URL: c.Failed.URL}
+			if c.State == store.HealthRed {
+				// The first commit it's red on: a factory PR's merge, where
+				// it passed before, is a strike. A refile never is.
+				p.attributeRed(ctx, r, n)
+			}
 			p.warn(p.fileHealth(ctx, r, h, c, true), "main health")
 		}
 	}

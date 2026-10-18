@@ -17,13 +17,18 @@ export function MetricsScreen() {
   return (
     <div className="space-y-4">
       <PageTitle>Spend and metrics</PageTitle>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         <Stat label="Cost per merged PR" value={r.merged ? money(r.cost_per_merged_usd) : "–"} big />
         <Stat label="First-pass rate" value={pct(r.first_pass_rate)} />
         <Stat label="Escalation rate" value={pct(r.escalation_rate)} />
         <Stat label="Review escapes" value={pct(r.review_escape_rate)} hint="Reviewer-passed PRs a human changed or closed" />
         <Stat label="Reviewer precision" value={pct(r.review_precision)} hint="Blocking findings that led to a fix" />
         <Stat label="Rounds to pass" value={r.rounds_to_pass < 0 ? "–" : r.rounds_to_pass.toFixed(1)} hint="Review rounds an item took before its review passed" />
+        <Stat
+          label="Revert rate"
+          value={pct(r.revert_rate)}
+          hint={`Factory PRs merged in the last ${r.revert_window_days} days that a later commit or PR reverted: ${r.reverted} of ${r.revert_merged}`}
+        />
         <Stat label="Spent this week" value={money(sp.week_usd)} />
         <Stat label="Merged / items" value={`${r.merged} / ${r.items}`} />
       </div>
@@ -50,6 +55,13 @@ export function MetricsScreen() {
           rows={r.precision_by_reviewer.map((x) => [x.key, `${x.fixed} / ${x.findings}`, String(x.refuted), pct(x.precision)])}
           head={["Reviewer", "Fixed", "Refuted", "Precision"]}
         />
+        {r.reverts_by_repo.length > 0 && (
+          <Table
+            title={`Reverts by repo (${r.revert_window_days} days)`}
+            rows={r.reverts_by_repo.map((x) => [x.repo, `${x.reverted} / ${x.merged}`, pct(x.revert_rate), String(x.broke_main)])}
+            head={["Repo", "Reverted", "Rate", "Broke main"]}
+          />
+        )}
         <Table title="Spend by model (all time)" rows={sp.by_model.map((x) => [x.model, money(x.cost_usd)])} head={["Model", "Spend"]} />
         {sp.usage.length > 0 && (
           <Table

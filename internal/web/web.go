@@ -42,6 +42,8 @@ type Actions interface {
 	Park(ctx context.Context, itemID int64, reason string) error
 	// ApproveEstimate lets an item whose cost estimate waits go on.
 	ApproveEstimate(ctx context.Context, itemID int64) error
+	// ResetAutoMerge turns a repo's tripped auto-merge breaker off.
+	ResetAutoMerge(ctx context.Context, repo, by string) error
 }
 
 // Server serves the control room.
@@ -83,6 +85,8 @@ type Server struct {
 	StartedConfig string
 	// Restarter applies saved settings by restarting (may be nil).
 	Restarter Restarter
+	// Breakers reads each repo's auto-merge breaker (may be nil).
+	Breakers func(ctx context.Context) []APIBreaker
 
 	tmpl       *template.Template
 	pollPeriod time.Duration

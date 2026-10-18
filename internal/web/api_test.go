@@ -50,6 +50,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Settings": APISettings{}, "SettingsGroup": APISettingsGroup{}, "Setting": APISetting{},
 		"Tuning": APITuning{}, "TuningProposal": APITuningProposal{}, "TuningChange": APITuningChange{},
 		"Preview": APIPreview{}, "PreviewShot": APIPreviewShot{},
+		"Breaker": APIBreaker{}, "RepoReverts": metrics.RepoReverts{},
 	}
 	for name, v := range types {
 		sc, ok := schemas[name]

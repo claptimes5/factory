@@ -386,6 +386,7 @@ func (p *Pipeline) closeOutWorkspace(ctx context.Context, it *store.WorkItem, pr
 		switch {
 		case pr.Merged:
 			merged++
+			p.recordMerge(ctx, it, rp.Repo, pr, false)
 			want, _ := headOf(pushed, rp.Repo)
 			changed = changed || pr.Head.SHA != "" && pr.Head.SHA != want
 		case pr.State == "closed":

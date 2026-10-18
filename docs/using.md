@@ -23,13 +23,16 @@ To reach it from another machine, or to put a password on it, see
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
-| **Spend** | Cost per merged PR, first-pass and escalation rates per week, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
+| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes and the [revert rate](#auto-merge-guard-rails), reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
 When a repo's base branch is red or flaky (see
 [Keeping main green](#keeping-main-green)), a line under the header says so
-on every screen, with a link to the fix issue.
+on every screen, with a link to the fix issue. When a repo's
+[auto-merge breaker](#auto-merge-guard-rails) has tripped, a line says
+that too, with a **Reset** button behind the same password check as
+Settings.
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
@@ -120,6 +123,12 @@ each issue they file, once a day when the cap holds some back, and once
 when a source can't be read.
 With [grooming](#backlog-grooming) on, it tells you what each run
 flagged, and when a split you confirmed files its sub-issues.
+It tells you once when a factory PR is reverted, once when main health
+sees a check go red on a factory PR's merge commit, and once when a repo's
+[auto-merge breaker](#auto-merge-guard-rails) trips (and when a cool-off
+turns it back on). A PR set to merge itself that it hands back to you
+(CI failed once it was brought up to date with main, say) is one
+notification too.
 
 The dashboard's Inbox can also show browser notifications, but only while
 a dashboard tab is open.
@@ -137,7 +146,8 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, review quality (escape rate, precision, rounds to pass), each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, recent jobs |
+| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, review quality (escape rate, precision, rounds to pass), each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, each repo's auto-merge breaker, the revert rate, recent jobs |
+| `factory automerge [reset REPO]` | Show each repo's [auto-merge breaker](#auto-merge-guard-rails); `reset` turns a tripped one off so the repo's PRs may merge themselves again. The running daemon picks it up at once |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory groom [REPO]` | Queue a [backlog grooming](#backlog-grooming) run of one repo, or of each groomed repo, now, whatever `grooming.every` says; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
@@ -463,6 +473,126 @@ until you reopen it.
 
 `factory status` shows each repo's state and the checks failing now; so
 does the dashboard while a repo is red or flaky.
+
+## Auto-merge guard rails
+
+With [auto-merge](configuration.md#auto-merge) on, three things keep a
+bad run of PRs from merging themselves one after another.
+
+**The revert rate.** The factory notices when a PR of its own is reverted
+on the base branch: by a commit (`git revert`'s "This reverts commit
+<sha>", GitLab's "This reverts merge request !N") or by a merged PR that
+reverts it (GitHub's revert button makes one titled `Revert "<title>"`
+with a `revert-N-` branch and "Reverts owner/name#N"; a squashed one
+whose message was rewritten is still found by its PR). A commit or PR
+naming a commit or PR number counts only against that one. A bare
+`Revert "<title>"`, naming nothing else, counts only when exactly one
+factory PR still standing has that title: each rebuild of an issue opens
+a PR with the same title. A `revert-N-` branch counts only when its PR
+also says it reverts something, since anyone can name a branch that way.
+On GitLab, only `!N` names a merge request (`#N` is an issue). A revert
+of a revert puts the change back and doesn't count. Each revert is recorded on
+the item, you're told once, and the revert rate, reverted PRs over the
+factory PRs merged in the last 30 days, shows in `factory status`, the
+metrics API and the dashboard's Spend screen, beside review escapes.
+
+It reads the branch on main health's cadence (`main_health.every`, 10
+minutes), as part of main health's reading when that's on and on its own
+when it isn't, but only for a repo with a factory PR merged in the last
+30 days and not reverted yet, and only when the branch's head moved since
+the last reading. Then it lists the commits since (at most 1,000) and the
+PRs merged since (at most 50), from a day before its last reading so a
+commit made earlier and pushed later is still seen. If there were more
+commits than that, the watch's place (the head and time it last read
+from) stays where it was, so the next reading starts from there again. A quiet repo costs one call per reading, and one with nothing to
+watch for, none. It reads reverts even when main health can't read the
+repo's CI.
+
+**The breaker.** A strike is a factory PR that was reverted, or whose
+merge commit main health saw a check go red on: the commit the check was
+first red on is the PR's merge, and the check passed on the commit
+before it, the merge's first parent (main health reads the branch's head,
+so a second commit landing before its next reading hides the first). A
+check that was red before the merge, missing there, still running there
+or with no result there, one main health files again after its issue was
+closed, or one whose commit before can't be read, is no strike. A PR that did both is one strike. Once a repo has `auto_merge.breaker.threshold`
+strikes (2) within `window` (7 days), the factory:
+
+- stops auto-merging in that repo: new PRs wait for you, as any would;
+- turns off auto-merge on the PRs that were waiting to merge themselves,
+  the same way parking does, and labels them `factory:awaiting-you`;
+- tells you once, naming the strikes.
+
+It stays tripped until you reset it with `factory automerge reset
+owner/name` or the dashboard's **Reset** button, which needs the control
+room's password or a request from the factory's own machine, as Settings
+does. Strikes before a reset don't count again. The PRs it handed back
+still wait for you, their descriptions no longer saying they merge
+themselves. With `cool_off` set it also resets itself that long after it
+tripped, and tells you; by default it doesn't, since a breaker that trips
+is worth a look. A cool-off reset counts from when the cool-off ended, so
+a strike after that counts (and can trip it again) even if nothing looked
+at the breaker in between, and `factory status` shows it back on as soon
+as the cool-off ends. A PR being opened as the breaker trips doesn't slip
+through: the factory checks the breaker again right before it turns
+auto-merge on.
+
+**Tested against current main.** A PR only merges itself once it was
+tested against the base branch as it is now:
+
+- **With a merge queue** (GitHub's, or GitLab's merge trains), the PR goes
+  into it: the queue tests it merged with the base and the PRs ahead of it
+  before it merges. A GitHub merge queue merges with its own method, so
+  `auto_merge.method` doesn't apply there. If nothing is left to wait for,
+  the PR joins the queue only once every check on it has passed.
+- **On GitLab with merged results pipelines** (with or without merge
+  trains), each pipeline already runs on the merge request merged with
+  its target branch, and a train retests it just before it merges, so the
+  factory turns on auto-merge directly and doesn't bring the branch up to
+  date itself. It accepts that pipeline for the verified commit when the
+  pipeline ran at the request's merge or train ref on a commit whose
+  parents include the verified one. This is built from GitLab's
+  documented API and tested with recorded responses, not against a live
+  project with trains. Merge trains without merged results pipelines
+  don't run, so the factory syncs the branch as below.
+- **Without either**, the factory checks, in a clone of its own, whether the
+  branch has the base's latest commit. If it does, auto-merge is turned on
+  for the verified commit as before. If it's behind, the factory merges
+  the base into the branch (a merge commit it makes and pushes, like
+  GitHub's "Update branch"), and waits for CI on that new head: once every
+  check passes there, auto-merge is turned on for exactly that commit. CI
+  failing there, or not finishing within 2 hours, leaves the PR for you,
+  with a notification. If the base can't be merged in cleanly, the PR
+  waits for you at once.
+- If the base moves again before the PR merges, the factory turns its
+  auto-merge off, brings it up to date again, and waits for CI again, up
+  to 3 times; after that the PR waits for you. If anyone else pushes to
+  the branch while it waits, it waits for you too. The count starts over
+  for a new build of the PR, or once auto-merge was turned off. Merged by
+  you while it waits for CI, it counts as your merge.
+
+On GitLab this does what "rebase before merge" would, without rewriting
+the commits the reviewer passed. The factory checks the base on each poll,
+so without GitHub's "Require branches to be up to date before merging"
+(or a merge queue) GitHub can merge a PR whose base moved after the last
+poll and before the next resync. Turning that setting on makes the forge
+enforce it.
+
+**To revisit after real use.** Choices made before anyone ran these on
+real repos:
+
+- Factory PRs a human merged count toward the revert rate and the
+  breaker, as auto-merged ones do.
+- A revert that names only a title still counts, when exactly one
+  standing factory PR has that title.
+- Bringing a branch up to date makes a merge commit, which can clash with
+  `method: rebase` (and a repo that forbids merge commits on branches).
+- The breaker's settings are in the YAML only, not the Settings screen.
+- A manual reset doesn't send a notification (a cool-off reset does).
+
+`factory eval` and `factory compare` turn the revert watch and the breaker
+off, as they do main health and sources: the base branch is the real
+repo's, not the run's.
 
 ## Issues from Sentry, Dependabot and TODOs
 
