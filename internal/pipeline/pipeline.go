@@ -554,7 +554,11 @@ func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store
 				return err
 			}
 		}
-		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
+		var heads []store.RepoHead
+		if p.inWorkspace(it) {
+			heads = p.jobHeads(ctx, it, last)
+		}
+		return p.enqueueReview(ctx, it, "review", 1, ReviewInput{ImplementJob: last.ID, Head: last.HeadSHA, Heads: heads, Gates: gates.VerdictLine(rs) + "\n\n" + gateTable(rs), Features: p.savedBlast(ctx, it.ID, last.ID)})
 	default:
 		var in ImplementInput
 		_ = json.Unmarshal([]byte(last.Input), &in)

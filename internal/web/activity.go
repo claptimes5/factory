@@ -102,6 +102,9 @@ func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone strin
 		case state.Reviewing:
 			return "passed its gates; review started", "live"
 		case state.AwaitingHuman:
+			if prs, ok := strings.CutPrefix(e.Reason, "draft PRs "); ok {
+				return "PRs " + strings.TrimSuffix(prs, " ready") + " are ready for you", "needs_you"
+			}
 			if it != nil && it.PRNumber > 0 {
 				return fmt.Sprintf("PR #%d is ready for you", it.PRNumber), "needs_you"
 			}

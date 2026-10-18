@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -199,5 +201,97 @@ func TestWorkspaceOneRepo(t *testing.T) {
 	}
 	if it := w.item(t, 1); it.Stage != state.Parked {
 		t.Fatalf("stage = %s", it.Stage)
+	}
+}
+
+// A restart between the build and its review resumes with every repo's
+// head, so the review neither parks on a "moved" branch nor opens one PR.
+func TestWorkspaceResumeAfterImplement(t *testing.T) {
+	ctx := context.Background()
+	w := setupWorkspace(t)
+	w.addIssue(1)
+	w.claude.builds = []func(string) error{bothBuild}
+	w.codex.reviews = []string{pass, pass}
+	if err := w.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := w.item(t, 1)
+	impl, _ := w.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	// As if the daemon died right after the implement job finished.
+	if err := w.p.Store.SetStage(ctx, it.ID, state.Implementing, "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.p.resume(ctx, w.item(t, 1), impl[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if it := w.item(t, 1); it.Stage != state.AwaitingHuman {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	if prs, _ := w.p.Store.ItemPRs(ctx, it.ID); len(prs) != 2 {
+		t.Fatalf("PRs = %+v", prs)
+	}
+}
+
+// The builder can write the folder that holds a workspace's checkouts; a
+// checkout it swaps for a symlink is refused, never committed from.
+func TestWorkspaceRefusesSymlinkedCheckout(t *testing.T) {
+	ctx := context.Background()
+	w := setupWorkspace(t)
+	w.addIssue(1)
+	secret := t.TempDir()
+	writeFile(secret, "client.txt", "host file\n")
+	w.claude.builds = []func(string) error{func(work string) error {
+		if err := os.RemoveAll(filepath.Join(work, "web")); err != nil {
+			return err
+		}
+		return os.Symlink(secret, filepath.Join(work, "web"))
+	}}
+	if err := w.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := w.item(t, 1)
+	jobs, _ := w.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	first := jobs[len(jobs)-1]
+	if first.State != state.Failed || !strings.Contains(first.Error, "replaced web") {
+		t.Fatalf("job = %s %q", first.State, first.Error)
+	}
+	if out, err := exec.Command("git", "-C", w.web.remote, "rev-parse", "--verify", "--quiet", "factory/r-1").Output(); err == nil {
+		t.Fatalf("pushed %s", out)
+	}
+}
+
+// A rebuild that no longer touches a repo marks that repo's old PR as
+// superseded, and stops tracking it.
+func TestWorkspaceRetiresDroppedPR(t *testing.T) {
+	ctx := context.Background()
+	w := setupWorkspace(t)
+	w.addIssue(1)
+	w.claude.builds = []func(string) error{bothBuild}
+	w.codex.reviews = []string{pass}
+	if err := w.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := w.item(t, 1)
+	api := w.gh.prs["factory/r-1"]
+	// The rebuild touches only the app.
+	in := ReviewInput{Head: "x", Heads: []store.RepoHead{{Repo: "o/web", SHA: "x"}}, Gates: "GATES: PASS"}
+	if err := w.p.Store.SetStage(ctx, it.ID, state.Implementing, "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	w.p.Store.SetStage(ctx, it.ID, state.Reviewing, "test", "")
+	if err := w.p.openPR(ctx, w.item(t, 1), *w.gh.issues[1], in); err != nil {
+		t.Fatal(err)
+	}
+	if b := w.gh.bodies[api.Number]; !strings.HasPrefix(b, "**Superseded: don't merge this.**") {
+		t.Fatalf("old API PR body:\n%s", b)
+	}
+	if hasLabel(w.gh.prLabels[api.Number], LabelAwaitingYou) {
+		t.Fatal("the superseded PR still waits on you")
+	}
+	if prs, _ := w.p.Store.ItemPRs(ctx, it.ID); len(prs) != 1 || prs[0].Repo != "o/web" {
+		t.Fatalf("PRs = %+v", prs)
 	}
 }

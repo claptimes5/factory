@@ -245,6 +245,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	changed := false
 	for _, pt := range parts {
+		if err := realDir(pt.ws.Work); err != nil {
+			return fail(run, state.Failed, err.Error())
+		}
 		head, ch, err := p.git(pt.repo).Ingest(ctx, pt.ws, msg)
 		if err != nil {
 			return fail(run, state.Failed, err.Error())

@@ -567,9 +567,6 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	// The checks shown are the main PR's: in a workspace, the head the
 	// pipeline recorded is that PR's repo's.
 	checksRepo := it.Repo
-	if len(p.PRs) > 0 {
-		checksRepo = mainPR(it, p.PRs).Repo
-	}
 	for i := len(jobs) - 1; i >= 0; i-- {
 		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" {
 			jid := jobs[i].ID
@@ -579,6 +576,13 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 			jid := jobs[i].ID
 			p.GateJobID = &jid
 			p.HeadSHA = jobs[i].HeadSHA
+			// In a workspace the head is in whichever repo that job recorded it.
+			hs, _ := s.Store.JobHeads(ctx, jid)
+			for _, h := range hs {
+				if h.SHA == p.HeadSHA {
+					checksRepo = h.Repo
+				}
+			}
 			gs, _ := s.Store.GateResults(ctx, jid)
 			p.Gates = apiGates(gs)
 		}
@@ -820,7 +824,13 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 			n.Kind = "ready_for_review"
 			n.Title = s.ref(it.Repo, it.IssueNumber) + " is ready for your review"
 			n.Detail = it.Title
-			if it.PRNumber > 0 {
+			if prs, _ := s.linkedPRs(ctx, it); len(prs) > 0 {
+				refs := make([]string, len(prs))
+				for i, p := range prs {
+					refs[i] = p.Ref
+				}
+				n.Detail = fmt.Sprintf("PRs %s: %s", strings.Join(refs, ", "), it.Title)
+			} else if it.PRNumber > 0 {
 				n.Detail = fmt.Sprintf("PR #%d: %s", it.PRNumber, it.Title)
 			}
 		} else {

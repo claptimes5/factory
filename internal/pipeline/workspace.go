@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -60,11 +61,14 @@ func (p *Pipeline) inWorkspace(it *store.WorkItem) bool { return len(p.members(i
 // the same in every repo and names the issue's own repo, since issue 12 of
 // the API and issue 12 of the web app are different changes.
 func (p *Pipeline) branchFor(it *store.WorkItem) string {
+	if p.inWorkspace(it) {
+		// Never a branch the item used before its repo joined the
+		// workspace: factory/issue-12 in the other repos is their own
+		// issue 12's.
+		return fmt.Sprintf("factory/%s-%d", config.ShortName(it.Repo), it.IssueNumber)
+	}
 	if it.Branch != "" {
 		return it.Branch
-	}
-	if p.inWorkspace(it) {
-		return fmt.Sprintf("factory/%s-%d", config.ShortName(it.Repo), it.IssueNumber)
 	}
 	return fmt.Sprintf("factory/issue-%d", it.IssueNumber)
 }
@@ -111,6 +115,21 @@ func agentDir(dir string, parts []*part, builder bool) string {
 		return filepath.Join(dir, "work")
 	}
 	return filepath.Join(dir, "repos")
+}
+
+// realDir refuses a builder's checkout that is no longer a plain
+// directory. A workspace's checkouts sit inside the folder the builder can
+// write, so it could swap one for a symlink to anywhere on the host, and
+// the daemon would commit what is there.
+func realDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("the builder replaced %s with something other than a directory", filepath.Base(dir))
+	}
+	return nil
 }
 
 // homePart is the part in the item's own repo.
@@ -285,6 +304,7 @@ func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is 
 		}
 		rows[i] = store.RepoPR{Repo: o.repo, Number: o.pr.Number}
 	}
+	p.retire(ctx, it, branch, prs)
 	if err := p.Store.SetItemPRs(ctx, it.ID, rows); err != nil {
 		return err
 	}
@@ -316,6 +336,31 @@ func (p *Pipeline) openWorkspacePRs(ctx context.Context, it *store.WorkItem, is 
 	p.notify(ctx, fmt.Sprintf("%s-risk change ready for review across %d repos: %s %s. Merge in order: %s",
 		capitalize(riskOrLow(it.Risk)), len(prs), p.ref(it.Repo, it.IssueNumber), is.Title, strings.Join(urls, " then ")))
 	return nil
+}
+
+// retire marks the PRs an earlier run of the item opened in repos this
+// change no longer touches: they hold old commits, and merging one would
+// ship half of a change. The factory never closes a PR; it says so in the
+// body and takes off its awaiting-you label.
+func (p *Pipeline) retire(ctx context.Context, it *store.WorkItem, branch string, keep []openedPR) {
+	old, err := p.Store.ItemPRs(ctx, it.ID)
+	if err != nil {
+		p.warn(err, "ItemPRs")
+		return
+	}
+	for _, o := range old {
+		kept := false
+		for _, k := range keep {
+			kept = kept || strings.EqualFold(k.repo, o.Repo)
+		}
+		if kept {
+			continue
+		}
+		body := fmt.Sprintf("**Superseded: don't merge this.** The factory rebuilt %s and the change no longer touches this repo. Close this PR and delete `%s`.",
+			p.issueRef(it.Repo, it.IssueNumber), branch)
+		p.warn(p.gh(o.Repo).UpdatePRBody(ctx, o.Number, body), "UpdatePRBody")
+		p.warn(p.gh(o.Repo).UnlabelPR(ctx, o.Number, LabelAwaitingYou), "UnlabelPR")
+	}
 }
 
 // closeOutWorkspace finishes a workspace item once every PR of its change
