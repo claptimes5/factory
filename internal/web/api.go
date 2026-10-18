@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -491,10 +492,13 @@ func (s *Server) mainHealth(ctx context.Context) []APIMainHealth {
 	hs, _ := s.Store.RepoHealths(ctx)
 	issues, _ := s.Store.HealthIssues(ctx, "")
 	for _, h := range hs {
+		if !slices.ContainsFunc(s.Repos, func(r string) bool { return strings.EqualFold(r, h.Repo) }) {
+			continue // no longer configured
+		}
 		m := APIMainHealth{Repo: h.Repo, Branch: h.Branch, State: h.State, SHA: h.HeadSHA, Detail: h.Detail, Checks: []APIHealthCheck{}}
 		for _, is := range issues {
-			if is.Repo == h.Repo {
-				c := APIHealthCheck{Check: is.Check, Kind: is.Kind, Issue: is.IssueNumber}
+			if is.Repo == h.Repo && (is.State == store.HealthRed || is.State == store.HealthFlaky) {
+				c := APIHealthCheck{Check: is.Check, Kind: is.State, Issue: is.IssueNumber}
 				if is.IssueNumber > 0 {
 					c.IssueURL = s.issueURL(is.Repo, is.IssueNumber)
 				}

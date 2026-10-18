@@ -404,5 +404,5 @@ func seedHealth(ctx context.Context, st *store.Store) error {
 			return err
 		}
 	}
-	return st.SetHealthIssue(ctx, store.HealthIssue{Repo: "acme/api", Check: "test", Kind: store.HealthFlaky, HeadSHA: "9f2c1e0", IssueNumber: 106})
+	return st.SetHealthIssue(ctx, store.HealthIssue{Repo: "acme/api", Check: "test", Kind: store.HealthFlaky, State: store.HealthFlaky, HeadSHA: "9f2c1e0", IssueNumber: 106})
 }

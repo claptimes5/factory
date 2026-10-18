@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,6 +21,14 @@ func TestMainHealth(t *testing.T) {
 	c, err = Parse([]byte(y + "\nmain_health: {enabled: true, every: 5m, daily_issue_cap: 1, require_approval: true}\n"))
 	if err != nil || !c.MainHealth.Enabled || c.MainHealth.Every.Duration != 5*time.Minute || c.MainHealth.DailyIssueCap != 1 || !c.MainHealth.RequireApproval {
 		t.Fatalf("set: %+v %v", c.MainHealth, err)
+	}
+	// 0 is the default, as the error for a negative one says.
+	c, err = Parse([]byte(y + "\nmain_health: {daily_issue_cap: 0}\n"))
+	if err != nil || c.MainHealth.DailyIssueCap != 3 {
+		t.Fatalf("0: %d %v", c.MainHealth.DailyIssueCap, err)
+	}
+	if _, err := Parse([]byte(y + "\nmain_health: {daily_issue_cap: -1}\n")); err == nil || !strings.Contains(err.Error(), "0 or left out is 3") {
+		t.Fatalf("negative: %v", err)
 	}
 	for name, bad := range map[string]string{
 		"too often":   "main_health: {every: 30s}",

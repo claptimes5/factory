@@ -53,10 +53,12 @@ func TestMainHealthLines(t *testing.T) {
 	}
 	cfg.MainHealth.Enabled = true
 	st.SetRepoHealth(ctx, store.RepoHealth{Repo: "o/r", Branch: "main", HeadSHA: "abcdef1234", State: store.HealthRed, Detail: "test, lint"})
-	st.SetHealthIssue(ctx, store.HealthIssue{Repo: "o/r", Check: "test", Kind: store.HealthRed, HeadSHA: "abcdef1234", IssueNumber: 12})
-	st.SetHealthIssue(ctx, store.HealthIssue{Repo: "o/r", Check: "lint", Kind: store.HealthRed, HeadSHA: "abcdef1234"})
+	st.SetHealthIssue(ctx, store.HealthIssue{Repo: "o/r", Check: "test\x1b[2J\u202e", Kind: store.HealthRed, State: store.HealthRed, HeadSHA: "abcdef1234", IssueNumber: 12})
+	st.SetHealthIssue(ctx, store.HealthIssue{Repo: "o/r", Check: "lint", Kind: store.HealthRed, State: store.HealthRed, HeadSHA: "abcdef1234"})
+	st.SetHealthIssue(ctx, store.HealthIssue{Repo: "o/r", Check: "old", Kind: store.HealthFlaky, State: store.HealthGreen, HeadSHA: "abcdef1234", IssueNumber: 9})
 	got := strings.Join(mainHealthLines(ctx, st, cfg), "\n")
-	want := "main o/r:\tred on main at abcdef1: test (red, o/r#12), lint (red, not filed yet)\nmain o/web:\tnot read yet"
+	// No escape reaches the terminal, and a check passing now isn't listed.
+	want := "main o/r:\tred on main at abcdef1: test [2J (red, o/r#12), lint (red, not filed yet)\nmain o/web:\tnot read yet"
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}

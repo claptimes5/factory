@@ -263,7 +263,10 @@ func TestAPIReads(t *testing.T) {
 		t.Fatalf("overview = %+v", o)
 	}
 	st.SetRepoHealth(context.Background(), store.RepoHealth{Repo: "o/r", Branch: "main", HeadSHA: "abc", State: store.HealthRed, Detail: "test"})
-	st.SetHealthIssue(context.Background(), store.HealthIssue{Repo: "o/r", Check: "test", Kind: store.HealthRed, HeadSHA: "abc", IssueNumber: 12})
+	st.SetHealthIssue(context.Background(), store.HealthIssue{Repo: "o/r", Check: "test", Kind: store.HealthRed, State: store.HealthRed, HeadSHA: "abc", IssueNumber: 12})
+	// A check passing now, and a repo no longer configured, aren't shown.
+	st.SetHealthIssue(context.Background(), store.HealthIssue{Repo: "o/r", Check: "lint", Kind: store.HealthFlaky, State: store.HealthGreen, HeadSHA: "abc", IssueNumber: 13})
+	st.SetRepoHealth(context.Background(), store.RepoHealth{Repo: "gone/repo", Branch: "main", HeadSHA: "abc", State: store.HealthRed})
 	getJSON(t, base+"/api/v1/overview", &o)
 	if len(o.MainHealth) != 1 || o.MainHealth[0].State != "red" || len(o.MainHealth[0].Checks) != 1 || o.MainHealth[0].Checks[0].Issue != 12 {
 		t.Fatalf("main health = %+v", o.MainHealth)

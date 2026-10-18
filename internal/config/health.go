@@ -13,8 +13,8 @@ type MainHealth struct {
 	Enabled bool `yaml:"enabled"`
 	// Every is how often it reads CI; default 10m, at least 1m.
 	Every Duration `yaml:"every,omitempty"`
-	// DailyIssueCap is how many issues it may file per repo a day;
-	// default 3.
+	// DailyIssueCap is how many issues it may file per repo a day; 0 or
+	// left out is 3.
 	DailyIssueCap int `yaml:"daily_issue_cap,omitempty"`
 	// RequireApproval files the issues without the intake label, so
 	// they wait for someone to add it. Off, they're built at once.
@@ -41,7 +41,7 @@ func (c *Config) checkHealth() []error {
 		errs = append(errs, fmt.Errorf("main_health.every must be at least 1m"))
 	}
 	if c.MainHealth.DailyIssueCap < 0 {
-		errs = append(errs, fmt.Errorf("main_health.daily_issue_cap must be at least 1"))
+		errs = append(errs, fmt.Errorf("main_health.daily_issue_cap must be at least 1; 0 or left out is 3 (main_health.enabled: false turns it off)"))
 	}
 	return errs
 }

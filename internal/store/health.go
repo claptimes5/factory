@@ -37,7 +37,21 @@ type HealthIssue struct {
 	HeadSHA     string
 	URL         string
 	CreatedAt   string
+	// State is the check's latest state: red, flaky, green, pending, or
+	// absent when the branch's CI no longer runs it.
+	State string
+	// AbsentSince is when the check went missing, in TimeFormat; "" while
+	// it runs.
+	AbsentSince string
+	// MutedUntil is when a won't-fix close stops muting the check.
+	MutedUntil string
+	// Refiles is how many issues were filed for it after the first,
+	// without it passing in between.
+	Refiles int
 }
+
+// HealthAbsent is a tracked check the branch's CI no longer runs.
+const HealthAbsent = "absent"
 
 // SetRepoHealth records a repo's latest reading.
 func (s *Store) SetRepoHealth(ctx context.Context, h RepoHealth) error {
@@ -82,10 +96,12 @@ func (s *Store) RepoHealths(ctx context.Context) ([]RepoHealth, error) {
 // SetHealthIssue records, or updates, a repo's red or flaky check.
 func (s *Store) SetHealthIssue(ctx context.Context, h HealthIssue) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO health_issues(repo, check_name, kind, issue_number, head_sha, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+		_, err := tx.Exec(`INSERT INTO health_issues(repo, check_name, kind, issue_number, head_sha, url, created_at, state, absent_since, muted_until, refiles)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(repo, check_name) DO UPDATE SET kind = excluded.kind, issue_number = excluded.issue_number,
-			head_sha = excluded.head_sha, url = excluded.url`,
-			h.Repo, h.Check, h.Kind, h.IssueNumber, h.HeadSHA, h.URL, Now())
+			head_sha = excluded.head_sha, url = excluded.url, state = excluded.state, absent_since = excluded.absent_since,
+			muted_until = excluded.muted_until, refiles = excluded.refiles`,
+			h.Repo, h.Check, h.Kind, h.IssueNumber, h.HeadSHA, h.URL, Now(), h.State, h.AbsentSince, h.MutedUntil, h.Refiles)
 		return err
 	})
 }
@@ -93,7 +109,7 @@ func (s *Store) SetHealthIssue(ctx context.Context, h HealthIssue) error {
 // HealthIssues lists a repo's red and flaky checks ("" for every repo's),
 // oldest first.
 func (s *Store) HealthIssues(ctx context.Context, repo string) ([]HealthIssue, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT repo, check_name, kind, issue_number, head_sha, url, created_at FROM health_issues
+	rows, err := s.read.QueryContext(ctx, `SELECT repo, check_name, kind, issue_number, head_sha, url, created_at, state, absent_since, muted_until, refiles FROM health_issues
 		WHERE ? = '' OR repo = ? ORDER BY created_at, check_name`, repo, repo)
 	if err != nil {
 		return nil, err
@@ -102,7 +118,7 @@ func (s *Store) HealthIssues(ctx context.Context, repo string) ([]HealthIssue, e
 	var out []HealthIssue
 	for rows.Next() {
 		var h HealthIssue
-		if err := rows.Scan(&h.Repo, &h.Check, &h.Kind, &h.IssueNumber, &h.HeadSHA, &h.URL, &h.CreatedAt); err != nil {
+		if err := rows.Scan(&h.Repo, &h.Check, &h.Kind, &h.IssueNumber, &h.HeadSHA, &h.URL, &h.CreatedAt, &h.State, &h.AbsentSince, &h.MutedUntil, &h.Refiles); err != nil {
 			return nil, err
 		}
 		out = append(out, h)

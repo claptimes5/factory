@@ -549,7 +549,7 @@ func TestSetupCreatesTheAppAndSavesEverything(t *testing.T) {
 		t.Fatalf("model keys: %v", vals)
 	}
 	perms, _ := f.manifest["default_permissions"].(map[string]any)
-	if perms["contents"] != "write" || perms["checks"] != "read" || perms["workflows"] != nil {
+	if perms["contents"] != "write" || perms["checks"] != "read" || perms["actions"] != "read" || perms["workflows"] != nil {
 		t.Fatalf("manifest permissions: %v", f.manifest)
 	}
 	if len(f.created) != len(pipeline.Labels("factory:ready"))-1 {

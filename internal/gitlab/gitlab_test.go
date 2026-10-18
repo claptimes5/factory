@@ -217,15 +217,23 @@ func TestAutoMerge(t *testing.T) {
 
 func TestCheckHistory(t *testing.T) {
 	var closed string
+	visibility := `{"visibility":"private"}`
+	bigLog := strings.Repeat("noise\n", 30000) + "section_start:1:step_script\r\x1b[0;31mFAIL\x1b[0m TestX\nprogress 10%\rprogress 100%\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch p := r.URL.EscapedPath(); {
-		case strings.HasSuffix(p, "/repository/commits/abc/statuses"):
-			if r.URL.Query().Get("all") != "true" {
-				t.Errorf("all = %q, want true (retries)", r.URL.Query().Get("all"))
+		case strings.HasSuffix(p, "/pipelines") && r.URL.Query().Get("sha") == "abc":
+			w.Write([]byte(`[{"id":2,"source":"schedule"},{"id":1,"source":"push"}]`))
+		case strings.HasSuffix(p, "/pipelines/1/jobs"):
+			if r.URL.Query().Get("include_retried") != "true" {
+				t.Errorf("include_retried = %q", r.URL.Query().Get("include_retried"))
 			}
-			w.Write([]byte(`[{"id":12,"name":"test","status":"success"},{"id":11,"name":"test","status":"failed"},{"id":13,"name":"ext","status":"failed"}]`))
+			w.Write([]byte(`[{"id":12,"name":"test","status":"success"},{"id":11,"name":"test","status":"failed"},{"id":13,"name":"deploy","status":"failed","failure_reason":"runner_system_failure"}]`))
+		case strings.HasSuffix(p, "/pipelines/2/jobs"):
+			w.Write([]byte(`[{"id":20,"name":"test","status":"failed"}]`))
 		case strings.HasSuffix(p, "/jobs/11/trace"):
-			w.Write([]byte("section_start:1:step_script\r\x1b[0;31mFAIL\x1b[0m TestX\nprogress 10%\rprogress 100%\n"))
+			w.Write([]byte(bigLog))
+		case p == "/projects/team%2Fweb":
+			w.Write([]byte(visibility))
 		case strings.HasSuffix(p, "/issues/4") && r.Method == "PUT":
 			b, _ := io.ReadAll(r.Body)
 			closed = string(b)
@@ -238,17 +246,54 @@ func TestCheckHistory(t *testing.T) {
 	ctx := context.Background()
 	c := &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
 	runs, err := c.CheckHistory(ctx, "abc")
-	if err != nil || len(runs) != 3 || runs[0].ID != 11 || runs[0].Conclusion != "failure" || runs[1].Conclusion != "success" {
+	if err != nil || len(runs) != 4 || runs[0].ID != 11 || runs[0].Conclusion != "failure" || runs[1].Conclusion != "success" {
 		t.Fatalf("runs %+v %v", runs, err)
 	}
-	if log, err := c.CheckLog(ctx, runs[0]); err != nil || log != "FAIL TestX\nprogress 100%\n" {
-		t.Fatalf("log %q %v", log, err)
+	keys := map[int64]string{}
+	for _, r := range runs {
+		keys[r.ID] = r.Key + "|" + r.Group + "|" + r.Conclusion
 	}
-	// An external CI's status has no job log.
-	if log, err := c.CheckLog(ctx, runs[2]); err != nil || log != "" {
-		t.Fatalf("external log %q %v", log, err)
+	// The scheduled pipeline's test is its own check, and a runner that
+	// broke is no result.
+	if keys[11] != "test|pipeline 1|failure" || keys[20] != "test (schedule)|pipeline 2|failure" || keys[13] != "deploy|pipeline 1|cancelled" {
+		t.Fatalf("keys %v", keys)
+	}
+	// The end of a long log, not its start.
+	if log, err := c.CheckLog(ctx, runs[0]); err != nil || !strings.HasSuffix(log, "FAIL TestX\nprogress 100%\n") || len(log) > logTail {
+		t.Fatalf("log %d bytes, ends %q, %v", len(log), log[max(0, len(log)-40):], err)
+	}
+	// A job with no log (an external CI's) has none.
+	if log, err := c.CheckLog(ctx, runs[1]); err != nil || log != "" {
+		t.Fatalf("no log %q %v", log, err)
 	}
 	if err := c.CloseIssue(ctx, 4); err != nil || closed != `{"state_event":"close"}` {
 		t.Fatalf("close %q %v", closed, err)
+	}
+	// Public issues but private job logs: nothing quoted.
+	visibility = `{"visibility":"public","public_jobs":false}`
+	pub := &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	if log, err := pub.CheckLog(ctx, runs[0]); err != nil || log != "" {
+		t.Fatalf("public project, private logs: %q %v", log, err)
+	}
+	visibility = `{"visibility":"public","public_jobs":true}`
+	pub = &Client{Project: "team/web", Host: "gitlab.example", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	if log, _ := pub.CheckLog(ctx, runs[0]); log == "" {
+		t.Fatal("public logs: want the log")
+	}
+}
+
+func TestTailBuffer(t *testing.T) {
+	b := &tailBuffer{max: 5}
+	for _, s := range []string{"abc", "defg", "h", "0123456789"} {
+		b.Write([]byte(s))
+	}
+	if string(b.bytes()) != "56789" {
+		t.Fatalf("%q", b.bytes())
+	}
+	b = &tailBuffer{max: 5}
+	b.Write([]byte("ab"))
+	b.Write([]byte("cdef"))
+	if string(b.bytes()) != "bcdef" {
+		t.Fatalf("%q", b.bytes())
 	}
 }

@@ -553,18 +553,19 @@ func mainHealthLines(ctx context.Context, st *store.Store, cfg *config.Config) [
 			out = append(out, fmt.Sprintf("main %s:\tnot read yet", repo))
 			continue
 		}
-		line := fmt.Sprintf("main %s:\t%s on %s", repo, strings.ReplaceAll(h.State, "_", " "), h.Branch)
+		// Check names and Detail come from CI: no escapes reach the terminal.
+		line := fmt.Sprintf("main %s:\t%s on %s", repo, strings.ReplaceAll(h.State, "_", " "), pipeline.SafeText(h.Branch, 100))
 		if h.HeadSHA != "" {
-			line += " at " + h.HeadSHA[:min(7, len(h.HeadSHA))]
+			line += " at " + pipeline.SafeText(h.HeadSHA[:min(7, len(h.HeadSHA))], 7)
 		}
 		var checks []string
 		for _, is := range issues {
-			if !strings.EqualFold(is.Repo, repo) {
-				continue
+			if !strings.EqualFold(is.Repo, repo) || is.State != store.HealthRed && is.State != store.HealthFlaky {
+				continue // only what's failing now
 			}
-			c := is.Check + " (" + is.Kind + ", not filed yet)"
+			c := pipeline.SafeName(is.Check) + " (" + is.State + ", not filed yet)"
 			if is.IssueNumber > 0 {
-				c = fmt.Sprintf("%s (%s, %s)", is.Check, is.Kind, issueRef(cfg, repo, is.IssueNumber))
+				c = fmt.Sprintf("%s (%s, %s)", pipeline.SafeName(is.Check), is.State, issueRef(cfg, repo, is.IssueNumber))
 			}
 			checks = append(checks, c)
 		}
@@ -572,7 +573,7 @@ func mainHealthLines(ctx context.Context, st *store.Store, cfg *config.Config) [
 		case len(checks) > 0:
 			line += ": " + strings.Join(checks, ", ")
 		case h.Detail != "":
-			line += ": " + h.Detail
+			line += ": " + pipeline.SafeText(h.Detail, 200)
 		}
 		if !cfg.MainHealth.Enabled {
 			line += " (main_health is off)"

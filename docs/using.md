@@ -302,65 +302,100 @@ the daemon reads CI on each repo's base branch every `main_health.every`
 the fix and builds it before anything else.
 
 **What it reads.** The checks on the branch's latest commit: GitHub's
-check runs (GitHub Actions and apps that use the Checks API), or GitLab's
-pipeline jobs. For each check, the latest run with a result counts:
+check runs (GitHub Actions and apps that use the Checks API, not commit
+statuses), or the jobs of GitLab's pipelines. A check is the same check on
+every commit when it has the same name in the same GitHub workflow (or
+app), or the same name in a GitLab pipeline of the same source, so two
+workflows' `build` jobs, or a scheduled pipeline's `test` and a push
+pipeline's, are separate checks. Workflow names need the app's
+`actions: read` permission, which setup asks for; without it, Actions jobs
+are told apart by name only. On a commit, only a check's latest run of CI
+(its check suite, or its pipeline) counts, and in it the latest run with a
+result:
 
 - **Red:** it failed or timed out.
-- **Flaky:** it failed, then passed when it ran again on the same commit.
-  That's the only flake signal it uses: a check that fails on one commit
-  and passes on the next may just have been fixed.
+- **Flaky:** it failed, then passed when it was retried in the same check
+  suite or pipeline. That's the only flake signal it uses: a check that
+  fails on one commit and passes on the next may just have been fixed.
 - A check still running counts as nothing, whatever it said before, and so
-  does one that was cancelled or skipped. A failure GitLab allows
+  does one that was cancelled or skipped, or a GitLab job whose runner
+  broke (`runner_system_failure` and the like). A failure GitLab allows
   (`allow_failure`) counts as passing.
 
 **What it files.** One open issue per repo and check, titled
 `Main is red: <check>` or `Flaky on main: <check>` and labeled
-`factory:main-health`. It names the commit, links the failing run and
-quotes the end of its output: on GitHub, what the check reported; on
-GitLab, the end of the job's log. That output is fenced and marked as
-untrusted, since a change's author can steer what CI prints, and the issue
-is what the builder reads. Before filing, the factory looks for an open
-issue it filed for the same check, so a lost database doesn't file twice.
+`factory:main-health`. Check names are cut to 100 characters, on one
+line, with invisible characters taken out. Before filing, it looks for an
+open issue the factory itself opened with that title, so a lost database
+doesn't file twice.
 
 **First in the queue.** The fix's item gets priority 100. Items start at
 0 and the orchestrator's and tuning runs at 10, so its triage, build and
-review jobs are claimed first, unless the orchestrator raised something
-higher with `set_priority`. It still goes through triage, the gates,
-review and the usual merge rules.
+review jobs are claimed first. The orchestrator's `set_priority` can still
+move it, up or down, and the factory doesn't put it back.
 
-**Approval.** The factory wrote the issue, so by default it files it with
-`factory:ready` and starts at once, approved as the factory, as the
-orchestrator's issues are. The CI output in it is data, not the task: the
-task is the factory's own text above it. With
-`main_health.require_approval: true`, it files the issue without
-`factory:ready` and you're told; it starts once someone with write access
-adds the label, and still goes first. Either way, if the issue's text
-changes after approval, the item parks as any would.
+**Approval, and what it can't do on its own.** CI output is text that
+anyone who can shape what CI prints can write: a test that echoes its
+input, a dependency, an app with `checks: write`. So:
 
-**When it's green again.** Once the check passes on the branch's latest
-commit, the factory comments on its issue and closes it, as long as the
-issue is still open and still labeled `factory:main-health`. An issue you
-took the label off is left alone. A build for it that hasn't opened a PR
-yet is parked, since there's nothing left to fix. A red check that passes
-on a rerun of the same commit is flaky, not fixed: its issue stays open for
-the flake, with a comment saying so. A flaky check's issue isn't closed
-when the check passes, since passing proves nothing about a flake. It's
-done when its fix merges, or when you close it.
+- By default (`require_approval: false`) the issue is filed with
+  `factory:ready` and starts at once, approved as the factory. Its text,
+  which is the builder's task, holds only the check's name, the commit and
+  a link to the failing run. The end of the run's output goes in a comment
+  on the issue, fenced and marked untrusted, and no prompt reads comments.
+- A fix started that way never merges itself, whatever `auto_merge` says:
+  no human read its issue, so its PR waits for you.
+- With `require_approval: true`, the issue is filed without
+  `factory:ready`, with the output quoted in it for you to read, and starts
+  once someone with write access adds the label. It's approved by them
+  then, and merges under the usual rules.
+- On GitLab, the output is only quoted when everyone who can read the
+  project's issues can read its job logs: a private project, or public
+  pipelines. Otherwise the issue links to the job.
+
+Either way, if the issue's text changes after approval, the item parks as
+any would.
+
+**When it's green again.** Only an actual pass counts. Once the check
+passes on the branch's latest commit, the factory comments on its issue
+and closes it, as long as it's still open and still labeled
+`factory:main-health`; an issue you took the label off is left alone. A
+build for it that hasn't opened a PR yet is parked, since there's nothing
+left to fix. If its PR is open, the issue stays open, with a comment, for
+you to merge or close the PR.
+
+A check that's missing from the branch's CI (a path filter, a renamed
+job, an app that reports late) isn't a pass: it's left alone, and after a
+day missing it's forgotten without a word on its issue.
+
+A red check that passes on a retry is flaky, not fixed: its issue stays
+open for the flake, with a comment saying so. A flaky check's issue isn't
+closed when the check passes, since passing proves nothing about a flake;
+it's done when its fix merges, or you close it. A flaky check that fails
+outright on a later commit is red, and its issue says so.
+
+**Muting.** Add `factory:mute` to a check's issue, open or closed, and
+the factory files nothing more for that check and leaves the issue as it
+is. On GitHub, closing the issue as not planned mutes it for 30 days, or
+until you reopen it.
 
 **Not looping.**
 
 - One issue per check at a time.
-- If the issue closes as done (its fix merged, say) and a later commit is
-  still red, that's a new failure, and it's filed again. Closed as not
-  planned on GitHub, it isn't filed again until the check passes.
+- If the issue closes as done (its fix merged, say) and a later commit
+  still fails, that's a new failure, and it's filed again. The first time,
+  it starts on its own as before. After that it waits for you to add
+  `factory:ready`: a fix that passes on its PR and leaves main red twice is
+  likely for a check that only runs on main, such as a deploy.
 - At most `main_health.daily_issue_cap` (3) issues per repo per UTC day.
   Past that you're told, and the issue is filed the next day if the check
   is still failing.
 - A repo whose CI the factory can't read (no permission, no branch) or
-  that has no checks at all gets no issues, and you're told once.
+  that has no checks at all gets no issues, and you're told once. A rate
+  limit isn't "can't read": it's tried again next time.
 
-`factory status` shows each repo's state; so does the dashboard while a
-repo is red or flaky.
+`factory status` shows each repo's state and the checks failing now; so
+does the dashboard while a repo is red or flaky.
 
 ## Working on the dashboard
 

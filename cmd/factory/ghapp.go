@@ -31,9 +31,10 @@ var githubWeb = "https://github.com"
 var browse func(base string)
 
 // appPermissions are what the factory needs, and nothing else. Workflows is
-// left out on purpose, so the factory can never edit its own CI.
+// left out on purpose, so the factory can never edit its own CI. Actions
+// is read only, for main health to tell two workflows' jobs of one name apart.
 var appPermissions = map[string]string{
-	"contents": "write", "issues": "write", "pull_requests": "write", "checks": "read", "metadata": "read",
+	"contents": "write", "issues": "write", "pull_requests": "write", "checks": "read", "actions": "read", "metadata": "read",
 }
 
 // createApp registers a GitHub App for the factory using GitHub's manifest
@@ -245,7 +246,7 @@ var manifestPage = template.Must(template.New("m").Parse(`<!doctype html>
 <body style="font-family:system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem">
 <h1>Create the factory's GitHub App</h1>
 <p>This sends you to GitHub with a new app for <b>{{.Repo}}</b> already filled in:
-read and write access to code, issues and pull requests, read access to checks, and nothing else.</p>
+read and write access to code, issues and pull requests, read access to checks and workflow runs, and nothing else.</p>
 <form id="f" action="{{.Action}}" method="post">
 <input type="hidden" name="manifest" value="{{.Manifest}}">
 <button type="submit" style="font-size:1.1rem;padding:.6rem 1.2rem">Continue to GitHub</button>

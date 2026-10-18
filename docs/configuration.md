@@ -576,11 +576,16 @@ main_health:
 | `enabled` | `false` | Reads CI on each repo's `base_branch` and files issues. |
 | `every` | `10m` | How often. Each reading is a few API calls per repo. |
 | `daily_issue_cap` | `3` | Issues it may file per repo per UTC day. Past it, a red check is tracked and filed the next day. |
-| `require_approval` | `false` | Off, an issue is filed with `factory:ready` and built at once, approved as the factory. On, it waits for someone with write access to add the label. Either way the fix goes first in the queue and through the gates and review. |
+| `require_approval` | `false` | Off, an issue is filed with `factory:ready` and built at once, approved as the factory: its text has no CI output, and its fix never merges itself. On, it's filed with the output quoted, and waits for someone with write access to add the label. Either way the fix goes first in the queue and through the gates and review. |
 
-On GitHub it reads check runs, which the factory's app may read already
-(`checks: read`). On GitLab it reads the pipeline's jobs and, for a failed
-one, its log.
+`daily_issue_cap: 0` is the default, 3; to stop filing, turn
+`enabled` off.
+
+On GitHub it reads check runs, which the factory's app may read
+(`checks: read`), and workflow runs, to name checks by their workflow
+(`actions: read`; for an app made before, add it in the app's settings
+and accept it on the installation, or checks are told apart by name only). On GitLab it reads the pipelines' jobs and, for a failed one, the
+end of its log.
 
 ## Claude-only review
 

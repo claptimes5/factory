@@ -22,7 +22,8 @@ func TestHealth(t *testing.T) {
 	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "test", Kind: HealthRed, HeadSHA: "a"})
 	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "test", Kind: HealthRed, HeadSHA: "a", IssueNumber: 4})
 	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/x", Check: "lint", Kind: HealthFlaky, HeadSHA: "c", IssueNumber: 5})
-	if hs, _ := s.HealthIssues(ctx, "o/r"); len(hs) != 1 || hs[0].IssueNumber != 4 {
+	s.SetHealthIssue(ctx, HealthIssue{Repo: "o/r", Check: "test", Kind: HealthRed, HeadSHA: "a", IssueNumber: 4, State: HealthAbsent, AbsentSince: "t1", MutedUntil: "t2", Refiles: 1})
+	if hs, _ := s.HealthIssues(ctx, "o/r"); len(hs) != 1 || hs[0].IssueNumber != 4 || hs[0].State != HealthAbsent || hs[0].AbsentSince != "t1" || hs[0].MutedUntil != "t2" || hs[0].Refiles != 1 {
 		t.Fatalf("o/r %+v", hs)
 	}
 	if hs, _ := s.HealthIssues(ctx, ""); len(hs) != 2 {
