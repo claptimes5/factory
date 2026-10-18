@@ -77,9 +77,9 @@ type GitHub interface {
 	CreatePR(ctx context.Context, title, body, head, base string, draft bool) (*github.PR, error)
 	UpdatePRBody(ctx context.Context, n int, body string) error
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
-	// Approver is who last added label to issue n, and whether they may
-	// approve work (see approval.go).
-	Approver(ctx context.Context, n int, label string) (who string, ok bool, err error)
+	// Approver is who last added label to issue n, whether they may
+	// approve work, and the text they approved (see approval.go).
+	Approver(ctx context.Context, n int, label string) (github.Approval, error)
 }
 
 // RepoClients are one repository's GitHub client and git remote.
@@ -413,19 +413,20 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 		if err != nil {
 			return err
 		}
-		who := ""
+		who, text := "", is
 		if fresh {
 			ok := false
-			if who, ok = p.approvedBy(ctx, repo, is, p.Cfg.Intake.Label); !ok {
+			if who, text, ok = p.approvedBy(ctx, repo, is.Number, p.Cfg.Intake.Label); !ok {
 				continue
 			}
 		}
-		it, created, err := p.Store.UpsertItem(ctx, repo, is.Number, is.Title)
+		it, created, err := p.Store.UpsertItem(ctx, repo, is.Number, text.Title)
 		if err != nil {
 			return err
 		}
 		if created {
-			if err := p.approve(ctx, it, is, who); err != nil {
+			// Should this fail, the item parks at triage for lack of one.
+			if err := p.approve(ctx, it, text, who); err != nil {
 				return err
 			}
 			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
@@ -446,11 +447,11 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 			continue
 		}
 		// A retry approves the issue as it reads now.
-		who, ok := p.approvedBy(ctx, repo, is, LabelRetry)
+		who, text, ok := p.approvedBy(ctx, repo, is.Number, LabelRetry)
 		if !ok {
 			continue
 		}
-		if err := p.approve(ctx, it, is, who); err != nil {
+		if err := p.approve(ctx, it, text, who); err != nil {
 			return err
 		}
 		// Remove the signal first so a failure below cannot loop.

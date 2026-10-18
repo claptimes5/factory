@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/claptimes5/factory/internal/github"
 )
@@ -13,13 +14,20 @@ import (
 // approve work.
 const developer = 30
 
-// Approver says who last added label to issue n, and whether they may
-// approve work: Developer access or above (inherited from a group
-// counts), or the factory's own user. who is "" when no one added it.
-func (c *Client) Approver(ctx context.Context, n int, label string) (who string, ok bool, err error) {
+// maxEventPages bounds the label events read; an issue with more can't
+// be approved here (the newest event might be past them).
+const maxEventPages = 50
+
+// Approver says who last added label to issue n and whether that starts
+// work: Developer access or above (inherited from a group counts), or the
+// factory's own user. The text is read after the label, then the issue's
+// history is checked for an edit since the label: an edit in between
+// counts too, so what's returned is what they approved unless Edited.
+func (c *Client) Approver(ctx context.Context, n int, label string) (github.Approval, error) {
 	type event struct {
-		Action string `json:"action"` // add or remove
-		Label  *struct {
+		Action    string    `json:"action"` // add or remove
+		CreatedAt time.Time `json:"created_at"`
+		Label     *struct {
 			Name string `json:"name"`
 		} `json:"label"`
 		User *struct {
@@ -27,39 +35,87 @@ func (c *Client) Approver(ctx context.Context, n int, label string) (who string,
 			Username string `json:"username"`
 		} `json:"user"`
 	}
+	var a github.Approval
 	id := 0
-	for page := 1; page <= 10; page++ {
+	var at time.Time
+	for page := 1; ; page++ {
+		if page > maxEventPages {
+			return a, fmt.Errorf("gitlab: issue %d has over %d label events; too many to tell who added %s", n, maxEventPages*100, label)
+		}
 		var evs []event
 		q := url.Values{"per_page": {"100"}, "page": {fmt.Sprint(page)}}
 		if err := c.do(ctx, "GET", fmt.Sprintf("%s/issues/%d/resource_label_events?%s", c.project(), n, q.Encode()), nil, &evs); err != nil {
-			return "", false, err
+			return a, err
 		}
 		for _, e := range evs { // oldest first: the last one wins
 			if e.Action == "add" && e.Label != nil && e.User != nil && strings.EqualFold(e.Label.Name, label) {
-				who, id = e.User.Username, e.User.ID
+				a.By, id, at = e.User.Username, e.User.ID, e.CreatedAt
 			}
 		}
 		if len(evs) < 100 {
 			break
 		}
 	}
-	if who == "" {
-		return "", false, nil
+	is, err := c.GetIssue(ctx, n)
+	if err != nil {
+		return a, err
 	}
-	if self, err := c.self(ctx); err == nil && strings.EqualFold(self, who) {
-		return who, true, nil
+	a.Issue = *is
+	if a.By == "" {
+		return a, nil
+	}
+	if a.Edited, err = c.editedSince(ctx, n, at); err != nil {
+		return a, err
+	}
+	self, err := c.self(ctx)
+	if err != nil {
+		return a, err // unsure who the factory is: decide on a later poll
+	}
+	if strings.EqualFold(self, a.By) {
+		a.OK = true
+		return a, nil
 	}
 	var m struct {
 		AccessLevel int `json:"access_level"`
 	}
 	err = c.do(ctx, "GET", fmt.Sprintf("%s/members/all/%d", c.project(), id), nil, &m)
 	if github.IsNotFound(err) {
-		return who, false, nil // not a member
+		return a, nil // not a member
 	}
 	if err != nil {
-		return who, false, err
+		return a, err
 	}
-	return who, m.AccessLevel >= developer, nil
+	a.OK = m.AccessLevel >= developer
+	return a, nil
+}
+
+// editedSince reports whether the issue's title or description changed
+// after t, from the system notes GitLab writes for each change.
+func (c *Client) editedSince(ctx context.Context, n int, t time.Time) (bool, error) {
+	type note struct {
+		Body      string    `json:"body"`
+		System    bool      `json:"system"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	for page := 1; page <= maxEventPages; page++ {
+		var notes []note
+		q := url.Values{"sort": {"desc"}, "order_by": {"created_at"}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		if err := c.do(ctx, "GET", fmt.Sprintf("%s/issues/%d/notes?%s", c.project(), n, q.Encode()), nil, &notes); err != nil {
+			return false, err
+		}
+		for _, x := range notes { // newest first
+			if !x.CreatedAt.After(t) {
+				return false, nil
+			}
+			if x.System && (strings.HasPrefix(x.Body, "changed the description") || strings.HasPrefix(x.Body, "changed title")) {
+				return true, nil
+			}
+		}
+		if len(notes) < 100 {
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("gitlab: issue %d has too many notes to check for edits", n)
 }
 
 func (c *Client) self(ctx context.Context) (string, error) {

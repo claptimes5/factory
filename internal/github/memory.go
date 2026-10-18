@@ -136,6 +136,10 @@ func (m *Memory) LabelPR(ctx context.Context, n int, ls ...string) error {
 }
 
 // Approver: everything in an eval was put there by whoever runs it.
-func (m *Memory) Approver(context.Context, int, string) (string, bool, error) {
-	return "factory", true, nil
+func (m *Memory) Approver(ctx context.Context, n int, _ string) (Approval, error) {
+	is, err := m.GetIssue(ctx, n)
+	if err != nil {
+		return Approval{}, err
+	}
+	return Approval{By: "factory", OK: true, Issue: *is}, nil
 }

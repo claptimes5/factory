@@ -6,3 +6,8 @@ CREATE TABLE approvals (
   approved_by TEXT NOT NULL,
   at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Items already here were started before approvals were recorded: an
+-- empty hash takes their text when next read as approved. Any other item
+-- without a row has no approval and parks.
+INSERT INTO approvals (item_id, issue_hash, approved_by) SELECT id, '', '' FROM work_items;

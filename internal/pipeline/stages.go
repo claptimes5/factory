@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +23,8 @@ const (
 	maxReviewAttempts = 2
 )
 
-// issue fetches the item's issue: the text that was approved, or errEdited.
+// issue fetches the item's issue: the text that was approved, or errEdited
+// (or errUnapproved).
 func (p *Pipeline) issue(ctx context.Context, it *store.WorkItem) (github.Issue, error) {
 	is, err := p.gh(it.Repo).GetIssue(ctx, it.IssueNumber)
 	if err != nil {
@@ -71,7 +71,7 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 		return p.park(ctx, it, "Triage failed twice: "+msg)
 	}
 	is, err := p.issue(ctx, it)
-	if errors.Is(err, errEdited) {
+	if notApproved(err) {
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
 		p.parkEdited(ctx, it, err)
 		return nil
@@ -174,7 +174,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 
 	is, err := p.issue(ctx, it)
-	if errors.Is(err, errEdited) {
+	if notApproved(err) {
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
 		p.parkEdited(ctx, it, err)
 		return nil
@@ -549,7 +549,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return p.park(ctx, it, fmt.Sprintf("The %s stage could not produce a valid verdict (%s).", j.Kind, msg))
 	}
 	is, err := p.issue(ctx, it)
-	if errors.Is(err, errEdited) {
+	if notApproved(err) {
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", err.Error())
 		p.parkEdited(ctx, it, err)
 		return nil

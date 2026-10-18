@@ -33,16 +33,21 @@ type fakeGH struct {
 	failCreatePR int
 	labeledBy    map[int]string // who added labels to an issue; "maintainer" unless set
 	outsiders    map[string]bool
+	editedAfter  map[int]bool // the issue changed after it was labeled
 }
 
-func (f *fakeGH) Approver(_ context.Context, n int, _ string) (string, bool, error) {
+func (f *fakeGH) Approver(_ context.Context, n int, _ string) (github.Approval, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	who := f.labeledBy[n]
 	if who == "" {
 		who = "maintainer"
 	}
-	return who, !f.outsiders[who], nil
+	a := github.Approval{By: who, OK: !f.outsiders[who], Edited: f.editedAfter[n]}
+	if is := f.issues[n]; is != nil {
+		a.Issue = *is
+	}
+	return a, nil
 }
 
 func newFakeGH() *fakeGH {

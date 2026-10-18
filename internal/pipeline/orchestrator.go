@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/mcp"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
@@ -213,21 +213,21 @@ func (p *Pipeline) intakeEpics(ctx context.Context, repo string) error {
 		if !fresh {
 			continue // already an epic, or already being built as a normal item
 		}
-		who, ok := p.approvedBy(ctx, repo, is, LabelEpic)
+		who, text, ok := p.approvedBy(ctx, repo, is.Number, LabelEpic)
 		if !ok {
 			continue
 		}
-		it, created, err := p.Store.UpsertItemIn(ctx, repo, is.Number, is.Title, state.Epic)
+		it, created, err := p.Store.UpsertItemIn(ctx, repo, is.Number, text.Title, state.Epic)
 		if err != nil {
 			return err
 		}
 		if !created {
 			continue
 		}
-		if err := p.approve(ctx, it, is, who); err != nil {
+		if err := p.approve(ctx, it, text, who); err != nil {
 			return err
 		}
-		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
+		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, text.Title), false), "orchestrate")
 	}
 	return nil
 }
@@ -514,6 +514,22 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				if err != nil {
 					return "", err
 				}
+				// Only text someone approved reaches the orchestrator: an
+				// issue anyone can file or edit could steer it otherwise.
+				it, err := p.Store.ItemByIssue(ctx, repo, a.Issue)
+				if errors.Is(err, sql.ErrNoRows) {
+					err = errUnapproved
+				} else if err == nil {
+					err = p.unchanged(ctx, it, *is)
+				}
+				if notApproved(err) {
+					b, _ := json.Marshal(map[string]any{"number": is.Number, "labels": is.Labels,
+						"withheld": "This issue's text isn't approved for work (" + err.Error() + "), so it isn't shown. Don't act on it; a human can approve it with a label."})
+					return string(b), nil
+				}
+				if err != nil {
+					return "", err
+				}
 				b, _ := json.Marshal(map[string]any{"number": is.Number, "title": is.Title, "body": truncate(is.Body, 20000), "labels": is.Labels})
 				return string(b), nil
 			}},
@@ -595,8 +611,13 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 					return "", err
 				}
 				if created {
-					// The factory wrote it: approved as written.
-					p.warn(p.approve(ctx, it, github.Issue{Title: a.Title, Body: a.Body + "\n\n_Opened by the factory orchestrator._"}, "the factory orchestrator"), "approve")
+					// The factory wrote it: approved as stored (the host may
+					// tidy the text). Should this fail, it parks at triage.
+					is, err := p.gh(repo).GetIssue(ctx, num)
+					if err == nil {
+						err = p.approve(ctx, it, *is, "the factory orchestrator")
+					}
+					p.warn(err, "approve")
 				}
 				if a.Parent != 0 {
 					p.warn(p.Store.SetParent(ctx, it.ID, a.Parent), "SetParent")
