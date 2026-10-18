@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -214,10 +215,55 @@ func protected(p string, list []string) bool {
 // binaryLines is what one changed binary file counts toward max_changed_lines.
 const binaryLines = 100
 
-// IsTest reports whether a path is test code or test data.
+// IsTest reports whether a path is test code or test data, in Go, Ruby,
+// JavaScript/TypeScript, Python or Rust. It goes by file names, plus a few
+// directories only when the file in them is code of that kind: a bare
+// features/ or spec/ directory is as often app code or an API spec.
 func IsTest(p string) bool {
-	return strings.HasSuffix(p, "_test.go") || strings.Contains(p, "/testdata/") || strings.HasPrefix(p, "testdata/")
+	p = filepath.ToSlash(p)
+	base := path.Base(p)
+	ext := path.Ext(base)
+	in := func(dir string) bool { return strings.HasPrefix(p, dir+"/") || strings.Contains(p, "/"+dir+"/") }
+	if in("testdata") {
+		return true
+	}
+	if ext == ".snap" || in("__snapshots__") || in("fixtures") || in("__fixtures__") {
+		return false
+	}
+	for _, suf := range []string{"_test.go", "_spec.rb", "_test.rb", "_test.py", ".feature"} {
+		if strings.HasSuffix(base, suf) {
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "test_") && ext == ".py" {
+		return true
+	}
+	if jsCode[ext] {
+		// foo.test.ts, foo.spec.jsx and the like.
+		parts := strings.Split(base, ".")
+		if len(parts) >= 3 && (parts[len(parts)-2] == "test" || parts[len(parts)-2] == "spec") {
+			return true
+		}
+		if in("__tests__") || in("cypress") {
+			return true
+		}
+	}
+	code := jsCode[ext] || ext == ".go" || ext == ".rb" || ext == ".py" || ext == ".rs"
+	switch {
+	case !code:
+		return false
+	case in("test") || in("tests") || in("e2e"):
+		// Helpers and suites (test/test_helper.rb, mocha's test/*.js,
+		// test/e2e/framework/util.go).
+		return true
+	case in("spec"):
+		// RSpec and Jasmine; a Go or Python spec/ package is usually code.
+		return ext == ".rb" || jsCode[ext]
+	}
+	return false
 }
+
+var jsCode = map[string]bool{".js": true, ".jsx": true, ".ts": true, ".tsx": true, ".mjs": true, ".cjs": true, ".vue": true, ".svelte": true}
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	safe := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "--no-pager"}

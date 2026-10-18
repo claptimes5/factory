@@ -49,7 +49,7 @@ func main() {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -137,6 +137,12 @@ func run(args []string) error {
 			return usage()
 		}
 		return pull(ctx, cfg, st, fs.Arg(1))
+	case "readiness":
+		p, err := build(cfg, st)
+		if err != nil {
+			return err
+		}
+		return runReadiness(ctx, cfg, p, fs.Args()[1:])
 	case "compare":
 		return runCompare(ctx, cfg, st, fs.Args()[1:])
 	case "eval":
@@ -246,7 +252,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 			}
 			return pipeline.RepoClients{
 				GH:  &github.Client{Repo: repo, Tokens: ts},
-				Git: &pipeline.Git{RemoteURL: "https://github.com/" + repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)},
+				Git: repoGit(cfg, repo, ts),
 			}
 		},
 		Runner: r,

@@ -255,12 +255,23 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 			return err
 		}
 	}
+	images := true
 	if cfg.Runner.Kind == "docker" {
 		p.say("\n== 5. Job images")
-		setupImages(p, cfg)
+		images = setupImages(p, cfg)
 	}
 
-	p.say("\n== 6. Claude (writes the code)")
+	if client != nil {
+		p.say("\n== 6. How ready each repo is for the factory")
+		if images {
+			setupReadiness(ctx, p, cfg, client)
+		} else {
+			p.say("The check runs in the job images, so it waits until they're built.")
+			p.say("Run it then with: ./factory readiness")
+		}
+	}
+
+	p.say("\n== 7. Claude (writes the code)")
 	p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
 	p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
 	for {
@@ -291,7 +302,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 
 	if usesHarness(cfg, "codex") {
-		p.say("\n== 7. OpenAI (reviews the code)")
+		p.say("\n== 8. OpenAI (reviews the code)")
 		p.say("factory.yaml has Codex review Claude's work. Paste an API key from")
 		p.say("https://platform.openai.com/api-keys. A ChatGPT plan isn't needed.")
 		p.say("No OpenAI account? Leave it empty and see \"Claude-only review\" in the README.")
@@ -305,7 +316,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 8. Phone notifications (optional)")
+	p.say("\n== 9. Phone notifications (optional)")
 	p.say("An ntfy topic URL (https://ntfy.sh/<topic>), or a Slack or Discord webhook URL.")
 	for {
 		// Webhook URLs work as passwords, so this is read like a key.
@@ -500,8 +511,9 @@ func checkDocker(p *prompter, cfg *config.Config) error {
 	return nil
 }
 
-// setupImages builds the job images that aren't built yet.
-func setupImages(p *prompter, cfg *config.Config) {
+// setupImages builds the job images that aren't built yet. It reports
+// whether they all are now.
+func setupImages(p *prompter, cfg *config.Config) bool {
 	var missing []jobImage
 	for _, im := range jobImages(cfg) {
 		if runCmd(io.Discard, "docker", "image", "inspect", im.tag) != nil {
@@ -510,7 +522,7 @@ func setupImages(p *prompter, cfg *config.Config) {
 	}
 	if len(missing) == 0 {
 		p.say("The job images are built.")
-		return
+		return true
 	}
 	for _, im := range missing {
 		p.say("Jobs for %s run in the image %s, which isn't built yet.", joinAnd(im.repos), im.tag)
@@ -518,11 +530,13 @@ func setupImages(p *prompter, cfg *config.Config) {
 	p.say("Building takes a few minutes per image.")
 	if !p.yes("Build now?", true) {
 		p.say("Build them later with: ./factory images")
-		return
+		return false
 	}
 	if err := buildImages(p.out, cfg, false); err != nil {
 		p.say("%v. Fix it and run `./factory images` (or setup) again.", err)
+		return false
 	}
+	return true
 }
 
 // checkBaseBranches compares each repo's base branch in factory.yaml with

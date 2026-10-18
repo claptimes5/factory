@@ -384,6 +384,49 @@ A repo's `gates` override the top-level ones field by field. Its
 the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
 `scenarios_dir: none` to turn one off for that repo.
 
+### How ready a repo is
+
+The factory can only prove its changes work as far as the repo's checks
+reach. `factory setup` ends by measuring that for each repo, and you can
+run it again any time:
+
+```sh
+./factory readiness              # every repo; or name one: ./factory readiness you/api
+                                 # (flags go before the name)
+./factory readiness -file        # also open an issue for each gap
+./factory readiness -queue       # open them labeled for the factory to work
+```
+
+It clones the base branch, runs the install step and every required check
+(the tests twice, to catch flakiness), and looks for tests, end-to-end
+tests, a feature map, a lockfile and CI. It prints a score and what's
+missing:
+
+```
+you/api at main (4f2c1a9): 59/100, not ready yet: fix the blockers first
+  ✗ `test` fails on main
+  ! No lint check
+  ! No feature map
+  ✓ Installs from a clean checkout
+  ✓ Has end-to-end tests
+```
+
+A **blocker** means every job would fail, or pass for the wrong reason
+(tests that fail on the base branch, flaky tests, no tests at all). A
+**gap** means jobs work but less of what they change is verified. Each one
+comes with an issue written for the factory's builder, so the first thing
+the factory does on a new repo can be making it verifiable. While a repo
+has blockers, `-queue` labels only those for the factory, since every other
+job would fail until they're fixed; the gaps are filed for later, and the
+next `-queue` run after the blockers are fixed labels them too.
+
+Issues it files carry `factory:readiness`. Running it again skips a gap
+whose issue is still open or was closed as not planned, and files it again
+if it was closed as done but came back. If the check itself can't run (no
+Docker, a missing job image, a command that isn't installed, a timeout), it
+stops there and files nothing. The report is saved to
+`data/readiness/<owner>__<name>.json`.
+
 ### Each repo's toolchain and checks
 
 `factory setup` reads each repo's files and suggests checks and a job image

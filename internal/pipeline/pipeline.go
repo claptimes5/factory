@@ -51,8 +51,13 @@ func Labels(intake string) []Label {
 		{LabelAwaitingYou, "1d76db", "Factory: draft PR ready for your review"},
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
+		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
 	}
 }
+
+// LabelReadiness marks the issues the readiness check filed, so running it
+// again doesn't file them twice.
+const LabelReadiness = "factory:readiness"
 
 // GitHub is the subset of the GitHub client the pipeline uses.
 type GitHub interface {
