@@ -52,7 +52,7 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 	}
 	body := e.gh.comments[it.PRNumber][0]
 	for _, want := range []string{"feature:Math=pass", "## Blast radius",
-		"**High risk**: it touches Math, a high-risk feature in the feature map. Two independent reviewers passed it", "check the features under Blast radius by hand", "| Math | high | `add.go`, `add_test.go` | `test -f add_test.go && echo math-ok`: pass; `add_test.go` |", "Not in the feature map: `extra.go`"} {
+		"**High risk**: it touches Math, a high-risk feature in the feature map. The reviewer and then a second critic passed it", "check the features under Blast radius by hand", "| Math | high | `add.go`, `add_test.go` | `test -f add_test.go && echo math-ok`: pass; `add_test.go` |", "Not in the feature map: `extra.go`"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("PR body missing %q:\n%s", want, body)
 		}

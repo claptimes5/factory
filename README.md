@@ -431,7 +431,7 @@ it, and the PR tells you how much of your attention it needs:
 | --- | --- | --- |
 | low | `review` | a skim of the diff is enough |
 | medium | `review.medium_risk` if set, else `review` | read the changes to the features it touches |
-| high | `review.high_risk`, then a second, independent Claude critic | read the whole diff, and check the features it touches by hand |
+| high | `review.high_risk`, then a second critic (`routing.critic`, else `implement.L`) | read the whole diff, and check the features it touches by hand |
 
 The reviewer is told the risk and holds a high-risk change to a higher
 bar. Each PR carries a `factory:risk-low|medium|high` label (filter on it

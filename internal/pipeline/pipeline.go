@@ -52,7 +52,7 @@ func Labels(intake string) []Label {
 		{LabelRetry, "5319e7", "Factory: send a parked issue back to triage"},
 		{LabelEpic, "c5def5", "Factory: split into child issues"},
 		{LabelReadiness, "bfdadc", "Factory: makes the repo verifiable (from the readiness check)"},
-		{riskLabel("high"), "b60205", "Factory: high risk; two reviewers passed it, read all of it"},
+		{riskLabel("high"), "b60205", "Factory: high risk; reviewer and critic passed it, read all of it"},
 		{riskLabel("medium"), "fbca04", "Factory: medium risk; read the changes to the features it touches"},
 		{riskLabel("low"), "c2e0c6", "Factory: low risk; gates and a reviewer passed it, a skim is enough"},
 	}

@@ -628,7 +628,7 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Closes #%d\n\nBuilt by the factory. Triage: complexity **%s**, risk **%s**. Verified commit `%s`.\n\n", it.IssueNumber, it.Complexity, it.Risk, short(in.Head))
+	fmt.Fprintf(&b, "Closes #%d\n\nBuilt by the factory. Complexity **%s**, risk **%s**. Verified commit `%s`.\n\n", it.IssueNumber, it.Complexity, riskOrLow(it.Risk), short(in.Head))
 	b.WriteString("## How to review\n\n" + p.reviewGuide(ctx, it, in.Features != "") + "\n")
 	b.WriteString("## Gates\n\n" + in.Gates + "\n")
 	if in.Features != "" {

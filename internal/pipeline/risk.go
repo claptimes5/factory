@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -14,8 +15,8 @@ import (
 //   - low: one independent reviewer; the PR says a skim is enough.
 //   - medium: the review.medium_risk reviewer when set; the PR points you
 //     at the features it touches.
-//   - high: the review.high_risk reviewer, then a second, independent
-//     Claude critic; the PR asks you to read all of it.
+//   - high: the review.high_risk reviewer, then a second critic (the
+//     critic route, else implement.L); the PR asks you to read all of it.
 //
 // Merge stays human at every level.
 
@@ -47,16 +48,35 @@ func (p *Pipeline) labelRisk(ctx context.Context, it *store.WorkItem, pr int) {
 }
 
 // riskWhy says where the item's risk came from: the feature that raised it
-// when the feature map did, else triage.
+// when the feature map did in this run (since the latest triage), else
+// triage.
 func (p *Pipeline) riskWhy(ctx context.Context, it *store.WorkItem) string {
 	risk := riskOrLow(it.Risk)
+	jobs, _ := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
+	run := map[int64]bool{}
+	for _, j := range jobs { // newest first
+		if j.Kind == "triage" {
+			break
+		}
+		run[j.ID] = true
+	}
 	if evs, err := p.Store.Events(ctx, it.ID); err == nil {
 		for i := len(evs) - 1; i >= 0; i-- {
-			if evs[i].Type != "risk_raised" {
+			e := evs[i]
+			if e.Type != "risk_raised" || e.JobID == nil || !run[*e.JobID] {
 				continue
 			}
 			var d struct{ Feature, To string }
-			if json.Unmarshal([]byte(evs[i].Data), &d) == nil && d.To == risk && d.Feature != "" {
+			if json.Unmarshal([]byte(e.Data), &d) != nil || d.Feature == "" {
+				// Saved before the event carried data: "low -> high: touches X".
+				arrow, feature, ok := strings.Cut(e.Reason, ": touches ")
+				_, to, _ := strings.Cut(arrow, " -> ")
+				if !ok {
+					break
+				}
+				d.Feature, d.To = feature, to
+			}
+			if d.To == risk {
 				return fmt.Sprintf("it touches %s, a %s-risk feature in the feature map", d.Feature, risk)
 			}
 			break
@@ -74,7 +94,7 @@ func (p *Pipeline) reviewGuide(ctx context.Context, it *store.WorkItem, features
 	why := p.riskWhy(ctx, it)
 	switch riskOrLow(it.Risk) {
 	case "high":
-		s := fmt.Sprintf("**High risk**: %s. Two independent reviewers passed it, the reviewer and a Claude critic, but read the whole diff before you merge", why)
+		s := fmt.Sprintf("**High risk**: %s. The reviewer and then a second critic passed it, but read the whole diff before you merge", why)
 		if features {
 			s += ", and check the features under Blast radius by hand"
 		}
