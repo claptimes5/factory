@@ -1,7 +1,7 @@
 // Package storetest opens stores for tests from a database migrated once
-// per test binary. Migrating a new database runs every migration and
-// backs it up before each one, which under -race costs most of a second;
-// copying a migrated file costs a millisecond.
+// per test binary. Migrating a new database runs every migration, which
+// under -race costs a large part of a second; copying a migrated file
+// costs a millisecond.
 package storetest
 
 import (

@@ -67,13 +67,15 @@ jobs:
         run: |
           git status --porcelain -- . ../internal/web/app
           test -z "$(git status --porcelain -- . ../internal/web/app)"
-      # The browser is cached by the lockfile, which pins Playwright's
-      # version; the system libraries it needs are installed either way.
+      # The browser is cached by Playwright's version and the runner image;
+      # the system libraries it needs are installed either way.
+      - id: pwver
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         id: playwright
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pwver.outputs.v }}
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
       - if: steps.playwright.outputs.cache-hit == 'true'

@@ -13,8 +13,7 @@ import (
 )
 
 // openTest opens a store copied from one migrated once per test binary:
-// migrating runs every migration and backs up before each, most of a
-// second under -race.
+// running every migration costs a large part of a second under -race.
 func openTest(t *testing.T) (*Store, string) {
 	t.Helper()
 	tmplOnce.Do(func() {

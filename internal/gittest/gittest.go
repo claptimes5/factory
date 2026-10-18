@@ -25,7 +25,7 @@ func run(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	cfg := filepath.Join(dir, "gitconfig")
-	if err := os.WriteFile(cfg, []byte("[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfg, []byte("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n"), 0o644); err != nil {
 		panic(err)
 	}
 	for k, v := range map[string]string{"GIT_CONFIG_GLOBAL": cfg, "GIT_CONFIG_NOSYSTEM": "1"} {

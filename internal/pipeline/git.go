@@ -37,8 +37,9 @@ type Git struct {
 	askErr  error
 }
 
-// safe disables every config knob that would make git run a program.
-var safe = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper="}
+// safe disables every config knob that would make git run a program,
+// including a signer set in the host's global config.
+var safe = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}
 
 func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append(append([]string{}, safe...), args...)...)
