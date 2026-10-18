@@ -67,6 +67,10 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 	if !strings.Contains(prompt, "## Blast radius") || !strings.Contains(prompt, "| Math |") || !strings.Contains(prompt, "rated **high risk**") {
 		t.Fatalf("review prompt has no blast radius or risk:\n%s", prompt)
 	}
+	// The builder was told which features are high risk, before it built.
+	if b := e.claude.prompts["implement"][0]; !strings.Contains(b, "These features are high risk: Math (`add.go`); if you change them, treat the change as high risk. Where the change has logic") {
+		t.Fatalf("implement prompt:\n%s", b)
+	}
 	// Raised to high, it got the critic too, and the PR says so in its label.
 	if len(e.codex.prompts["review"]) != 1 || len(e.claude.prompts["critic"]) != 1 {
 		t.Fatalf("want the reviewer and the critic: codex %d, claude %d", len(e.codex.prompts["review"]), len(e.claude.prompts["critic"]))
@@ -138,5 +142,23 @@ func TestFeatureCheckBaseGetsInstall(t *testing.T) {
 	}
 	if it := e.item(t, 1); it.Stage == state.AwaitingHuman {
 		t.Fatalf("a real failure was excused as red on base: %+v", it)
+	}
+}
+
+// An issue triage rated high still hears where the high-risk features are.
+func TestImplementPromptHighRisk(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"features.yaml": featureMap})
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.claude.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := e.claude.prompts["implement"][0]
+	if !strings.Contains(b, "This issue is rated high risk. These features are high risk: Math (`add.go`);") || !strings.Contains(b, "property-based test") {
+		t.Fatalf("implement prompt:\n%s", b)
 	}
 }

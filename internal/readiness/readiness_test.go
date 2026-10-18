@@ -63,6 +63,7 @@ func titles(r *Report, l Level) string {
 func TestReadyRepo(t *testing.T) {
 	dir := tree(t, "Gemfile", "Gemfile.lock", "app/models/user.rb", "spec/models/user_spec.rb", "spec/system/login_spec.rb", ".github/workflows/ci.yml")
 	os.WriteFile(filepath.Join(dir, "features.yaml"), []byte("features:\n  - {name: Login, paths: [app/], tests: [spec/system/login_spec.rb], risk: high}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "spec/system/login_spec.rb"), []byte("require \"prop_check\"\n"), 0o644)
 	exec, ran := fails()
 	r := Assess(context.Background(), Input{Repo: repo("bundle install", "lint", "test", "build"), SHA: "abc1234567", Dir: dir, Exec: exec})
 	if !r.Ready || r.Score != 100 || titles(r, Blocker) != "" || titles(r, Gap) != "" {
@@ -166,5 +167,37 @@ func TestSave(t *testing.T) {
 	path, err := Save(dir, &Report{Repo: "o/api"})
 	if err != nil || filepath.Base(path) != "o__api.json" {
 		t.Fatalf("%s %v", path, err)
+	}
+}
+
+// A high-risk feature with tests but no property or fuzz test is a gap;
+// a lower-risk one isn't, and an untested one is left to feature-tests.
+func TestPropertyTests(t *testing.T) {
+	dir := tree(t, "go.mod", "go.sum", "pay/pay.go", "pay/pay_test.go", "auth/auth.go", "auth/auth_test.go", "ui/ui.go", "ui/ui_test.go", "ops/ops.go", ".github/workflows/ci.yml")
+	os.WriteFile(filepath.Join(dir, "auth/auth_test.go"), []byte("package auth\n\nfunc FuzzLogin(f *testing.F) {}\n"), 0o644)
+	// A symlink out of the export doesn't count, whatever it points at.
+	outside := filepath.Join(t.TempDir(), "rapid_test.go")
+	os.WriteFile(outside, []byte("import \"pgregory.net/rapid\"\n"), 0o644)
+	os.Remove(filepath.Join(dir, "pay/pay_test.go"))
+	os.Symlink(outside, filepath.Join(dir, "pay/pay_test.go"))
+	os.WriteFile(filepath.Join(dir, "features.yaml"), []byte(`features:
+  - {name: Payments, paths: [pay/], tests: [pay/], risk: high}
+  - {name: Auth, paths: [auth/], tests: [auth/auth_test.go], risk: high}
+  - {name: UI, paths: [ui/], tests: [ui/], risk: medium}
+  - {name: Ops, paths: [ops/], tests: [], risk: high}
+`), 0o644)
+	exec, _ := fails()
+	r := Assess(context.Background(), Input{Repo: repo("", "test"), SHA: "abc1234567", Dir: dir, Exec: exec})
+	if !strings.Contains(titles(r, Gap), "High-risk features have no property tests: Payments;") && !strings.HasSuffix(titles(r, Gap), "High-risk features have no property tests: Payments") {
+		t.Fatalf("gaps: %s", titles(r, Gap))
+	}
+	var found bool
+	for _, is := range r.Issues() {
+		if is.Key == "property-tests" {
+			found = strings.Contains(is.Body, ": Payments.") && strings.Contains(is.Body, "pgregory.net/rapid")
+		}
+	}
+	if !found {
+		t.Fatalf("no property-tests issue: %+v", r.Issues())
 	}
 }

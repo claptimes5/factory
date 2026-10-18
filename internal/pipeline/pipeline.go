@@ -882,7 +882,8 @@ type PromptData struct {
 	PreviousFailure string
 	Gates           string
 	Features        string // the change's blast radius, when the repo has a feature map
-	Risk            string // low, medium or high, for the reviewer
+	Risk            string   // low, medium or high
+	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
 	Fence           string   // a code fence the diff cannot close
 	Reasons         []string // why the orchestrator runs

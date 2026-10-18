@@ -60,3 +60,23 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("%+v", h)
 	}
 }
+
+func TestHasProperties(t *testing.T) {
+	for text, want := range map[string]bool{
+		"import \"pgregory.net/rapid\"\n":                    true,
+		"func FuzzParse(f *testing.F) {}\n":                  true,
+		"func FuzzyMatch(t *testing.T) {}\n":                 false,
+		"from hypothesis import given\n":                     true,
+		"import fc from 'fast-check'\n":                      true,
+		"#include <rapidcheck.h>\n":                          true,
+		"import org.scalacheck.Prop\n":                       true,
+		"import Test.QuickCheck\n":                           true,
+		"// TODO: use proptest here\nfn it_works() {}\n":     false,
+		"# switch to hypothesis later\ndef test_x(): pass\n": false,
+		"def test_total():\n    assert total([1, 2]) == 3\n": false,
+	} {
+		if got := HasProperties(text); got != want {
+			t.Errorf("HasProperties(%q) = %v, want %v", text, got, want)
+		}
+	}
+}

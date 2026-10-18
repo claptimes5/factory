@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -153,6 +154,53 @@ type Health struct {
 	Covered  int      // of those, the ones some feature's paths cover
 	Untested []string // features with no tests
 	Stale    []string // "feature: pattern" for paths or tests that match no file
+}
+
+// TestFiles are the files among files that the feature's tests name.
+func (f Feature) TestFiles(files []string) []string {
+	var out []string
+	for _, file := range files {
+		if matchAny(f.Tests, file) {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// PropertyMarkers are what a property-based or fuzz test uses, by stack:
+// the library's import or name. They match case-insensitively.
+var PropertyMarkers = []string{
+	"testing/quick", "pgregory.net/rapid", "flyingmutant/rapid", "gopter", // Go
+	"from hypothesis", "import hypothesis", "import atheris", // Python
+	"fast-check", "fc.assert", "fc.property", "jsverify", // JS/TS
+	"prop_check", "rantly", // Ruby
+	"proptest", "quickcheck", "fuzz_target!", "libfuzzer_sys", "bolero", // Rust, Haskell
+	"exunitproperties", "streamdata", // Elixir
+	"jqwik", "junit-quickcheck", "kotest.property", "org.scalacheck", // JVM
+	"fscheck", "cscheck", // .NET
+	"rapidcheck", "swiftcheck", "eris\\", // C++, Swift, PHP
+}
+
+// goFuzz is a Go fuzz test's signature.
+var goFuzz = regexp.MustCompile(`func Fuzz\w*\(\s*\w+\s+\*testing\.F\s*\)`)
+
+// HasProperties reports whether a test file's text uses property-based
+// or fuzz testing. Lines that are only comments don't count.
+func HasProperties(text string) bool {
+	var code strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "//") || t == "#" || strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "--") || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "/*") {
+			continue
+		}
+		code.WriteString(line + "\n")
+	}
+	s := code.String()
+	if goFuzz.MatchString(s) {
+		return true
+	}
+	l := strings.ToLower(s)
+	return slices.ContainsFunc(PropertyMarkers, func(m string) bool { return strings.Contains(l, m) })
 }
 
 // Check measures the map against the repo's files.

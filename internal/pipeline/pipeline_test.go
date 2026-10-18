@@ -381,6 +381,9 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 		}
 	}
 	// The reviewer is never shown the builder's summary.
+	if strings.Contains(e.claude.prompts["implement"][0], "property-based") {
+		t.Fatal("a low-risk build with no feature map was asked for property tests")
+	}
 	if strings.Contains(e.codex.prompts["review"][0], "did it") {
 		t.Fatal("review prompt leaked the builder's summary")
 	}
