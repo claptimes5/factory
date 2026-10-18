@@ -286,3 +286,61 @@ func TestCapDiff(t *testing.T) {
 		t.Fatal("a diff under the cap is kept whole")
 	}
 }
+
+// A line you take out of the lessons PR, or whose PR you close without
+// merging, is remembered as declined and never proposed again.
+func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n\nRun the tests.\n"})
+	lesson := func(lines ...string) string {
+		var ls []string
+		for _, l := range lines {
+			ls = append(ls, fmt.Sprintf(`{"line":%q,"why":"seen in #1","evidence":["#1"]}`, l))
+		}
+		return `{"lessons":[` + strings.Join(ls, ",") + `],"skip_reason":""}`
+	}
+	edit := func(n int, learn string) {
+		t.Helper()
+		e.built(t, n)
+		e.merge(fmt.Sprintf("factory/issue-%d", n), e.humanPush(t, fmt.Sprintf("factory/issue-%d", n), "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
+		e.claude.learn = append(e.claude.learn, learn)
+		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.poll(t)
+	}
+	t.Cleanup(func() { learnDay = store.Today })
+
+	edit(1, lesson("Check for overflow.", "Document exported functions."))
+	first := e.gh.prs[LessonsBranch].Number
+	// You take one line out of the open PR.
+	md := strings.Replace(e.lessonsMD(t), "\n- Document exported functions.", "", 1)
+	e.humanPush(t, LessonsBranch, "AGENTS.md", md+"\n")
+
+	edit(2, lesson("document exported functions", "Run go vet."))
+	if p := e.claude.prompts["learn"][1]; !strings.Contains(p, "## Lines a human declined") || !strings.Contains(p, "- Document exported functions.") {
+		t.Fatalf("learn prompt:\n%s", p)
+	}
+	if md := e.lessonsMD(t); !strings.HasSuffix(md, "- Check for overflow.\n- Run go vet.") || strings.Contains(strings.ToLower(md), "document") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+
+	// You close the PR without merging: its lines are declined too, and the
+	// next lessons start a fresh PR from base.
+	e.gh.prs[LessonsBranch].State = "closed"
+	edit(3, lesson("CHECK FOR OVERFLOW", "Name tests after behavior."))
+	pr := e.gh.prs[LessonsBranch]
+	if pr.Number == first || pr.State != "open" {
+		t.Fatalf("lessons PR = %+v", pr)
+	}
+	if md := e.lessonsMD(t); !strings.HasSuffix(md, "## Lessons from the factory\n\n- Name tests after behavior.") || strings.Contains(md, "overflow") || strings.Contains(md, "vet") {
+		t.Fatalf("AGENTS.md:\n%s", md)
+	}
+	ls, _ := e.p.Store.Lessons(ctx, "o/r")
+	got := map[string]string{}
+	for _, l := range ls {
+		got[l.Line] = l.Status
+	}
+	want := map[string]string{"Check for overflow.": "declined", "Document exported functions.": "declined", "Run go vet.": "declined", "Name tests after behavior.": "proposed"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("lessons = %v", got)
+	}
+}

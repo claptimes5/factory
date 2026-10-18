@@ -292,13 +292,16 @@ The lines go to `AGENTS.md`, which builders read before they start, under a
 change: on the `factory/lessons` branch, in a draft PR labeled
 `factory:awaiting-you`. The PR lists each line with why it was proposed and
 links to the issues and PRs it came from. While it's open, new lines are
-added to it. A line already in `AGENTS.md` or in the PR is skipped. You get
-a notification each time it opens or grows.
+added to it. A line already in `AGENTS.md` or in the PR, or one you
+declined, is skipped. You get a notification each time it opens or grows.
 
 Read the lines before you merge: they steer every later build. Edit or drop
 any on the branch. The PR never merges itself, whatever `auto_merge` says,
-and no build ever runs on its branch. Close it to turn the lines down; the
-next lessons start a fresh PR.
+and no build ever runs on its branch.
+
+To turn a line down, take it out of the PR's branch, or close the PR without
+merging it to turn them all down. The factory remembers declined lines and
+never proposes them again; the next lessons start a fresh PR.
 
 To turn it off, set `learning: {enabled: false}` (see
 [Configuration](configuration.md#learning-from-your-edits)).

@@ -35,3 +35,24 @@ func TestSignals(t *testing.T) {
 		t.Fatalf("since = %+v", later)
 	}
 }
+
+// A proposed line is kept once, and remembers what became of it.
+func TestLessons(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTest(t)
+	for _, l := range []Lesson{{Repo: "o/R", Line: "Check X.", Norm: "check x", PRNumber: 5}, {Repo: "o/r", Line: "check x", Norm: "check x", PRNumber: 6}} {
+		if err := s.AddLesson(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ls, err := s.Lessons(ctx, "O/r")
+	if err != nil || len(ls) != 1 || ls[0].PRNumber != 5 || ls[0].Status != LessonProposed {
+		t.Fatalf("lessons = %+v, %v", ls, err)
+	}
+	if err := s.DecideLesson(ctx, ls[0].ID, LessonDeclined); err != nil {
+		t.Fatal(err)
+	}
+	if ls, _ = s.Lessons(ctx, "o/r"); ls[0].Status != LessonDeclined || ls[0].DecidedAt == "" {
+		t.Fatalf("after decide = %+v", ls)
+	}
+}

@@ -91,3 +91,58 @@ func (s *Store) UseSignals(ctx context.Context, ids []int64, learnJob int64) err
 		return nil
 	})
 }
+
+// Lesson is a line the factory proposed for a repo's AGENTS.md.
+type Lesson struct {
+	ID        int64
+	Repo      string
+	Line      string
+	Norm      string // the line as dedup compares it
+	PRNumber  int
+	Status    string // proposed | merged | declined
+	CreatedAt string
+	DecidedAt string
+}
+
+// Lesson statuses.
+const (
+	LessonProposed = "proposed"
+	LessonMerged   = "merged"
+	LessonDeclined = "declined"
+)
+
+// AddLesson records a proposed line. One already known by its norm keeps
+// what it has.
+func (s *Store) AddLesson(ctx context.Context, l Lesson) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO lessons(repo, line, norm, pr_number, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			strings.ToLower(l.Repo), l.Line, l.Norm, l.PRNumber, Now())
+		return err
+	})
+}
+
+// Lessons lists a repo's proposed lines, oldest first.
+func (s *Store) Lessons(ctx context.Context, repo string) ([]Lesson, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id, repo, line, norm, pr_number, status, created_at, decided_at FROM lessons WHERE repo = ? ORDER BY id`, strings.ToLower(repo))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Lesson
+	for rows.Next() {
+		var l Lesson
+		if err := rows.Scan(&l.ID, &l.Repo, &l.Line, &l.Norm, &l.PRNumber, &l.Status, &l.CreatedAt, &l.DecidedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// DecideLesson sets what became of a proposed line.
+func (s *Store) DecideLesson(ctx context.Context, id int64, status string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE lessons SET status = ?, decided_at = ? WHERE id = ?`, status, Now(), id)
+		return err
+	})
+}

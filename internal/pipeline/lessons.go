@@ -378,6 +378,7 @@ type learnPrompt struct {
 	AgentsMD string   // the base branch's AGENTS.md, or ""
 	ClaudeMD string   // the base branch's CLAUDE.md, or ""
 	Proposed []string // lines in the open lessons PR not on the base yet
+	Declined []string // lines a human turned down: never again
 	Edits    []learnEdit
 	Groups   []learnGroup
 	Fence    string // a code fence none of the above can close
@@ -420,6 +421,7 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 			data.Proposed = newLines(agents, branch)
 		}
 	}
+	data.Declined = p.settleLessons(ctx, in.Repo, ws, agents)
 	var findings []store.Signal
 	for _, s := range sigs {
 		switch s.Kind {
@@ -472,6 +474,69 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 	return nil
 }
 
+// settleLessons records what became of the lines the factory proposed:
+// merged, or declined when their PR closed unmerged, or when a human took
+// them out of the PR before merging it. It returns every declined line.
+// base is AGENTS.md on the base branch of the checkout ws.
+func (p *Pipeline) settleLessons(ctx context.Context, repo string, ws *Workspace, base string) []string {
+	ls, err := p.Store.Lessons(ctx, repo)
+	if err != nil {
+		p.warn(err, "Lessons")
+		return nil
+	}
+	has := func(md, norm string) bool {
+		for _, l := range strings.Split(md, "\n") {
+			if normLine(l) == norm {
+				return true
+			}
+		}
+		return false
+	}
+	open, _ := p.gh(repo).FindPR(ctx, LessonsBranch)
+	if open != nil && (open.State != "open" || open.Merged) {
+		open = nil
+	}
+	branch, onBranch := "", false
+	if open != nil {
+		branch, onBranch, _ = p.git(repo).FileAt(ctx, ws.Repo, "refs/remotes/origin/"+LessonsBranch, "AGENTS.md")
+	}
+	prs := map[int]*github.PR{}
+	var declined []string
+	for _, l := range ls {
+		if l.Status == store.LessonProposed {
+			status := ""
+			if open != nil && l.PRNumber == open.Number {
+				if onBranch && !has(branch, l.Norm) && !has(base, l.Norm) {
+					status = store.LessonDeclined // taken out of the open PR
+				}
+			} else {
+				pr, ok := prs[l.PRNumber]
+				if !ok {
+					if pr, err = p.gh(repo).GetPR(ctx, l.PRNumber); err != nil {
+						pr = nil
+					}
+					prs[l.PRNumber] = pr
+				}
+				switch {
+				case pr == nil:
+				case pr.Merged && has(base, l.Norm):
+					status = store.LessonMerged
+				case pr.Merged || pr.State == "closed":
+					status = store.LessonDeclined // closed, or merged without it
+				}
+			}
+			if status != "" {
+				p.warn(p.Store.DecideLesson(ctx, l.ID, status), "DecideLesson")
+				l.Status = status
+			}
+		}
+		if l.Status == store.LessonDeclined {
+			declined = append(declined, l.Line)
+		}
+	}
+	return declined
+}
+
 // oneLine joins a text's lines, for a list item.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
@@ -516,6 +581,15 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 	for _, l := range strings.Split(base+"\n"+cur, "\n") {
 		seen[normLine(l)] = true
 	}
+	known, err := p.Store.Lessons(ctx, repo)
+	if err != nil {
+		return err
+	}
+	for _, l := range known {
+		if l.Status == store.LessonDeclined {
+			seen[l.Norm] = true
+		}
+	}
 	var add []verdict.Lesson
 	for _, l := range lessons {
 		l.Line = cleanLine(l.Line)
@@ -559,6 +633,9 @@ func (p *Pipeline) proposeLessons(ctx context.Context, j *store.Job, repo string
 		if err := gh.UpdatePRBody(ctx, open.Number, body); err != nil {
 			return err
 		}
+	}
+	for _, l := range lines {
+		p.warn(p.Store.AddLesson(ctx, store.Lesson{Repo: repo, Line: l, Norm: normLine(l), PRNumber: pr.Number}), "AddLesson")
 	}
 	p.warn(gh.LabelPR(ctx, pr.Number, LabelAwaitingYou), "LabelPR")
 	b, _ := json.Marshal(map[string]any{"lines": lines})
