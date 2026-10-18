@@ -41,7 +41,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Overview": APIOverview{}, "Item": APIItem{}, "Card": APICard{}, "Column": APIColumn{}, "Board": APIBoard{},
 		"Job": APIJob{}, "Gate": APIGate{}, "Event": APIEvent{}, "ItemDetail": APIItemDetail{}, "JobDetail": APIJobDetail{},
 		"Finding": APIFinding{}, "Review": APIReview{}, "Check": APICheck{}, "PRPanel": APIPRPanel{}, "Diff": APIDiff{},
-		"Feed": APIFeed{}, "DaySpend": APIDaySpend{}, "ModelSpend": APIModelSpend{}, "Spend": APISpend{},
+		"Feed": APIFeed{}, "Activity": APIActivity{}, "ActivityEntry": APIActivityEntry{}, "DaySpend": APIDaySpend{}, "ModelSpend": APIModelSpend{}, "Spend": APISpend{},
 		"Notification": APINotification{}, "Notifications": APINotifications{}, "ActionResult": APIActionResult{},
 		"Error": APIError{}, "Metrics": metrics.Report{}, "Group": metrics.Group{}, "Week": metrics.Week{},
 	}
@@ -170,7 +170,8 @@ func TestAPIReads(t *testing.T) {
 	if len(b.Columns) != len(boardStages) || len(awaiting.Cards) != 1 || len(parked.Cards) != 1 {
 		t.Fatalf("board = %+v", b)
 	}
-	if c := awaiting.Cards[0]; c.CostUSD != 1.25 || c.Model != "sonnet" || !c.NeedsYou || c.PRURL != "https://github.com/o/r/pull/9" {
+	if c := awaiting.Cards[0]; c.CostUSD != 1.25 || c.Model != "sonnet" || !c.NeedsYou || c.PRURL != "https://github.com/o/r/pull/9" ||
+		c.GatesPassed != 1 || c.GatesTotal != 1 || c.Attempt != 1 || c.Live {
 		t.Fatalf("card = %+v", c)
 	}
 	if c := parked.Cards[0]; c.BlockedNote != "needs a human" {
@@ -207,6 +208,30 @@ func TestAPIReads(t *testing.T) {
 	getJSON(t, base+"/api/v1/orchestrator?item=1", &f)
 	if len(f.Events) != 0 {
 		t.Fatalf("filtered feed = %+v", f)
+	}
+
+	var act APIActivity
+	getJSON(t, base+"/api/v1/activity", &act)
+	var lines []string
+	for _, e := range act.Entries {
+		lines = append(lines, e.Ref+" "+e.Text+" ("+e.Tone+")")
+	}
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{"#2 PR #9 is ready for you (needs_you)", "#2 passed its gates; review started (live)", "#2 started building with sonnet (live)",
+		"#2 codex started reviewing (live)", "#2 unblocks two items (info)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("activity lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "job_queued") || act.Entries[0].Text != "unblocks two items" || act.Entries[0].Actor != "orchestrator" {
+		t.Errorf("activity:\n%s", got)
+	}
+
+	getJSON(t, base+"/api/v1/activity?repo=other/repo", &act)
+	for _, e := range act.Entries {
+		if e.Ref != "" {
+			t.Fatalf("another repo's feed has %+v", e)
+		}
 	}
 
 	var n APINotifications
@@ -425,5 +450,73 @@ func TestNotificationIDsSurviveItemEdits(t *testing.T) {
 		if !after[id] {
 			t.Fatalf("a priority change re-raised %s: %v", id, after)
 		}
+	}
+}
+
+// A running job's card says what its log shows it doing now.
+func TestLiveActivity(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "log.jsonl")
+	write := func(lines ...string) {
+		os.WriteFile(log, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	}
+	write(`{"type":"system","subtype":"init"}`)
+	if a := liveActivity(log); a != "" {
+		t.Fatalf("before any tool: %q", a)
+	}
+	write(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./...\necho done"}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Fixing it."}]}}`)
+	if a := liveActivity(log); a != "running go test ./..." {
+		t.Fatalf("bash: %q", a)
+	}
+	write(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/work/internal/webhook/retry.go"}}]}}`)
+	if a := liveActivity(log); a != "editing webhook/retry.go" {
+		t.Fatalf("edit: %q", a)
+	}
+	write(`{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}`)
+	if a := liveActivity(log); a != "running npm test" {
+		t.Fatalf("codex: %q", a)
+	}
+	// A tool result bigger than the first window read doesn't hide the call before it.
+	big := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + strings.Repeat("x", 200<<10) + `"}]}}`
+	write(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test -v ./..."}}]}}`, big)
+	if a := liveActivity(log); a != "running go test -v ./..." {
+		t.Fatalf("after a big line: %q", a)
+	}
+	if got := trim("ééé", 3); got != "é…" {
+		t.Fatalf("trim cut a character: %q", got)
+	}
+	if a := liveActivity(filepath.Join(t.TempDir(), "none")); a != "" {
+		t.Fatalf("no log: %q", a)
+	}
+}
+
+// A card shows the latest attempt's gates, not an earlier attempt's.
+func TestCardGatesFollowTheLatestAttempt(t *testing.T) {
+	base, st, _, _ := apiSetup(t)
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/r", 3, "Retry it")
+	first, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 2})
+	st.ClaimJob(ctx)
+	st.SetGateResults(ctx, first, []store.GateResult{{Gate: "test", Status: "fail"}, {Gate: "lint", Status: "pass"}})
+	st.FinishJob(ctx, first, store.Result{State: state.Failed})
+	second, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "opus", BudgetUSD: 2, Attempt: 2})
+	st.ClaimJob(ctx)
+	st.FinishJob(ctx, second, store.Result{State: state.TimedOut})
+	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
+	var b APIBoard
+	getJSON(t, base+"/api/v1/board", &b)
+	found := false
+	for _, col := range b.Columns {
+		for _, c := range col.Cards {
+			if c.ID == it.ID {
+				found = true
+				if c.Attempt != 2 || c.GatesTotal != 0 {
+					t.Fatalf("card = %+v", c)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no card for the item")
 	}
 }

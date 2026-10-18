@@ -53,6 +53,15 @@ type APICard struct {
 	CostUSD float64 `json:"cost_usd"`
 	Live    bool    `json:"live"`
 	LiveJob *int64  `json:"live_job"`
+	// The running job: its kind, when it started, and what its log says
+	// it is doing now ("editing parser/parser.go").
+	LiveKind  string `json:"live_kind"`
+	LiveSince string `json:"live_since"`
+	Activity  string `json:"activity"`
+	// The latest implement attempt, and how its gates went.
+	Attempt     int `json:"attempt"`
+	GatesPassed int `json:"gates_passed"`
+	GatesTotal  int `json:"gates_total"`
 }
 
 // APIColumn is one board column.
@@ -368,6 +377,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", s.apiRetry)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.apiCancel)
 	mux.HandleFunc("GET /api/v1/orchestrator", s.apiFeed)
+	mux.HandleFunc("GET /api/v1/activity", s.apiActivity)
 	mux.HandleFunc("GET /api/v1/metrics", s.metricsJSON)
 	mux.HandleFunc("GET /api/v1/spend", s.apiSpend)
 	mux.HandleFunc("GET /api/v1/notifications", s.apiNotifications)
@@ -429,6 +439,7 @@ func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
 				c.LiveJob = &id
 			}
 		}
+		s.cardProgress(ctx, &c, jobs)
 		col.Cards = append(col.Cards, c)
 	}
 	for _, st := range boardStages {

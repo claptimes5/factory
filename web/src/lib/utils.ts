@@ -35,13 +35,19 @@ const stageNames: Record<string, string> = {
   triage: "Triage",
   spec: "Spec",
   ready: "Ready",
-  implementing: "Implementing",
+  implementing: "Building",
   reviewing: "Reviewing",
-  awaiting_human: "Needs review",
+  awaiting_human: "PR ready",
   parked: "Parked",
   blocked: "Blocked",
   done: "Done",
 };
 export const stageName = (s: string) => stageNames[s] ?? s;
+
+/** "acme/web#101" as "web#101": the owner is the same everywhere. */
+export const shortRef = (ref: string) => ref.replace(/^[^/#]+\//, "");
+
+/** A repo's name without its owner. */
+export const repoName = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
 export const shortSha = (s: string) => s.slice(0, 7);

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/metrics"
@@ -429,12 +430,16 @@ func summarize(line string) string {
 	return trim(strings.Join(parts, " "), 2000)
 }
 
+// trim keeps a line to about n bytes, cutting between characters.
 func trim(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > n {
-		return s[:n] + "…"
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 func (s *Server) back(w http.ResponseWriter, r *http.Request, path, msg string) {

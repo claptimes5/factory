@@ -11,7 +11,7 @@ export function DiffScreen() {
     <div>
       <div className="mb-3 text-sm text-muted-foreground">
         <Link to="/" className="hover:text-foreground">
-          Board
+          Floor
         </Link>{" "}
         /{" "}
         <Link to={`/items/${id}`} className="hover:text-foreground">

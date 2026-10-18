@@ -210,13 +210,24 @@ in `web.hosts`.
 
 ## Dashboard (M7)
 
-The dashboard is at `/app/` on the same address as the control room (the
-"Classic view" link goes back). It is a React app built from `web/` and
-embedded in the binary, so running the factory needs no Node.
+The dashboard is at `/app/` on the same address as the control room
+(search for "Classic control room" to go back). It is a React app built
+from `web/` and embedded in the binary, fonts included, so running the
+factory needs no Node and loads nothing from outside. It follows the
+system's dark or light setting, and the sun/moon button switches it.
 
-- **Board:** items in columns by stage, with a live dot when a job runs,
-  model, cost, PR, and a needs-you or blocked badge. On a phone the columns
-  stack, with what needs you first.
+- **Floor:** what needs you first: PRs ready for review, with their gates
+  and a button to the PR, and parked items with the question to answer.
+  Below, a column per stage. A running job's card says what it is doing,
+  read from its log ("editing webhook/retry.go"), with its model, attempt
+  and how long it has run. A live feed of the day and the week's numbers
+  sit beside it. With several repos, the chips in the header narrow every
+  screen to one. On a phone, what's building and in review comes first and
+  the other stages are a tap away; a tablet gets two columns.
+- **Jump to (⌘K or Ctrl+K):** any item by number or title, or any screen.
+- **Live:** the feed on its own, said plainly ("PR #88 is ready for you",
+  "started building with opus, attempt 2"), with the orchestrator's
+  decisions marked.
 - **Item:** the issue, triage's spec, jobs, audit trail, and the PR panel:
   CI checks from GitHub, gate results, the reviewer's verdict with each
   finding linked to its diff line, and Approve (on GitHub), Retry, Retry a

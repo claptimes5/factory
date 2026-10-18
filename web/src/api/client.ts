@@ -18,6 +18,8 @@ export type PRPanel = S["PRPanel"];
 export type Finding = S["Finding"];
 export type Diff = S["Diff"];
 export type Feed = S["Feed"];
+export type Activity = S["Activity"];
+export type ActivityEntry = S["ActivityEntry"];
 export type Spend = S["Spend"];
 export type Metrics = S["Metrics"];
 export type Notification = S["Notification"];
@@ -66,7 +68,8 @@ export const queryClient = new QueryClient({
 });
 
 export const useOverview = () => useQuery({ queryKey: ["overview"], queryFn: () => getJSON<Overview>("/overview") });
-export const useBoard = () => useQuery({ queryKey: ["board"], queryFn: () => getJSON<Board>("/board") });
+export const useBoard = (opts: { enabled?: boolean; refetchInterval?: number | ((q: { state: { data?: Board } }) => number) } = {}) =>
+  useQuery({ queryKey: ["board"], queryFn: () => getJSON<Board>("/board"), ...opts });
 export const useItem = (id: number) =>
   useQuery({ queryKey: ["item", id], queryFn: () => getJSON<ItemDetail>(`/items/${id}`) });
 export const usePRPanel = (id: number) =>
@@ -78,6 +81,11 @@ export const useFeed = (item?: number) =>
   useQuery({
     queryKey: ["feed", item ?? 0],
     queryFn: () => getJSON<Feed>(item ? `/orchestrator?item=${item}` : "/orchestrator"),
+  });
+export const useActivity = (repo = "") =>
+  useQuery({
+    queryKey: ["activity", repo],
+    queryFn: () => getJSON<Activity>(repo ? `/activity?repo=${encodeURIComponent(repo)}` : "/activity"),
   });
 export const useSpend = () => useQuery({ queryKey: ["spend"], queryFn: () => getJSON<Spend>("/spend") });
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () => getJSON<Metrics>("/metrics") });
