@@ -587,6 +587,12 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 					if a.Repo == "" {
 						a.Repo = parent.Repo // an epic's children go in its repo unless named
 					}
+					if split, err := p.Store.GroomSplit(ctx, parent.Repo, parent.IssueNumber); err != nil || split {
+						if err != nil {
+							return "", err
+						}
+						return "", fmt.Errorf("refused: item %d's sub-issues came from backlog grooming and wait for a human's approval; don't split it again", a.Parent)
+					}
 				}
 				repo, err := p.pickRepo(a.Repo)
 				if err != nil {
@@ -1038,6 +1044,14 @@ func (p *Pipeline) finishEpics(ctx context.Context) error {
 		return err
 	}
 	for _, ep := range epics {
+		if p.waitsOnGroomChildren(ctx, ep) {
+			continue // a split's sub-issue isn't approved or closed yet
+		}
+		// A grooming split's sub-issues may all have closed unbuilt.
+		split, err := p.Store.GroomSplit(ctx, ep.Repo, ep.IssueNumber)
+		if err != nil {
+			return err
+		}
 		children, open := 0, 0
 		for _, it := range all {
 			if it.ParentID != nil && *it.ParentID == ep.ID {
@@ -1047,11 +1061,18 @@ func (p *Pipeline) finishEpics(ctx context.Context) error {
 				}
 			}
 		}
-		if children > 0 && open == 0 {
+		if (children > 0 || split) && open == 0 {
 			if err := p.Store.SetStage(ctx, ep.ID, state.Done, "daemon", fmt.Sprintf("all %d child issues done", children)); err != nil {
 				return err
 			}
-			p.warn(p.gh(ep.Repo).Comment(ctx, ep.IssueNumber, fmt.Sprintf("All %d child issues of this epic are merged.", children)), "Comment")
+			msg := fmt.Sprintf("All %d child issues of this epic are merged.", children)
+			switch {
+			case children == 0:
+				msg = "Every sub-issue of this epic was closed without being built."
+			case split:
+				msg = fmt.Sprintf("The %d sub-issues of this epic that were built are merged, and none is left waiting.", children)
+			}
+			p.warn(p.gh(ep.Repo).Comment(ctx, ep.IssueNumber, msg), "Comment")
 		}
 	}
 	return nil

@@ -118,6 +118,8 @@ goes red or flaky on a base branch and once when it's green again. With
 [sources](#issues-from-sentry-dependabot-and-todos) on, it tells you about
 each issue they file, once a day when the cap holds some back, and once
 when a source can't be read.
+With [grooming](#backlog-grooming) on, it tells you what each run
+flagged, and when a split you confirmed files its sub-issues.
 
 The dashboard's Inbox can also show browser notifications, but only while
 a dashboard tab is open.
@@ -135,8 +137,9 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, each repo's base branch CI (with main health on), recent jobs |
+| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, recent jobs |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
+| `factory groom [REPO]` | Queue a [backlog grooming](#backlog-grooming) run of one repo, or of each groomed repo, now, whatever `grooming.every` says; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |
 | `factory migrate` | Apply database migrations (a backup is written first) |
 | `factory backup FILE` | Write a consistent copy of the database |
@@ -553,6 +556,105 @@ closes nothing that scan), and doesn't clone while the disk is low.
 
 `factory status` shows each source's last read of each repo, what it found
 and the issues it has open.
+
+## Backlog grooming
+
+With [`grooming.every`](configuration.md#backlog-grooming) set (weekly is
+a good start), the factory looks over each repo's open issues and flags
+three things for you:
+
+- **Likely duplicates:** issues that ask for the same change, with the one
+  to keep.
+- **Likely stale issues:** no activity for `grooming.stale_after` (90
+  days), and something in them suggests they're obsolete, such as naming
+  code or a version that's gone. Age alone isn't enough.
+- **Issues too big for one change**, with a proposed split into 2 to 5
+  sub-issues, each with a title and a short body.
+
+**It never closes, edits or splits anything on its own.** For each issue it
+flags, it leaves one comment saying why and what you can do, and adds a
+label: `factory:duplicate?`, `factory:stale?` or `factory:split?`. Then:
+
+| You | The factory |
+| --- | --- |
+| Add `factory:close` to a duplicate or stale issue | Closes it (as not planned on GitHub) with a note: for a duplicate, which issue to follow instead |
+| Add `factory:split` to an issue flagged too big | Opens the proposed sub-issues, each waiting for `factory:ready` like any other, and makes the issue their [epic](#epics-and-dependencies) |
+| Take the `?` label off | Drops the proposal, and doesn't make it again for that issue unless the issue's title or text changes |
+| Close the issue yourself | Forgets the proposal |
+| Approve the issue, or let the factory take it up some other way | Takes the `?` label off and forgets the proposal |
+
+`factory:close` and `factory:split` count only from someone with write
+access (Developer or above on GitLab), checked as `factory:ready` is (see
+[Who can start work](security.md#who-can-start-work)). From anyone else,
+or if the issue changed after the label went on, the label comes off and
+a comment says why. The factory also refuses, takes both labels off and
+says why, when the issue's title or text changed since it was flagged, an
+open PR would now close it, or, for a duplicate, the issue to keep has
+closed or is itself proposed closed: of two issues, only one is ever
+closed as the other's duplicate. A confirming label on an issue with no
+matching proposal does nothing.
+
+**Splits.** The sub-issues say they're part of the original and carry no
+factory label, so nothing is built until someone approves each one. The
+original becomes an epic item, labeled `factory:epic`, that's never built
+itself; an approved sub-issue becomes its child. The epic is done once
+every sub-issue is closed and every approved one is built, including when
+all were closed unbuilt. The orchestrator can't split it again. Should
+filing fail partway, the next poll carries on: each sub-issue's body ends
+with a hidden marker, so one filed before the failure is found, not filed
+twice.
+
+**What it reads.** Each run reads up to `grooming.max_issues` (50) open
+issues: their title, labels, age, last activity and the first 1500
+characters of their text, all fenced as untrusted (see
+[Grooming: untrusted issue text](security.md#grooming-untrusted-issue-text)).
+It leaves alone, and only lists by title so it can name them as the issue
+to keep, issues that:
+
+- the factory has an item for (being built, parked, or done);
+- an open PR would close;
+- carry any `factory:` label or the intake label: in progress, an epic,
+  filed by [main health](#keeping-main-green) or a
+  [source](#issues-from-sentry-dependabot-and-todos) (whose own loop
+  closes them when what they were filed for goes away), or flagged already;
+- a split filed and nobody has approved yet.
+
+**What it posts.** Just before flagging an issue, the daemon reads it
+again and leaves it alone if it closed, changed, or was taken up while
+the run went on. It checks every proposal against what the run was shown: issue numbers it wasn't given, or may not flag, are dropped,
+as are stale calls on recently active issues and splits into fewer than
+2 or more than 5. Anything it would post must be plain prose: no links,
+@mentions, HTML, GitLab references or quick actions, and `#N` only for an
+issue the run was shown. A proposal that breaks a rule is dropped and the
+job's verdict says why; a reply that isn't the schema fails the run. At
+most 10 issues are flagged per run.
+
+**Not twice.** Each comment ends with a hidden marker naming the proposal
+and the issue text it was made for. The factory records each proposal
+before commenting, and drops the record if the comment or label fails.
+Before commenting it checks the record and the issue's comments for the
+marker, counting only the factory's own comments: when it finds its
+marker with no record (a lost database, or a label that failed), it puts
+the label and record back without commenting again. One caveat: after a
+lost database, that can put back a `?` label you had taken off, if the
+issue hasn't changed since. An issue has at most one open proposal.
+
+**Budget.** A groom job runs on `routing.groom` (Sonnet by default) and
+counts toward `budgets.daily_total`. A run that's due waits while today's
+budget is spent, and you're told once a day.
+
+**Checking for your labels.** While proposals are open, the daemon looks
+at most every 10 minutes: per repo with open proposals, it lists the
+issues carrying `factory:close`, `factory:split` and each `?` label in
+use (one list call per label, more for long lists), and reads each
+flagged issue whose `?` label is gone or that's confirmed. Confirming
+reads the issue, and for a duplicate the issue to keep, once more. Every
+6 hours it also reads each split's sub-issues nobody has approved yet,
+one call each, to see which closed. With no proposals open and no
+sub-issues waiting it makes no calls.
+
+`factory status` shows each repo's last run, what it read and flagged, and
+the proposals still open. Its prompt is `prompts/groom.md`.
 
 ## Screenshots on the PR
 

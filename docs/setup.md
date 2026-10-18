@@ -62,8 +62,10 @@ before moving on:
    permissions the factory needs, then asks you to install it on the repo.
    It saves the app's key and finds the IDs itself, so you copy nothing by
    hand. It then confirms it can reach the repo and offers to create the
-   factory's labels. On a server you reach over SSH, setup prints the
-   `ssh -L` command that lets your own browser open the link.
+   factory's labels, including grooming's (`factory:duplicate?`,
+   `factory:stale?`, `factory:split?`, `factory:split`, `factory:close`).
+   On a server you reach over SSH, setup prints the `ssh -L` command that
+   lets your own browser open the link.
 4. **Claude:** an API key, or a subscription token from `claude setup-token`.
 5. **OpenAI:** only if `factory.yaml` uses Codex. It asks "API key or
    ChatGPT plan?" and signs Codex in with an API key, a ChatGPT plan, or a
