@@ -15,34 +15,42 @@ import (
 // REVIEW.md's skip never covers one; one to auth, crypto, secrets or
 // payments code is the auth kind of change, and to migrations a
 // migration, both high risk. Setting an area replaces its defaults, []
-// turns it off, and an area of another name is added to them.
+// turns it off (left empty or null, it keeps them), and an area of
+// another name is added to them.
 type Sensitive map[string][]string
 
 // DefaultSensitive are the areas, in order, and their globs when
-// sensitive leaves them out. A glob with no / matches any part of a
-// path, so *auth* catches AuthController.php and internal/auth/ alike
-// (and authors.go: a false start is cheaper than a miss).
+// sensitive leaves them out. The four auth-kind areas, and migrations,
+// hold a person's merge, so their globs are narrow names; the wide ones
+// (*auth*, *token*, *session*, which catch authors.go and a lexer's
+// tokens.go too) are in access, which only starts a pass: a false start
+// is cheaper than a miss, a held PR isn't.
 var DefaultSensitive = []pathglob.Area{
 	// Authentication, sessions, permissions.
-	{Name: "auth", Globs: []string{"*auth*", "*oidc*", "*saml*", "*jwt*", "sso", "sso.*", "sso_*", "*login*", "*logout*", "*signin*",
-		"*signup*", "*session*", "*cookie*", "*password*", "passwd*", "*permission*", "*rbac*", "acl", "acl.*", "*accesscontrol*",
-		"*access_control*", "*csrf*", "*cors*", "*middleware*", "devise*"}},
+	{Name: "auth", Globs: []string{"auth", "auth.*", "auth_*", "*_auth*", "auth-*", "*-auth*", "authn*", "authz*", "authenticat*", "authoriz*",
+		"*authcontroller*", "*authservice*", "*authhandler*", "*authprovider*", "oauth*", "oidc*", "saml*", "sso*", "*jwt*", "login*", "logout*",
+		"session", "session.*", "session_*", "sessions*", "password*", "passwd*", "credential*", "permission*", "rbac*", "acl", "acl.*", "devise*"}},
 	// Cryptography.
 	{Name: "crypto", Globs: []string{"*crypt*", "*cipher*", "*hmac*", "tls", "tls.*", "cert", "certs", "cert.*", "cert_*", "cert-*", "*certificate*"}},
 	// Keys and secrets.
-	{Name: "secrets", Globs: []string{"*.pem", "*.key", "*.crt", "*.p12", "*.pfx", "id_rsa*", "*secret*", "*credential*", "*token*", "*apikey*",
-		"*api_key*", ".env", ".env.*", "*.env", ".npmrc", ".pypirc"}},
+	{Name: "secrets", Globs: []string{"*.pem", "*.key", "*.crt", "*.p12", "*.pfx", "id_rsa*", "*secret*", "*apikey*", "*api_key*", ".env", ".env.*",
+		"*.env", ".npmrc", ".pypirc"}},
 	// Money.
-	{Name: "payments", Globs: []string{"*payment*", "*billing*", "*invoice*", "*checkout*", "*wallet*", "*stripe*"}},
+	{Name: "payments", Globs: []string{"payment*", "*_payment*", "billing*", "*_billing*", "invoice*", "*_invoice*", "stripe", "stripe.*", "stripe_*",
+		"*_stripe*", "wallet*"}},
+	// Wide names around access and money: a pass, but not a person.
+	{Name: "access", Globs: []string{"*auth*", "*oidc*", "*saml*", "*login*", "*logout*", "*signin*", "*signup*", "*session*", "*cookie*", "*password*",
+		"*permission*", "*rbac*", "*accesscontrol*", "*access_control*", "*csrf*", "*cors*", "*middleware*", "*token*", "*credential*",
+		"*payment*", "*billing*", "*invoice*", "*checkout*", "*wallet*", "*stripe*"}},
 	// Untrusted input, files and outbound requests.
 	{Name: "input", Globs: []string{"*sanitiz*", "*upload*", "*download*", "*multipart*", "*serializ*", "*webhook*", "*redirect*", "*proxy*",
 		"*unzip*", "*untar*", "*archive*"}},
 	// Running commands.
 	{Name: "exec", Globs: []string{"exec", "exec.*", "exec_*", "exec-*", "*exec", "*exec.*", "*_exec_*", "*shell*", "*subprocess*"}},
-	// SQL.
-	{Name: "sql", Globs: []string{"*.sql", "*sql*"}},
+	// SQL, and the code that runs migrations.
+	{Name: "sql", Globs: []string{"*.sql", "*sql*", "migrate", "migrate.*"}},
 	// A database's migrations.
-	{Name: "migrations", Globs: []string{"migrations", "migrate", "migrate.*", "migration/", "alembic/", "flyway/", "liquibase/"}},
+	{Name: "migrations", Globs: []string{"migrations", "migrate/", "migration/", "alembic/", "flyway/", "liquibase/"}},
 	// CI, which runs with the repo's secrets.
 	{Name: "ci", Globs: []string{".github/workflows/", ".gitlab-ci.yml"}},
 	// Dependency manifests and lockfiles.
@@ -66,8 +74,8 @@ func (c *Config) SensitiveAreas(names ...string) []pathglob.Area {
 		if len(names) > 0 && !slices.Contains(names, name) {
 			return
 		}
-		globs, ok := c.Sensitive[name]
-		if !ok {
+		globs := c.Sensitive[name]
+		if globs == nil { // left out, or null: an explicit [] turns it off
 			globs = def
 		}
 		out = append(out, pathglob.Area{Name: name, Globs: globs})
@@ -90,6 +98,17 @@ func (c *Config) SensitiveMatch(file string) (string, bool) {
 		return a + ": " + g, true
 	}
 	return "", false
+}
+
+// SkipGuardAreas are the sensitive list and, as one more area, every
+// glob security and risk are given themselves: what REVIEW.md's skip may
+// never cover.
+func (c *Config) SkipGuardAreas() []pathglob.Area {
+	var own []string
+	for _, l := range [][]string{c.Security.Paths, c.Security.ExtraPaths, c.Risk.AuthPaths, c.Risk.MigrationPaths} {
+		own = append(own, l...)
+	}
+	return append(c.SensitiveAreas(), pathglob.Area{Name: "configured", Globs: own})
 }
 
 var areaName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)

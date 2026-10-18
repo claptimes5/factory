@@ -20,12 +20,12 @@ func areaNames(as []pathglob.Area) []string {
 func TestSensitiveDefaults(t *testing.T) {
 	t.Parallel()
 	c := load(t)
-	want := []string{"auth", "crypto", "secrets", "payments", "input", "exec", "sql", "migrations", "ci", "dependencies", "infra"}
+	want := []string{"auth", "crypto", "secrets", "payments", "access", "input", "exec", "sql", "migrations", "ci", "dependencies", "infra"}
 	if got := areaNames(c.SensitiveAreas()); !slices.Equal(got, want) {
 		t.Fatalf("areas %v", got)
 	}
 	// What risk's and the security pass's own defaults had is all here.
-	for _, g := range []string{"*auth*", "*jwt*", "sso", "devise*", "*crypt*", "*token*", "*payment*", "*billing*", "*wallet*", "migrations", "migration/", "alembic/", "go.mod", "*.tf"} {
+	for _, g := range []string{"auth", "*auth*", "*jwt*", "sso*", "devise*", "*crypt*", "*token*", "*payment*", "*billing*", "*wallet*", "migrations", "migrate/", "migration/", "alembic/", "go.mod", "*.tf"} {
 		if !slices.ContainsFunc(c.SensitiveAreas(), func(a pathglob.Area) bool { return slices.Contains(a.Globs, g) }) {
 			t.Errorf("no default area has %s", g)
 		}
@@ -53,9 +53,9 @@ func TestSensitiveOverride(t *testing.T) {
 	for file, want := range map[string]string{
 		"internal/crypto/aes.go":      "",                           // off
 		"internal/ledger/post.go":     "payments: internal/ledger/", // replaced
-		"internal/payments/charge.go": "",                           // not a default any more
+		"internal/payments/charge.go": "access: *payment*",          // no longer payments, still a pass
 		"web/LedgerView.tsx":          "ledger_ui: *ledger*",        // added
-		"internal/auth/a.go":          "auth: *auth*",               // the rest keep theirs
+		"internal/auth/a.go":          "auth: auth",                 // the rest keep theirs
 	} {
 		if g, ok := c.SecurityMatch(file); g != want || ok != (want != "") {
 			t.Errorf("%s: %q, want %q", file, g, want)
@@ -72,6 +72,43 @@ func TestSensitiveOverride(t *testing.T) {
 	} {
 		if _, err := set(bad.y); err == nil || !strings.Contains(err.Error(), bad.err) {
 			t.Errorf("%s: %v", bad.y, err)
+		}
+	}
+}
+
+// An area left empty or null keeps its defaults: only [] turns one off,
+// so a half-written line can't open a hole.
+func TestSensitiveNullKeepsDefaults(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile("../../factory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := func(y string) *Config {
+		c, err := ParseIn([]byte(strings.Replace(string(b), "\nrouting:", "\nsensitive: "+y+"\nrouting:", 1)), "../..")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for _, y := range []string{"{auth: }", "{auth: ~}", "{auth: null}"} {
+		if _, g, ok := pathglob.InAreas(set(y).RiskRules().Auth, "internal/auth/a.go"); !ok || g != "auth" {
+			t.Errorf("%s turned auth off", y)
+		}
+	}
+	if _, _, ok := pathglob.InAreas(set("{auth: []}").RiskRules().Auth, "internal/auth/a.go"); ok {
+		t.Error("auth: [] left auth on")
+	}
+}
+
+// What security and risk are given themselves is guarded from REVIEW.md's
+// skip as the sensitive list is.
+func TestSkipGuardAreas(t *testing.T) {
+	t.Parallel()
+	c := Config{Security: Security{Paths: []string{"keys/"}, ExtraPaths: []string{"ledger/"}}, Risk: Risk{AuthPaths: []string{"gate*"}, MigrationPaths: []string{"schema/"}}}
+	for _, f := range []string{"keys/a.go", "ledger/b.go", "app/gatekeeper.go", "schema/1.go", "internal/auth/a.go"} {
+		if _, _, ok := pathglob.InAreas(c.SkipGuardAreas(), f); !ok {
+			t.Errorf("%s isn't guarded", f)
 		}
 	}
 }

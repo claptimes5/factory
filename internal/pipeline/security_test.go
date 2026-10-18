@@ -68,7 +68,7 @@ func TestSecurityPassBlocksWhenTheReviewerPasses(t *testing.T) {
 		t.Fatalf("security jobs %+v", sj)
 	}
 	sp := e.claude.prompts["security"]
-	for _, want := range []string{"it changes auth.go (matches auth: *auth*)", "+func Allowed", "Leave `earlier` empty"} {
+	for _, want := range []string{"it changes auth.go (matches auth: auth.*)", "+func Allowed", "Leave `earlier` empty"} {
 		if !strings.Contains(sp[0], want) {
 			t.Errorf("first security prompt missing %q:\n%s", want, sp[0])
 		}
@@ -308,7 +308,7 @@ func TestSecurityPathsSkipTests(t *testing.T) {
 	t.Parallel()
 	c := &config.Config{}
 	got := securityPaths(c.SecurityMatch, []string{"auth_test.go", "add.go", "internal/auth/login.go", "go.sum", "web/src/Login.test.tsx", "docs/auth.md"}, "api/")
-	want := "it changes api/internal/auth/login.go (matches auth: *auth*), api/go.sum (matches dependencies: go.sum)"
+	want := "it changes api/internal/auth/login.go (matches auth: auth), api/go.sum (matches dependencies: go.sum)"
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %q", got)
 	}

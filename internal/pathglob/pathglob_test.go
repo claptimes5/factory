@@ -24,6 +24,9 @@ func TestMatch(t *testing.T) {
 		{"migrations/", "internal/store/migrations/0018.sql", true},
 		{"migrations/", "migrations/0018.sql", true},
 		{"migrations/", "docs/migrations", false},
+		{"x/", "x", false},
+		{"src/*/", "src/main.go", false}, // the old security matcher matched this
+		{"src/*/", "src/app/main.go", true},
 		// With a /: from the root, the path and what's under it.
 		{"db/migrate/", "db/migrate/1.rb", true},
 		{"/db/migrate/", "db/migrate/1.rb", true},
@@ -53,6 +56,7 @@ func TestMatch(t *testing.T) {
 		// The file is cleaned; a bad pattern matches nothing.
 		{"auth", "./internal//auth/x.go", true},
 		{"[", "[", false},
+		{"[[]id]", "app/[id]/page.tsx", true}, // a literal bracket; \ is refused
 	} {
 		if got := Match(c.pattern, c.file); got != c.want {
 			t.Errorf("Match(%q, %q) = %v, want %v", c.pattern, c.file, got, c.want)

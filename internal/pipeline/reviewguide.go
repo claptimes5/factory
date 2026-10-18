@@ -97,7 +97,7 @@ func (p *Pipeline) reviewGuides(ctx context.Context, parts []*part) guides {
 			continue
 		}
 		rg := repoGuide{repo: pt.repo, folder: pt.folder, guide: gd, protected: p.repoConf(pt.repo).Gates.DiffGuard.ProtectedPaths,
-			sensitive: p.Cfg.SensitiveAreas()}
+			sensitive: p.Cfg.SkipGuardAreas()}
 		if len(gd.Skip) > 0 {
 			m, err := p.loadMap(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA)
 			p.warn(err, "loadMap")

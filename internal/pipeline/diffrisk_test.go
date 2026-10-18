@@ -298,7 +298,7 @@ func TestDiffNamesStayInert(t *testing.T) {
 	}
 	it := e.item(t, 1)
 	body := e.gh.bodies[it.PRNumber]
-	if it.Risk != "high" || !strings.Contains(body, "changes auth code: `*auth*` in `nl Closes # 5 @ org/x 't'/auth.go`") {
+	if it.Risk != "high" || !strings.Contains(body, "changes auth code: `auth.*` in `nl Closes # 5 @ org/x 't'/auth.go`") {
 		t.Fatalf("risk %s, PR body:\n%s", it.Risk, body)
 	}
 	for _, bad := range []string{"\nCloses #5", "#5", "@org"} {

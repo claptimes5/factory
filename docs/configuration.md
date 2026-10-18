@@ -530,44 +530,66 @@ sensitive:
   reports: [internal/export/]                 # an area of your own
 ```
 
-Setting an area replaces its defaults, `[]` turns it off, and an area of
-another name (lowercase letters, digits, `_` and `-`) is added: it gets
+Setting an area replaces its defaults and `[]` turns it off; left empty
+or null (`auth:`), it keeps them. An area of another name (lowercase letters, digits, `_` and `-`) is added: it gets
 the security pass and REVIEW.md's guard, but isn't auth code. The block
 applies to every repo. A glob the daemon can't read refuses the config.
 
 A glob ignores case. One with no `/` matches any one part of a path, a
 directory's name or the file's: `*auth*` catches `internal/auth/check.go`,
-`AuthController.php` and `authors.go` alike (a false start is cheaper
-than a miss); ending in `/`, only a directory's (`migrations/` matches
+`AuthController.php` and `authors.go` alike; ending in `/`, only a directory's (`migrations/` matches
 `db/migrations/0003.sql` at any depth). Any other is matched from the
 repo's root, part by part, where `*` stops at `/` and a part that is only
 `**` matches any number of parts (`app/**/keys.rb`). It matches what it
 names and everything under it, so `internal/billing` names the directory
 too; ending in `/`, only what's under it. A leading `/` or `./` changes
 nothing. `\`, empty, `.` and `..` parts, and `**` inside a part (`a**b`)
-are refused. The same globs, read the same way, are used by
-`security.paths` and `risk`'s paths. The defaults:
+are refused; to match a literal `[`, write `[[]` (`app/[[]id]/`). The
+same globs, read the same way, are used by `security.paths` and
+`risk`'s paths.
 
-- **`auth`:** `*auth*`, `*oidc*`, `*saml*`, `*jwt*`, `sso`, `sso.*`,
-  `sso_*`, `*login*`, `*logout*`, `*signin*`, `*signup*`, `*session*`,
-  `*cookie*`, `*password*`, `passwd*`, `*permission*`, `*rbac*`, `acl`,
-  `acl.*`, `*accesscontrol*`, `*access_control*`, `*csrf*`, `*cors*`,
-  `*middleware*`, `devise*`.
+Two changes from before this list, when the security pass and risk each
+read globs their own way. In `security.paths` and `extra_paths`, a
+trailing `/` now means a directory only: `src/*/` no longer matches
+`src/main.go`, nor `x/` a file named `x`. In `risk`'s paths, a `\`
+(once an escape) or a `.`, `..` or empty part now refuses the config,
+where before it was taken or matched nothing.
+
+The areas that hold a merge for you (`auth`, `crypto`, `secrets`,
+`payments`, `migrations`) use narrow names, so `authors.go`, a lexer's
+`tokens.go` or `git/checkout.go` don't wait for a person. The wide
+wildcards that would catch those are in `access`, which only starts a
+pass (a pass that finds nothing is cheaper than a miss). The defaults:
+
+- **`auth`:** `auth`, `auth.*`, `auth_*`, `*_auth*`, `auth-*`, `*-auth*`,
+  `authn*`, `authz*`, `authenticat*`, `authoriz*`, `*authcontroller*`,
+  `*authservice*`, `*authhandler*`, `*authprovider*`, `oauth*`, `oidc*`,
+  `saml*`, `sso*`, `*jwt*`, `login*`, `logout*`, `session`, `session.*`,
+  `session_*`, `sessions*`, `password*`, `passwd*`, `credential*`,
+  `permission*`, `rbac*`, `acl`, `acl.*`, `devise*`.
 - **`crypto`:** `*crypt*`, `*cipher*`, `*hmac*`, `tls`, `tls.*`, `cert`,
   `certs`, `cert.*`, `cert_*`, `cert-*`, `*certificate*`.
 - **`secrets`:** `*.pem`, `*.key`, `*.crt`, `*.p12`, `*.pfx`, `id_rsa*`,
-  `*secret*`, `*credential*`, `*token*`, `*apikey*`, `*api_key*`, `.env`,
-  `.env.*`, `*.env`, `.npmrc`, `.pypirc`.
-- **`payments`:** `*payment*`, `*billing*`, `*invoice*`, `*checkout*`,
+  `*secret*`, `*apikey*`, `*api_key*`, `.env`, `.env.*`, `*.env`,
+  `.npmrc`, `.pypirc`.
+- **`payments`:** `payment*`, `*_payment*`, `billing*`, `*_billing*`,
+  `invoice*`, `*_invoice*`, `stripe`, `stripe.*`, `stripe_*`,
+  `*_stripe*`, `wallet*`.
+- **`access`** (wide names, a pass only): `*auth*`, `*oidc*`, `*saml*`,
+  `*login*`, `*logout*`, `*signin*`, `*signup*`, `*session*`, `*cookie*`,
+  `*password*`, `*permission*`, `*rbac*`, `*accesscontrol*`,
+  `*access_control*`, `*csrf*`, `*cors*`, `*middleware*`, `*token*`,
+  `*credential*`, `*payment*`, `*billing*`, `*invoice*`, `*checkout*`,
   `*wallet*`, `*stripe*`.
 - **`input`** (untrusted input, files and outbound requests):
   `*sanitiz*`, `*upload*`, `*download*`, `*multipart*`, `*serializ*`,
   `*webhook*`, `*redirect*`, `*proxy*`, `*unzip*`, `*untar*`, `*archive*`.
 - **`exec`:** `exec`, `exec.*`, `exec_*`, `exec-*`, `*exec`, `*exec.*`,
   `*_exec_*`, `*shell*`, `*subprocess*`.
-- **`sql`:** `*.sql`, `*sql*`.
-- **`migrations`:** `migrations`, `migrate`, `migrate.*`, `migration/`,
-  `alembic/`, `flyway/`, `liquibase/`.
+- **`sql`** (and the code that runs migrations): `*.sql`, `*sql*`,
+  `migrate`, `migrate.*`.
+- **`migrations`:** `migrations`, `migrate/`, `migration/`, `alembic/`,
+  `flyway/`, `liquibase/`.
 - **`ci`:** `.github/workflows/`, `.gitlab-ci.yml`.
 - **`dependencies`:** `go.mod`, `go.sum`, `go.work`, `vendor`,
   `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`,
@@ -1181,8 +1203,10 @@ security:
 
 Left out, `paths` is every area of the [sensitive list](#sensitive-code),
 which is where to say what is sensitive: `paths` and `extra_paths` still
-work, but set, `paths` replaces that list for the pass alone, and
-nothing else reads them. Globs match as the sensitive list's do. Tests
+work, but set, `paths` replaces that list for the pass alone (REVIEW.md's
+`skip` still never covers what either names). Globs match as the
+sensitive list's do; a trailing `/` now means a directory only (see
+[Sensitive code](#sensitive-code)). Tests
 and docs (`.md`, `.rst`, `.adoc`) never start a pass. `paths: []` leaves
 only `content` and the feature map to start one.
 

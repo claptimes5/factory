@@ -235,6 +235,29 @@ func TestApplyGuides(t *testing.T) {
 	}
 }
 
+// A path security or risk was given itself is never skipped, as the
+// sensitive list's aren't.
+func TestSkipNeverCoversConfiguredPaths(t *testing.T) {
+	for _, c := range []*config.Config{
+		{Security: config.Security{ExtraPaths: []string{"gen/"}}},
+		{Security: config.Security{Paths: []string{"gen/"}}},
+		{Risk: config.Risk{AuthPaths: []string{"gen/"}}},
+		{Risk: config.Risk{MigrationPaths: []string{"gen/"}}},
+	} {
+		g := &repoGuide{guide: &reviewmd.Guide{File: "REVIEW.md", Skip: []string{"gen/"}}, modified: map[string]bool{"gen/a.go": true}, sensitive: c.SkipGuardAreas()}
+		if g.skips("gen/a.go") {
+			t.Errorf("%+v %+v: skipped", c.Security, c.Risk)
+		}
+	}
+	g := &repoGuide{guide: &reviewmd.Guide{File: "REVIEW.md", Skip: []string{"gen/"}}, modified: map[string]bool{"gen/a.go": true}, sensitive: (&config.Config{}).SkipGuardAreas()}
+	if !g.skips("gen/a.go") {
+		t.Fatal("an ordinary path wasn't skipped")
+	}
+	if riskyReviewLine("Don't flag nil checks in gen/a.go.", (&config.Config{Risk: config.Risk{AuthPaths: []string{"gen/"}}}).SkipGuardAreas()) == "" {
+		t.Fatal("a learned line about a configured path was kept")
+	}
+}
+
 // Overruled findings make a learn job only when they repeat: at least two,
 // alike, from two items.
 func TestOverruledFindingsThreshold(t *testing.T) {

@@ -305,15 +305,19 @@ real runs, and are to be looked at again once the metrics have data:
   lines or 10 files, high at 300 lines or 25 files), the default paths
   (deploy and infrastructure files medium, none high), what counts as auth
   code (the sensitive list's `auth`, `crypto`, `secrets` and `payments`
-  areas: broad globs such as `*auth*`, `*session*`, `*token*` and
-  `*crypt*`, which will catch some code that isn't), the
+  areas: narrow names such as `auth.*`, `session_*`, `*jwt*` and
+  `payment*`, which will still catch some code that isn't, and miss
+  some that is, which only the wide `access` area's pass sees), the
   levels each kind raises to (migrations and auth high, new dependencies
   and deleted tests medium), and the four kinds that always need you.
   The metrics, and the dashboard's Spend screen, count how often the
   diff raised an item's risk.
 - Crypto, secrets and payments code now needs a person, as auth code
   does, since they share the sensitive list with the security pass. That
-  may hold back more PRs (a `tokens.go` in a lexer, say) than it should.
+  may hold more PRs (`*crypt*` catches any file with crypt in its name).
+  The wide names (`*token*`, `*session*`, `*middleware*`, `*checkout*`)
+  only start a pass, so a token service named `tokens.go` merges itself
+  if `auto_merge` allows it.
 - The [security pass](#security-pass)'s default globs (the sensitive
   list) and risky-code
   signals were picked by hand. Some will start passes that find nothing
@@ -468,7 +472,7 @@ optional. The daemon applies it to the reviewer's verdict itself:
 
 | Key | What it does |
 | --- | --- |
-| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one that is security-sensitive: in the [sensitive list](configuration.md#sensitive-code), or with a name that looks it (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`), which config can't take away. Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
+| `skip` | Paths or globs, matched as in the [feature map](#feature-map). A major or minor finding that would block, on a path it covers, becomes a note. Never a critical one, never on a high-risk item, and never on a protected path, a path of a `high` feature, or one that is security-sensitive: in the [sensitive list](configuration.md#sensitive-code), `security.paths`, `security.extra_paths`, `risk.auth_paths` or `risk.migration_paths`, or with a name that looks it (auth, session, secret, token, crypto, payment, billing, migrations, `.github/`, Dockerfiles, `.env`), which config can't take away. Only a file the change modifies can be skipped, never one it adds, renames or copies, and the finding's path must be a plain path in the repo. When the feature map can't be read, nothing is skipped. If that leaves the review's block with nothing to block on, it passes; findings carried from earlier rounds still block. |
 | `max_minor` | Minor notes past this many are left out, and the PR says how many. A minor finding that blocks is never left out, so the cap can't pass a change. In a workspace, the lowest cap of its repos holds. |
 
 Neither ever touches a finding of the [security pass](#security-pass),

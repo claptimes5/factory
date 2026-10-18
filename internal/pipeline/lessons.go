@@ -758,7 +758,7 @@ func (p *Pipeline) runLearn(ctx context.Context, j *store.Job) error {
 		v.ReviewLines = nil
 	}
 	v.ReviewLines = slices.DeleteFunc(v.ReviewLines, func(l verdict.Lesson) bool {
-		if why := riskyReviewLine(l.Line, p.Cfg.SensitiveAreas()); why != "" {
+		if why := riskyReviewLine(l.Line, p.Cfg.SkipGuardAreas()); why != "" {
 			p.log().Info("lessons: REVIEW.md line refused", "line", oneLine(l.Line), "why", why)
 			return true
 		}
