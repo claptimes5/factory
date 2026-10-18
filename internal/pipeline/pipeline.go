@@ -799,6 +799,8 @@ func (p *Pipeline) Reconcile(ctx context.Context, quiet time.Duration) error {
 }
 
 func (p *Pipeline) resume(ctx context.Context, it *store.WorkItem, jobs []*store.Job) error {
+	// A verifier or paired critic is part of the review it ran inside.
+	jobs = slices.DeleteFunc(slices.Clone(jobs), func(j *store.Job) bool { return store.IsSubKind(j.Kind) })
 	var last *store.Job
 	if len(jobs) > 0 {
 		last = jobs[0]
@@ -888,9 +890,11 @@ func (p *Pipeline) enqueueTriage(ctx context.Context, it *store.WorkItem, attemp
 
 // ImplementInput is carried to implement jobs.
 type ImplementInput struct {
-	Findings        string `json:"findings,omitempty"`         // reviewer findings for a fix round
-	PreviousFailure string `json:"previous_failure,omitempty"` // why the last attempt failed
-	FixRound        bool   `json:"fix_round,omitempty"`
+	Findings string `json:"findings,omitempty"` // reviewer findings for a fix round, fenced
+	// FindingIDs are the blocking findings the builder must answer.
+	FindingIDs      []string `json:"finding_ids,omitempty"`
+	PreviousFailure string   `json:"previous_failure,omitempty"` // why the last attempt failed
+	FixRound        bool     `json:"fix_round,omitempty"`
 }
 
 func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, attempt int, in ImplementInput) (bool, error) {
@@ -925,14 +929,7 @@ func (p *Pipeline) enqueueReview(ctx context.Context, it *store.WorkItem, kind s
 	route := p.Cfg.ReviewKey(it.Risk)
 	r := p.Cfg.Routing[route]
 	if kind == "critic" {
-		route = "critic"
-		r = p.Cfg.Routing["implement.L"] // the strongest Claude tier
-		// Only what makes it the strongest model: not the builder's skills,
-		// instructions or fast mode.
-		r.Skills, r.Use, r.Instructions, r.InstructionsFile, r.Fast = "", nil, "", "", false
-		if c, ok := p.Cfg.Routing["critic"]; ok {
-			r = c
-		}
+		route, r = "critic", p.Cfg.CriticRoute()
 	}
 	b, _ := json.Marshal(in)
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: kind, Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
@@ -1097,7 +1094,7 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
 		p.log().Error("finish job", "job", j.ID, "err", err)
 	}
-	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On {
+	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On && !store.IsSubKind(j.Kind) {
 		p.failedTwice(ctx, j)
 	}
 }
@@ -1159,6 +1156,10 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runLearn(ctx, j)
 	case "groom":
 		err = p.runGroom(ctx, j)
+	case store.KindVerify, store.KindParallelCritic:
+		// Only ever run inside a review, which starts its own again.
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "runs only inside the review that started it")
+		return
 	default:
 		p.finish(ctx, j, agentRun{}, state.Failed, "", "unknown job kind "+j.Kind)
 		return
@@ -1180,7 +1181,8 @@ type PromptData struct {
 	Install         string   // the repo's install command, if any
 	Checks          []string // the repo's required gate commands
 	Coverage        bool     // a coverage floor holds the change
-	Findings        string
+	Findings        string   // a fix round's findings, or the verifier's, fenced
+	AnswerIDs       []string // the findings a fix round's builder answers
 	PreviousFailure string
 	Gates           string
 	Features        string   // the change's blast radius, when the repo has a feature map
@@ -1189,6 +1191,12 @@ type PromptData struct {
 	Risky           []string // the high-risk features in the feature map, for the builder
 	Diff            string
 	Fence           string         // a code fence the diff cannot close
+	Round           int            // the review round
+	Earlier         string         // a re-review's open and earlier findings, fenced
+	Since           string         // a re-review: the commit Diff starts from, the one last reviewed
+	Context         string         // a re-review: the whole change, when small
+	ContextFence    string         // a fence Context cannot close
+	ContextFiles    string         // a re-review: the whole change's files, fenced, when Context is too big
 	Members         []PromptMember // a workspace's repos, side by side in the checkout
 	Reasons         []string       // why the orchestrator runs
 	Summary         bool           // the orchestrator writes the daily summary

@@ -229,11 +229,16 @@ type APIJobDetail struct {
 
 // APIFinding is one reviewer finding.
 type APIFinding struct {
-	Severity string `json:"severity"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Claim    string `json:"claim"`
-	Evidence string `json:"evidence"`
+	ID          string `json:"id"`
+	Severity    string `json:"severity"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Claim       string `json:"claim"`
+	Evidence    string `json:"evidence"`
+	By          string `json:"by"`
+	Blocks      bool   `json:"blocks"`
+	Check       string `json:"check"`
+	CheckReason string `json:"check_reason"`
 }
 
 // APIReview is the latest reviewer verdict on an item.
@@ -549,10 +554,14 @@ func apiGates(gs []store.GateResult) []APIGate {
 	return out
 }
 
-func apiFindings(fs []verdict.Finding) []APIFinding {
-	out := make([]APIFinding, 0, len(fs))
-	for _, f := range fs {
-		out = append(out, APIFinding{Severity: f.Severity, File: f.File, Line: f.Line, Claim: f.Claim, Evidence: f.Evidence})
+func apiFindings(v *verdict.Review) []APIFinding {
+	out := make([]APIFinding, 0, len(v.Findings))
+	for i, f := range v.Findings {
+		a := APIFinding{ID: f.ID, Severity: f.Severity, File: f.File, Line: f.Line, Claim: f.Claim, Evidence: f.Evidence, By: f.By, Blocks: v.BlocksOn(i)}
+		if f.Check != nil {
+			a.Check, a.CheckReason = f.Check.Status, f.Check.Reason
+		}
+		out = append(out, a)
 	}
 	return out
 }
@@ -781,7 +790,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 	// pipeline recorded is that PR's repo's.
 	checksRepo := it.Repo
 	for i := len(jobs) - 1; i >= 0; i-- {
-		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" {
+		if p.LastJobID == nil && jobs[i].Kind != "orchestrate" && !store.IsSubKind(jobs[i].Kind) {
 			jid := jobs[i].ID
 			p.LastJobID = &jid
 		}
@@ -801,7 +810,7 @@ func (s *Server) apiPRPanel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if j, v := latestReview(jobs); j != nil {
-		p.Review = &APIReview{JobID: j.ID, Decision: v.Decision, Findings: apiFindings(v.Findings), Assumptions: v.ChallengedAssumptions}
+		p.Review = &APIReview{JobID: j.ID, Decision: v.Decision, Findings: apiFindings(v), Assumptions: v.ChallengedAssumptions}
 		if p.Review.Assumptions == nil {
 			p.Review.Assumptions = []string{}
 		}
@@ -845,7 +854,7 @@ func (s *Server) apiDiff(w http.ResponseWriter, r *http.Request) {
 	// The diff the latest verdict was made against, with its findings.
 	if j, v := latestReview(jobs); j != nil {
 		if b, ok := read(j); ok {
-			writeJSON(w, http.StatusOK, APIDiff{JobID: j.ID, Patch: string(b), Findings: apiFindings(v.Findings)})
+			writeJSON(w, http.StatusOK, APIDiff{JobID: j.ID, Patch: string(b), Findings: apiFindings(v)})
 			return
 		}
 	}

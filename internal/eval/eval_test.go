@@ -153,6 +153,9 @@ func TestReplaySetReportsCostPerPass(t *testing.T) {
 	if rep.CostUSD != 1.5 || rep.CostPerPass != 1.5 {
 		t.Fatalf("cost %.2f per pass %.2f", rep.CostUSD, rep.CostPerPass)
 	}
+	if rep.Results[0].Rounds != 1 || rep.MeanRounds != 1 || !strings.Contains(rep.Table(), "review rounds 1.0") {
+		t.Fatalf("review rounds:\n%s", rep.Table())
+	}
 	if !strings.Contains(rep.Table(), "cost per pass $1.50") {
 		t.Fatal(rep.Table())
 	}

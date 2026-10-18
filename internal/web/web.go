@@ -107,6 +107,12 @@ func (s *Server) Handler() (http.Handler, error) {
 			return fmt.Sprintf("%.0f%%", v*100)
 		},
 		"hours": func(v float64) string { return fmt.Sprintf("%.1f h", v) },
+		"rounds": func(v float64) string {
+			if v < 0 {
+				return "–"
+			}
+			return fmt.Sprintf("%.1f", v)
+		},
 		"short": func(s string, n int) string {
 			if len(s) > n {
 				return s[:n] + "…"

@@ -14,7 +14,16 @@ export function FindingRow({ f, itemId }: { f: Finding; itemId: number }) {
   return (
     <li className="py-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
+        {f.id && <span className="font-mono text-xs text-muted-foreground">{f.id}</span>}
         <Badge variant={sevVariant[f.severity as keyof typeof sevVariant] ?? "secondary"}>{f.severity}</Badge>
+        {f.blocks ? (
+          <Badge variant="destructive">blocks</Badge>
+        ) : (
+          <Badge variant="secondary" title={f.check === "refuted" ? `Refuted: ${f.check_reason}` : undefined}>
+            {f.check === "refuted" ? "refuted: a note" : "note"}
+          </Badge>
+        )}
+        {f.by && <span className="text-xs text-muted-foreground">by the {f.by}</span>}
         {f.file && (
           <Link to={`/items/${itemId}/diff#${findingAnchor(f)}`} className="font-mono text-xs text-primary hover:underline">
             {f.file}
@@ -24,6 +33,12 @@ export function FindingRow({ f, itemId }: { f: Finding; itemId: number }) {
       </div>
       <p className="mt-1">{f.claim}</p>
       {f.evidence && <p className="mt-0.5 text-xs whitespace-pre-wrap text-muted-foreground">{f.evidence}</p>}
+      {f.check && (
+        <p className="mt-0.5 text-xs text-muted-foreground" data-testid="finding-check">
+          Verifier: {f.check}
+          {f.check_reason && `: ${f.check_reason}`}
+        </p>
+      )}
     </li>
   );
 }

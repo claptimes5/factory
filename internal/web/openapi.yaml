@@ -475,13 +475,18 @@ components:
         can_attach: { type: boolean }
     Finding:
       type: object
-      required: [severity, file, line, claim, evidence]
+      required: [id, severity, file, line, claim, evidence, by, blocks, check, check_reason]
       properties:
-        severity: { type: string, description: "critical, major, minor" }
+        id: { type: string, description: "F1, F2, ...: the same across an item's review rounds" }
+        severity: { type: string, description: "critical, major, minor, pre-existing" }
         file: { type: string }
         line: { type: integer }
         claim: { type: string }
         evidence: { type: string }
+        by: { type: string, description: "review or critic in a paired review, else empty" }
+        blocks: { type: boolean, description: The round blocks on it }
+        check: { type: string, description: "The verifier's ruling: confirmed, refuted, unverified, or empty when it wasn't checked" }
+        check_reason: { type: string }
     Review:
       type: object
       required: [job_id, decision, findings, challenged_assumptions]
@@ -630,9 +635,18 @@ components:
         implemented: { type: integer }
         first_pass_rate: { type: number, description: "0..1, or -1 with no data" }
         escalation_rate: { type: number, description: "0..1, or -1 with no data" }
+    Precision:
+      type: object
+      required: [key, findings, fixed, refuted, precision]
+      properties:
+        key: { type: string, description: "The reviewer's route and harness/model" }
+        findings: { type: integer }
+        fixed: { type: integer }
+        refuted: { type: integer }
+        precision: { type: number, description: "0..1, or -1 with no data" }
     Metrics:
       type: object
-      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, awaiting_human_hours, awaiting_human_mean_hours, weekly]
+      required: [items, merged, closed, parked, cost_per_merged_usd, by_complexity, by_model, first_pass_rate, escalation_rate, review_blocks, review_escape_rate, review_precision, precision_by_reviewer, verifier_refute_rate, rounds_to_pass, awaiting_human_hours, awaiting_human_mean_hours, weekly]
       properties:
         items: { type: integer }
         merged: { type: integer }
@@ -645,6 +659,10 @@ components:
         escalation_rate: { type: number }
         review_blocks: { type: integer }
         review_escape_rate: { type: number }
+        review_precision: { type: number, description: "Share of settled blocking findings that led to a fix, 0..1, or -1 with no data" }
+        precision_by_reviewer: { type: array, items: { $ref: "#/components/schemas/Precision" } }
+        verifier_refute_rate: { type: number, description: "Share of checked findings the verifier refuted, 0..1, or -1" }
+        rounds_to_pass: { type: number, description: "Mean review rounds of items that passed review, or -1" }
         awaiting_human_hours: { type: number }
         awaiting_human_mean_hours: { type: number }
         weekly: { type: array, items: { $ref: "#/components/schemas/Week" } }

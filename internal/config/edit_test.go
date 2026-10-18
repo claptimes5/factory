@@ -205,7 +205,7 @@ func TestSettings(t *testing.T) {
 	for _, g := range groups {
 		names = append(names, g.Name)
 	}
-	if strings.Join(names, ",") != "Budgets,Models,Escalation,Auto-merge,Orchestrator,Tuning,Intake" {
+	if strings.Join(names, ",") != "Budgets,Models,Review,Escalation,Auto-merge,Orchestrator,Tuning,Intake" {
 		t.Fatalf("groups = %v", names)
 	}
 	get := func(p ...string) Setting {
@@ -240,7 +240,7 @@ func TestSettings(t *testing.T) {
 			rows = append(rows, s.Row)
 		}
 	}
-	if strings.Join(rows, ",") != "orchestrate,triage,implement.XS,implement.S,implement.M,implement.L,review,review.high_risk" {
+	if strings.Join(rows, ",") != "orchestrate,triage,implement.XS,implement.S,implement.M,implement.L,review,review.high_risk,verify" {
 		t.Errorf("rows = %v", rows)
 	}
 	// What can run commands or open the network isn't offered.
@@ -278,5 +278,23 @@ func TestSettings(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%v %v = %v, %v; want %v", c.s.Path, c.in, got, err, c.want)
 		}
+	}
+}
+
+func TestReviewSettingsAreEditable(t *testing.T) {
+	src, _ := os.ReadFile("../../factory.yaml")
+	groups, err := Settings(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := FindSetting(groups, []string{"review", "verify"})
+	if !ok || s.Default != true || s.Value != nil {
+		t.Fatalf("review.verify %+v", s)
+	}
+	if v, err := s.Coerce(false); err != nil || v != false {
+		t.Fatalf("coerce %v %v", v, err)
+	}
+	if _, ok := FindSetting(groups, []string{"budgets", "verify"}); !ok {
+		t.Fatal("budgets.verify isn't editable")
 	}
 }

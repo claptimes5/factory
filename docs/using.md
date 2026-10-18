@@ -137,7 +137,7 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, recent jobs |
+| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, review quality (escape rate, precision, rounds to pass), each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, recent jobs |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory groom [REPO]` | Queue a [backlog grooming](#backlog-grooming) run of one repo, or of each groomed repo, now, whatever `grooming.every` says; the daemon runs it |
 | `factory limits clear [harness]` | Forgets the usage-limit readings, so a paused harness's jobs start before the window resets |

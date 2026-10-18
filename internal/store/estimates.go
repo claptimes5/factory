@@ -211,9 +211,9 @@ func (s *Store) itemCosts(ctx context.Context, itemID int64) ([]ItemCost, error)
 		switch p.Kind {
 		case "implement":
 			cur.Implement += p.USD
-		case "review":
+		case "review", KindVerify: // the verifier is part of reviewing
 			cur.Review += p.USD
-		case "critic":
+		case "critic", KindParallelCritic:
 			cur.Critic += p.USD
 		}
 		cur.FinishedAt = max(cur.FinishedAt, fin)

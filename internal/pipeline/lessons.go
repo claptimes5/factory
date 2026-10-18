@@ -208,13 +208,14 @@ func splitBefore(s, prefix string) []string {
 	return append(out, s[start:])
 }
 
-// recordFindings saves a blocking verdict's critical and major findings.
+// recordFindings saves the critical and major findings a verdict blocked
+// on: not the ones the verifier refuted, nor pre-existing ones.
 func (p *Pipeline) recordFindings(ctx context.Context, j *store.Job, it *store.WorkItem, v *verdict.Review) {
 	if !p.Cfg.Learning.On() || !v.Blocks() {
 		return
 	}
-	for _, f := range v.Findings {
-		if f.Severity == "minor" {
+	for i, f := range v.Findings {
+		if f.Severity != verdict.Critical && f.Severity != verdict.Major || !v.BlocksOn(i) {
 			continue
 		}
 		p.warn(p.Store.AddSignal(ctx, store.Signal{Repo: it.Repo, Kind: store.SignalFinding, ItemID: it.ID, IssueNumber: it.IssueNumber,

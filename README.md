@@ -16,6 +16,7 @@ issue labeled factory:ready
                test-proves-fix (the new tests must fail on the old code),
                the coverage floor, and hidden scenarios if you set them up
   -> review    (Codex, read-only, sees only issue + diff + gate results)
+  -> verify    (a cheap model checks each blocking finding; only confirmed ones block)
   -> critic    (Claude, high-risk items only)
   -> draft PR with the evidence, labeled factory:awaiting-you
 ```
@@ -23,7 +24,8 @@ issue labeled factory:ready
 Each model tier gets `max_attempts_per_tier` attempts (2 by default). Then
 the item moves one tier up, and after the last tier it parks. A reviewer
 block sends the findings back to the builder, for at most two fix rounds; a
-third block parks the item. A missing or malformed verdict never passes.
+third block parks the item. The builder answers each finding by its id, and
+the next review rules on those answers while it reads only what changed. A missing or malformed verdict never passes.
 
 ## Quickstart
 
@@ -107,7 +109,7 @@ file issues and you choose which ones to build. See
 | [Setup](docs/setup.md) | Dependencies, what setup asks, running as a service, upgrades, manual setup with a GitHub App, WSL2 |
 | [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, keeping main green, issues from Sentry, Dependabot and TODOs, backlog grooming, screenshots on the PR, `factory pull`, `eval` and `compare` |
 | [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, main health, sources, backlog grooming, PR previews, Claude-only review |
-| [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, the feature map, readiness, hidden scenarios, metrics, the replay set |
+| [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, review findings, the feature map, readiness, hidden scenarios, metrics, the replay set |
 | [Security](docs/security.md) | Who can start work, how jobs are isolated, sources' tokens and untrusted text, grooming's untrusted issue text, running a preview, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |
 | [Status](docs/status.md) | What's built, and where this differs from [SPEC.md](SPEC.md) |

@@ -43,7 +43,10 @@ Side-by-side skill comparison, services, workspaces across repos,
   two minutes resumes from its last job's outcome.
 - **No separate spec stage yet.** Triage parks unclear issues with a question.
 - **Reviewer value is measured as review escapes** (passed PRs you changed or
-  closed), since blocked versions never reach you and so can't be judged.
+  closed), since blocked versions never reach you and so can't be judged,
+  and as **reviewer precision**: the share of its blocking findings that
+  a verifier didn't refute and the builder fixed (see
+  [Review findings](quality.md#review-findings)).
 - **The orchestrator is off by default** in code (on in this repo's
   `factory.yaml`), since it spends on its own schedule.
 - **Approve opens the PR on GitHub.** The dashboard has no GitHub login of
