@@ -521,6 +521,11 @@ func (c *Config) Validate() error {
 		if c.Runner.Kind != "docker" {
 			bad("services need the docker runner")
 		}
+		if c.Runner.Network == "host" {
+			// On the host's network, a job reaches the host and not the
+			// services' private network.
+			bad("services can't be used with runner.network: host")
+		}
 	}
 	// A required gate without a command is allowed here: it reports
 	// MISCONFIGURED at run time and fails the job, so the gap is visible.

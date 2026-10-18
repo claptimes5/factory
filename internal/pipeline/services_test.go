@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ type svcRunner struct {
 	started []string
 	stopped []string
 	specs   []runner.Spec
+	fail    error
 }
 
 func (r *svcRunner) Run(ctx context.Context, s runner.Spec, w io.Writer) (int, error) {
@@ -33,6 +35,9 @@ func (r *svcRunner) Run(ctx context.Context, s runner.Spec, w io.Writer) (int, e
 func (r *svcRunner) StartServices(_ context.Context, job string, svcs []runner.Service, _ time.Duration) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.fail != nil {
+		return "", r.fail
+	}
 	for _, s := range svcs {
 		r.started = append(r.started, job+":"+s.Name+"="+s.Image)
 	}
@@ -92,5 +97,29 @@ func TestServicesRunForImplementJobs(t *testing.T) {
 	}
 	if e.p.servicesOf(jobs[0].ID) != "" {
 		t.Fatal("the job's services are still registered")
+	}
+}
+
+// Services that don't start park the item at once: another model tier
+// wouldn't start them either.
+func TestServicesFailToStart(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	r := &svcRunner{fail: errors.New("db never got ready")}
+	e.p.Runner, e.p.GateExec = r, nil
+	e.p.Cfg.Repos[0].Services = map[string]config.Service{"db": {Image: "postgres:16"}}
+	e.addIssue(1)
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.Stage != state.Parked {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	if jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"}); len(jobs) != 1 {
+		t.Fatalf("implement jobs = %d, want 1", len(jobs))
+	}
+	if len(e.claude.prompts["implement"]) != 0 {
+		t.Fatal("the builder ran without its services")
 	}
 }

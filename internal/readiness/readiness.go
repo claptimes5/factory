@@ -512,11 +512,12 @@ func readCapped(p string) ([]byte, error) {
 var knownServices = []struct {
 	name, image, env, ready string
 	signs                   []string // lowercase text in docker-compose or config files
+	errs                    []string // lowercase text in a failure that couldn't reach it
 }{
-	{"postgres", "postgres:16", "{POSTGRES_PASSWORD: factory}", "pg_isready -U postgres", []string{"image: postgres", "image: \"postgres", "adapter: postgresql", "postgres://", "postgresql://"}},
-	{"mysql", "mysql:8", "{MYSQL_ROOT_PASSWORD: factory}", "mysqladmin ping -h 127.0.0.1 -pfactory", []string{"image: mysql", "image: mariadb", "adapter: mysql2", "mysql://"}},
-	{"redis", "redis:7", "", "redis-cli ping", []string{"image: redis", "redis://"}},
-	{"mongo", "mongo:7", "", "mongosh --quiet --eval 'db.runCommand({ping:1})'", []string{"image: mongo", "mongodb://"}},
+	{"postgres", "postgres:16", "{POSTGRES_PASSWORD: factory}", "pg_isready -U postgres", []string{"image: postgres", "image: \"postgres", "adapter: postgresql", "postgres://", "postgresql://"}, []string{"postgres", "pg::", "psycopg", "5432"}},
+	{"mysql", "mysql:8", "{MYSQL_ROOT_PASSWORD: factory}", "mysqladmin ping -h 127.0.0.1 -pfactory", []string{"image: mysql", "image: mariadb", "adapter: mysql2", "mysql://"}, []string{"mysql", "mariadb", "3306"}},
+	{"redis", "redis:7", "", "redis-cli ping", []string{"image: redis", "redis://"}, []string{"redis", "6379"}},
+	{"mongo", "mongo:7", "", "mongosh --quiet --eval 'db.runCommand({ping:1})'", []string{"image: mongo", "mongodb://"}, []string{"mongo", "27017"}},
 }
 
 // connRefused is how a check that can't reach a service usually fails.
@@ -538,20 +539,25 @@ func servicesHint(dir string, files []string, repo config.Repo, output string) s
 			}
 		}
 	}
+	// The failure has to name one of them too: a check that can't reach
+	// some web API isn't missing the repo's database.
+	out := strings.ToLower(output)
 	var snippet strings.Builder
+	named := false
 	for _, s := range knownServices {
 		if slices.ContainsFunc(s.signs, func(sign string) bool { return strings.Contains(text.String(), sign) }) {
-			fmt.Fprintf(&snippet, "    %s:\n      image: %s\n", s.name, s.image)
+			named = named || slices.ContainsFunc(s.errs, func(e string) bool { return strings.Contains(out, e) })
+			fmt.Fprintf(&snippet, "      %s:\n        image: %s\n", s.name, s.image)
 			if s.env != "" {
-				fmt.Fprintf(&snippet, "      env: %s\n", s.env)
+				fmt.Fprintf(&snippet, "        env: %s\n", s.env)
 			}
-			fmt.Fprintf(&snippet, "      ready: %s\n", s.ready)
+			fmt.Fprintf(&snippet, "        ready: %s\n", s.ready)
 		}
 	}
-	if snippet.Len() == 0 {
+	if !named {
 		return ""
 	}
-	return "The check couldn't connect to a service, and the repo's files point at the ones below. The factory starts services for every build and check when factory.yaml lists them under the repo; each is reached by its name as the host (`postgres:5432`), so point the test settings at it in the repo's `env:` (for example `DATABASE_URL`):\n\n```yaml\n  - name: " + repo.Name + "\n    services:\n" + snippet.String() + "```"
+	return "The check couldn't connect to a service, and the repo's files point at the ones below. The factory starts services for every build and check when factory.yaml lists them under the repo; each is reached by its name as the host (`postgres:5432`), so point the test settings at it in the repo's `env:` (for example `DATABASE_URL`):\n\n```yaml\nrepos:\n  - name: " + repo.Name + "\n    services:\n" + snippet.String() + "```"
 }
 
 func featureMap(files []string) bool {

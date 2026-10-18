@@ -10,6 +10,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/runner"
+	"gopkg.in/yaml.v3"
 )
 
 func tree(t *testing.T, files ...string) string {
@@ -220,8 +221,28 @@ func TestServicesHint(t *testing.T) {
 			f = &r.Findings[i]
 		}
 	}
-	if f == nil || f.Level != Blocker || f.Issue != nil || !strings.Contains(f.Detail, "postgres:\n      image: postgres:16\n      env: {POSTGRES_PASSWORD: factory}\n      ready: pg_isready -U postgres\n    redis:") {
+	if f == nil || f.Level != Blocker || f.Issue != nil {
 		t.Fatalf("finding = %+v\n%s", f, r.Text())
+	}
+	// The snippet pastes into factory.yaml as is.
+	_, rest, _ := strings.Cut(f.Detail, "```yaml\n")
+	snippet, _, _ := strings.Cut(rest, "```")
+	var pasted struct {
+		Repos []struct {
+			Name     string
+			Services map[string]config.Service
+		}
+	}
+	if err := yaml.Unmarshal([]byte(snippet), &pasted); err != nil || len(pasted.Repos) != 1 {
+		t.Fatalf("snippet doesn't parse (%v):\n%s", err, snippet)
+	}
+	pg := pasted.Repos[0].Services["postgres"]
+	if pg.Image != "postgres:16" || pg.Env["POSTGRES_PASSWORD"] != "factory" || pg.Ready != "pg_isready -U postgres" || pasted.Repos[0].Services["redis"].Image != "redis:7" {
+		t.Fatalf("snippet = %+v:\n%s", pasted, snippet)
+	}
+	// A refused connection that names none of them isn't a missing database.
+	if h := servicesHint(dir, []string{"docker-compose.yml"}, repo("", "test"), "dial tcp api.example.com:443: connection refused"); h != "" {
+		t.Fatalf("hint for an unrelated failure:\n%s", h)
 	}
 	for _, is := range r.Issues() {
 		if is.Key == "check:test" {

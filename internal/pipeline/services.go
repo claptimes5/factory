@@ -18,8 +18,14 @@ var ServiceWait = 2 * time.Minute
 // does nothing.
 func (p *Pipeline) StartServices(ctx context.Context, jobID int64, repo string) (stop func(), err error) {
 	svcs := p.repoConf(repo).Services
+	if len(svcs) == 0 {
+		return func() {}, nil
+	}
 	sr, ok := p.Runner.(runner.ServiceRunner)
-	if len(svcs) == 0 || !ok {
+	if !ok {
+		// Config only allows services with the docker runner; this is a
+		// pipeline wired up some other way, so say what it's missing.
+		p.log().Warn("services not started: the runner can't run them", "repo", repo)
 		return func() {}, nil
 	}
 	names := make([]string, 0, len(svcs))

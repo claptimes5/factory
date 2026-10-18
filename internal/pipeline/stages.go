@@ -171,7 +171,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	stop, err := p.StartServices(ctx, j.ID, it.Repo)
 	defer stop()
 	if err != nil {
-		return fail(agentRun{}, state.Failed, err.Error())
+		// Another model tier can't start a database: say so and stop.
+		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
+		return p.park(ctx, it, fmt.Sprintf("The repo's services didn't start, so nothing was built:\n\n```\n%s\n```", truncate(err.Error(), 3000)))
 	}
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
 	// A fresh attempt starts from the base branch; a fix round builds on the

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -151,11 +152,19 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	ctx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
 	args := d.Args(s)
+	// Env values reach the container from the docker command's own
+	// environment (-e NAME), at create time.
+	env := append(os.Environ(), envList(s.Env)...)
+	// A container created but never started isn't removed by --rm.
+	remove := func() { _ = d.Kill(context.Background(), s.Name) }
 	if s.Services != "" {
 		// docker run joins one network; the usual one (for the agent's
 		// API and installs) is connected between create and start.
 		args[0] = "create"
-		if out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput(); err != nil {
+		create := exec.CommandContext(ctx, d.bin(), args...)
+		create.Env = env
+		if out, err := create.CombinedOutput(); err != nil {
+			remove() // the daemon may have made it before the CLI was stopped
 			return -1, fmt.Errorf("docker create: %v: %s", err, strings.TrimSpace(string(out)))
 		}
 		if !s.NoNetwork {
@@ -164,19 +173,22 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 				net = "bridge"
 			}
 			if out, err := exec.CommandContext(ctx, d.bin(), "network", "connect", net, s.Name).CombinedOutput(); err != nil {
-				_ = d.Kill(context.Background(), s.Name)
+				remove()
 				return -1, fmt.Errorf("docker network connect: %v: %s", err, strings.TrimSpace(string(out)))
 			}
 		}
 		args = []string{"start", "-a", "-i", s.Name}
 	}
 	cmd := exec.Command(d.bin(), args...)
-	cmd.Env = append(os.Environ(), envList(s.Env)...)
+	cmd.Env = env
 	cmd.Stdin = s.Stdin
 	cmd.Stdout = stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
+		if s.Services != "" {
+			remove()
+		}
 		return -1, err
 	}
 	done := make(chan error, 1)
@@ -202,9 +214,11 @@ func serviceNet(job string) string { return job + "-svc" }
 // their data directory) but get no new privileges, the job's limits and
 // only the internal services network.
 func (d *Docker) ServiceArgs(job string, s Service) []string {
-	a := []string{"run", "-d", "--rm", "--name", job + "-svc-" + s.Name,
+	// No --rm: a service that dies on start keeps its logs for the error;
+	// StopServices removes it.
+	a := []string{"run", "-d", "--name", job + "-svc-" + s.Name,
 		"--network", serviceNet(job), "--network-alias", s.Name,
-		"--security-opt", "no-new-privileges", "--pids-limit", "1024",
+		"--security-opt", "no-new-privileges", "--cap-drop", "NET_RAW", "--pids-limit", "1024",
 		"--label", "factory.job=" + job,
 	}
 	if d.CPUs != "" {
@@ -221,8 +235,15 @@ func (d *Docker) ServiceArgs(job string, s Service) []string {
 
 func (d *Docker) StartServices(ctx context.Context, job string, svcs []Service, wait time.Duration) (string, error) {
 	net := serviceNet(job)
+	if err := d.isolatedGateways(ctx); err != nil {
+		return "", err
+	}
 	_ = d.StopServices(ctx, job) // left over from a crash
-	if out, err := exec.CommandContext(ctx, d.bin(), "network", "create", "--internal", "--label", "factory.job="+job, net).CombinedOutput(); err != nil {
+	// Internal: no route out. Isolated gateways: the host takes no address
+	// on it either, so nothing on it reaches the host's own ports.
+	if out, err := exec.CommandContext(ctx, d.bin(), "network", "create", "--internal",
+		"-o", "com.docker.network.bridge.gateway_mode_ipv4=isolated", "-o", "com.docker.network.bridge.gateway_mode_ipv6=isolated",
+		"--label", "factory.job="+job, net).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("docker network create: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	fail := func(err error) (string, error) {
@@ -234,26 +255,44 @@ func (d *Docker) StartServices(ctx context.Context, job string, svcs []Service, 
 			return fail(fmt.Errorf("service %s: %v: %s", s.Name, err, strings.TrimSpace(string(out))))
 		}
 	}
-	deadline := time.Now().Add(wait)
+	rctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
 	for _, s := range svcs {
 		if s.Ready == "" {
 			continue
 		}
+		name := job + "-svc-" + s.Name
 		for {
-			out, err := exec.CommandContext(ctx, d.bin(), "exec", job+"-svc-"+s.Name, "sh", "-c", s.Ready).CombinedOutput()
+			out, err := exec.CommandContext(rctx, d.bin(), "exec", name, "sh", "-c", s.Ready).CombinedOutput()
 			if err == nil {
 				break
 			}
 			if ctx.Err() != nil {
 				return fail(ctx.Err())
 			}
-			if time.Now().After(deadline) {
-				return fail(fmt.Errorf("service %s wasn't ready after %s: `%s`: %s", s.Name, wait, s.Ready, tail(string(out), 500)))
+			if rctx.Err() != nil || !d.Alive(ctx, name) {
+				logs, _ := exec.Command(d.bin(), "logs", "--tail", "30", name).CombinedOutput()
+				return fail(fmt.Errorf("service %s wasn't ready within %s: `%s`: %s\n\nIts log:\n%s", s.Name, wait, s.Ready, tail(string(out), 500), tail(string(logs), 2000)))
 			}
 			time.Sleep(time.Second)
 		}
 	}
 	return net, nil
+}
+
+// isolatedGateways checks the Docker engine can keep a network's gateway
+// off the host (Docker 28 and later; older ones ignore the option).
+func (d *Docker) isolatedGateways(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, d.bin(), "version", "--format", "{{.Server.Version}}").Output()
+	if err != nil {
+		return fmt.Errorf("docker version: %w", err)
+	}
+	v := strings.TrimSpace(string(out))
+	major, _, _ := strings.Cut(v, ".")
+	if n, err := strconv.Atoi(major); err != nil || n < 28 {
+		return fmt.Errorf("services need Docker 28 or later, to keep their network off the host; this is %s", v)
+	}
+	return nil
 }
 
 func (d *Docker) StopServices(ctx context.Context, job string) error {

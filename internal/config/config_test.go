@@ -260,4 +260,8 @@ services:
 	if _, err := Parse([]byte("repo: o/api\n" + local + "services:\n  db: {image: x}\n")); err == nil || !strings.Contains(err.Error(), "need the docker runner") {
 		t.Errorf("local runner: err = %v", err)
 	}
+	host := strings.Replace(base, `network: ""`, "network: host", 1)
+	if _, err := Parse([]byte("repo: o/api\n" + host + "services:\n  db: {image: x}\n")); err == nil || !strings.Contains(err.Error(), "network: host") {
+		t.Errorf("host network: err = %v", err)
+	}
 }

@@ -602,9 +602,13 @@ has no way out. The builder and every check join it, and reviewers don't.
 Hidden scenarios join it as well, but they still reach nothing else. The
 services are removed when the job ends, and the daemon clears any that a
 crash left behind. Create the test database in the install step (for
-example `bin/rails db:prepare`), because each job starts empty. Services
-need the docker runner. Don't put secrets in their `env`, since it goes on
-the docker command line.
+example `bin/rails db:prepare`), because each job starts empty. Within a
+job, though, the builder and every check share one set, so data one check
+writes is there for the next; tests that clean up after themselves (a
+transaction per test) keep that from mattering. `factory eval` gets a set
+too. Services need the docker runner on Docker 28 or newer, and can't be
+used with `network: host`. Don't put secrets in their `env`, since it goes
+on the docker command line.
 
 If a check fails because it can't connect to a database and the repo has
 no services, the readiness check says so. It suggests the services to add,
