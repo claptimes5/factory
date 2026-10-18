@@ -47,6 +47,40 @@ func TestRemoveMissingLabelIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestAppTokenLooksUpInstallation(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	installed := map[string]bool{"/app/installations/7/access_tokens": true}
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch {
+		case r.URL.Path == "/repos/o/r/installation":
+			json.NewEncoder(w).Encode(map[string]any{"id": 7})
+		case installed[r.URL.Path]:
+			json.NewEncoder(w).Encode(map[string]any{"token": "ghs_x", "expires_at": time.Now().Add(time.Hour)})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	a := &AppTokens{AppID: "1", Key: key, Repo: "o/r", BaseURL: srv.URL}
+	if tok, err := a.Token(context.Background()); err != nil || tok != "ghs_x" {
+		t.Fatalf("%q %v", tok, err)
+	}
+	// Uninstalled since: the next try looks the installation up again.
+	a.token, installed = "", nil
+	if _, err := a.Token(context.Background()); err == nil {
+		t.Fatal("want an error once uninstalled")
+	}
+	if a.InstallationID != "" {
+		t.Fatalf("installation %s kept after a 404", a.InstallationID)
+	}
+	a2 := &AppTokens{AppID: "1", Key: key, Repo: "o/none", BaseURL: srv.URL}
+	if _, err := a2.Token(context.Background()); err == nil || !strings.Contains(err.Error(), "not installed on o/none") {
+		t.Fatalf("want not installed, got %v", err)
+	}
+}
+
 func TestAppTokenScopedAndCached(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	calls := 0

@@ -299,16 +299,19 @@ func (c *Client) UpdatePRBody(ctx context.Context, n int, body string) error {
 // AppTokens mints GitHub App installation tokens scoped to one repository
 // and caches each until shortly before it expires.
 type AppTokens struct {
-	AppID          string
+	AppID string
+	// InstallationID is the app's installation on the repo's owner. Left
+	// empty, it is looked up on first use.
 	InstallationID string
 	Key            *rsa.PrivateKey
 	Repo           string // owner/name: the token is scoped to this repo only
 	BaseURL        string
 	HTTP           *http.Client
 
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	mu       sync.Mutex
+	token    string
+	expires  time.Time
+	lookedUp bool // InstallationID came from RepoInstallation
 }
 
 // LoadAppKey reads a PEM private key (PKCS#1 or PKCS#8).
@@ -363,7 +366,17 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	_, name, _ := strings.Cut(a.Repo, "/")
+	owner, name, _ := strings.Cut(a.Repo, "/")
+	if a.InstallationID == "" {
+		id, err := a.RepoInstallation(ctx, a.Repo)
+		if err != nil {
+			return "", err
+		}
+		if id == "" {
+			return "", fmt.Errorf("github: the app is not installed on %s; install it on %s and select %s", a.Repo, owner, a.Repo)
+		}
+		a.InstallationID, a.lookedUp = id, true
+	}
 	var r struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -382,6 +395,10 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 		// for. Apps set up before Checks was needed still work, minus the CI panel.
 		delete(perms, "checks")
 		err = doJSON(ctx, hc, "POST", u, "Bearer "+jwt, map[string]any{"repositories": []string{name}, "permissions": perms}, &r)
+	}
+	if errors.As(err, &he) && he.Status == http.StatusNotFound && a.lookedUp {
+		// The app was uninstalled since the lookup; look again next time.
+		a.InstallationID, a.lookedUp = "", false
 	}
 	if err != nil {
 		return "", err
@@ -419,6 +436,32 @@ func ConvertManifest(ctx context.Context, base, code string) (*CreatedApp, error
 	var app CreatedApp
 	err := doJSON(ctx, &http.Client{Timeout: 30 * time.Second}, "POST", base+"/app-manifests/"+url.PathEscape(code)+"/conversions", "", nil, &app)
 	return &app, err
+}
+
+// RepoInstallation returns the ID of the app's installation that covers
+// the repo owner/name, or "" if none does.
+func (a *AppTokens) RepoInstallation(ctx context.Context, repo string) (string, error) {
+	jwt, err := a.JWT(time.Now())
+	if err != nil {
+		return "", err
+	}
+	base := a.BaseURL
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	owner, name, _ := strings.Cut(repo, "/")
+	var in struct {
+		ID int64 `json:"id"`
+	}
+	err = doJSON(ctx, &http.Client{Timeout: 30 * time.Second}, "GET", base+"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+"/installation", "Bearer "+jwt, nil, &in)
+	var he *HTTPError
+	if errors.As(err, &he) && he.Status == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(in.ID, 10), nil
 }
 
 // FindInstallation returns the ID of the app's installation on the given

@@ -131,11 +131,11 @@ func apiSetup(t *testing.T) (string, *store.Store, *fakeActions, *Server) {
 	os.WriteFile(filepath.Join(jobs, itoa(rev), "diff.patch"), []byte("diff --git a/p.go b/p.go\n+i <= n\n"), 0o644)
 	st.AddEvent(ctx, store.Event{Actor: "orchestrator", ItemID: &it.ID, Type: "set_priority", Reason: "unblocks two items"})
 
-	s := &Server{Store: st, Actions: fa, Repo: "o/r", DailyCap: 1, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, JobsDir: jobs,
-		Issue: func(_ context.Context, n int) (*github.Issue, error) {
+	s := &Server{Store: st, Actions: fa, Repos: []string{"o/r"}, DailyCap: 1, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, JobsDir: jobs,
+		Issue: func(_ context.Context, _ string, n int) (*github.Issue, error) {
 			return &github.Issue{Number: n, Body: "The parser drops the last token."}, nil
 		},
-		Checks: func(_ context.Context, sha string) ([]github.CheckRun, error) {
+		Checks: func(_ context.Context, _, sha string) ([]github.CheckRun, error) {
 			return []github.CheckRun{{Name: "test", Status: "completed", Conclusion: "success", URL: "https://ci/" + sha}}, nil
 		},
 	}

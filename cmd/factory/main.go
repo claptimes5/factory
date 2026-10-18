@@ -143,7 +143,7 @@ func run(args []string) error {
 				return err
 			}
 			healthCheck(ctx, cfg, p)
-			slog.Info("factory serving", "repo", cfg.Repo, "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
+			slog.Info("factory serving", "repos", strings.Join(cfg.RepoNames(), ","), "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
 			return p.Serve(ctx)
 		}
 		if err := p.Recover(ctx); err != nil {
@@ -162,13 +162,25 @@ func envOr(k, def string) string {
 	return def
 }
 
-func tokens(cfg *config.Config) (github.TokenSource, error) {
+// tokens returns GitHub credentials for one repo. App tokens are scoped to
+// that repo alone.
+func tokens(cfg *config.Config, repo string) (github.TokenSource, error) {
 	if app := os.Getenv("FACTORY_GITHUB_APP_ID"); app != "" {
 		key, err := github.LoadAppKey(os.Getenv("FACTORY_GITHUB_APP_KEY"))
 		if err != nil {
 			return nil, fmt.Errorf("FACTORY_GITHUB_APP_KEY: %w", err)
 		}
-		return &github.AppTokens{AppID: app, InstallationID: os.Getenv("FACTORY_GITHUB_INSTALLATION_ID"), Key: key, Repo: cfg.Repo}, nil
+		// The saved installation is the app's install on the first repo's
+		// account. A repo under any other account (repos under several, or
+		// one since dropped from the config) has its own looked up instead.
+		inst := os.Getenv("FACTORY_GITHUB_INSTALLATION_ID")
+		owner, _, _ := strings.Cut(repo, "/")
+		for _, r := range append(cfg.RepoNames(), repo) {
+			if o, _, _ := strings.Cut(r, "/"); !strings.EqualFold(o, owner) {
+				inst = ""
+			}
+		}
+		return &github.AppTokens{AppID: app, InstallationID: inst, Key: key, Repo: repo}, nil
 	}
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		return github.StaticToken(t), nil
@@ -206,8 +218,8 @@ func newRunner(cfg *config.Config) runner.Runner {
 }
 
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
-	ts, err := tokens(cfg)
-	if err != nil {
+	// Fail at start, not on the first job, when credentials are missing.
+	if _, err := tokens(cfg, cfg.RepoNames()[0]); err != nil {
 		return nil, err
 	}
 	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
@@ -217,10 +229,18 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	}
 	r := newRunner(cfg)
 	return &pipeline.Pipeline{
-		Cfg:    cfg,
-		Store:  st,
-		GH:     &github.Client{Repo: cfg.Repo, Tokens: ts},
-		Git:    &pipeline.Git{RemoteURL: "https://github.com/" + cfg.Repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)},
+		Cfg:   cfg,
+		Store: st,
+		ClientsFor: func(repo string) pipeline.RepoClients {
+			ts, err := tokens(cfg, repo)
+			if err != nil {
+				ts = github.StaticToken("") // checked above; fails each call if the env changed
+			}
+			return pipeline.RepoClients{
+				GH:  &github.Client{Repo: repo, Tokens: ts},
+				Git: &pipeline.Git{RemoteURL: "https://github.com/" + repo + ".git", Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)},
+			}
+		},
 		Runner: r,
 		Harnesses: map[string]harness.Harness{
 			"claude": harness.NewClaude(r),
@@ -270,13 +290,19 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 	if err != nil {
 		return fmt.Errorf("web.listen: %w", err)
 	}
-	srv := &web.Server{Store: st, Actions: p, Repo: cfg.Repo, DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
+	srv := &web.Server{Store: st, Actions: p, Repos: cfg.RepoNames(), DailyCap: cfg.Budgets.DailyTotal, AwaitCap: cfg.Budgets.AwaitingHumanMax,
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
-	srv.Issue = web.CachedIssue(p.GH.GetIssue, 5*time.Minute)
-	if c, ok := p.GH.(*github.Client); ok {
-		srv.Checks = web.CachedChecks(c.CheckRuns, 30*time.Second)
-	}
+	srv.Issue = web.CachedIssue(func(ctx context.Context, repo string, n int) (*github.Issue, error) {
+		return p.GitHubFor(repo).GetIssue(ctx, n)
+	}, 5*time.Minute)
+	srv.Checks = web.CachedChecks(func(ctx context.Context, repo, sha string) ([]github.CheckRun, error) {
+		c, ok := p.GitHubFor(repo).(*github.Client)
+		if !ok {
+			return nil, nil
+		}
+		return c.CheckRuns(ctx, sha)
+	}, 30*time.Second)
 	if cfg.Runner.Kind == "docker" {
 		srv.Attach = web.TTYDAttach(st, host)
 		srv.Exec = web.DockerExec(st)
@@ -315,7 +341,7 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		if it.PRNumber > 0 {
 			pr = fmt.Sprintf("#%d", it.PRNumber)
 		}
-		fmt.Fprintf(w, "%d\t#%d\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.IssueNumber, it.Stage, dash(it.Complexity), dash(it.Risk), pr, it.Title)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, issueRef(cfg, it.Repo, it.IssueNumber), it.Stage, dash(it.Complexity), dash(it.Risk), pr, it.Title)
 	}
 	fmt.Fprintln(w)
 	for _, s := range []state.JobState{state.Queued, state.Running} {
@@ -335,6 +361,37 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// parseIssue reads an issue as 12, #12 or owner/name#12. A bare number
+// means the only repo; with several, the repo must be named.
+func parseIssue(cfg *config.Config, arg string) (string, int, error) {
+	repo, num, named := strings.Cut(arg, "#")
+	if !named {
+		repo, num = "", arg
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n <= 0 {
+		return "", 0, fmt.Errorf("%q is not an issue number (write 12, #12 or owner/name#12)", arg)
+	}
+	if repo == "" {
+		if len(cfg.Repos) > 1 {
+			return "", 0, fmt.Errorf("the factory works on several repos; name one, as in %s#%d", cfg.Repos[0].Name, n)
+		}
+		return cfg.Repos[0].Name, n, nil
+	}
+	if r, ok := cfg.RepoConf(repo); ok {
+		repo = r.Name
+	}
+	return repo, n, nil
+}
+
+// issueRef names an issue for people: #12, or owner/name#12 with several repos.
+func issueRef(cfg *config.Config, repo string, n int) string {
+	if len(cfg.Repos) > 1 {
+		return fmt.Sprintf("%s#%d", repo, n)
+	}
+	return fmt.Sprintf("#%d", n)
 }
 
 func dash(s string) string {
@@ -377,10 +434,17 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	if len(cases) == 0 {
 		return fmt.Errorf("no cases in %s", *set)
 	}
-	ts, err := tokens(cfg)
+	ts, err := tokens(cfg, cfg.RepoNames()[0])
 	if err != nil {
 		slog.Warn("no GitHub credentials; cases must name a local or public repo", "err", err)
 		ts = nil
+	}
+	tokensFor := func(repo string) github.TokenSource {
+		if ts == nil {
+			return nil
+		}
+		t, _ := tokens(cfg, repo)
+		return t
 	}
 	r := newRunner(cfg)
 	work, err := os.MkdirTemp(cfg.Path(cfg.DataDir), "eval-")
@@ -389,7 +453,7 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 	}
 	defer os.RemoveAll(work)
 	rep, err := eval.Run(ctx, eval.Options{
-		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, WorkDir: work, Parallel: *parallel,
+		Cfg: cfg, Runner: r, Secrets: secrets(), Tokens: ts, TokensFor: tokensFor, WorkDir: work, Parallel: *parallel,
 		Harnesses: map[string]harness.Harness{"claude": harness.NewClaude(r), "codex": harness.NewCodex(r)},
 	}, cases)
 	if err != nil {
@@ -423,26 +487,47 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 // pull hands an item over for local work: it fetches the item's branch into
 // the git repository in the current directory and copies the item's job
 // transcripts (and Claude sessions, when kept) next to it.
+// remoteIs reports whether a git remote URL (https or ssh) points at the
+// GitHub repo owner/name.
+func remoteIs(url, repo string) bool {
+	u := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git"))
+	r := strings.ToLower(repo)
+	return strings.HasSuffix(u, "/"+r) || strings.HasSuffix(u, ":"+r)
+}
+
 func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) error {
-	n, err := strconv.Atoi(strings.TrimPrefix(arg, "#"))
+	repo, n, err := parseIssue(cfg, arg)
 	if err != nil {
-		return fmt.Errorf("pull: %q is not an issue number", arg)
+		return fmt.Errorf("pull: %w", err)
 	}
-	it, err := st.ItemByIssue(ctx, cfg.Repo, n)
+	it, err := st.ItemByIssue(ctx, repo, n)
 	if err != nil {
-		return fmt.Errorf("no work item for issue #%d", n)
+		return fmt.Errorf("no work item for issue %s", issueRef(cfg, repo, n))
 	}
 	branch := it.Branch
 	if branch == "" {
 		branch = fmt.Sprintf("factory/issue-%d", n)
 	}
-	// The user's own git and credentials: this runs in their checkout.
+	// The user's own git and credentials: this runs in their checkout,
+	// which with several repos must be the checkout of this one.
+	if len(cfg.Repos) > 1 {
+		out, err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output()
+		if err != nil {
+			return fmt.Errorf("pull: reading this checkout's origin: %w", err)
+		}
+		if !remoteIs(strings.TrimSpace(string(out)), repo) {
+			return fmt.Errorf("pull: this checkout's origin is %s, not %s; run it in a checkout of %s", strings.TrimSpace(string(out)), repo, repo)
+		}
+	}
 	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", "+refs/heads/"+branch+":refs/heads/"+branch)
 	fetch.Stdout, fetch.Stderr = os.Stdout, os.Stderr
 	if err := fetch.Run(); err != nil {
 		return fmt.Errorf("git fetch %s: %w", branch, err)
 	}
 	dst := filepath.Join(".factory", fmt.Sprintf("issue-%d", n))
+	if len(cfg.Repos) > 1 {
+		dst = filepath.Join(".factory", strings.ReplaceAll(repo, "/", "__")+fmt.Sprintf("-issue-%d", n))
+	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -532,15 +617,18 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 	if len(args) == 0 {
 		return fmt.Errorf("usage: factory compare <issue> -skills a,b")
 	}
-	issue, err := strconv.Atoi(strings.TrimPrefix(args[0], "#"))
+	repo, issue, err := parseIssue(cfg, args[0])
 	if err != nil {
-		return fmt.Errorf("compare: %q is not an issue number", args[0])
+		return fmt.Errorf("compare: %w", err)
+	}
+	if _, ok := cfg.RepoConf(repo); !ok {
+		return fmt.Errorf("compare: %s is not in factory.yaml", repo)
 	}
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	risk := "low"
-	if it, err := st.ItemByIssue(ctx, cfg.Repo, issue); err == nil {
+	if it, err := st.ItemByIssue(ctx, repo, issue); err == nil {
 		if *complexity == "" {
 			*complexity = it.Complexity
 		}
@@ -566,9 +654,12 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 		return fmt.Errorf("today's budget is spent ($%.2f of $%.2f)", spent, cfg.Budgets.DailyTotal)
 	}
 	id := fmt.Sprintf("%d-%s", issue, time.Now().UTC().Format("20060102T150405Z"))
+	if len(cfg.Repos) > 1 {
+		id = strings.ReplaceAll(repo, "/", "__") + "-" + id
+	}
 	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
 	rep, err := compare.Run(ctx, compare.Options{
-		Cfg: cfg, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GH, Git: p.Git,
+		Cfg: cfg, Repo: repo, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GitHubFor(repo), Git: p.GitFor(repo),
 		Dir: dir, Push: !*noPush, Budget: max(left, 0),
 	}, issue, strings.Split(*skills, ","), *complexity, risk)
 	if rep != nil {
@@ -577,7 +668,7 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 			cost += a.CostUSD
 		}
 		if cost > 0 {
-			if serr := st.AddSpend(context.WithoutCancel(ctx), cost, "human", fmt.Sprintf("compare #%d: %s", issue, *skills)); serr != nil {
+			if serr := st.AddSpend(context.WithoutCancel(ctx), cost, "human", fmt.Sprintf("compare %s: %s", issueRef(cfg, repo, issue), *skills)); serr != nil {
 				slog.Error("recording compare spend", "err", serr)
 			}
 		}
@@ -588,7 +679,7 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 	if err := rep.Save(dir); err != nil {
 		return err
 	}
-	_ = st.AddEvent(ctx, store.Event{Actor: "human", Type: "compare_done", Reason: fmt.Sprintf("#%d: %s", issue, *skills), Data: dir})
+	_ = st.AddEvent(ctx, store.Event{Actor: "human", Type: "compare_done", Reason: fmt.Sprintf("%s: %s", issueRef(cfg, repo, issue), *skills), Data: dir})
 	for _, a := range rep.Arms {
 		fmt.Printf("%-16s %-16s review=%-9s cost=$%.2f time=%.0fs %s\n", a.Skillset, a.Stage, a.Review, a.CostUSD, a.Seconds, a.Error)
 	}

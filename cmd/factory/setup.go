@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -184,20 +185,24 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	p.say("Press Enter to keep a value shown in [brackets]. Each section is saved")
 	p.say("as you finish it; Ctrl-C stops, and running setup again starts from your answers.")
 
-	p.say("\n== 1. Repository")
+	p.say("\n== 1. Repositories")
+	p.say("The factory can work on several repos, each on its own. List them separated by commas.")
 	for {
-		repo := p.ask("GitHub repository the factory works on (owner/name)", cfg.Repo)
-		repo = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(repo, "https://github.com/"), "github.com/"), ".git")
-		if o, n, ok := strings.Cut(repo, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
-			p.say("Write it as owner/name, for example octocat/hello-world.")
+		names, err := parseRepoList(p.ask("GitHub repositories (owner/name)", strings.Join(cfg.RepoNames(), ", ")))
+		if err != nil {
+			p.say("%v", err)
 			continue
 		}
-		if repo != cfg.Repo {
-			if err := setYAML(cfgPath, "repo", repo); err != nil {
+		if !slices.Equal(names, cfg.RepoNames()) {
+			if err := setRepos(cfgPath, names); err != nil {
 				return err
 			}
-			cfg.Repo = repo
-			p.say("Updated repo in %s.", cfgPath)
+			c, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			*cfg = *c
+			p.say("Updated %s.", cfgPath)
 		}
 		break
 	}
@@ -210,35 +215,34 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 
 	p.say("\n== 3. GitHub access")
-	gh, err := setupGitHub(ctx, p, cfg, vals, filepath.Dir(envPath))
+	client, err := setupGitHub(ctx, p, cfg, vals, filepath.Dir(envPath))
 	if err != nil {
 		return err
 	}
 	if err := save(); err != nil {
 		return err
 	}
-	if gh != nil {
-		if b, err := gh.DefaultBranch(ctx); err == nil && b != "" && b != cfg.BaseBranch {
-			if p.yes(fmt.Sprintf("%s's default branch is %s, but factory.yaml says %s. Use %s?", cfg.Repo, b, cfg.BaseBranch, b), true) {
-				if err := setYAML(cfgPath, "base_branch", b); err != nil {
-					p.say("Couldn't update it: %v. Set base_branch in %s yourself.", err, cfgPath)
-				} else {
-					cfg.BaseBranch = b
-				}
-			}
-		}
+	if client != nil {
+		checkBaseBranches(ctx, p, cfgPath, cfg, client)
 		labels := pipeline.Labels(cfg.Intake.Label)
-		p.say("\nThe factory uses %d labels on %s, such as %s.", len(labels), cfg.Repo, labels[0].Name)
+		p.say("\nThe factory uses %d labels on each repo, such as %s.", len(labels), labels[0].Name)
 		if p.yes("Create the ones that are missing? Existing labels are left as they are.", true) {
-			for _, l := range labels {
-				created, err := gh.EnsureLabel(ctx, l.Name, l.Color, l.Description)
-				switch {
-				case err != nil:
-					p.say("  %s: %v", l.Name, err)
-				case created:
-					p.say("  %s: created", l.Name)
-				default:
-					p.say("  %s: already there", l.Name)
+			for _, repo := range cfg.RepoNames() {
+				gh, err := client(repo)
+				if err != nil {
+					p.say("%s: %v", repo, err)
+					continue
+				}
+				for _, l := range labels {
+					created, err := gh.EnsureLabel(ctx, l.Name, l.Color, l.Description)
+					switch {
+					case err != nil:
+						p.say("  %s %s: %v", repo, l.Name, err)
+					case created:
+						p.say("  %s %s: created", repo, l.Name)
+					default:
+						p.say("  %s %s: already there", repo, l.Name)
+					}
 				}
 			}
 		}
@@ -307,13 +311,16 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 	p.say("\nAll set. Saved %s.", envPath)
 	p.say("Start the factory with:\n\n    ./factory serve\n")
-	p.say("Then open http://%s/app/ and label an issue on %s with %s.", cfg.Web.Listen, cfg.Repo, cfg.Intake.Label)
+	p.say("Then open http://%s/app/ and label an issue on %s with %s.", cfg.Web.Listen, strings.Join(cfg.RepoNames(), " or "), cfg.Intake.Label)
 	return nil
 }
 
+// clientFor makes a GitHub client for one repo with the saved credentials.
+type clientFor func(repo string) (*github.Client, error)
+
 // setupGitHub connects to GitHub one of three ways and checks that it can
-// read the repo. It returns nil if you chose to skip the check.
-func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[string]string, keyDir string) (*github.Client, error) {
+// read every repo. It returns nil if you chose to skip the check.
+func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[string]string, keyDir string) (clientFor, error) {
 	def := func() string {
 		switch {
 		case vals["FACTORY_GITHUB_APP_ID"] != "":
@@ -323,12 +330,14 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 		}
 		return "1"
 	}
-	p.say("The factory acts on GitHub through a GitHub App limited to this one repo.")
+	repos := cfg.RepoNames()
+	list := strings.Join(repos, ", ")
+	p.say("The factory acts on GitHub through a GitHub App limited to %s.", list)
 	p.say("  1. Create a new app for me (recommended; takes about a minute in the browser)")
 	p.say("  2. Use an app I already made")
 	p.say("  3. Use a personal access token (only for a quick try)")
 	for {
-		var gh *github.Client
+		var client clientFor
 		switch p.ask("Choose 1, 2 or 3", def()) {
 		case "1":
 			id, slug, keyPath, err := createApp(ctx, p, cfg, keyDir)
@@ -343,7 +352,7 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			}
 			vals["FACTORY_GITHUB_APP_ID"], vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["FACTORY_GITHUB_APP_KEY"] = id, inst, keyPath
 			vals["GITHUB_TOKEN"] = ""
-			gh, _ = appClient(cfg, vals)
+			client = appClients(vals)
 		case "2":
 			vals["FACTORY_GITHUB_APP_ID"] = p.ask("App ID (under About on the app's settings page)", vals["FACTORY_GITHUB_APP_ID"])
 			for {
@@ -356,44 +365,53 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 				break
 			}
 			key, _ := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
-			owner, _, _ := strings.Cut(cfg.Repo, "/")
-			found, err := (&github.AppTokens{AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, BaseURL: githubAPI}).FindInstallation(ctx, owner)
+			app := &github.AppTokens{AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, BaseURL: githubAPI}
+			first, missing, err := installations(ctx, app, repos)
 			if err != nil {
 				p.say("GitHub refused that app ID and key: %v", err)
 				continue
 			}
-			if found == "" {
-				p.say("The app isn't installed on %s. Install it from the app's settings page (Install App), then try again.", owner)
+			if len(missing) > 0 {
+				p.say("The app isn't installed on %s. Install it from the app's settings page (Install App), then try again.", strings.Join(missing, " or "))
 				continue
 			}
-			vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["GITHUB_TOKEN"] = found, ""
-			gh, _ = appClient(cfg, vals)
+			vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["GITHUB_TOKEN"] = first, ""
+			client = appClients(vals)
 		case "3":
 			p.say("Create a fine-grained token at %s/settings/personal-access-tokens/new", githubWeb)
-			p.say("for %s only, with Contents, Issues and Pull requests set to Read and write.", cfg.Repo)
+			p.say("for %s only, with Contents, Issues and Pull requests set to Read and write.", list)
 			vals["GITHUB_TOKEN"] = p.secret("Token", vals["GITHUB_TOKEN"])
 			vals["FACTORY_GITHUB_APP_ID"], vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["FACTORY_GITHUB_APP_KEY"] = "", "", ""
-			gh = &github.Client{Repo: cfg.Repo, Tokens: github.StaticToken(vals["GITHUB_TOKEN"]), BaseURL: githubAPI}
+			tok := github.StaticToken(vals["GITHUB_TOKEN"])
+			client = func(repo string) (*github.Client, error) {
+				return &github.Client{Repo: repo, Tokens: tok, BaseURL: githubAPI}, nil
+			}
 		default:
 			continue
 		}
-		p.say("Checking access to %s ...", cfg.Repo)
-		sha, err := gh.BranchSHA(ctx, cfg.BaseBranch)
-		if err == nil && sha == "" {
-			// The branch may just be named differently; reading the repo is what matters.
-			_, err = gh.DefaultBranch(ctx)
-		}
-		if err == nil {
-			p.say("OK: the factory can reach %s.", cfg.Repo)
-			return gh, nil
-		}
-		p.say("That didn't work: %v", err)
-		if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "404") {
-			p.say("Check that the app or token has access to %s itself, not only to its owner.", cfg.Repo)
-			if vals["FACTORY_GITHUB_APP_ID"] != "" {
-				p.say("For the app: open its settings, Install App, the gear next to %s, and add %s.", strings.Split(cfg.Repo, "/")[0], cfg.Repo)
-				p.say("Then choose 2 to check again; that keeps the app you already have.")
+		var failed []string
+		for _, repo := range repos {
+			p.say("Checking access to %s ...", repo)
+			err := checkRepo(ctx, client, cfg, repo)
+			if err == nil {
+				p.say("OK: the factory can reach %s.", repo)
+				continue
 			}
+			failed = append(failed, repo)
+			p.say("That didn't work: %v", err)
+			if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not installed") {
+				owner, _, _ := strings.Cut(repo, "/")
+				p.say("Check that the app or token has access to %s itself, not only to its owner.", repo)
+				if vals["FACTORY_GITHUB_APP_ID"] != "" {
+					p.say("For the app: open its settings, Install App, the gear next to %s, and add %s.", owner, repo)
+				}
+			}
+		}
+		if len(failed) == 0 {
+			return client, nil
+		}
+		if vals["FACTORY_GITHUB_APP_ID"] != "" {
+			p.say("Then choose 2 to check again; that keeps the app you already have.")
 		}
 		if !p.yes("Try again?", true) {
 			p.say("Saving what you entered; run `factory setup` again to fix it.")
@@ -402,14 +420,56 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 	}
 }
 
-func appClient(cfg *config.Config, vals map[string]string) (*github.Client, error) {
-	key, err := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
+// checkRepo reads a repo's base branch, or failing that the repo itself:
+// the branch may just be named differently.
+func checkRepo(ctx context.Context, client clientFor, cfg *config.Config, repo string) error {
+	gh, err := client(repo)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &github.Client{Repo: cfg.Repo, BaseURL: githubAPI, Tokens: &github.AppTokens{
-		AppID: vals["FACTORY_GITHUB_APP_ID"], InstallationID: vals["FACTORY_GITHUB_INSTALLATION_ID"],
-		Key: key, Repo: cfg.Repo, BaseURL: githubAPI}}, nil
+	rc, _ := cfg.RepoConf(repo)
+	sha, err := gh.BranchSHA(ctx, rc.BaseBranch)
+	if err == nil && sha == "" {
+		_, err = gh.DefaultBranch(ctx)
+	}
+	return err
+}
+
+// installations finds the app's installation on each repo's owner. It
+// returns the first repo's, and the owners it isn't installed on.
+func installations(ctx context.Context, app *github.AppTokens, repos []string) (first string, missing []string, err error) {
+	seen := map[string]bool{}
+	for i, repo := range repos {
+		owner, _, _ := strings.Cut(repo, "/")
+		if seen[strings.ToLower(owner)] {
+			continue
+		}
+		seen[strings.ToLower(owner)] = true
+		id, err := app.FindInstallation(ctx, owner)
+		if err != nil {
+			return "", nil, err
+		}
+		if id == "" {
+			missing = append(missing, owner)
+		}
+		if i == 0 {
+			first = id
+		}
+	}
+	return first, missing, nil
+}
+
+// appClients makes clients that act as the saved app. The saved
+// installation is the first repo's owner's; others are looked up.
+func appClients(vals map[string]string) clientFor {
+	return func(repo string) (*github.Client, error) {
+		key, err := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
+		if err != nil {
+			return nil, err
+		}
+		return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: &github.AppTokens{
+			AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, Repo: repo, BaseURL: githubAPI}}, nil
+	}
 }
 
 // checkDocker makes sure Docker works for this user and the job image
@@ -446,6 +506,101 @@ func checkDocker(p *prompter, cfg *config.Config) error {
 	return nil
 }
 
+// checkBaseBranches compares each repo's base branch in factory.yaml with
+// its default branch on GitHub. With one repo it offers to fix the config.
+func checkBaseBranches(ctx context.Context, p *prompter, cfgPath string, cfg *config.Config, client clientFor) {
+	for _, name := range cfg.RepoNames() {
+		r, _ := cfg.RepoConf(name)
+		gh, err := client(r.Name)
+		if err != nil {
+			continue
+		}
+		b, err := gh.DefaultBranch(ctx)
+		if err != nil || b == "" || b == r.BaseBranch {
+			continue
+		}
+		if len(cfg.Repos) > 1 {
+			p.say("%s's default branch is %s, but the factory will use %s. To change it, give", r.Name, b, r.BaseBranch)
+			p.say("that repo its own base_branch under repos: in %s.", cfgPath)
+			continue
+		}
+		if p.yes(fmt.Sprintf("%s's default branch is %s, but factory.yaml says %s. Use %s?", r.Name, b, r.BaseBranch, b), true) {
+			if err := setYAML(cfgPath, "base_branch", b); err != nil {
+				p.say("Couldn't update it: %v. Set base_branch in %s yourself.", err, cfgPath)
+			} else if c, err := config.Load(cfgPath); err == nil {
+				*cfg = *c
+			}
+		}
+	}
+}
+
+// parseRepoList reads "owner/a, https://github.com/owner/b" into names.
+func parseRepoList(in string) ([]string, error) {
+	var names []string
+	seen := map[string]bool{}
+	for _, f := range strings.FieldsFunc(in, func(r rune) bool { return r == ',' || r == ' ' }) {
+		f = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(f, "https://"), "github.com/"), ".git")
+		if o, n, ok := strings.Cut(f, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+			return nil, fmt.Errorf("write %q as owner/name, for example octocat/hello-world", f)
+		}
+		if !seen[strings.ToLower(f)] {
+			seen[strings.ToLower(f)] = true
+			names = append(names, f)
+		}
+	}
+	if len(names) == 0 {
+		return nil, errors.New("name at least one repository, as owner/name")
+	}
+	return names, nil
+}
+
+// setRepos writes the repo list to the config: `repo: x` for one, or
+// `repos: [x, y]`. A repos: list with per-repo settings is left alone.
+func setRepos(path string, names []string) error {
+	cur, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	for _, r := range cur.Repos {
+		if r.BaseBranch != "" || r.Gates != nil {
+			return fmt.Errorf("%s gives %s settings of its own; change its repos: list there and run setup again", path, r.Name)
+		}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	block := "repo: " + names[0] + "\n"
+	if len(names) > 1 {
+		block = "repos:\n"
+		for _, n := range names {
+			block += "  - " + n + "\n"
+		}
+	}
+	// Replace the top-level repo: or repos: line and whatever belongs to
+	// it: indented lines and "- item" lines of a block list.
+	lines := strings.SplitAfter(string(b), "\n")
+	var out strings.Builder
+	found := false
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		isRepo := strings.HasPrefix(l, "repo:") || strings.HasPrefix(l, "repos:")
+		if found || !isRepo {
+			out.WriteString(l)
+			continue
+		}
+		found = true
+		out.WriteString(block)
+		for i+1 < len(lines) && (strings.HasPrefix(lines[i+1], " ") || strings.HasPrefix(lines[i+1], "\t") || strings.HasPrefix(lines[i+1], "-")) {
+			i++
+		}
+	}
+	if !found {
+		return fmt.Errorf("%s has no repo: line to update", path)
+	}
+	return writeConfig(path, []byte(out.String()))
+}
+
 // setYAML rewrites one top-level `key: value` line of the config file,
 // keeping everything else, comments included.
 func setYAML(path, key, value string) error {
@@ -461,7 +616,12 @@ func setYAML(path, key, value string) error {
 	if err != nil {
 		return err
 	}
-	out := re.ReplaceAllLiteral(b, append([]byte(key+": "), bytes.TrimSpace(quoted)...))
+	return writeConfig(path, re.ReplaceAllLiteral(b, append([]byte(key+": "), bytes.TrimSpace(quoted)...)))
+}
+
+// writeConfig replaces the config file in one step, after checking that
+// the new text is a valid config.
+func writeConfig(path string, out []byte) error {
 	if _, err := config.Parse(out); err != nil {
 		return fmt.Errorf("updating %s: %w", path, err)
 	}

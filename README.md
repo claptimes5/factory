@@ -38,7 +38,8 @@ CGO_ENABLED=0 go build -o factory ./cmd/factory
 `factory setup` walks you through everything else and checks each answer
 before moving on:
 
-1. **Repository:** which repo the factory works on. It updates `factory.yaml`.
+1. **Repositories:** which repos the factory works on, one or several. It
+   updates `factory.yaml`.
 2. **Docker:** checks that Docker works for you, and offers to build the job
    image the first time (a few minutes).
 3. **GitHub:** creates a GitHub App for the factory for you. It gives you a
@@ -267,6 +268,9 @@ If that forwarding is unreliable, set `networkingMode=mirrored` in
 | `factory eval [-config candidate.yaml] [-set evals] [-baseline base.json] [-out report.json]` | Run the replay set and report pass rate and cost per pass; with a baseline, fail if the candidate is worse |
 | `factory compare ISSUE -skills a,b [-complexity M] [-no-push]` | Build one issue once per skill set and report the arms side by side |
 | `factory pull ISSUE` | Fetch an item's branch into the current checkout and copy its job transcripts to `.factory/issue-N/` |
+
+With several repos, name an issue as `owner/name#12`; with one, `12` or
+`#12` is enough.
 | `factory last-job`, `factory wait-job AFTER TIMEOUT`, `factory db-path` | Used by `deploy/upgrade.sh` |
 | `factory mcp-bridge SOCKET` | Internal: the orchestrator's stdio MCP server, run inside its container |
 
@@ -357,6 +361,34 @@ escalation tiers, timeouts, budgets, Codex token pricing, gate commands and
 the diff guard. The daemon refuses a config where a reviewer could run the
 same harness and model as the builder it reviews. Stage prompts are in
 [`prompts/`](prompts).
+
+### Several repositories
+
+One factory can work on several repos. Each is worked on separately: its
+own issues, branches, PRs and checks. They share the queue, the budgets,
+the models and the dashboard, which can filter by repo.
+
+```yaml
+repos:
+  - you/api                     # takes the top-level base_branch and gates
+  - name: you/web
+    base_branch: develop
+    gates:                      # overrides the top-level gates for this repo
+      required: [types, test]
+      commands: {types: npm run typecheck, test: npm test}
+```
+
+A repo's `gates` override the top-level ones field by field. Its
+`commands` replace the top-level commands; anything it leaves out, such as
+the diff guard or `proves_fix`, is inherited. Set `proves_fix: none` or
+`scenarios_dir: none` to turn one off for that repo.
+
+`repo: you/api` is the short form for one repo. With a GitHub App, install
+it on every repo (setup walks you through this). Repos under different
+accounts need the app to be public, which setup sets up for you; anyone
+could then install it, but only on their own repos, and its private key
+stays with you. The orchestrator sees every repo and names one when it
+opens an issue.
 
 ### Claude-only review
 

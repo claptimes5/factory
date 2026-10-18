@@ -15,7 +15,7 @@ export function DiffScreen() {
         </Link>{" "}
         /{" "}
         <Link to={`/items/${id}`} className="hover:text-foreground">
-          #{item.data?.item.issue} {item.data?.item.title}
+          {item.data?.item.ref} {item.data?.item.title}
         </Link>{" "}
         / diff
       </div>

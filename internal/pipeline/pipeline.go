@@ -67,14 +67,23 @@ type GitHub interface {
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
 }
 
+// RepoClients are one repository's GitHub client and git remote.
+type RepoClients struct {
+	GH  GitHub
+	Git *Git
+}
+
 // Pipeline wires the store, GitHub, git, the runner and the harnesses.
 type Pipeline struct {
-	Cfg       *config.Config
-	Store     *store.Store
-	GH        GitHub
-	Git       *Git
-	Runner    runner.Runner
-	Harnesses map[string]harness.Harness
+	Cfg   *config.Config
+	Store *store.Store
+	// ClientsFor makes a repo's clients, once per repo. Without it GH and
+	// Git serve every repo, which is how tests run one.
+	ClientsFor func(repo string) RepoClients
+	GH         GitHub
+	Git        *Git
+	Runner     runner.Runner
+	Harnesses  map[string]harness.Harness
 	// Secrets maps a harness name to the env vars injected into its jobs.
 	Secrets map[string]map[string]string
 	Log     *slog.Logger
@@ -88,6 +97,8 @@ type Pipeline struct {
 	JobPrefix string
 
 	mu         sync.Mutex
+	clientsMu  sync.Mutex
+	clientsBy  map[string]RepoClients
 	running    int
 	lastPoll   time.Time
 	budgetHalt string // day the daily cap halted dequeuing, to notify once
@@ -105,6 +116,53 @@ type Pipeline struct {
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
+}
+
+func (p *Pipeline) clients(repo string) RepoClients {
+	if p.ClientsFor == nil {
+		return RepoClients{GH: p.GH, Git: p.Git}
+	}
+	key := strings.ToLower(repo)
+	p.clientsMu.Lock()
+	defer p.clientsMu.Unlock()
+	c, ok := p.clientsBy[key]
+	if !ok {
+		if p.clientsBy == nil {
+			p.clientsBy = map[string]RepoClients{}
+		}
+		c = p.ClientsFor(repo)
+		p.clientsBy[key] = c
+	}
+	return c
+}
+
+// GitHubFor returns the GitHub client for a repo.
+func (p *Pipeline) GitHubFor(repo string) GitHub { return p.gh(repo) }
+
+// GitFor returns the git remote for a repo.
+func (p *Pipeline) GitFor(repo string) *Git { return p.git(repo) }
+
+// gh returns the GitHub client for an item's repo.
+func (p *Pipeline) gh(repo string) GitHub { return p.clients(repo).GH }
+
+// git returns the git remote for an item's repo.
+func (p *Pipeline) git(repo string) *Git { return p.clients(repo).Git }
+
+// repoConf returns an item's repo settings. A repo dropped from the config
+// keeps the defaults, so its items can still finish.
+func (p *Pipeline) repoConf(repo string) config.Repo {
+	if r, ok := p.Cfg.RepoConf(repo); ok {
+		return r
+	}
+	return config.Repo{Name: repo, BaseBranch: p.Cfg.BaseBranch, Gates: &p.Cfg.Gates}
+}
+
+// ref names an issue for people: #12 with one repo, owner/name#12 with several.
+func (p *Pipeline) ref(repo string, n int) string {
+	if len(p.Cfg.Repos) > 1 {
+		return fmt.Sprintf("%s#%d", repo, n)
+	}
+	return fmt.Sprintf("#%d", n)
 }
 
 // ShutdownGrace is how long running jobs may continue after SIGTERM.
@@ -285,7 +343,23 @@ func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
 func (p *Pipeline) Intake(ctx context.Context) error {
 	p.act.Lock()
 	defer p.act.Unlock()
-	issues, err := p.GH.ListIssues(ctx, p.Cfg.Intake.Label)
+	// One repo GitHub can't reach must not stop the others.
+	var errs []error
+	for _, repo := range p.Cfg.RepoNames() {
+		if err := p.intakeRepo(ctx, repo); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", repo, err))
+		}
+	}
+	if err := p.closeOut(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// intakeRepo picks up one repo's labeled and retried issues.
+func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
+	gh := p.gh(repo)
+	issues, err := gh.ListIssues(ctx, p.Cfg.Intake.Label)
 	if err != nil {
 		return err
 	}
@@ -293,7 +367,7 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 		if hasLabel(is.Labels, LabelEpic) {
 			continue // epics are split by the orchestrator, never built whole
 		}
-		it, created, err := p.Store.UpsertItem(ctx, p.Cfg.Repo, is.Number, is.Title)
+		it, created, err := p.Store.UpsertItem(ctx, repo, is.Number, is.Title)
 		if err != nil {
 			return err
 		}
@@ -304,29 +378,29 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 		}
 	}
 	if p.Cfg.Orchestrator.On {
-		p.warn(p.intakeEpics(ctx), "epics")
+		p.warn(p.intakeEpics(ctx, repo), "epics")
 	}
-	retries, err := p.GH.ListIssues(ctx, LabelRetry)
+	retries, err := gh.ListIssues(ctx, LabelRetry)
 	if err != nil {
 		return err
 	}
 	for _, is := range retries {
-		it, err := p.Store.ItemByIssue(ctx, p.Cfg.Repo, is.Number)
+		it, err := p.Store.ItemByIssue(ctx, repo, is.Number)
 		if err != nil || it.Stage != state.Parked {
 			continue
 		}
 		// Remove the signal first so a failure below cannot loop.
-		if err := p.GH.RemoveLabel(ctx, is.Number, LabelRetry); err != nil {
+		if err := gh.RemoveLabel(ctx, is.Number, LabelRetry); err != nil {
 			p.warn(err, "RemoveLabel")
 			continue
 		}
-		p.warn(p.GH.RemoveLabel(ctx, is.Number, LabelParked), "RemoveLabel")
+		p.warn(gh.RemoveLabel(ctx, is.Number, LabelParked), "RemoveLabel")
 		if hasLabel(is.Labels, LabelEpic) {
 			// An unparked epic goes back to the orchestrator, never to triage.
 			if err := p.Store.SetStage(ctx, it.ID, state.Epic, "human", "factory:retry label added"); err != nil {
 				return err
 			}
-			p.warn(p.Orchestrate(ctx, fmt.Sprintf("epic #%d (item %d) was unparked: %s", is.Number, it.ID, is.Title), false), "orchestrate")
+			p.warn(p.Orchestrate(ctx, fmt.Sprintf("epic %s (item %d) was unparked: %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
 			continue
 		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:retry label added"); err != nil {
@@ -336,6 +410,12 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// closeOut finishes items whose PR was merged or closed, unblocks their
+// dependents and reconciles items left with no job.
+func (p *Pipeline) closeOut(ctx context.Context) error {
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return err
@@ -344,7 +424,8 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 		if it.PRNumber == 0 {
 			continue
 		}
-		pr, err := p.GH.GetPR(ctx, it.PRNumber)
+		gh := p.gh(it.Repo)
+		pr, err := gh.GetPR(ctx, it.PRNumber)
 		if err != nil {
 			p.log().Warn("get pr", "pr", it.PRNumber, "err", err)
 			continue
@@ -355,10 +436,10 @@ func (p *Pipeline) Intake(ctx context.Context) error {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_merged",
 				Reason: fmt.Sprintf("PR #%d", pr.Number), Data: fmt.Sprintf(`{"changed":%t}`, changed)}), "AddEvent")
 			p.warn(p.Store.SetStage(ctx, it.ID, state.Done, "human", fmt.Sprintf("PR #%d merged", pr.Number)), "SetStage")
-			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 		} else if pr.State == "closed" {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "pr_closed", Reason: fmt.Sprintf("PR #%d", pr.Number)}), "AddEvent")
-			p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
+			p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 			p.warn(p.park(ctx, it, fmt.Sprintf("PR #%d was closed without merging.", pr.Number)), "park")
 		}
 	}
@@ -705,7 +786,7 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		return
 	}
 	defer func() {
-		for _, d := range []string{"repo", "work", "gate", "proves"} {
+		for _, d := range []string{"repo", "repos", "work", "gate", "proves"} {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
 	}()
@@ -759,7 +840,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 
 // PromptData is what stage templates can reference.
 type PromptData struct {
-	Repo            string
+	Repo            string   // owner/name, or the list of them for the orchestrator
+	Repos           []string // the orchestrator's repos when there are several
 	Issue           github.Issue
 	OutDir          string
 	Findings        string

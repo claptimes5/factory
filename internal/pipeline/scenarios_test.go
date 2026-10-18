@@ -57,7 +57,7 @@ func TestHiddenScenarioFailsWithoutLeaking(t *testing.T) {
 func TestScenariosDirMissingIsMisconfigured(t *testing.T) {
 	e := setup(t)
 	e.p.Cfg.Gates.ScenariosDir = filepath.Join(t.TempDir(), "nope")
-	rs := e.p.runScenarios(context.Background(), 1, t.TempDir())
+	rs := e.p.runScenarios(context.Background(), 1, t.TempDir(), e.p.Cfg.Gates.ScenariosDir)
 	if len(rs) != 1 || rs[0].Status != "misconfigured" {
 		t.Fatalf("results = %+v", rs)
 	}
@@ -87,7 +87,7 @@ test('home says hello', async ({ page }) => {
 });
 `)
 	writeFile(work, "index.html", `<h1 id="t">Hello</h1>`)
-	if rs := e.p.runScenarios(context.Background(), 1, work); len(rs) != 1 || rs[0].Status != "pass" {
+	if rs := e.p.runScenarios(context.Background(), 1, work, e.p.Cfg.Gates.ScenariosDir); len(rs) != 1 || rs[0].Status != "pass" {
 		log, _ := os.ReadFile(filepath.Join(e.p.jobDir(1), "scenarios", "1-home.log"))
 		t.Fatalf("results = %+v\n%s", rs, log)
 	}
@@ -96,7 +96,7 @@ test('home says hello', async ({ page }) => {
 	writeFile(work, "node_modules/.bin/playwright", "#!/bin/sh\nexit 0\n")
 	os.Chmod(filepath.Join(work, "node_modules/.bin/playwright"), 0o755)
 	writeFile(work, "package.json", `{"name":"x"}`)
-	if rs := e.p.runScenarios(context.Background(), 2, work); rs[0].Status != "fail" {
+	if rs := e.p.runScenarios(context.Background(), 2, work, e.p.Cfg.Gates.ScenariosDir); rs[0].Status != "fail" {
 		t.Fatalf("a broken page must fail: %+v", rs)
 	}
 }

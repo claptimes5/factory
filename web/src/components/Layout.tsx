@@ -46,7 +46,7 @@ export function Layout() {
       <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex h-12 max-w-[1600px] items-center gap-4 px-4">
           <span className="font-semibold">Factory</span>
-          <span className="hidden truncate text-sm text-muted-foreground sm:inline">{o?.repo}</span>
+          <span className="hidden truncate text-sm text-muted-foreground sm:inline">{o?.repos.join(", ")}</span>
           <nav className="ml-2 hidden gap-1 md:flex" aria-label="Main">
             {nav.map(({ to, label, icon: Icon, end }) => (
               <NavLink

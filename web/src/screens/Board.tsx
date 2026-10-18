@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { AlertTriangle, GitPullRequest, Hand } from "lucide-react";
-import { useBoard, type Card as CardT } from "@/api/client";
+import { useBoard, useOverview, type Card as CardT } from "@/api/client";
 import { ErrorBox, Loading } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { cn, money, stageName } from "@/lib/utils";
@@ -13,15 +13,19 @@ export function BoardScreen() {
   const { data, error, isLoading } = useBoard();
   const [filter, setFilter] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [repo, setRepo] = useState("");
+  const repos = useOverview().data?.repos ?? [];
   const columns = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return (data?.columns ?? [])
       .map((c) => ({
         ...c,
-        cards: q ? c.cards.filter((k) => k.title.toLowerCase().includes(q) || `#${k.issue}`.includes(q)) : c.cards,
+        cards: c.cards.filter(
+          (k) => (!repo || k.repo === repo) && (!q || k.title.toLowerCase().includes(q) || k.ref.toLowerCase().includes(q)),
+        ),
       }))
       .filter((c) => (c.stage === "done" ? showDone : !quiet.has(c.stage) || c.cards.length > 0));
-  }, [data, filter, showDone]);
+  }, [data, filter, showDone, repo]);
   if (isLoading) return <Loading what="Loading the board" />;
   if (error) return <ErrorBox error={error} />;
   const total = data!.columns.reduce((n, c) => n + c.cards.length, 0);
@@ -37,6 +41,21 @@ export function BoardScreen() {
           onChange={(e) => setFilter(e.target.value)}
           className="ml-auto h-8 w-full rounded-md border bg-card px-2.5 text-sm sm:w-64"
         />
+        {repos.length > 1 && (
+          <select
+            aria-label="Repository"
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            className="h-8 rounded-md border bg-card px-2 text-sm"
+          >
+            <option value="">All repos</option>
+            {repos.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        )}
         <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Done
         </label>
@@ -79,7 +98,7 @@ function BoardCard({ card: c }: { card: CardT }) {
       )}
     >
       <div className="mb-1 flex items-start gap-2">
-        <span className="font-mono text-xs text-muted-foreground">#{c.issue}</span>
+        <span className="font-mono text-xs text-muted-foreground">{c.ref}</span>
         <span className="line-clamp-2 flex-1 font-medium">{c.title}</span>
         {c.live && (
           <span className="relative mt-1 flex size-2 shrink-0" title="A job is running">

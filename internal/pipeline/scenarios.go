@@ -32,8 +32,7 @@ const dockerScenarios = "/scenarios"
 
 type scenario struct{ name, file string }
 
-func (p *Pipeline) scenarios() ([]scenario, error) {
-	dir := p.Cfg.Gates.ScenariosDir
+func (p *Pipeline) scenarios(dir string) ([]scenario, error) {
 	if dir == "" {
 		return nil, nil
 	}
@@ -73,13 +72,13 @@ func (s scenario) command(dir string) string {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// runScenarios runs every hidden scenario against the exported checkout.
-func (p *Pipeline) runScenarios(ctx context.Context, jobID int64, gateDir string) []gates.Result {
-	list, err := p.scenarios()
+// runScenarios runs every hidden scenario in dir against the exported checkout.
+func (p *Pipeline) runScenarios(ctx context.Context, jobID int64, gateDir, dir string) []gates.Result {
+	list, err := p.scenarios(dir)
 	if err != nil {
 		return []gates.Result{{Gate: "scenarios", Status: gates.Misconfigured, Detail: err.Error()}}
 	}
-	host := p.Cfg.Path(p.Cfg.Gates.ScenariosDir)
+	host := p.Cfg.Path(dir)
 	seen, work := host, gateDir
 	var mounts []runner.Mount
 	pathEnv := "" // in the job image, a fixed PATH: nothing from the checkout

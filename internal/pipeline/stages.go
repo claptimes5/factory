@@ -24,7 +24,7 @@ const (
 )
 
 func (p *Pipeline) issue(ctx context.Context, it *store.WorkItem) (github.Issue, error) {
-	is, err := p.GH.GetIssue(ctx, it.IssueNumber)
+	is, err := p.gh(it.Repo).GetIssue(ctx, it.IssueNumber)
 	if err != nil {
 		return github.Issue{}, err
 	}
@@ -37,11 +37,11 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	if err := p.Store.SetStage(ctx, it.ID, state.Parked, "daemon", reason); err != nil {
 		return err
 	}
-	p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
-	p.warn(p.GH.AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
-	p.warn(p.GH.Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
+	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
+	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
+	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
 		"\n\nAdd the `"+LabelRetry+"` label to send it back through triage."), "Comment")
-	p.notify(ctx, fmt.Sprintf("Parked #%d: %s", it.IssueNumber, firstLine(reason)))
+	p.notify(ctx, fmt.Sprintf("Parked %s: %s", p.ref(it.Repo, it.IssueNumber), firstLine(reason)))
 	return nil
 }
 
@@ -69,13 +69,13 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	p.warn(p.GH.AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
-	ws, err := p.Git.Prepare(ctx, dir, p.Cfg.BaseBranch, "", false, false)
+	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
+	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, "", false, false)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
-	prompt, err := p.render("triage", PromptData{Repo: p.Cfg.Repo, Issue: is})
+	prompt, err := p.render("triage", PromptData{Repo: it.Repo, Issue: is})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -167,16 +167,16 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	p.warn(p.GH.AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
+	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
 	// A fresh attempt starts from the base branch; a fix round builds on the
 	// branch the reviewer saw.
-	ws, err := p.Git.Prepare(ctx, dir, p.Cfg.BaseBranch, j.Branch, !in.FixRound, true)
+	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, j.Branch, !in.FixRound, true)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
 
-	prompt, err := p.render("implement", PromptData{Repo: p.Cfg.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(ws.Work, out)).Out,
+	prompt, err := p.render("implement", PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(ws.Work, out)).Out,
 		Findings: in.Findings, PreviousFailure: in.PreviousFailure})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
@@ -199,7 +199,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 
 	// From here on the builder's checkout is only read as files. Everything
 	// below runs in the daemon's own repository.
-	head, changed, err := p.Git.Ingest(ctx, ws, fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
+	head, changed, err := p.git(it.Repo).Ingest(ctx, ws, fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.",
 		it.IssueNumber, is.Title, v.Summary, j.ID, j.Harness, j.Model, j.Attempt))
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
@@ -207,11 +207,11 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if !changed {
 		return fail(run, state.Failed, "builder made no changes")
 	}
-	base, err := p.Git.MergeBase(ctx, ws.Repo, ws.BaseSHA, head)
+	base, err := p.git(it.Repo).MergeBase(ctx, ws.Repo, ws.BaseSHA, head)
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
-	results, err := p.verify(ctx, j.ID, ws, base, head)
+	results, err := p.verify(ctx, j.ID, it, ws, base, head)
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
@@ -223,7 +223,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 
 	p.warn(p.Store.SetJobHead(ctx, j.ID, head), "SetJobHead")
 	// Push exactly the commit that was verified.
-	if err := p.Git.Push(ctx, ws.Repo, head, j.Branch, !in.FixRound); err != nil {
+	if err := p.git(it.Repo).Push(ctx, ws.Repo, head, j.Branch, !in.FixRound); err != nil {
 		return fail(run, state.Failed, "push: "+err.Error())
 	}
 	branch := j.Branch
@@ -238,32 +238,33 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 // verify runs the deterministic checks on the commit under test: the diff
 // guard on the daemon's repository, then the gates and the test-proves-fix
 // check on read-only exports.
-func (p *Pipeline) verify(ctx context.Context, jobID int64, ws *Workspace, base, head string) ([]gates.Result, error) {
+func (p *Pipeline) verify(ctx context.Context, jobID int64, it *store.WorkItem, ws *Workspace, base, head string) ([]gates.Result, error) {
+	g := p.repoConf(it.Repo).Gates
 	results := []gates.Result{gates.DiffGuard(ctx, ws.Repo, base, head, gates.Guard{
-		MaxChangedLines: p.Cfg.Gates.DiffGuard.MaxChangedLines, ProtectedPaths: p.Cfg.Gates.DiffGuard.ProtectedPaths})}
+		MaxChangedLines: g.DiffGuard.MaxChangedLines, ProtectedPaths: g.DiffGuard.ProtectedPaths})}
 	gateDir := filepath.Join(p.jobDir(jobID), "gate")
-	if err := p.Git.Export(ctx, ws.Repo, head, gateDir); err != nil {
+	if err := p.git(it.Repo).Export(ctx, ws.Repo, head, gateDir); err != nil {
 		return nil, err
 	}
-	results = append(results, gates.Run(ctx, p.Cfg.Gates.Required, p.Cfg.Gates.Commands, func(ctx context.Context, cmd string) (int, string, error) {
+	results = append(results, gates.Run(ctx, g.Required, g.Commands, func(ctx context.Context, cmd string) (int, string, error) {
 		return p.gateExec(ctx, jobID, gateDir, cmd)
 	})...)
-	if p.Cfg.Gates.ProvesFix != "" {
-		results = append(results, p.provesFix(ctx, jobID, ws.Repo, base, head))
+	if g.ProvesFix != "" {
+		results = append(results, p.provesFix(ctx, jobID, it, g.ProvesFix, ws.Repo, base, head))
 	}
 	// Scenarios are slow end-to-end checks: run them only on code that
 	// already passes everything else.
 	if gates.Passed(results) {
-		results = append(results, p.runScenarios(ctx, jobID, gateDir)...)
+		results = append(results, p.runScenarios(ctx, jobID, gateDir, g.ScenariosDir)...)
 	}
 	return results, nil
 }
 
 // provesFix reverts the non-test code to base, keeps the changed tests, and
 // requires them to fail: a test that passes without the fix proves nothing.
-func (p *Pipeline) provesFix(ctx context.Context, jobID int64, repo, base, head string) gates.Result {
+func (p *Pipeline) provesFix(ctx context.Context, jobID int64, it *store.WorkItem, command, repo, base, head string) gates.Result {
 	r := gates.Result{Gate: "proves_fix"}
-	files, err := p.Git.ChangedFiles(ctx, repo, base, head)
+	files, err := p.git(it.Repo).ChangedFiles(ctx, repo, base, head)
 	if err != nil {
 		r.Status, r.Detail = gates.Fail, err.Error()
 		return r
@@ -292,13 +293,13 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, repo, base, head 
 		return r
 	}
 	dir := filepath.Join(p.jobDir(jobID), "proves")
-	if err := p.Git.Export(ctx, repo, base, dir); err != nil {
+	if err := p.git(it.Repo).Export(ctx, repo, base, dir); err != nil {
 		r.Status, r.Detail = gates.Fail, err.Error()
 		return r
 	}
 	for _, f := range tests {
 		// A test file deleted at head is skipped; the diff guard reports it.
-		if err := p.Git.Show(ctx, repo, head, f, filepath.Join(dir, f)); err != nil {
+		if err := p.git(it.Repo).Show(ctx, repo, head, f, filepath.Join(dir, f)); err != nil {
 			continue
 		}
 	}
@@ -307,7 +308,7 @@ func (p *Pipeline) provesFix(ctx context.Context, jobID int64, repo, base, head 
 		pkgs = append(pkgs, k)
 	}
 	sort.Strings(pkgs)
-	cmd := strings.ReplaceAll(p.Cfg.Gates.ProvesFix, "{pkgs}", strings.Join(pkgs, " "))
+	cmd := strings.ReplaceAll(command, "{pkgs}", strings.Join(pkgs, " "))
 	exit, output, err := p.gateExec(ctx, jobID, dir, cmd)
 	switch {
 	case err != nil:
@@ -399,7 +400,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	ws, err := p.Git.Prepare(ctx, dir, p.Cfg.BaseBranch, j.Branch, false, false)
+	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, j.Branch, false, false)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -410,11 +411,11 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 			j.Branch, short(ws.Start), short(in.Head)))
 	}
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", ws.Start), "SetJobRuntime")
-	base, err := p.Git.MergeBase(ctx, ws.Repo, ws.BaseSHA, ws.Start)
+	base, err := p.git(it.Repo).MergeBase(ctx, ws.Repo, ws.BaseSHA, ws.Start)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	diff, err := p.Git.Diff(ctx, ws.Repo, base, ws.Start)
+	diff, err := p.git(it.Repo).Diff(ctx, ws.Repo, base, ws.Start)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -423,7 +424,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	p.warn(os.WriteFile(filepath.Join(dir, "diff.patch"), []byte(diff), 0o644), "save diff")
 	// The reviewer sees the issue, the diff and gate results only: never the
 	// builder's own summary.
-	prompt, err := p.render("review", PromptData{Repo: p.Cfg.Repo, Issue: is, Gates: in.Gates, Diff: diff, Fence: fence(diff)})
+	prompt, err := p.render("review", PromptData{Repo: it.Repo, Issue: is, Gates: in.Gates, Diff: diff, Fence: fence(diff)})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -482,7 +483,7 @@ func (p *Pipeline) reviewBlocked(ctx context.Context, it *store.WorkItem, v *ver
 	if err := p.Store.SetStage(ctx, it.ID, state.Implementing, "daemon", fmt.Sprintf("review blocked (round %d)", blocks)); err != nil {
 		return err
 	}
-	p.warn(p.GH.Comment(ctx, it.IssueNumber, fmt.Sprintf("**Reviewer blocked round %d.** Sending it back to the builder.\n\n%s", blocks, findings)), "Comment")
+	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, fmt.Sprintf("**Reviewer blocked round %d.** Sending it back to the builder.\n\n%s", blocks, findings)), "Comment")
 	_, err = p.enqueueImplement(ctx, it, 1, ImplementInput{Findings: findings, FixRound: true})
 	return err
 }
@@ -539,16 +540,16 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 		return err
 	}
 	branch := branchFor(it)
-	pr, err := p.GH.FindPR(ctx, branch)
+	pr, err := p.gh(it.Repo).FindPR(ctx, branch)
 	if err != nil {
 		return err
 	}
 	if pr == nil {
-		pr, err = p.GH.CreatePR(ctx, fmt.Sprintf("%s (#%d)", is.Title, is.Number), body, branch, p.Cfg.BaseBranch, true)
+		pr, err = p.gh(it.Repo).CreatePR(ctx, fmt.Sprintf("%s (#%d)", is.Title, is.Number), body, branch, p.repoConf(it.Repo).BaseBranch, true)
 		if err != nil {
 			return err
 		}
-	} else if err := p.GH.UpdatePRBody(ctx, pr.Number, body); err != nil {
+	} else if err := p.gh(it.Repo).UpdatePRBody(ctx, pr.Number, body); err != nil {
 		return err
 	}
 	n := pr.Number
@@ -558,10 +559,10 @@ func (p *Pipeline) openPR(ctx context.Context, it *store.WorkItem, is github.Iss
 	if err := p.Store.SetStage(ctx, it.ID, state.AwaitingHuman, "daemon", fmt.Sprintf("draft PR #%d ready", pr.Number)); err != nil {
 		return err
 	}
-	p.warn(p.GH.AddLabels(ctx, pr.Number, LabelAwaitingYou), "AddLabels")
-	p.warn(p.GH.RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
-	p.warn(p.GH.AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
-	p.notify(ctx, fmt.Sprintf("PR ready for review: #%d %s %s", pr.Number, is.Title, pr.URL))
+	p.warn(p.gh(it.Repo).AddLabels(ctx, pr.Number, LabelAwaitingYou), "AddLabels")
+	p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelRunning), "RemoveLabel")
+	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelAwaitingYou), "AddLabels")
+	p.notify(ctx, fmt.Sprintf("PR ready for review: %s %s %s", p.ref(it.Repo, pr.Number), is.Title, pr.URL))
 	return nil
 }
 

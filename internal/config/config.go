@@ -20,8 +20,49 @@ type Route struct {
 	Skills  string `yaml:"skills"` // skill set folder under skills/
 }
 
+// Gates are the checks a change must pass before review.
+type Gates struct {
+	Required []string          `yaml:"required"`
+	Commands map[string]string `yaml:"commands"`
+	// ProvesFix runs the changed tests against the base code; it must
+	// fail. {pkgs} is replaced by the packages holding changed tests.
+	ProvesFix string `yaml:"proves_fix"`
+	// ScenariosDir holds the hidden end-to-end scenarios. It must be
+	// outside the target repository so builders never see it.
+	ScenariosDir string `yaml:"scenarios_dir"`
+	DiffGuard    struct {
+		MaxChangedLines int      `yaml:"max_changed_lines"`
+		ProtectedPaths  []string `yaml:"protected_paths"`
+	} `yaml:"diff_guard"`
+}
+
+// Repo is one repository the factory works on.
+type Repo struct {
+	Name       string `yaml:"name"` // owner/name
+	BaseBranch string `yaml:"base_branch"`
+	// Gates overrides the top-level gates field by field: what it leaves
+	// out (the diff guard's protected paths, say) is inherited, and its
+	// commands replace the top level's. proves_fix or scenarios_dir "none"
+	// turns one off.
+	Gates *Gates `yaml:"gates"`
+}
+
+// UnmarshalYAML accepts a bare "owner/name" as well as a mapping.
+func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		r.Name = n.Value
+		return nil
+	}
+	type plain Repo
+	return n.Decode((*plain)(r))
+}
+
 type Config struct {
-	Repo       string `yaml:"repo"`
+	// SingleRepo is the short form for a factory with one repo; Repos is
+	// filled from it. Use RepoNames and RepoConf rather than either field.
+	SingleRepo string `yaml:"repo"`
+	Repos      []Repo `yaml:"repos"`
+	// BaseBranch and Gates are the defaults for every repo.
 	BaseBranch string `yaml:"base_branch"`
 	DataDir    string `yaml:"data_dir"`
 	SkillsDir  string `yaml:"skills_dir"`
@@ -83,20 +124,7 @@ type Config struct {
 
 	Pricing map[string]Price `yaml:"pricing"`
 
-	Gates struct {
-		Required []string          `yaml:"required"`
-		Commands map[string]string `yaml:"commands"`
-		// ProvesFix runs the changed tests against the base code; it must
-		// fail. {pkgs} is replaced by the packages holding changed tests.
-		ProvesFix string `yaml:"proves_fix"`
-		// ScenariosDir holds the hidden end-to-end scenarios. It must be
-		// outside the target repository so builders never see it.
-		ScenariosDir string `yaml:"scenarios_dir"`
-		DiffGuard    struct {
-			MaxChangedLines int      `yaml:"max_changed_lines"`
-			ProtectedPaths  []string `yaml:"protected_paths"`
-		} `yaml:"diff_guard"`
-	} `yaml:"gates"`
+	Gates Gates `yaml:"gates"`
 
 	dir string
 }
@@ -217,6 +245,15 @@ func (c *Config) defaults() {
 	if c.Gates.DiffGuard.MaxChangedLines == 0 {
 		c.Gates.DiffGuard.MaxChangedLines = 400
 	}
+	if c.SingleRepo != "" && len(c.Repos) == 0 {
+		c.Repos = []Repo{{Name: c.SingleRepo}}
+	}
+	for i := range c.Repos {
+		r := &c.Repos[i]
+		r.Name = strings.TrimSuffix(strings.TrimPrefix(r.Name, "https://github.com/"), ".git")
+		r.Name = strings.TrimPrefix(r.Name, "github.com/")
+		// Unset base_branch and gates follow the top level (see RepoConf).
+	}
 }
 
 var harnesses = map[string]bool{"claude": true, "codex": true}
@@ -226,8 +263,21 @@ var harnesses = map[string]bool{"claude": true, "codex": true}
 func (c *Config) Validate() error {
 	var errs []error
 	bad := func(f string, a ...any) { errs = append(errs, fmt.Errorf(f, a...)) }
-	if c.Repo == "" || !strings.Contains(c.Repo, "/") {
-		bad("repo must be owner/name")
+	if c.SingleRepo != "" && (len(c.Repos) != 1 || c.Repos[0].Name != strings.TrimSuffix(strings.TrimPrefix(c.SingleRepo, "https://github.com/"), ".git")) {
+		bad("use repo: for one repository or repos: for several, not both")
+	}
+	if len(c.Repos) == 0 {
+		bad("repos needs at least one owner/name")
+	}
+	seen := map[string]bool{}
+	for _, r := range c.Repos {
+		if o, n, ok := strings.Cut(r.Name, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+			bad("repo %q must be owner/name", r.Name)
+		}
+		if seen[strings.ToLower(r.Name)] {
+			bad("repo %s is listed twice", r.Name)
+		}
+		seen[strings.ToLower(r.Name)] = true
 	}
 	for _, k := range []string{"triage", "implement.S", "implement.M", "implement.L", "review"} {
 		if _, ok := c.Routing[k]; !ok {
@@ -297,6 +347,72 @@ func (c *Config) Validate() error {
 	// A required gate without a command is allowed here: it reports
 	// MISCONFIGURED at run time and fails the job, so the gap is visible.
 	return errors.Join(errs...)
+}
+
+// RepoNames lists the repos the factory works on, the first being the one
+// commands use when you don't name one.
+func (c *Config) RepoNames() []string {
+	ns := make([]string, len(c.Repos))
+	for i, r := range c.Repos {
+		ns[i] = r.Name
+	}
+	return ns
+}
+
+// RepoConf returns a repo's settings by name, ignoring case as GitHub
+// does, with the top-level base_branch and gates filling what it leaves out.
+func (c *Config) RepoConf(name string) (Repo, bool) {
+	for _, r := range c.Repos {
+		if strings.EqualFold(r.Name, name) {
+			return c.resolve(r), true
+		}
+	}
+	return Repo{}, false
+}
+
+// Primary is the first repo: the one commands use when you name none.
+func (c *Config) Primary() Repo { return c.resolve(c.Repos[0]) }
+
+func (c *Config) resolve(r Repo) Repo {
+	if r.BaseBranch == "" {
+		r.BaseBranch = c.BaseBranch
+	}
+	r.Gates = mergeGates(c.Gates, r.Gates)
+	return r
+}
+
+// mergeGates lays a repo's gates over the top-level ones.
+func mergeGates(top Gates, own *Gates) *Gates {
+	if own == nil {
+		return &top
+	}
+	g := *own
+	if g.Required == nil {
+		g.Required = top.Required
+	}
+	// Commands replace the top level's rather than add to them: a
+	// TypeScript repo shouldn't run the Go repo's test command.
+	if g.Commands == nil {
+		g.Commands = top.Commands
+	}
+	if g.ProvesFix == "" {
+		g.ProvesFix = top.ProvesFix
+	}
+	if g.ScenariosDir == "" {
+		g.ScenariosDir = top.ScenariosDir
+	}
+	for _, s := range []*string{&g.ProvesFix, &g.ScenariosDir} {
+		if *s == "none" {
+			*s = ""
+		}
+	}
+	if g.DiffGuard.MaxChangedLines == 0 {
+		g.DiffGuard.MaxChangedLines = top.DiffGuard.MaxChangedLines
+	}
+	if g.DiffGuard.ProtectedPaths == nil {
+		g.DiffGuard.ProtectedPaths = top.DiffGuard.ProtectedPaths
+	}
+	return &g
 }
 
 // Path resolves p against the config file's directory.

@@ -35,6 +35,7 @@ const None = "none"
 // Options is what a comparison needs from the daemon's wiring.
 type Options struct {
 	Cfg       *config.Config
+	Repo      string // owner/name of the issue's repo; default the first configured repo
 	Harnesses map[string]harness.Harness
 	Runner    runner.Runner
 	Secrets   map[string]map[string]string
@@ -79,6 +80,13 @@ type Report struct {
 	Arms       []Arm     `json:"arms"`
 }
 
+func (o Options) repoConf() config.Repo {
+	if r, ok := o.Cfg.RepoConf(o.Repo); ok {
+		return r
+	}
+	return o.Cfg.Primary()
+}
+
 var setName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Run compares the skill sets on one issue.
@@ -112,18 +120,19 @@ func Run(ctx context.Context, o Options, issue int, sets []string, complexity, r
 	// on the base mid-run cannot make the comparison unfair, and holding
 	// nothing but the base, so no arm can read an earlier solution (the
 	// daemon's PR branch or a previous comparison's).
+	rc := o.repoConf()
 	frozen := filepath.Join(o.Dir, "remote.git")
 	if err := o.Git.CloneBare(ctx, frozen); err != nil {
 		return nil, err
 	}
-	base, err := gitOut(ctx, frozen, "rev-parse", "refs/heads/"+o.Cfg.BaseBranch)
+	base, err := gitOut(ctx, frozen, "rev-parse", "refs/heads/"+rc.BaseBranch)
 	if err != nil {
 		return nil, err
 	}
-	if err := o.Git.Freeze(ctx, frozen, "refs/heads/"+o.Cfg.BaseBranch); err != nil {
+	if err := o.Git.Freeze(ctx, frozen, "refs/heads/"+rc.BaseBranch); err != nil {
 		return nil, err
 	}
-	rep := &Report{Repo: o.Cfg.Repo, Issue: issue, Title: is.Title, BaseSHA: base, Complexity: complexity, Started: time.Now().UTC()}
+	rep := &Report{Repo: rc.Name, Issue: issue, Title: is.Title, BaseSHA: base, Complexity: complexity, Started: time.Now().UTC()}
 	rep.Arms = make([]Arm, len(sets))
 	remotes := make([]string, len(sets))
 	share := 0.0
@@ -169,6 +178,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	arm := Arm{Skillset: set, Branch: fmt.Sprintf("factory/compare-%d-%s", is.Number, set)}
 	dir := filepath.Join(o.Dir, set)
 	cfg := *o.Cfg
+	cfg.Repos = []config.Repo{o.repoConf()}
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Orchestrator.On = false
 	if budget > 0 {
@@ -199,7 +209,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 		Git:      &pipeline.Git{RemoteURL: remote, Author: o.Git.Author, AskPassDir: dir},
 		GateExec: o.GateExec, JobPrefix: fmt.Sprintf("cmp%d-%d-", os.Getpid(), i), Log: o.Log.With("skillset", set),
 	}
-	it, _, err := st.UpsertItem(ctx, cfg.Repo, is.Number, is.Title)
+	it, _, err := st.UpsertItem(ctx, cfg.Repos[0].Name, is.Number, is.Title)
 	if err != nil {
 		return arm, err
 	}

@@ -143,7 +143,7 @@ func (p *Pipeline) drainedTrigger(ctx context.Context) {
 		if it.Stage == state.Blocked && p.depsMoving(ctx, it.ID) {
 			continue
 		}
-		stuck = append(stuck, fmt.Sprintf("#%d", it.IssueNumber))
+		stuck = append(stuck, p.ref(it.Repo, it.IssueNumber))
 	}
 	if len(stuck) == 0 {
 		return
@@ -192,27 +192,27 @@ func (p *Pipeline) failedTwice(ctx context.Context, j *store.Job) {
 		if err != nil {
 			return
 		}
-		p.warn(p.Orchestrate(ctx, fmt.Sprintf("item %d (issue #%d) failed twice in a row; last error: %s", it.ID, it.IssueNumber, truncate(jobs[0].Error, 300)), false), "orchestrate")
+		p.warn(p.Orchestrate(ctx, fmt.Sprintf("item %d (issue %s) failed twice in a row; last error: %s", it.ID, p.ref(it.Repo, it.IssueNumber), truncate(jobs[0].Error, 300)), false), "orchestrate")
 	}
 }
 
 // intakeEpics turns each new factory:epic issue into an epic item (which is
 // never built itself) and asks the orchestrator to split it. The epic is
 // done once every child is.
-func (p *Pipeline) intakeEpics(ctx context.Context) error {
-	epics, err := p.GH.ListIssues(ctx, LabelEpic)
+func (p *Pipeline) intakeEpics(ctx context.Context, repo string) error {
+	epics, err := p.gh(repo).ListIssues(ctx, LabelEpic)
 	if err != nil {
 		return err
 	}
 	for _, is := range epics {
-		it, created, err := p.Store.UpsertItemIn(ctx, p.Cfg.Repo, is.Number, is.Title, state.Epic)
+		it, created, err := p.Store.UpsertItemIn(ctx, repo, is.Number, is.Title, state.Epic)
 		if err != nil {
 			return err
 		}
 		if !created {
 			continue // already an epic, or already being built as a normal item
 		}
-		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic #%d (item %d): %s", is.Number, it.ID, is.Title), false), "orchestrate")
+		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
 	}
 	return nil
 }
@@ -240,9 +240,42 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		// The container runs this very binary as its MCP bridge.
 		return fail(agentRun{}, state.Failed, "the orchestrator needs a Linux host with Docker (the daemon's binary runs inside the job container)")
 	}
-	ws, err := p.Git.Prepare(ctx, dir, p.Cfg.BaseBranch, "", false, false)
-	if err != nil {
-		return fail(agentRun{}, state.Failed, err.Error())
+	// One repo is checked out in the agent's directory; several each get a
+	// folder there named owner__name.
+	// A repo that can't be checked out is left out, so one bad repo doesn't
+	// stop the orchestrator for the rest.
+	names := p.Cfg.RepoNames()
+	var work string
+	var missing []string
+	for _, name := range names {
+		rc := p.repoConf(name)
+		sub := dir
+		if len(names) > 1 {
+			sub = filepath.Join(dir, "repos", strings.ReplaceAll(name, "/", "__"))
+		}
+		ws, err := p.git(name).Prepare(ctx, sub, rc.BaseBranch, "", false, false)
+		if err != nil {
+			p.log().Warn("orchestrator checkout", "repo", name, "err", err)
+			missing = append(missing, fmt.Sprintf("%s could not be checked out this run (%s); its code is not in your directory", name, truncate(err.Error(), 200)))
+			continue
+		}
+		work = ws.Repo
+		if len(names) > 1 {
+			// Move the clone up a level so the folder is the checkout itself.
+			if err := os.Rename(ws.Repo, sub+".tmp"); err != nil {
+				return fail(agentRun{}, state.Failed, err.Error())
+			}
+			if err := os.Remove(sub); err != nil {
+				return fail(agentRun{}, state.Failed, err.Error())
+			}
+			if err := os.Rename(sub+".tmp", sub); err != nil {
+				return fail(agentRun{}, state.Failed, err.Error())
+			}
+			work = filepath.Join(dir, "repos")
+		}
+	}
+	if work == "" {
+		return fail(agentRun{}, state.Failed, "no repo could be checked out: "+strings.Join(missing, "; "))
 	}
 	sockDir := filepath.Join(dir, "run")
 	if err := os.MkdirAll(sockDir, 0o700); err != nil {
@@ -269,11 +302,11 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	}})
 
 	snapshot, _ := p.statusText(ctx)
-	prompt, err := p.render("orchestrate", PromptData{Repo: p.Cfg.Repo, Reasons: in.Reasons, Summary: in.Summary, Status: snapshot})
+	prompt, err := p.render("orchestrate", PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	run := p.runAgentWith(ctx, j, ws.Repo, out, prompt, `{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}`,
+	run := p.runAgentWith(ctx, j, work, out, prompt, `{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}`,
 		p.Cfg.Timeout("orchestrate"), agentExtras{mounts: mounts, mcpConfig: string(mcpCfg), tools: []string{"mcp__factory"}})
 	if p.stopIfCancelled(ctx, j, nil, run) {
 		return nil
@@ -392,6 +425,7 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				}
 				type row struct {
 					ID         int64  `json:"id"`
+					Repo       string `json:"repo"`
 					Issue      int    `json:"issue"`
 					Title      string `json:"title"`
 					Stage      string `json:"stage"`
@@ -403,7 +437,7 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				}
 				rows := []row{}
 				for _, it := range items {
-					rows = append(rows, row{it.ID, it.IssueNumber, it.Title, string(it.Stage), it.Complexity, it.Risk, it.Priority, it.PRNumber, it.ParentID})
+					rows = append(rows, row{it.ID, it.Repo, it.IssueNumber, it.Title, string(it.Stage), it.Complexity, it.Risk, it.Priority, it.PRNumber, it.ParentID})
 				}
 				b, _ := json.Marshal(rows)
 				return string(b), nil
@@ -447,16 +481,21 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				return string(b), nil
 			}},
 		{Name: "get_issue", Description: "A GitHub issue's title, body and labels, for example an epic to split.",
-			InputSchema: schema(`"issue":{"type":"integer"}`, "issue"),
+			InputSchema: schema(`"issue":{"type":"integer"},`+repoProp, "issue"),
 			Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				logRead(ctx, "get_issue", raw)
 				var a struct {
-					Issue int `json:"issue"`
+					Issue int    `json:"issue"`
+					Repo  string `json:"repo"`
 				}
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
 				}
-				is, err := p.GH.GetIssue(ctx, a.Issue)
+				repo, err := p.pickRepo(a.Repo)
+				if err != nil {
+					return "", err
+				}
+				is, err := p.gh(repo).GetIssue(ctx, a.Issue)
 				if err != nil {
 					return "", err
 				}
@@ -490,13 +529,13 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				return tailFile(j.LogPath, a.Lines)
 			}},
 		{Name: "create_issue", Description: "Open a GitHub issue that the factory will build, optionally as a child of an epic item and after other items. Pass depends_on here rather than afterwards, so the child cannot start early.",
-			InputSchema: schema(`"title":{"type":"string"},"body":{"type":"string"},"parent":{"type":"integer"},"depends_on":{"type":"array","items":{"type":"integer"}},"labels":{"type":"array","items":{"type":"string"}},`+reasonProp, "title", "body", "reason"),
+			InputSchema: schema(`"title":{"type":"string"},"body":{"type":"string"},"parent":{"type":"integer"},"depends_on":{"type":"array","items":{"type":"integer"}},"labels":{"type":"array","items":{"type":"string"}},`+repoProp+`,`+reasonProp, "title", "body", "reason"),
 			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a struct {
-					Title, Body, Reason string
-					Parent              int64
-					DependsOn           []int64 `json:"depends_on"`
-					Labels              []string
+					Title, Body, Reason, Repo string
+					Parent                    int64
+					DependsOn                 []int64 `json:"depends_on"`
+					Labels                    []string
 				}
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
@@ -505,9 +544,17 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 					return "", errors.New("reason is required")
 				}
 				if a.Parent != 0 {
-					if _, err := p.Store.GetItem(ctx, a.Parent); err != nil {
+					parent, err := p.Store.GetItem(ctx, a.Parent)
+					if err != nil {
 						return "", fmt.Errorf("refused: no parent item %d", a.Parent)
 					}
+					if a.Repo == "" {
+						a.Repo = parent.Repo // an epic's children go in its repo unless named
+					}
+				}
+				repo, err := p.pickRepo(a.Repo)
+				if err != nil {
+					return "", err
 				}
 				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
 					return "", err
@@ -524,11 +571,11 @@ func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
 				if err := audit(ctx, "create_issue", nil, a.Reason, raw); err != nil {
 					return "", err
 				}
-				num, err := p.GH.CreateIssue(ctx, a.Title, a.Body+"\n\n_Opened by the factory orchestrator._", labels)
+				num, err := p.gh(repo).CreateIssue(ctx, a.Title, a.Body+"\n\n_Opened by the factory orchestrator._", labels)
 				if err != nil {
 					return "", err
 				}
-				it, created, err := p.Store.UpsertItem(ctx, p.Cfg.Repo, num, a.Title)
+				it, created, err := p.Store.UpsertItem(ctx, repo, num, a.Title)
 				if err != nil {
 					return "", err
 				}
@@ -903,6 +950,21 @@ func (p *Pipeline) unblock(ctx context.Context) error {
 	return nil
 }
 
+// repoProp is the optional repo argument of tools that act on GitHub.
+const repoProp = `"repo":{"type":"string","description":"owner/name; defaults to the parent epic's repo, else the first configured repo"}`
+
+// pickRepo resolves a tool's repo argument to a configured repo.
+func (p *Pipeline) pickRepo(name string) (string, error) {
+	if name == "" {
+		return p.Cfg.Repos[0].Name, nil
+	}
+	r, ok := p.Cfg.RepoConf(name)
+	if !ok {
+		return "", fmt.Errorf("refused: %s is not one of the factory's repos (%s)", name, strings.Join(p.Cfg.RepoNames(), ", "))
+	}
+	return r.Name, nil
+}
+
 func (p *Pipeline) finishEpics(ctx context.Context) error {
 	epics, err := p.Store.ListItems(ctx, state.Epic)
 	if err != nil || len(epics) == 0 {
@@ -926,7 +988,7 @@ func (p *Pipeline) finishEpics(ctx context.Context) error {
 			if err := p.Store.SetStage(ctx, ep.ID, state.Done, "daemon", fmt.Sprintf("all %d child issues done", children)); err != nil {
 				return err
 			}
-			p.warn(p.GH.Comment(ctx, ep.IssueNumber, fmt.Sprintf("All %d child issues of this epic are merged.", children)), "Comment")
+			p.warn(p.gh(ep.Repo).Comment(ctx, ep.IssueNumber, fmt.Sprintf("All %d child issues of this epic are merged.", children)), "Comment")
 		}
 	}
 	return nil
