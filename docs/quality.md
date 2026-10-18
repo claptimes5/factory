@@ -1,0 +1,270 @@
+# Quality
+
+This guide covers how the factory decides a change is good enough to show
+you: the gates, how review scales with risk, the feature map, how ready a
+repo is, and how the factory measures itself.
+
+## The gates
+
+After the builder stops, the daemon runs deterministic gates in the job
+container. They run on an export of the builder's commit, never the
+builder's own checkout (see [Isolation](security.md#isolation)). In this
+repo's `factory.yaml`:
+
+| Gate | What it checks |
+| --- | --- |
+| `install` (optional) | Runs first, with the network on. If it fails, nothing else runs. |
+| Diff guard | The change stays under `max_changed_lines` and touches no `protected_paths`: the factory's own controls and files that steer agents. |
+| Required checks | Each name in `gates.required` runs its command from `gates.commands`: here `types` (`go vet`), `lint` (`golangci-lint`), `test` (`go test -race`) and `build`. A required gate with no command is misconfigured and fails. |
+| [Proves-fix](#test-proves-fix) | The new tests must fail on the old code. |
+| [Coverage floor](#coverage-floor) | Touched packages can't end up less covered. |
+| [Feature checks](#feature-map) | The `check` of each feature the change touches. |
+| [Hidden scenarios](#hidden-scenarios) | After every other gate passes, if `gates.scenarios_dir` is set. |
+
+Each repo can override the gates (see
+[Several repositories](configuration.md#several-repositories) and
+[Each repo's toolchain and checks](configuration.md#each-repos-toolchain-and-checks)).
+Set `proves_fix: none`, `coverage: none` or `scenarios_dir: none` to turn
+one off for a repo.
+
+Then the reviewer reads the issue, the diff and the gate results. A block
+sends the findings back to the builder, for at most `max_review_rounds`
+fix rounds (2); a third block parks the item. A malformed review retries
+once, then parks, so a broken reviewer never consumes a fix round or
+passes code.
+
+## Test proves fix
+
+`gates.proves_fix` reverts the code, keeps the changed tests, and runs
+them. They must fail. `{pkgs}` becomes the packages holding changed tests,
+and an empty command turns the check off:
+
+```yaml
+gates:
+  proves_fix: go test -count=1 {pkgs}
+```
+
+A compile failure counts as a failing test. A new test that calls a
+function the change adds fails to build on the old code, which is the
+expected test-first shape. The proves-fix check is Go-only for now.
+
+## Coverage floor
+
+`gates.coverage` runs, with coverage, the tests of every Go package whose
+code the change touches, on the base and on the change. A package can't
+end up less covered than on the base.
+
+```yaml
+gates:
+  coverage: go test -count=1 -cover {pkgs}
+  coverage_slack: 0.5
+```
+
+- **`coverage_slack`** allows a drop of that many points
+  (`coverage_slack: 1` allows one point).
+- **Packages compare by directory,** so renaming the module doesn't reset
+  them.
+- **A new package has no floor,** but it must have some tests, unless it's
+  a command (`package main`).
+- **A package the base can't measure,** because its tests fail, has no
+  floor either.
+- **Some code doesn't count:** vendored code, generated files
+  (`// Code generated … DO NOT EDIT.`), files build tags leave out, and
+  nested modules.
+- **The output it reads** is Go's `coverage: N% of statements` lines. A
+  script of your own can print `dir N%` lines instead.
+
+The builder is told the floor exists. The coverage check is Go-only for
+now.
+
+## Text-only changes
+
+Triage rates a change `XS` when it touches only text: copy, docs,
+comments, translations or config values, with no change to how the code
+behaves.
+
+- An `XS` item builds on `routing.implement.XS` (Haiku by default, else
+  `implement.S`), with its own budget (`budgets.per_job.XS`, else S's).
+- The builder is told it needs no new test.
+- The reviewer is told to block anything that turns out to change behavior
+  without one.
+- Every gate still runs. On Go code the proves-fix check still asks for a
+  test, and the coverage floor skips text.
+- An XS change that triage rates high risk keeps the usual test-first rule.
+
+In a repo without those checks, the reviewer is what catches a "text"
+issue that is really a logic change.
+
+## Review scaled by risk
+
+Every item has a risk. Triage rates it `low` or `high`, and a
+[feature map](#feature-map) can raise it to `medium` or `high`. Review gets
+stricter with it, and the PR tells you how much of your attention it
+needs:
+
+| Risk | Reviewers | The PR says |
+| --- | --- | --- |
+| low | `review` | a skim of the diff is enough |
+| medium | `review.medium_risk` if set, else `review` | read the changes to the features it touches |
+| high | `review.high_risk`, then a second critic (`routing.critic`, else `implement.L`) | read the whole diff, and check the features it touches by hand |
+
+The reviewer is told the risk and holds a high-risk change to a higher
+bar. Each PR carries a `factory:risk-low|medium|high` label (filter on it
+to find the quick ones) and a "How to review" section that says why it got
+its risk.
+
+Merging is yours at every level. To make GitHub enforce it, give the paths
+behind your high-risk features a CODEOWNERS entry and require code owner
+review on the base branch.
+
+## Feature map
+
+A feature map, `features.yaml` at the repo root, lists what the product
+does, where each feature lives and what proves it works:
+
+```yaml
+features:
+  - name: Login
+    description: Sign in with email and password
+    paths: [app/controllers/sessions_controller.rb, app/views/sessions/, "app/models/user*.rb"]
+    tests: [spec/system/login_spec.rb, spec/models/user_spec.rb]
+    check: bundle exec rspec spec/system/login_spec.rb   # optional: runs just its tests
+    risk: high                                            # optional: low, medium or high
+  - name: Billing
+    paths: [app/services/billing/]
+    tests: []                                             # none yet; say so rather than leave it out
+```
+
+A path is a file, a directory (with or without a trailing `/`), or a glob
+matched against the whole path. `*` stops at `/`, and there is no `**`, so
+use a directory for a tree.
+
+When a change touches a feature, through its code or its tests:
+
+- **Its `check` runs as a gate,** `feature:<name>`, after the required
+  checks (once per distinct command). A check that fails on the base
+  branch too doesn't block the change if it fails the same way (same exit
+  code, after the same install). The PR marks it as failing on the base
+  branch.
+- **The reviewer and the PR get the blast radius:** each feature touched,
+  its risk, the files that touch it and what proves it, plus any changed
+  files the map doesn't cover.
+- **A feature's `risk` raises the item's.** A change to a `high` feature is
+  reviewed as high risk (with the critic), whatever triage said.
+- **The builder is told the `high` features** and where they live before
+  it starts. It's asked for a property-based test of any rule it changes
+  in them, as it is for an issue triage rated high.
+
+The map is read from the base branch, never from the change, so a builder
+can't shrink its own blast radius. Builders are asked to keep it up to
+date when they add or move a feature; those edits count once merged.
+
+The readiness check reports how much of the code the map covers, entries
+that point at nothing, features with no tests, and `high` features whose
+tests include no property-based or fuzz test. It files the work to fix
+each.
+
+This repo's own map is [`features.yaml`](../features.yaml).
+
+## How ready a repo is
+
+The factory can only prove its changes work as far as the repo's checks
+reach. `factory setup` ends by measuring that for each repo, and you can
+run it again any time:
+
+```sh
+./factory readiness              # every repo; or name one: ./factory readiness you/api
+                                 # (flags go before the name)
+./factory readiness -file        # also open an issue for each gap
+./factory readiness -queue       # open them labeled for the factory to work
+```
+
+It clones the base branch, runs the install step and every required check
+(the tests twice, to catch flakiness), and looks for tests, end-to-end
+tests, a feature map, a lockfile and CI. It prints a score and what's
+missing:
+
+```
+you/api at main (4f2c1a9): 59/100, not ready yet: fix the blockers first
+  ✗ `test` fails on main
+  ! No lint check
+  ! No feature map
+  ✓ Installs from a clean checkout
+  ✓ Has end-to-end tests
+```
+
+- A **blocker** means every job would fail, or pass for the wrong reason:
+  tests that fail on the base branch, flaky tests, no tests at all.
+- A **gap** means jobs work but less of what they change is verified.
+
+Each one comes with an issue written for the factory's builder, so the
+first thing the factory does on a new repo can be making it verifiable.
+While a repo has blockers, `-queue` labels only those for the factory,
+since every other job would fail until they're fixed. The gaps are filed
+for later, and the next `-queue` run after the blockers are fixed labels
+them too.
+
+Issues it files carry `factory:readiness`. Running it again skips a gap
+whose issue is still open or was closed as not planned, and files it again
+if it was closed as done but came back. (On GitLab, which doesn't record
+why an issue was closed, it never files a gap again once its issue is
+closed.)
+
+If the check itself can't run (no Docker, a missing job image, a command
+that isn't installed, a timeout), it stops there and files nothing. The
+report is saved to `data/readiness/<owner>__<name>.json`.
+
+For what a new repo needs to pass, see [new-project.md](new-project.md).
+
+## Hidden scenarios
+
+Set `gates.scenarios_dir` to a directory outside the repository. After
+every other gate passes, each of these runs against the commit under test:
+
+- each `name.sh`, run with sh in the checkout;
+- each Playwright `name.spec.js|mjs|ts`, with a `playwright.config.*` in
+  the same directory.
+
+Builders and reviewers only learn `scenario:name pass|fail`. The full
+output stays in `data/jobs/<id>/scenarios/`. Build the job image with
+`--build-arg PLAYWRIGHT=1` for browser scenarios.
+
+Hidden scenarios join the job's [services](configuration.md#services-databases-and-the-like)
+network, but still reach nothing else. Scenarios that run with no network
+still get none.
+
+## Metrics
+
+`/metrics` (and `/metrics.json`) report:
+
+- cost per merged PR by complexity and by the model that landed it;
+- first-pass rate and escalation rate;
+- reviewer blocks;
+- review escapes: passed PRs you changed before merging, or closed;
+- hours spent awaiting you.
+
+Reviewer value is measured as review escapes, since blocked versions never
+reach you and so can't be judged. The dashboard's Spend screen shows the
+same numbers per week.
+
+## The replay set
+
+`evals/<name>/case.yaml` freezes a past issue at `base_sha`, and
+`evals/<name>/accept/` holds the hidden acceptance files. `factory eval`
+runs every case through the real pipeline against a private copy of the
+repo and an in-memory GitHub, so nothing is pushed or posted. Then it runs
+`accept` on the result. With `-baseline`, it fails if the candidate config
+is worse. See [`evals/README.md`](../evals/README.md) and the
+[commands](using.md#commands).
+
+## Failures become cases
+
+When you merge a factory PR only after changing it, the daemon tells you,
+because what you changed is what the factory missed.
+`factory eval capture PR` turns that PR, or any merged fix, into a case:
+
+- frozen at the commit its branch started from;
+- with the issue it closed as the task;
+- with its own tests and test data as the acceptance files.
+
+Every later config is then measured against the miss.

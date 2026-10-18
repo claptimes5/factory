@@ -320,7 +320,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		p.say("\n== 8. OpenAI (reviews the code)")
 		p.say("factory.yaml has Codex review Claude's work. Paste an API key from")
 		p.say("https://platform.openai.com/api-keys. A ChatGPT plan isn't needed.")
-		p.say("No OpenAI account? Leave it empty and see \"Claude-only review\" in the README.")
+		p.say("No OpenAI account? Leave it empty and see docs/configuration.md#claude-only-review.")
 		vals["OPENAI_API_KEY"] = p.secret("OpenAI API key", firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"]))
 		vals["CODEX_API_KEY"] = ""
 		if vals["OPENAI_API_KEY"] == "" {
