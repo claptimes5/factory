@@ -44,6 +44,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Feed": APIFeed{}, "Activity": APIActivity{}, "ActivityEntry": APIActivityEntry{}, "DaySpend": APIDaySpend{}, "ModelSpend": APIModelSpend{}, "Spend": APISpend{},
 		"Notification": APINotification{}, "Notifications": APINotifications{}, "ActionResult": APIActionResult{},
 		"Error": APIError{}, "Metrics": metrics.Report{}, "Group": metrics.Group{}, "Week": metrics.Week{},
+		"Settings": APISettings{}, "SettingsGroup": APISettingsGroup{}, "Setting": APISetting{},
 	}
 	for name, v := range types {
 		sc, ok := schemas[name]

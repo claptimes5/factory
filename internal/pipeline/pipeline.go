@@ -149,6 +149,8 @@ type Pipeline struct {
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request
+
+	restart atomic.Bool // a restart was asked for: claim nothing more
 }
 
 func (p *Pipeline) clients(repo string) RepoClients {
@@ -247,8 +249,46 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 	return p.coalesceOrchestrate(ctx)
 }
 
+// ErrRestart is what Serve returns once a restart was asked for and no
+// job is left running. The caller starts the daemon again, which reads
+// factory.yaml afresh.
+var ErrRestart = errors.New("restart to apply new settings")
+
+// RequestRestart stops new jobs from starting so the daemon can restart
+// once the running ones finish (see ErrRestart). It returns how many are
+// still running. Asking again changes nothing.
+func (p *Pipeline) RequestRestart(ctx context.Context) int {
+	n := p.Running()
+	if p.restart.CompareAndSwap(false, true) {
+		msg := "Restarting to apply new settings."
+		if n > 0 {
+			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s.", n, plural(n, "job finishes", "jobs finish"))
+		}
+		p.notify(ctx, msg)
+	}
+	return n
+}
+
+// RestartPending says whether a restart is waiting on running jobs.
+func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
+
+// Running is how many jobs this daemon is running.
+func (p *Pipeline) Running() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.running
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // Serve runs the daemon loop until ctx is cancelled, then waits for
-// running jobs to stop.
+// running jobs to stop. After RequestRestart it returns ErrRestart once
+// they have.
 func (p *Pipeline) Serve(ctx context.Context) error {
 	if err := p.Recover(ctx); err != nil {
 		return err
@@ -259,7 +299,12 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
-		if err := p.Tick(ctx, true); err != nil && !errors.Is(err, context.Canceled) {
+		err := p.Tick(ctx, true)
+		if errors.Is(err, ErrRestart) {
+			p.wg.Wait() // nothing runs, but a job may be finishing up
+			return err
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
 			p.log().Error("tick", "err", err)
 		}
 		select {
@@ -283,7 +328,15 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 
 // Tick polls GitHub when due and starts as many queued jobs as the caps
 // allow. With async=false, jobs run inline (tests and `factory run-once`).
+// Once a restart is asked for it starts nothing, and returns ErrRestart
+// when no job is left running.
 func (p *Pipeline) Tick(ctx context.Context, async bool) error {
+	if p.restart.Load() {
+		if p.Running() == 0 {
+			return ErrRestart
+		}
+		return nil
+	}
 	if time.Since(p.lastPoll) >= p.Cfg.Intake.PollInterval.Duration {
 		p.lastPoll = time.Now()
 		if err := p.Intake(ctx); err != nil {
@@ -335,7 +388,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	p.mu.Lock()
 	running := p.running
 	p.mu.Unlock()
-	if running >= p.Cfg.Budgets.ConcurrentJobs {
+	if running >= p.Cfg.Budgets.ConcurrentJobs || p.restart.Load() {
 		return nil, nil
 	}
 	// One orchestrator at a time: its tools act on the whole queue.

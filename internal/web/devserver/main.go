@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +39,39 @@ func (actions) Park(_ context.Context, id int64, reason string) error {
 	return fmt.Errorf("devserver: would park item %d: %s", id, reason)
 }
 
+// restarter pretends one job is still running, so a restart stays pending.
+type restarter struct{ pending atomic.Bool }
+
+func (r *restarter) RequestRestart(context.Context) int { r.pending.Store(true); return 1 }
+func (r *restarter) RestartPending() bool               { return r.pending.Load() }
+func (r *restarter) Running() int                       { return 1 }
+
+// sampleConfig is the factory.yaml the Settings screen edits.
+const sampleConfig = `# A sample factory.yaml for the devserver.
+repos: [acme/api, acme/web]
+runner: {kind: local}
+
+routing:
+  triage:       {harness: claude, model: haiku}
+  implement.S:  {harness: claude, model: sonnet}   # escalates on a miss
+  implement.M:  {harness: claude, model: sonnet}
+  implement.L:  {harness: claude, model: opus, fast: true}
+  review:       {harness: codex,  model: gpt-6.1-sol}
+
+escalation:
+  implement: [sonnet, opus]
+
+budgets:
+  per_job: {XS: 0.5, S: 2, M: 6, L: 15}
+  triage: 0.5
+  review: 3
+  daily_total: 25             # dollars a day
+  concurrent_jobs: 3
+
+pricing:
+  gpt-6.1-sol: {input_per_mtok: 2, output_per_mtok: 10}
+`
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8090", "address to serve on")
 	flag.Parse()
@@ -51,12 +85,17 @@ func main() {
 		log.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
+	cfgPath := filepath.Join(dir, "factory.yaml")
+	if err := os.WriteFile(cfgPath, []byte(sampleConfig), 0o644); err != nil {
+		log.Fatal(err)
+	}
 	jobs := filepath.Join(dir, "jobs")
 	if err := seed(context.Background(), st, jobs); err != nil {
 		log.Fatal(err)
 	}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
+		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Issue: func(_ context.Context, _ string, n int) (*github.Issue, error) {
 			return &github.Issue{Number: n, Body: fmt.Sprintf("Issue #%d.\n\nThe parser drops the last token when the input has no trailing newline.\n\nExpected: every token is kept.\nVerify: `go test ./parser`.", n)}, nil
 		},

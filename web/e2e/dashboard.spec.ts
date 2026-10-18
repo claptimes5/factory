@@ -160,3 +160,28 @@ test("inbox lists what needs you", async ({ page }, info) => {
   await shot(page, info, "inbox");
   if (phone(info)) await noSidewaysScroll(page);
 });
+
+test("settings save to factory.yaml and restart once jobs finish", async ({ page }, info) => {
+  await page.goto("/app/settings");
+  const budgets = page.getByRole("region", { name: "Budgets" });
+  await expect(page.getByRole("region", { name: "Models" })).toContainText("implement.L");
+  await expect(budgets.getByLabel("Pause at usage (%)")).toHaveAttribute("placeholder", "95");
+  const cap = budgets.getByLabel("Daily cap", { exact: true });
+
+  // An invalid file is refused with the config's own words, and nothing is written.
+  await cap.fill("0");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("alert")).toContainText("budgets.daily_total must be > 0");
+
+  await cap.fill(phone(info) ? "31" : "30");
+  await page.getByRole("button", { name: "Save" }).click();
+  // The devserver is shared: another run may have asked for the restart already.
+  const notice = page.getByRole("status");
+  await expect(notice).toContainText(/Changes apply when the factory restarts|Restart pending/);
+  const restart = page.getByRole("button", { name: "Restart when jobs finish" });
+  if (await restart.isVisible()) await restart.click();
+  await expect(notice).toContainText("Restart pending, waiting for 1 running job");
+  await expect(page.getByText("Gate commands, repos, the runner and the network are edited in factory.yaml.")).toBeVisible();
+  await shot(page, info, "settings");
+  if (phone(info)) await noSidewaysScroll(page);
+});

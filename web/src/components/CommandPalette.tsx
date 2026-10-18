@@ -35,6 +35,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { key: "s:/live", label: "Live activity", hint: "Screen", go: go("/live") },
       { key: "s:/orchestrator", label: "Orchestrator decisions", hint: "Screen", go: go("/orchestrator") },
       { key: "s:/metrics", label: "Spend and metrics", hint: "Screen", go: go("/metrics") },
+      { key: "s:/settings", label: "Settings", hint: "Screen", go: go("/settings") },
       {
         key: "s:classic",
         label: "Classic control room",

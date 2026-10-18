@@ -139,6 +139,13 @@ every refusal.
 machine and a tailnet, as `0.0.0.0` or a LAN address does. Without one,
 the factory won't start.
 
+**Changing settings from the dashboard** (the Settings screen, see
+[Settings](using.md#settings)) needs the password, or `web.listen` on a
+loopback address. On a tailnet address without a password, the screen is
+read-only: someone who can reach your tailnet can look, but not change
+budgets or models, or restart the factory. Nothing that runs commands or
+opens the network (gates, repos, the runner, egress) can be changed there.
+
 **Use HTTPS on a public address.** The control room serves plain HTTP, so
 put it behind an HTTPS proxy (Caddy, or `tailscale serve`); the session
 cookie is then marked secure. There, Attach gives you the `docker exec`

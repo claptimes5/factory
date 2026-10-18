@@ -13,6 +13,7 @@ import { MetricsScreen } from "@/screens/Metrics";
 import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
 import { LiveScreen } from "@/screens/Live";
+import { SettingsScreen } from "@/screens/Settings";
 import "./index.css";
 
 const router = createBrowserRouter(
@@ -28,6 +29,7 @@ const router = createBrowserRouter(
         { path: "/metrics", element: <MetricsScreen /> },
         { path: "/notifications", element: <NotificationsScreen /> },
         { path: "/live", element: <LiveScreen /> },
+        { path: "/settings", element: <SettingsScreen /> },
         { path: "*", element: <NotFound /> },
       ],
     },

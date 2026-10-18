@@ -1020,3 +1020,46 @@ func TestSeveralRepos(t *testing.T) {
 		}
 	}
 }
+
+// A restart waits for running jobs, starts no new ones, and is reported
+// once nothing runs.
+func TestRestartWaitsForRunningJobs(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	var notes []string
+	e.p.Notify = func(_ context.Context, m string) { notes = append(notes, m) }
+	e.p.running = 2 // two jobs still going
+	if n := e.p.RequestRestart(ctx); n != 2 || !e.p.RestartPending() {
+		t.Fatalf("running = %d, pending = %v", n, e.p.RestartPending())
+	}
+	e.p.RequestRestart(ctx)
+	if len(notes) != 1 || notes[0] != "Restarting to apply new settings once 2 running jobs finish." {
+		t.Fatalf("notes = %q", notes)
+	}
+	// Queued work stays queued while they finish.
+	if _, err := e.p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: "claude", Model: "opus", BudgetUSD: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Tick(ctx, true); err != nil {
+		t.Fatalf("tick with jobs running = %v", err)
+	}
+	if j, err := e.p.claimNext(ctx); j != nil || err != nil {
+		t.Fatalf("claimed %v, %v during a restart", j, err)
+	}
+	e.p.mu.Lock()
+	e.p.running = 0
+	e.p.mu.Unlock()
+	if err := e.p.Drain(ctx); !errors.Is(err, ErrRestart) {
+		t.Fatalf("idle tick = %v, want ErrRestart", err)
+	}
+	if err := e.p.Serve(ctx); !errors.Is(err, ErrRestart) {
+		t.Fatalf("Serve = %v, want ErrRestart", err)
+	}
+	if n, _ := e.p.Store.CountJobs(ctx, state.Queued, ""); n != 1 {
+		t.Fatalf("queued = %d: the restart must leave the queue alone", n)
+	}
+	if _, err := e.p.Store.ItemByIssue(ctx, "o/r", 1); err == nil {
+		t.Fatal("no intake while a restart waits")
+	}
+}

@@ -25,10 +25,49 @@ To reach it from another machine, or to put a password on it, see
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, daily spend against the cap, and cost by size and model. |
 | **Inbox** | PRs ready for review, parked items and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
+| **Settings** | Budgets, models, escalation, auto-merge, the orchestrator and intake, saved to `factory.yaml`. See below. |
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
 are a tap away. A tablet gets two columns.
+
+### Settings
+
+The Settings screen changes part of `factory.yaml` for you:
+
+- **Budgets**: the daily cap, jobs at once, PRs waiting for you, the cap
+  per job and per triage or review, `pause_at_usage` and
+  `fast_multiplier`.
+- **Models**: the harness, model, effort and fast mode of each routing
+  entry in the file.
+- **Escalation**: the model tiers, attempts per tier and review rounds.
+- **Auto-merge**: the top-level `up_to`, `max_size` and `method`.
+- **Orchestrator** and **Intake**: whether the orchestrator runs, its
+  budgets, how often it runs, and how often intake polls.
+
+An empty box means the key is left out of the file, so its default
+applies; the box shows that default. Gate commands, repos, the runner,
+egress, env, services and pricing aren't on the screen, since they can
+run commands on the host or open the network. Edit those in the file.
+
+**Saving** writes only the lines that change, so your comments and
+layout stay. The whole file must still load, or nothing is written and
+the screen shows why, as the factory would say it at start. A save is
+refused if the file changed since the page loaded it; reload to
+see the change.
+
+**Changes apply when the factory restarts**, since the daemon reads
+`factory.yaml` only at start. Press **Restart when jobs finish**: no new
+job starts, and once the running ones finish the daemon starts again with
+the same command, reading the new file. You get a notification when the
+restart is asked for. Restarting it yourself (systemd, `docker restart`)
+works too.
+
+**Who can save.** Anyone who can open the dashboard can see the settings.
+Saving and restarting need a password on the control room
+(`FACTORY_WEB_PASSWORD`), or `web.listen` on a loopback address such as
+`127.0.0.1`. On a tailnet address without a password the screen is
+read-only. See [Control room login](security.md#control-room-login).
 
 ## The classic control room
 

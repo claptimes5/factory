@@ -45,10 +45,31 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if errors.Is(err, pipeline.ErrRestart) {
+		// run's deferred cleanup (the database above all) is done.
+		err = restart()
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "factory:", err)
 		os.Exit(1)
 	}
+}
+
+// startEnv is the environment the process started with, before the
+// settings file filled it in, so a restart reads that file afresh too.
+var startEnv = os.Environ()
+
+// restart replaces this process with a fresh copy of the same binary,
+// arguments and environment, which reads factory.yaml again. No job is
+// running; were one, Recover would requeue it.
+func restart() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	slog.Info("restarting to apply new settings")
+	return syscall.Exec(exe, os.Args, startEnv)
 }
 
 func usage() error {
@@ -169,7 +190,7 @@ func run(args []string) error {
 			return err
 		}
 		if cmd == "serve" {
-			if err := serveWeb(ctx, cfg, st, p); err != nil {
+			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
 				return err
 			}
 			healthCheck(ctx, cfg, p)
@@ -360,7 +381,7 @@ func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) 
 	}
 }
 
-func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipeline.Pipeline) error {
+func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store.Store, p *pipeline.Pipeline) error {
 	host, _, err := net.SplitHostPort(cfg.Web.Listen)
 	if err != nil {
 		return fmt.Errorf("web.listen: %w", err)
@@ -369,6 +390,14 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
 	srv.DiskLow = p.DiskLow
+	// The Settings screen edits the config file; saved changes apply when
+	// the daemon restarts, which it does once running jobs finish.
+	srv.ConfigPath, _ = filepath.Abs(cfgPath)
+	srv.Listen = cfg.Web.Listen
+	srv.Restarter = p
+	if b, err := os.ReadFile(cfgPath); err == nil {
+		srv.StartedConfig = web.ConfigVersion(b)
+	}
 	// A repo since dropped from the config still links to its host.
 	links := func(repo string) config.Repo {
 		h, n := config.SplitRepo("", repo)

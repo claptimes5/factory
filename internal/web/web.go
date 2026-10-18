@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -69,9 +70,21 @@ type Server struct {
 	// (nil when the runner has no containers to attach to).
 	Exec ExecFunc
 	// Login, with a password set, makes everyone sign in first.
-	Login      *Login
+	Login *Login
+	// ConfigPath is the factory.yaml the Settings screen edits ("" for
+	// none). Listen is the control room's address: settings change from
+	// the browser only behind a password or on a loopback address.
+	ConfigPath string
+	Listen     string
+	// StartedConfig is the ConfigVersion of the file the daemon read,
+	// so the screen can say when saved changes wait for a restart.
+	StartedConfig string
+	// Restarter applies saved settings by restarting (may be nil).
+	Restarter Restarter
+
 	tmpl       *template.Template
 	pollPeriod time.Duration
+	settingsMu sync.Mutex
 }
 
 func (s *Server) ref(repo string, n int) string {

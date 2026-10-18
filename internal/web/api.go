@@ -435,6 +435,9 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/spend", s.apiSpend)
 	mux.HandleFunc("GET /api/v1/notifications", s.apiNotifications)
 	mux.HandleFunc("GET /api/v1/stream", s.apiStream)
+	mux.HandleFunc("GET /api/v1/settings", s.apiSettings)
+	mux.HandleFunc("POST /api/v1/settings", s.apiSaveSettings)
+	mux.HandleFunc("POST /api/v1/settings/restart", s.apiRestart)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { apiErr(w, http.StatusNotFound, "no such endpoint") })
 }
 
