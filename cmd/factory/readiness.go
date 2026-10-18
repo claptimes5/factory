@@ -228,7 +228,7 @@ func skippedNote(n int) string {
 // setupReadiness runs the readiness check on each repo and offers to file
 // the work that makes it verifiable.
 func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client clientFor) {
-	rn, err := newRunner(cfg)
+	rn, err := newRunner(cfg, "")
 	if err != nil {
 		p.say("Skipping the readiness check: %v", err)
 		return

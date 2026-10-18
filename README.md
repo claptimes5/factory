@@ -798,7 +798,8 @@ secrets the jobs don't need out of `env`.
   for. That stops a client from naming a different site there, but not
   from sending another site's `Host` header inside the encrypted stream
   (domain fronting) or hiding the name with Encrypted Client Hello, so an
-  allowed CDN name can still reach other sites behind that CDN. It never
+  allowed CDN name can still reach other sites behind that CDN. Other
+  ports you allow (`host:8443`) get no SNI check. It never
   forwards to IP addresses, or to names that resolve to private, loopback
   or link-local addresses. That rules out the cloud metadata service and
   your LAN.

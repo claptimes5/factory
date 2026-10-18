@@ -164,9 +164,6 @@ func TestBlocked(t *testing.T) {
 // A tunnel to 443 that sends no ClientHello in time is closed, not
 // passed through unchecked.
 func TestSilentTLSTunnelIsClosed(t *testing.T) {
-	old := helloWait
-	helloWait = 200 * time.Millisecond
-	defer func() { helloWait = old }()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +178,7 @@ func TestSilentTLSTunnelIsClosed(t *testing.T) {
 		b, _ := io.ReadAll(c)
 		got <- b
 	}()
-	p := &Proxy{Rules: rules(t, "api.example.com"),
+	p := &Proxy{Rules: rules(t, "api.example.com"), HelloWait: 200 * time.Millisecond,
 		Resolve: func(context.Context, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 		},
@@ -217,9 +214,6 @@ func TestSilentTLSTunnelIsClosed(t *testing.T) {
 // A long download the client sends nothing back on outlives the idle
 // limit: only silence both ways closes a tunnel.
 func TestIdleCountsBothWays(t *testing.T) {
-	old := tunnelIdle
-	tunnelIdle = 300 * time.Millisecond
-	defer func() { tunnelIdle = old }()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +236,7 @@ func TestIdleCountsBothWays(t *testing.T) {
 			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 		},
 		Blocked: func(netip.Addr) bool { return false },
+		Idle:    300 * time.Millisecond,
 	}
 	srv := httptest.NewServer(p)
 	defer srv.Close()

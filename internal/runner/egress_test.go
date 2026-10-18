@@ -114,3 +114,28 @@ func TestEnsureEgressNeedsDocker28(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The daemon removes only its own owner's stale proxies (and the old
+// name), never one an eval beside it made.
+func TestStaleEgressProxiesKeepsOthers(t *testing.T) {
+	d, log := fakeEgressDocker(t)
+	d.Egress.Owner = "daemon-1"
+	script, _ := os.ReadFile(d.Bin)
+	script = []byte(strings.Replace(string(script), `"ps -a") ;;`, `"ps -a") echo factory-egress-proxy-old; echo `+d.Egress.name()+` ;;`, 1))
+	if err := os.WriteFile(d.Bin, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StaleEgressProxies(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	calls := string(b)
+	for _, want := range []string{"--filter label=factory.egress.owner=daemon-1", "rm -f factory-egress-proxy-old", "rm -f factory-egress-proxy\n"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("no %q in:\n%s", want, calls)
+		}
+	}
+	if strings.Contains(calls, "rm -f "+d.Egress.name()) {
+		t.Errorf("removed its own proxy:\n%s", calls)
+	}
+}

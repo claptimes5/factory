@@ -21,6 +21,10 @@ type Egress struct {
 	Allow   []string // rules, as egress.ParseRule reads them
 	Private []string // rules for hosts on a private network
 	Binary  string   // this binary, on the host, which the proxy runs
+	// Owner labels the proxies this runner makes. StaleEgressProxies
+	// removes only its own owner's, so the daemon leaves alone a proxy
+	// a factory eval beside it is using or still setting up.
+	Owner string
 }
 
 const (
@@ -122,7 +126,7 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if st := status(); st != "" && st != "running" {
 		_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", name).Run() // broken: start afresh
 	}
-	args := []string{"create", "--name", name, "--label", "factory.egress=" + fp, "--restart", "unless-stopped",
+	args := []string{"create", "--name", name, "--label", "factory.egress=" + fp, "--label", "factory.egress.owner=" + e.Owner, "--restart", "unless-stopped",
 		"--network", EgressNet, "--user", "65534:65534", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--read-only", "--memory", "256m", "--pids-limit", "512",
 		"-v", e.Binary + ":/opt/factory/factory:ro", "--entrypoint", "/opt/factory/factory",
@@ -139,7 +143,7 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if outer == "" {
 		outer = "bridge"
 	}
-	// Only the container this call made is removed on failure.
+	// On failure the container is removed, so the next try starts afresh.
 	fail := func(what string, err error, out []byte) error {
 		_ = exec.Command(d.bin(), "rm", "-f", name).Run()
 		return fmt.Errorf("%s: %v: %s", what, err, strings.TrimSpace(string(out)))
@@ -157,13 +161,23 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	return nil
 }
 
-// waitEgress waits for the proxy to listen.
+// waitEgress waits for the proxy to listen. Only log lines since its
+// latest start count: a restarted container still has the old run's.
 func (d *Docker) waitEgress(ctx context.Context, name string) error {
 	deadline := time.Now().Add(EgressWait)
 	for {
-		logs, _ := exec.CommandContext(ctx, d.bin(), "logs", name).CombinedOutput()
-		if strings.Contains(string(logs), "egress proxy listening") && d.Alive(ctx, name) {
+		st, _ := exec.CommandContext(ctx, d.bin(), "inspect", "-f", "{{.State.Status}} {{.State.StartedAt}}", name).Output()
+		status, started, _ := strings.Cut(strings.TrimSpace(string(st)), " ")
+		args := []string{"logs", name}
+		if started != "" && !strings.HasPrefix(started, "0001-") {
+			args = []string{"logs", "--since", started, name}
+		}
+		logs, _ := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput()
+		if status == "running" && strings.Contains(string(logs), "egress proxy listening") {
 			return nil
+		}
+		if status == "exited" || status == "dead" {
+			return fmt.Errorf("it exited: %s", tail(string(logs), 1500))
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return fmt.Errorf("not listening after %s: %s", EgressWait, tail(string(logs), 1500))
@@ -218,26 +232,20 @@ func (d *Docker) importEmptyImage(ctx context.Context) error {
 	return nil
 }
 
-// StaleEgressProxies removes proxies left by other rules or binaries
-// (and the one name earlier versions used), keeping this runner's. Only
-// the daemon calls it, at start, and not while any job container is on
-// the jobs' network: a factory eval running beside it keeps its proxy.
+// StaleEgressProxies removes the proxies this runner's owner made for
+// other rules or binaries, and the one name earlier versions used,
+// keeping this runner's. The daemon calls it at start.
 func (d *Docker) StaleEgressProxies(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--filter", "network="+EgressNet, "--format", "{{.Names}}").Output()
+	if d.Egress == nil || d.Egress.Owner == "" {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--filter", "label=factory.egress.owner="+d.Egress.Owner, "--format", "{{.Names}}").Output()
 	if err != nil {
 		return err
 	}
-	for _, n := range strings.Fields(string(out)) {
-		if !strings.HasPrefix(n, EgressProxy) && n != "factory-egress-proxy" {
-			return nil // something else is using a proxy
-		}
-	}
-	keep := ""
-	if d.Egress != nil {
-		keep = d.Egress.name()
-	}
-	for _, n := range strings.Fields(string(out)) {
-		if n != keep {
+	stale := append(strings.Fields(string(out)), "factory-egress-proxy")
+	for _, n := range stale {
+		if n != d.Egress.name() {
 			_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", n).Run()
 		}
 	}

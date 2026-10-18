@@ -10,6 +10,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -232,7 +234,9 @@ func secrets() map[string]map[string]string {
 	}
 }
 
-func newRunner(cfg *config.Config) (runner.Runner, error) {
+// newRunner makes the jobs' runner. owner labels the egress proxies it
+// makes; only the daemon's own owner's stale ones are removed at start.
+func newRunner(cfg *config.Config, owner string) (runner.Runner, error) {
 	if cfg.Runner.Kind != "docker" {
 		return runner.Local{}, nil
 	}
@@ -247,9 +251,20 @@ func newRunner(cfg *config.Config) (runner.Runner, error) {
 			return nil, err
 		}
 		allow, private := cfg.EgressRules()
-		d.Egress = &runner.Egress{Allow: allow, Private: private, Binary: bin}
+		d.Egress = &runner.Egress{Allow: allow, Private: private, Binary: bin, Owner: owner}
 	}
 	return d, nil
+}
+
+// daemonOwner names the daemon of this data directory, for the egress
+// proxies it makes.
+func daemonOwner(cfg *config.Config) string {
+	dir, err := filepath.Abs(cfg.DataDir)
+	if err != nil {
+		dir = cfg.DataDir
+	}
+	h := sha256.Sum256([]byte(dir))
+	return "daemon-" + hex.EncodeToString(h[:8])
 }
 
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
@@ -267,7 +282,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
 		cfg.Orchestrator.On = false
 	}
-	r, err := newRunner(cfg)
+	r, err := newRunner(cfg, daemonOwner(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +531,7 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 		}
 		return t
 	}
-	r, err := newRunner(cfg)
+	r, err := newRunner(cfg, "")
 	if err != nil {
 		return err
 	}

@@ -97,6 +97,10 @@ type Proxy struct {
 	// Blocked says an address may never be reached: the host's, the
 	// cloud metadata service, private networks. Replaced in tests.
 	Blocked func(netip.Addr) bool
+	// Idle closes a tunnel that has carried nothing either way for this
+	// long; 0 is tunnelIdle. HelloWait bounds the wait for a ClientHello
+	// on 443; 0 is helloWait.
+	Idle, HelloWait time.Duration
 
 	once  sync.Once
 	tr    *http.Transport
@@ -245,12 +249,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// tunnelIdle closes a tunnel that has carried nothing either way for
-// this long; maxConns bounds the proxy's open requests and tunnels.
-var (
+// tunnelIdle is Proxy.Idle's default; maxConns bounds the proxy's open requests and tunnels.
+const (
 	tunnelIdle = 10 * time.Minute
-	helloWait  = 30 * time.Second // for a ClientHello on 443
-	maxConns   = 1024
+	helloWait  = 30 * time.Second
+)
+
+var (
+	maxConns = 1024
 )
 
 // errSNI is a TLS ClientHello naming another host than the CONNECT did.
@@ -289,7 +295,11 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		// doesn't stop a Host header inside TLS naming another site on a
 		// shared CDN.) Anything else, unreadable or late, is refused.
 		var first bytes.Buffer
-		_ = down.SetReadDeadline(time.Now().Add(helloWait))
+		wait := p.HelloWait
+		if wait <= 0 {
+			wait = helloWait
+		}
+		_ = down.SetReadDeadline(time.Now().Add(wait))
 		sni, isTLS, err := clientHelloSNI(io.TeeReader(in, &first))
 		_ = down.SetReadDeadline(time.Time{})
 		switch {
@@ -310,29 +320,35 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	var last atomic.Int64 // unix nanos of the last byte either way
 	last.Store(time.Now().UnixNano())
 	done := make(chan struct{}, 2)
-	go func() { pipe(up, in, down, &last); done <- struct{}{} }()
-	go func() { pipe(down, up, up, &last); done <- struct{}{} }()
+	idle := p.Idle
+	if idle <= 0 {
+		idle = tunnelIdle
+	}
+	go func() { pipe(up, in, down, &last, idle); done <- struct{}{} }()
+	go func() { pipe(down, up, up, &last, idle); done <- struct{}{} }()
 	<-done
 	<-done
 }
 
 // pipe copies src to dst until either ends, or until nothing has moved
-// either way for tunnelIdle: last is shared by both directions, so a
+// either way for idle: last is shared by both directions, so a
 // download the client sends nothing back on isn't cut. conn is src's
 // connection, whose read deadline wakes the check.
-func pipe(dst net.Conn, src io.Reader, conn net.Conn, last *atomic.Int64) {
+func pipe(dst net.Conn, src io.Reader, conn net.Conn, last *atomic.Int64, idle time.Duration) {
 	b := make([]byte, 32<<10)
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(tunnelIdle))
+		_ = conn.SetReadDeadline(time.Now().Add(idle))
 		n, err := src.Read(b)
 		if n > 0 {
 			last.Store(time.Now().UnixNano())
+			// A peer that stops reading doesn't hold the tunnel open.
+			_ = dst.SetWriteDeadline(time.Now().Add(idle))
 			if _, werr := dst.Write(b[:n]); werr != nil {
 				break
 			}
 		}
 		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() && time.Since(time.Unix(0, last.Load())) < tunnelIdle {
+		if errors.As(err, &ne) && ne.Timeout() && time.Since(time.Unix(0, last.Load())) < idle {
 			continue // the other way is busy
 		}
 		if err != nil {
