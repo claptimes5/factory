@@ -32,10 +32,19 @@ var (
 // gitlabAPI overrides the GitLab API base for every host; tests set it.
 var gitlabAPI = ""
 
+// repoFor is a repo's settings, or for one since dropped from the config
+// (its work items can still be open) just its host and name.
+func repoFor(cfg *config.Config, repo string) config.Repo {
+	if rc, ok := cfg.RepoConf(repo); ok {
+		return rc
+	}
+	host, name := config.SplitRepo("", repo)
+	return config.Repo{Name: name, Host: host}
+}
+
 // newForge makes the client for a repo on its host.
 func newForge(cfg *config.Config, repo string, ts github.TokenSource) forge {
-	rc, ok := cfg.RepoConf(repo)
-	if ok && rc.GitLab() {
+	if rc := repoFor(cfg, repo); rc.GitLab() {
 		return &gitlab.Client{Project: rc.Path(), Host: rc.Host, BaseURL: gitlabAPI, Tokens: ts}
 	}
 	return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: ts}
@@ -51,10 +60,7 @@ func gitlabToken() (github.TokenSource, error) {
 
 // repoGit is how the factory reaches a repo with git.
 func repoGit(cfg *config.Config, repo string, ts github.TokenSource) *pipeline.Git {
-	rc, ok := cfg.RepoConf(repo)
-	if !ok {
-		rc = config.Repo{Name: repo}
-	}
+	rc := repoFor(cfg, repo)
 	g := &pipeline.Git{RemoteURL: rc.CloneURL(), Tokens: ts, Author: "factory[bot] <factory@users.noreply.github.com>", AskPassDir: cfg.Path(cfg.DataDir)}
 	if rc.GitLab() {
 		g.User = "oauth2"

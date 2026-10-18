@@ -4,6 +4,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,20 @@ func TestGitLabRepos(t *testing.T) {
 	deploy, _ := c.RepoConf("git.example.com/platform/infra/deploy")
 	if out, _ := yaml.Marshal(deploy); strings.TrimSpace(string(out)) == "" || strings.Contains(string(out), "host:") {
 		t.Fatalf("marshal: %s", out)
+	}
+	if pp := web.Gates.DiffGuard.ProtectedPaths; !slices.Contains(pp, ".gitlab-ci.yml") || !slices.Contains(pp, ".gitlab/") {
+		t.Fatalf("protected: %v", pp)
+	}
+	// A dotted group under an explicit host, and a host with a port.
+	if h, n := SplitRepo("git.example.com", "my.team/proj"); h != "git.example.com" || n != "git.example.com/my.team/proj" {
+		t.Fatalf("dotted group: %s %s", h, n)
+	}
+	c2, err := Parse([]byte("repos:\n  - {name: \"git.example.com:8443/g/p\", image_from: ruby:3.4-bookworm}\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := c2.Primary(); r.Image != "factory-job-git.example.com-8443__g__p:latest" {
+		t.Fatalf("image %s", r.Image)
 	}
 	for _, bad := range []string{"gitlab.com/onlyone", "o/a/b"} {
 		if _, err := Parse([]byte("repos: [" + bad + "]\n" + base)); err == nil {

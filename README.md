@@ -404,6 +404,12 @@ a group access token or a personal token for a bot account. The token
 needs the `api` and `write_repository` scopes and the Developer role, or
 Maintainer if Developers can't push to the base branch.
 
+On GitLab a pushed branch runs its own `.gitlab-ci.yml` with the
+project's runners and CI variables, so builders may never change
+`.gitlab-ci.yml` or `.gitlab/`; the diff guard adds both for every GitLab
+repo. A group with a dot in its name needs `host:` set, as in
+`{name: my.team/web, host: gitlab.com}`.
+
 Two differences from GitHub: GitLab doesn't record why an issue was closed,
 so the readiness check never files a gap again once its issue is closed.
 The dashboard's CI panel shows the commit's pipeline jobs.

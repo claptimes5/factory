@@ -81,7 +81,9 @@ func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, 
 		return nil, err
 	}
 	if tok != "" {
-		req.Header.Set("PRIVATE-TOKEN", tok)
+		// Authorization, unlike PRIVATE-TOKEN, is dropped if a redirect
+		// leaves the host. GitLab takes every kind of token this way.
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -219,6 +221,9 @@ type rawMR struct {
 	Draft  bool   `json:"draft"`
 	WIP    bool   `json:"work_in_progress"` // before GitLab 14
 	SHA    string `json:"sha"`
+	// They differ for a merge request from a fork.
+	SourceProject int `json:"source_project_id"`
+	TargetProject int `json:"target_project_id"`
 }
 
 func (r rawMR) pr() *github.PR {
@@ -233,17 +238,21 @@ func (r rawMR) pr() *github.PR {
 	return pr
 }
 
-// FindPR returns the open merge request from branch, or nil.
+// FindPR returns the open merge request from branch in the project
+// itself, or nil. One from a fork's branch of the same name isn't the
+// factory's.
 func (c *Client) FindPR(ctx context.Context, branch string) (*github.PR, error) {
 	var mrs []rawMR
 	q := url.Values{"source_branch": {branch}, "state": {"opened"}}
 	if err := c.do(ctx, "GET", c.project()+"/merge_requests?"+q.Encode(), nil, &mrs); err != nil {
 		return nil, err
 	}
-	if len(mrs) == 0 {
-		return nil, nil
+	for _, mr := range mrs {
+		if mr.SourceProject == mr.TargetProject {
+			return mr.pr(), nil
+		}
 	}
-	return mrs[0].pr(), nil
+	return nil, nil
 }
 
 // GetPR fetches a merge request.
@@ -273,13 +282,23 @@ func (c *Client) UpdatePRBody(ctx context.Context, n int, body string) error {
 
 // CheckRuns lists the CI jobs on a commit as GitHub-style checks.
 func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error) {
-	var st []struct {
-		Name      string `json:"name"`
-		Status    string `json:"status"`
-		TargetURL string `json:"target_url"`
+	type status struct {
+		Name         string `json:"name"`
+		Status       string `json:"status"`
+		TargetURL    string `json:"target_url"`
+		AllowFailure bool   `json:"allow_failure"`
 	}
-	if err := c.do(ctx, "GET", c.project()+"/repository/commits/"+url.PathEscape(sha)+"/statuses?per_page=100", nil, &st); err != nil {
-		return nil, err
+	var st []status
+	for page := 1; page <= 10; page++ {
+		var batch []status
+		q := url.Values{"per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		if err := c.do(ctx, "GET", c.project()+"/repository/commits/"+url.PathEscape(sha)+"/statuses?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		st = append(st, batch...)
+		if len(batch) < 100 {
+			break
+		}
 	}
 	out := make([]github.CheckRun, 0, len(st))
 	for _, s := range st {
@@ -289,13 +308,16 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, 
 			cr.Conclusion = "success"
 		case "failed":
 			cr.Conclusion = "failure"
+			if s.AllowFailure {
+				cr.Conclusion = "neutral"
+			}
 		case "canceled":
 			cr.Conclusion = "cancelled"
 		case "skipped":
 			cr.Conclusion = "skipped"
 		case "manual":
 			cr.Conclusion = "action_required"
-		case "running":
+		case "running", "canceling":
 			cr.Status = "in_progress"
 		default: // created, pending, preparing, scheduled, waiting_for_resource
 			cr.Status = "queued"

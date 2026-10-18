@@ -22,8 +22,8 @@ type fakeGitLab struct {
 func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.tokens = append(f.tokens, r.Header.Get("PRIVATE-TOKEN"))
-	if r.Header.Get("PRIVATE-TOKEN") != "glpat-abc" {
+	f.tokens = append(f.tokens, r.Header.Get("Authorization"))
+	if r.Header.Get("Authorization") != "Bearer glpat-abc" {
 		w.WriteHeader(401)
 		return
 	}
@@ -99,6 +99,10 @@ func TestRepoGitForGitLab(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 	if g := repoGit(cfg, "o/r", nil); g.RemoteURL != "https://github.com/o/r.git" || g.User != "" {
+		t.Fatalf("%+v", g)
+	}
+	// A repo dropped from the config keeps its host.
+	if g := repoGit(cfg, "gitlab.com/old/one", nil); g.RemoteURL != "https://gitlab.com/old/one.git" || g.User != "oauth2" {
 		t.Fatalf("%+v", g)
 	}
 	t.Setenv("GITLAB_TOKEN", "")

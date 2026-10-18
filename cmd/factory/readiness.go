@@ -57,9 +57,10 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 func marker(key string) string { return "<!-- factory-readiness: " + key + " -->" }
 
 // planIssues picks the report's findings that need an issue. It skips a
-// gap whose issue is still open, or was closed as not planned: someone
-// decided against it. A gap whose issue was closed as done is back, so it
-// is filed again. Once the repo is ready, waiting are the open issues
+// gap whose issue is still open, or was closed for any reason but done
+// (not planned, a duplicate, none given): someone decided. A gap whose
+// issue was closed as done is back, so it is filed again; on GitLab,
+// which gives no reason, a closed issue stays closed. Once the repo is ready, waiting are the open issues
 // filed without the intake label while it had blockers.
 func planIssues(ctx context.Context, gh forge, r *readiness.Report, intake string) (todo []readiness.Finding, waiting []int, skipped int, err error) {
 	if r.Incomplete {

@@ -179,7 +179,7 @@ func envOr(k, def string) string {
 // tokens returns GitHub credentials for one repo. App tokens are scoped to
 // that repo alone.
 func tokens(cfg *config.Config, repo string) (github.TokenSource, error) {
-	if rc, ok := cfg.RepoConf(repo); ok && rc.GitLab() {
+	if repoFor(cfg, repo).GitLab() {
 		return gitlabToken()
 	}
 	if app := os.Getenv("FACTORY_GITHUB_APP_ID"); app != "" {
@@ -477,10 +477,11 @@ func runEval(ctx context.Context, cfg *config.Config, args []string) error {
 		ts = nil
 	}
 	tokensFor := func(repo string) github.TokenSource {
-		if ts == nil {
+		// Each repo's own host's credentials, whichever are set up.
+		t, err := tokens(cfg, repo)
+		if err != nil {
 			return nil
 		}
-		t, _ := tokens(cfg, repo)
 		return t
 	}
 	r := newRunner(cfg)

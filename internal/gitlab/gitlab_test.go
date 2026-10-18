@@ -20,7 +20,7 @@ type fake struct {
 
 func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls = append(f.calls, r.Method+" "+r.URL.RequestURI())
-	if r.Header.Get("PRIVATE-TOKEN") != "tok" {
+	if r.Header.Get("Authorization") != "Bearer tok" {
 		w.WriteHeader(401)
 		return
 	}
@@ -52,7 +52,10 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			j([]any{})
 			return
 		}
-		j([]map[string]any{{"iid": 5, "web_url": "https://gitlab.example/team/sub/web/-/merge_requests/5", "state": "opened", "draft": true, "sha": "abc"}})
+		j([]map[string]any{
+			{"iid": 4, "state": "opened", "source_project_id": 99, "target_project_id": 1}, // from a fork
+			{"iid": 5, "web_url": "https://gitlab.example/team/sub/web/-/merge_requests/5", "state": "opened", "draft": true, "sha": "abc", "source_project_id": 1, "target_project_id": 1},
+		})
 	case r.Method == "GET" && path == p+"/merge_requests/5":
 		j(map[string]any{"iid": 5, "state": "merged", "sha": "def"})
 	case r.Method == "POST" && path == p+"/merge_requests":
@@ -74,7 +77,7 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && path == p+"/repository/files/src%2Fapp.ts":
 		j(map[string]any{"content": base64.StdEncoding.EncodeToString([]byte("export {}")), "encoding": "base64"})
 	case r.Method == "GET" && path == p+"/repository/commits/abc/statuses":
-		j([]map[string]any{{"name": "test", "status": "failed", "target_url": "https://ci/1"}, {"name": "lint", "status": "running"}})
+		j([]map[string]any{{"name": "test", "status": "failed", "target_url": "https://ci/1"}, {"name": "lint", "status": "running"}, {"name": "audit", "status": "failed", "allow_failure": true}})
 	case r.Method == "GET" && strings.HasPrefix(path, p+"/labels/"):
 		w.WriteHeader(404)
 	case r.Method == "POST" && path == p+"/labels":
@@ -148,7 +151,7 @@ func TestClient(t *testing.T) {
 		t.Fatalf("want a 404, got %v", err)
 	}
 	checks, err := c.CheckRuns(ctx, "abc")
-	if err != nil || len(checks) != 2 || checks[0].Conclusion != "failure" || checks[1].Status != "in_progress" {
+	if err != nil || len(checks) != 3 || checks[0].Conclusion != "failure" || checks[1].Status != "in_progress" || checks[2].Conclusion != "neutral" {
 		t.Fatalf("checks %+v %v", checks, err)
 	}
 	if created, err := c.EnsureLabel(ctx, "factory:ready", "0e8a16", "go"); err != nil || !created || f.puts[len(f.puts)-1]["color"] != "#0e8a16" {

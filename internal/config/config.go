@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -315,7 +316,9 @@ func SplitRepo(host, name string) (string, string) {
 		name = strings.TrimPrefix(name, scheme)
 	}
 	name = strings.TrimSuffix(strings.TrimSuffix(name, "/"), ".git")
-	if first, rest, ok := strings.Cut(name, "/"); ok && strings.Contains(first, ".") {
+	if first, rest, ok := strings.Cut(name, "/"); ok && strings.Contains(first, ".") && (host == "" || strings.EqualFold(first, host)) {
+		// A dotted first segment is a host, unless host: names another
+		// one: then it's a group like my.team.
 		host, name = first, rest
 	}
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://"), "/"))
@@ -510,7 +513,7 @@ func (c *Config) resolve(r Repo) Repo {
 		r.BaseBranch = c.BaseBranch
 	}
 	if r.Image == "" && r.ImageFrom != "" {
-		r.Image = "factory-job-" + strings.ToLower(strings.ReplaceAll(r.Name, "/", "__")) + ":latest"
+		r.Image = "factory-job-" + strings.ToLower(strings.NewReplacer("/", "__", ":", "-").Replace(r.Name)) + ":latest"
 	}
 	if r.Image == "" {
 		r.Image = c.Runner.Image
@@ -524,6 +527,18 @@ func (c *Config) resolve(r Repo) Repo {
 	}
 	r.Env = env
 	r.Gates = mergeGates(c.Gates, r.Gates)
+	if r.GitLab() {
+		// A pushed branch runs its own .gitlab-ci.yml with the project's
+		// runners and CI variables, and a GitLab token, unlike GitHub's,
+		// can push pipeline changes. So builders never may.
+		pp := slices.Clone(r.Gates.DiffGuard.ProtectedPaths)
+		for _, p := range []string{".gitlab-ci.yml", ".gitlab/"} {
+			if !slices.Contains(pp, p) {
+				pp = append(pp, p)
+			}
+		}
+		r.Gates.DiffGuard.ProtectedPaths = pp
+	}
 	return r
 }
 
