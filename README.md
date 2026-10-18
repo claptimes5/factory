@@ -712,6 +712,31 @@ after the reviewer approves and can only add a block, so it uses
 `routing.critic` (default: `implement.L`) even when that is the builder's
 model. No OpenAI key is needed once no route names `codex`.
 
+## Who can start work
+
+Anyone can open an issue on a public repo, but only someone who could push
+to it can start work there. The factory checks who added `factory:ready`
+(or `factory:retry`, or the epic label):
+
+- **On GitHub** they need write or admin access. **On GitLab** they need
+  Developer or higher. The factory's own app or bot account also counts,
+  so issues the orchestrator files start on their own. Other bots and
+  workflows (`github-actions[bot]`) don't: an issue's author can set off a
+  workflow, so a person has to add the label.
+- **Anyone else** gets the label removed and a comment saying why. So
+  outsiders file issues, and you start the ones you want by labeling them.
+- **What you approve is the text as you labeled it.** If the title or text
+  changed after the label went on, even before the factory saw it, the
+  label comes off and the factory asks you to add it again. Once work has
+  started, an edit parks the item before its next stage. A reporter can't
+  swap the request after you said yes. To build the new text, add
+  `factory:retry`.
+- **The orchestrator reads only approved text.** It sees an issue's title
+  and body only if that issue was approved and is unchanged since.
+
+Items that were already in the factory when you upgrade take their text,
+the next time it's read, as approved.
+
 ## Isolation
 
 The builder runs arbitrary code, so nothing it writes is trusted:

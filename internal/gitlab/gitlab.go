@@ -28,8 +28,9 @@ type Client struct {
 	Tokens  github.TokenSource
 	HTTP    *http.Client
 
-	mu  sync.Mutex
-	ref string // the default branch, once looked up
+	mu       sync.Mutex
+	ref      string // the default branch, once looked up
+	selfName string // the token's user, once looked up
 }
 
 // HTTPError is a non-2xx response.

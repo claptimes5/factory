@@ -77,6 +77,9 @@ type GitHub interface {
 	CreatePR(ctx context.Context, title, body, head, base string, draft bool) (*github.PR, error)
 	UpdatePRBody(ctx context.Context, n int, body string) error
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
+	// Approver is who last added label to issue n, whether they may
+	// approve work, and the text they approved (see approval.go).
+	Approver(ctx context.Context, n int, label string) (github.Approval, error)
 }
 
 // RepoClients are one repository's GitHub client and git remote.
@@ -406,11 +409,26 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 		if hasLabel(is.Labels, LabelEpic) {
 			continue // epics are split by the orchestrator, never built whole
 		}
-		it, created, err := p.Store.UpsertItem(ctx, repo, is.Number, is.Title)
+		fresh, err := p.isNew(ctx, repo, is.Number)
+		if err != nil {
+			return err
+		}
+		who, text := "", is
+		if fresh {
+			ok := false
+			if who, text, ok = p.approvedBy(ctx, repo, is.Number, p.Cfg.Intake.Label); !ok {
+				continue
+			}
+		}
+		it, created, err := p.Store.UpsertItem(ctx, repo, is.Number, text.Title)
 		if err != nil {
 			return err
 		}
 		if created {
+			// Should this fail, the item parks at triage for lack of one.
+			if err := p.approve(ctx, it, text, who); err != nil {
+				return err
+			}
 			if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
 				return err
 			}
@@ -427,6 +445,14 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 		it, err := p.Store.ItemByIssue(ctx, repo, is.Number)
 		if err != nil || it.Stage != state.Parked {
 			continue
+		}
+		// A retry approves the issue as it reads now.
+		who, text, ok := p.approvedBy(ctx, repo, is.Number, LabelRetry)
+		if !ok {
+			continue
+		}
+		if err := p.approve(ctx, it, text, who); err != nil {
+			return err
 		}
 		// Remove the signal first so a failure below cannot loop.
 		if err := gh.RemoveLabel(ctx, is.Number, LabelRetry); err != nil {
