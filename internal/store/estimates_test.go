@@ -10,6 +10,7 @@ import (
 )
 
 func TestEstimates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it, _, _ := s.UpsertItem(ctx, "o/r", 1, "t")
@@ -35,6 +36,7 @@ func TestEstimates(t *testing.T) {
 }
 
 func TestItemCosts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	harness := "claude"
@@ -116,6 +118,7 @@ func TestItemCosts(t *testing.T) {
 // Upgrading marks the health fixes already in flight, so their cost
 // isn't held once the health issue is gone.
 func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, path := openTest(t)
 	fix, _, _ := s.UpsertItem(ctx, "o/r", 7, "Main is red: test")

@@ -8,6 +8,7 @@ import (
 )
 
 func TestFindingsKeepTheirIDsAndOutcomes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
@@ -61,6 +62,7 @@ func TestFindingsKeepTheirIDsAndOutcomes(t *testing.T) {
 // A sub-job runs from the start, and a restart cancels it rather than
 // queue it: the job it ran inside runs again.
 func TestSubJobsNeverQueue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
@@ -90,6 +92,7 @@ func TestSubJobsNeverQueue(t *testing.T) {
 // A review's findings and its finish are one transaction: if the job
 // can't finish, its rulings aren't applied either.
 func TestFinishReviewIsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)

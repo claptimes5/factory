@@ -3,6 +3,7 @@ package verdict
 import "testing"
 
 func TestLearnParse(t *testing.T) {
+	t.Parallel()
 	var l Learn
 	if err := Parse([]byte(`{"lessons":[{"line":"Check for overflow in arithmetic helpers.","why":"#1 and #2","evidence":["#1","#2"]}],"skip_reason":""}`), &l); err != nil || len(l.Lessons) != 1 {
 		t.Fatalf("parse: %v %+v", err, l)

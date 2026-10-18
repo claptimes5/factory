@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroomProposals(t *testing.T) {
+	t.Parallel()
 	s, _ := openTest(t)
 	ctx := context.Background()
 	id, err := s.AddGroomProposal(ctx, GroomProposal{Repo: "o/r", IssueNumber: 7, Kind: GroomSplit, Key: "k", IssueHash: "h",

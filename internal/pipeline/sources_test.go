@@ -187,6 +187,7 @@ func count(msgs []string, sub string) int {
 }
 
 func TestSentryFilesForApprovalAndClosesWhenResolved(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, msgs := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 120, 5)
@@ -244,6 +245,7 @@ func TestSentryFilesForApprovalAndClosesWhenResolved(t *testing.T) {
 }
 
 func TestResolvedLeavesAnApprovedIssueAlone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -274,6 +276,7 @@ func TestResolvedLeavesAnApprovedIssueAlone(t *testing.T) {
 }
 
 func TestSentryUnreadableNotifiesOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, msgs := srcSetup(t, nil)
 	s.err = &sentry.HTTPError{Status: 401, Body: "Invalid token"}
@@ -301,6 +304,7 @@ func TestSentryUnreadableNotifiesOnce(t *testing.T) {
 }
 
 func TestSourceRetriesServerErrorsQuietly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, msgs := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -322,6 +326,7 @@ func TestSourceRetriesServerErrorsQuietly(t *testing.T) {
 }
 
 func TestSourcesShareTheDailyCap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, msgs := srcSetup(t, nil)
 	e.p.Cfg.Sources.DailyIssueCap = 2
@@ -344,6 +349,7 @@ func TestSourcesShareTheDailyCap(t *testing.T) {
 }
 
 func TestDependabot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, _, _ := srcSetup(t, nil)
 	gh.alerts[1] = &github.DependabotAlert{Number: 1, State: "open", Severity: "high", Package: "lodash", Manifest: "web/package-lock.json"}
@@ -380,6 +386,7 @@ func TestDependabot(t *testing.T) {
 }
 
 func TestDependabotPR(t *testing.T) {
+	t.Parallel()
 	prs := []github.PR{{Number: 1, Title: "Bump lodash from 1 to 2"}, {Number: 2, Title: "Bump lodash from 1 to 2 in /web"}, {Number: 3, Title: "Bump lodash-es from 1 to 2"}}
 	for manifest, want := range map[string]int{"package-lock.json": 1, "web/package-lock.json": 2, "api/package-lock.json": 0} {
 		got := 0
@@ -393,6 +400,7 @@ func TestDependabotPR(t *testing.T) {
 }
 
 func TestSourceUnreadableWithoutClient(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, _, msgs := srcSetup(t, nil)
 	e.p.GH = e.gh // no Dependabot methods, as GitLab's
@@ -404,6 +412,7 @@ func TestSourceUnreadableWithoutClient(t *testing.T) {
 }
 
 func TestDependabotForbiddenIsUnreadable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, _, msgs := srcSetup(t, nil)
 	gh.alertErr = &github.HTTPError{Status: 403, Body: "Resource not accessible by integration"}
@@ -423,6 +432,7 @@ func TestDependabotForbiddenIsUnreadable(t *testing.T) {
 }
 
 func TestSourceFindsAnIssueTheStoreLost(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -437,6 +447,7 @@ func TestSourceFindsAnIssueTheStoreLost(t *testing.T) {
 }
 
 func TestSourceAdoptsOnlyItsOwnIssues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -455,6 +466,7 @@ func TestSourceAdoptsOnlyItsOwnIssues(t *testing.T) {
 }
 
 func TestSourceLeavesAnEditedIssueOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -472,6 +484,7 @@ func TestSourceLeavesAnEditedIssueOpen(t *testing.T) {
 }
 
 func TestSourceTreatsAnEpicAsApproved(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -486,6 +499,7 @@ func TestSourceTreatsAnEpicAsApproved(t *testing.T) {
 }
 
 func TestSourceClosesBeforeCommenting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -506,6 +520,7 @@ func TestSourceClosesBeforeCommenting(t *testing.T) {
 }
 
 func TestSentryTransitionalStatusIsntGone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -523,6 +538,7 @@ func TestSentryTransitionalStatusIsntGone(t *testing.T) {
 }
 
 func TestSourceNoticeLeavesOutTheTitle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, msgs := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -556,6 +572,7 @@ func pushTo(t *testing.T, remote string, files map[string]string) {
 }
 
 func TestTODOs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, _, _ := srcSetup(t, map[string]string{
 		"retry.go":              "package fixture\n\n// " + mkTODO + ": retry the upload on a 503\nfunc upload() {}\n",
@@ -601,6 +618,7 @@ func TestTODOs(t *testing.T) {
 }
 
 func TestTODOsWidenedAndCappedPerRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, _, _ := srcSetup(t, map[string]string{
 		"a.go": "package fixture\n\n// TODO: one\n// FIXME: two\n# TODO three\n",
@@ -618,6 +636,7 @@ func TestTODOsWidenedAndCappedPerRun(t *testing.T) {
 }
 
 func TestParseTODO(t *testing.T) {
+	t.Parallel()
 	both := []string{"TODO", mkTODO}
 	for line, want := range map[string]string{
 		"// " + mkTODO + ": add retries":     mkTODO + "|add retries",
@@ -649,6 +668,7 @@ func TestParseTODO(t *testing.T) {
 }
 
 func TestSourceLabels(t *testing.T) {
+	t.Parallel()
 	var names []string
 	for _, l := range Labels("factory:ready") {
 		names = append(names, l.Name)
@@ -661,6 +681,7 @@ func TestSourceLabels(t *testing.T) {
 }
 
 func TestSourcesTrigger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, _ := srcSetup(t, nil)
 	s.issues["1"] = sentryIssue("1", 50, 1)
@@ -682,6 +703,7 @@ func TestSourcesTrigger(t *testing.T) {
 }
 
 func TestNoClose(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"TODO: fix #123 race":                      "TODO: fix # 123 race",
 		"Closes: o/r#9 and resolves #1":            "Closes: o/r# 9 and resolves # 1",
@@ -702,6 +724,7 @@ func TestNoClose(t *testing.T) {
 }
 
 func TestDependabotPRByBranchAndGroup(t *testing.T) {
+	t.Parallel()
 	prs := []github.PR{
 		{Number: 1, Title: "Bump the npm_and_yarn group across 1 directory with 2 updates", Body: "Bumps the npm_and_yarn group with 2 updates in the /web directory: [lodash](https://x) and [minimist](https://y).\n"},
 		{Number: 2, Title: "chore(deps): bump stuff"},
@@ -740,6 +763,7 @@ func (f *fakeNotPlanned) CloseNotPlanned(ctx context.Context, n int) error {
 }
 
 func TestSourceClosesAsNotPlanned(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, gh, s, _ := srcSetup(t, nil)
 	np := &fakeNotPlanned{fakeSrcGH: gh}
@@ -754,6 +778,7 @@ func TestSourceClosesAsNotPlanned(t *testing.T) {
 }
 
 func TestTODOScanStopsAtTheCap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var b strings.Builder
 	for i := 0; i < 50; i++ {
@@ -779,6 +804,7 @@ func TestTODOScanStopsAtTheCap(t *testing.T) {
 }
 
 func TestTODOScanSkipsWhileTheDiskIsLowAndSweepsOldClones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, _, _ := srcSetup(t, map[string]string{"a.go": "// " + mkTODO + ": x\n"})
 	stale := filepath.Join(e.p.Cfg.Path(e.p.Cfg.DataDir), "todos-123")
@@ -800,6 +826,7 @@ func TestTODOScanSkipsWhileTheDiskIsLowAndSweepsOldClones(t *testing.T) {
 }
 
 func TestSourcesTriggerRemembersAcrossRestartsAndRunsAside(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, s, _ := srcSetup(t, nil)
 	e.p.Cfg.Sources.Sentry.Enabled = true

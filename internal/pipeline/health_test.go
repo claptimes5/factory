@@ -110,6 +110,7 @@ func healthRow(t *testing.T, e *env, check string) *store.HealthIssue {
 }
 
 func TestReadChecks(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		runs []github.CheckRun
 		want string
@@ -139,6 +140,7 @@ func TestReadChecks(t *testing.T) {
 }
 
 func TestMainRedFilesAFixFirstAndClosesItWhenGreen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	// Work already waiting, which the fix must overtake.
@@ -223,6 +225,7 @@ func TestMainRedFilesAFixFirstAndClosesItWhenGreen(t *testing.T) {
 }
 
 func TestMainHealthRequireApproval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	e.p.Cfg.MainHealth.RequireApproval = true
@@ -277,6 +280,7 @@ func TestMainHealthRequireApproval(t *testing.T) {
 }
 
 func TestMainHealthDedupesAndCaps(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	// Filed before the store knew of it (a fresh data directory), as
@@ -329,6 +333,7 @@ func TestMainHealthDedupesAndCaps(t *testing.T) {
 }
 
 func TestMainHealthFlaky(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure"), run(2, "test", "success")}
@@ -354,6 +359,7 @@ func TestMainHealthFlaky(t *testing.T) {
 }
 
 func TestMainHealthRedThenRerunPasses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure")}
@@ -372,6 +378,7 @@ func TestMainHealthRedThenRerunPasses(t *testing.T) {
 }
 
 func TestMainHealthAfterTheIssueCloses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure")}
@@ -409,6 +416,7 @@ func TestMainHealthAfterTheIssueCloses(t *testing.T) {
 }
 
 func TestMainHealthUnreadable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	ci.readErr = &github.HTTPError{Status: 403, Body: "Resource not accessible by integration"}
@@ -444,6 +452,7 @@ func TestMainHealthUnreadable(t *testing.T) {
 }
 
 func TestHealthTrigger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "success")}
@@ -470,6 +479,7 @@ func TestHealthTrigger(t *testing.T) {
 }
 
 func TestReadChecksKeysAndGroups(t *testing.T) {
+	t.Parallel()
 	r := func(id int64, key, group, conclusion string) github.CheckRun {
 		x := run(id, "build", conclusion)
 		x.Key, x.Group = key, group
@@ -494,6 +504,7 @@ func TestReadChecksKeysAndGroups(t *testing.T) {
 }
 
 func TestSafeName(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 300)
 	if n := SafeName(long); len([]rune(n)) != 100 || !strings.HasSuffix(n, "…") {
 		t.Fatalf("long: %d runes", len([]rune(n)))
@@ -507,6 +518,7 @@ func TestSafeName(t *testing.T) {
 }
 
 func TestHealthFixNeverMergesItself(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "medium", MaxSize: "L"}
@@ -535,11 +547,11 @@ func TestHealthFixNeverMergesItself(t *testing.T) {
 }
 
 func TestMissingCheckIsNotAPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	now := time.Now()
-	healthNow = func() time.Time { return now }
-	t.Cleanup(func() { healthNow = time.Now })
+	e.p.healthNowFn = func() time.Time { return now }
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure"), run(2, "lint", "success")}
 	e.p.CheckMainHealth(ctx)
 	// A path filter skips test on the next commit: nothing passed.
@@ -563,6 +575,7 @@ func TestMissingCheckIsNotAPass(t *testing.T) {
 }
 
 func TestMainOnlyFailureStopsStartingOnItsOwn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	for i, sha := range []string{"a1", "b2", "c3"} {
@@ -589,11 +602,11 @@ func TestMainOnlyFailureStopsStartingOnItsOwn(t *testing.T) {
 }
 
 func TestMutingAFlake(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	now := time.Now()
-	healthNow = func() time.Time { return now }
-	t.Cleanup(func() { healthNow = time.Now })
+	e.p.healthNowFn = func() time.Time { return now }
 	flaky := func(sha string, id int64) {
 		ci.head = sha
 		ci.runs[sha] = []github.CheckRun{run(id, "test", "failure"), run(id+1, "test", "success")}
@@ -617,6 +630,7 @@ func TestMutingAFlake(t *testing.T) {
 }
 
 func TestMuteLabel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure")}
@@ -641,6 +655,7 @@ func TestMuteLabel(t *testing.T) {
 }
 
 func TestRateLimitIsAnOutage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	ci.readErr = &github.HTTPError{Status: 403, Body: "API rate limit exceeded", Limited: true}
@@ -654,6 +669,7 @@ func TestRateLimitIsAnOutage(t *testing.T) {
 }
 
 func TestGreenLeavesAnOpenFixPR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, msgs := healthSetup(t)
 	ci.runs["aaaaaaa1"] = []github.CheckRun{run(1, "test", "failure")}
@@ -678,6 +694,7 @@ func TestGreenLeavesAnOpenFixPR(t *testing.T) {
 }
 
 func TestLogsAreReadOutsideTheLock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, ci, _ := healthSetup(t)
 	read := 0

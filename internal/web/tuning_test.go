@@ -26,6 +26,7 @@ func addProposal(t *testing.T, s *Server, changes ...store.ProposedChange) int64
 }
 
 func TestTuningGetApplyDismiss(t *testing.T) {
+	t.Parallel()
 	base, path, s, _ := settingsSetup(t, "127.0.0.1:8080")
 	var tu APITuning
 	getJSON(t, base+"/api/v1/settings/tuning", &tu)
@@ -96,6 +97,7 @@ func TestTuningGetApplyDismiss(t *testing.T) {
 }
 
 func TestTuningApplyRefusedWithoutAPassword(t *testing.T) {
+	t.Parallel()
 	base, path, s, _ := settingsSetup(t, "100.64.0.7:8080")
 	orig, _ := os.ReadFile(path)
 	id := addProposal(t, s, store.ProposedChange{Path: []string{"budgets", "daily_total"}, Value: 75.0, Why: "x"})
@@ -115,6 +117,7 @@ func TestTuningApplyRefusedWithoutAPassword(t *testing.T) {
 // Apply takes the changes you picked, and the card reads each against the
 // file as it is now: the diff is fresh, and a change already made says so.
 func TestTuningApplyPicked(t *testing.T) {
+	t.Parallel()
 	base, path, s, _ := settingsSetup(t, "127.0.0.1:8080")
 	id := addProposal(t, s,
 		store.ProposedChange{Path: []string{"budgets", "daily_total"}, Value: 75.0, Why: "a"},

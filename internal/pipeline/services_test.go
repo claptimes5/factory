@@ -55,6 +55,7 @@ func (r *svcRunner) StopServices(_ context.Context, job string) error {
 // every check get their network, and they stop when the job ends.
 // Reviewers don't get them.
 func TestServicesRunForImplementJobs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	r := &svcRunner{}
@@ -103,6 +104,7 @@ func TestServicesRunForImplementJobs(t *testing.T) {
 // Services that don't start park the item at once: another model tier
 // wouldn't start them either.
 func TestServicesFailToStart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	r := &svcRunner{fail: errors.New("db never got ready")}

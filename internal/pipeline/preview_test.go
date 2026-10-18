@@ -145,6 +145,7 @@ func (e *env) withPreviews(p config.Preview) (*previewGH, *capture) {
 // and the builder's, before and after, at desktop and phone sizes: the
 // reviewer looks at them and the PR gets them in one comment.
 func TestPreviewPostsScreenshots(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, c := e.withPreviews(config.Preview{Start: "npm start", Before: true})
@@ -200,6 +201,7 @@ func TestPreviewPostsScreenshots(t *testing.T) {
 // browser's errors stay on the dashboard, since the log can quote the
 // secrets in the repo's files.
 func TestPreviewFailureNeverFailsTheBuild(t *testing.T) {
+	t.Parallel()
 	for mode, want := range map[string]struct{ comment, notes []string }{
 		"not-ready": {[]string{"the app didn't answer / within 1m"}, []string{"Error: Cannot find module 'next'", "on port 3000"}},
 		"timeout":   {[]string{"the capture timed out after 5m (previews.timeout)"}, []string{"timed out after 5m"}},
@@ -255,6 +257,7 @@ func TestPreviewFailureNeverFailsTheBuild(t *testing.T) {
 // Each build edits the PR's one comment, and the last build's images go
 // once the new ones are up.
 func TestPreviewCommentUpdatedInPlace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -294,6 +297,7 @@ func TestPreviewCommentUpdatedInPlace(t *testing.T) {
 
 // A merged PR's screenshots are removed, and its comment says so.
 func TestPreviewRemovedWhenThePRMerges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -317,6 +321,7 @@ func TestPreviewRemovedWhenThePRMerges(t *testing.T) {
 
 // Screenshots of a PR left open go after previews.keep_for.
 func TestPreviewKeepFor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -337,6 +342,7 @@ func TestPreviewKeepFor(t *testing.T) {
 // Without the setting nothing is captured, and a forge with nowhere to
 // put screenshots still gets a build.
 func TestPreviewOffAndUnsupportedForge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	_, c := e.withPreviews(config.Preview{Start: "npm start"})
@@ -371,6 +377,7 @@ func (e *env) secondBuild(t *testing.T) ReviewInput {
 // When the comment can't be written it still shows the last build's
 // images, so they stay up, and the new ones are recorded to go in time.
 func TestPreviewKeptWhenTheCommentFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -401,6 +408,7 @@ func TestPreviewKeptWhenTheCommentFails(t *testing.T) {
 // A sweep that read the record before a build posted leaves the new
 // build's screenshots and comment alone.
 func TestPreviewSweepDoesntRemoveANewerPost(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -425,6 +433,7 @@ func TestPreviewSweepDoesntRemoveANewerPost(t *testing.T) {
 // Maintainer role) is told once: the comment says so, without claiming
 // they're gone, and the factory stops trying.
 func TestPreviewNotRemovable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -450,6 +459,7 @@ func TestPreviewNotRemovable(t *testing.T) {
 // A PR closed while its item is back in a fix round loses its
 // screenshots on the next sweep.
 func TestPreviewRemovedWhenClosedDuringAFix(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
@@ -475,6 +485,7 @@ func TestPreviewRemovedWhenClosedDuringAFix(t *testing.T) {
 // A cut note stays valid UTF-8: a PR comment or a log line with half a
 // character in it is mangled.
 func TestTruncateKeepsRunesWhole(t *testing.T) {
+	t.Parallel()
 	for n := 0; n <= 5; n++ {
 		if got := truncate("a€b", n); !utf8.ValidString(got) {
 			t.Fatalf("truncate(%d) = %q", n, got)
@@ -489,6 +500,7 @@ func TestTruncateKeepsRunesWhole(t *testing.T) {
 // first post's uploads are recorded on its PR (never PR 0), and a new
 // PR's failed post keeps the old PR's comment and the last post's time.
 func TestPreviewFailedCommentKeepsTheRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})

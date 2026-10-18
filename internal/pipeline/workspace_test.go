@@ -34,6 +34,7 @@ workspaces:
 		t.Fatal(err)
 	}
 	cfg.DataDir, cfg.PromptsDir, cfg.SkillsDir = e.p.Cfg.DataDir, e.p.Cfg.PromptsDir, e.p.Cfg.SkillsDir
+	cfg.Budgets.MinFreeDiskGB = e.p.Cfg.Budgets.MinFreeDiskGB
 	e.p.Cfg = cfg
 	web := setup(t)
 	clients := map[string]RepoClients{
@@ -76,6 +77,7 @@ func gateNames(t *testing.T, e *env, jobID int64) string {
 // side by side, gates in each, one review of the combined diff, a linked
 // draft PR per repo, and done only when every PR merged.
 func TestWorkspaceChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := setupWorkspace(t)
 	w.addIssue(1)
@@ -172,6 +174,7 @@ func TestWorkspaceChange(t *testing.T) {
 // A change that needs only one repo of the workspace opens only its PR, and
 // a PR closed unmerged parks the item.
 func TestWorkspaceOneRepo(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := setupWorkspace(t)
 	w.addIssue(1)
@@ -207,6 +210,7 @@ func TestWorkspaceOneRepo(t *testing.T) {
 // A restart between the build and its review resumes with every repo's
 // head, so the review neither parks on a "moved" branch nor opens one PR.
 func TestWorkspaceResumeAfterImplement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := setupWorkspace(t)
 	w.addIssue(1)
@@ -238,6 +242,7 @@ func TestWorkspaceResumeAfterImplement(t *testing.T) {
 // The builder can write the folder that holds a workspace's checkouts; a
 // checkout it swaps for a symlink is refused, never committed from.
 func TestWorkspaceRefusesSymlinkedCheckout(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := setupWorkspace(t)
 	w.addIssue(1)
@@ -266,6 +271,7 @@ func TestWorkspaceRefusesSymlinkedCheckout(t *testing.T) {
 // A rebuild that no longer touches a repo marks that repo's old PR as
 // superseded, and stops tracking it.
 func TestWorkspaceRetiresDroppedPR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := setupWorkspace(t)
 	w.addIssue(1)

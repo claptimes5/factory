@@ -6,6 +6,7 @@ import (
 )
 
 func TestSources(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	if st, err := s.SourceState(ctx, "o/r", "sentry"); st != nil || err != nil {

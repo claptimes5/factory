@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -11,7 +12,57 @@ import (
 	"github.com/claptimes5/factory/internal/state"
 )
 
+// openTest opens a store copied from one migrated once per test binary:
+// migrating runs every migration and backs up before each, most of a
+// second under -race.
 func openTest(t *testing.T) (*Store, string) {
+	t.Helper()
+	tmplOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "store-template-")
+		if err != nil {
+			tmplErr = err
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, "factory.db")
+		s, err := Open(path)
+		if err != nil {
+			tmplErr = err
+			return
+		}
+		// Closing the last connection checkpoints the WAL into the file.
+		if tmplErr = s.Close(); tmplErr != nil {
+			return
+		}
+		if _, err := os.Stat(path + "-wal"); err == nil {
+			tmplErr = errors.New("the template's WAL wasn't checkpointed on close")
+			return
+		}
+		tmpl, tmplErr = os.ReadFile(path)
+	})
+	if tmplErr != nil {
+		t.Fatalf("migrating the template: %v", tmplErr)
+	}
+	path := filepath.Join(t.TempDir(), "factory.db")
+	if err := os.WriteFile(path, tmpl, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s, path
+}
+
+var (
+	tmplOnce sync.Once
+	tmpl     []byte
+	tmplErr  error
+)
+
+// openFresh opens a new store, running every migration.
+func openFresh(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "factory.db")
 	s, err := Open(path)
@@ -46,6 +97,7 @@ func enqueue(t *testing.T, s *Store, itemID int64, prio int) int64 {
 // Many goroutines and two separate connections race to claim; every job must
 // be claimed exactly once, and no claim may return a job twice.
 func TestClaimRace(t *testing.T) {
+	t.Parallel()
 	s, path := openTest(t)
 	s2, err := Open(path)
 	if err != nil {
@@ -101,6 +153,7 @@ func TestClaimRace(t *testing.T) {
 }
 
 func TestClaimOrder(t *testing.T) {
+	t.Parallel()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
 	low := enqueue(t, s, it.ID, 0)
@@ -132,6 +185,7 @@ func TestClaimOrder(t *testing.T) {
 }
 
 func TestFinishJobTransitionsAndSpend(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
@@ -167,6 +221,7 @@ func TestFinishJobTransitionsAndSpend(t *testing.T) {
 }
 
 func TestSetStageValidatesAndAudits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 7)
@@ -202,6 +257,7 @@ func TestSetStageValidatesAndAudits(t *testing.T) {
 }
 
 func TestUpsertIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	a, created, err := s.UpsertItem(ctx, "o/r", 3, "first")
@@ -218,6 +274,7 @@ func TestUpsertIsIdempotent(t *testing.T) {
 }
 
 func TestRequeueRunning(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
@@ -244,7 +301,8 @@ func TestRequeueRunning(t *testing.T) {
 }
 
 func TestMigrationsAreForwardOnlyAndBackedUp(t *testing.T) {
-	s, path := openTest(t)
+	t.Parallel()
+	s, path := openFresh(t)
 	v, err := s.SchemaVersion(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +336,7 @@ func migrationFiles(t *testing.T) []string {
 }
 
 func TestDependencyCyclesRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	a, b, c := newItem(t, s, 1), newItem(t, s, 2), newItem(t, s, 3)
@@ -300,6 +359,7 @@ func TestDependencyCyclesRefused(t *testing.T) {
 }
 
 func TestVersionMovesOnItemOnlyWrites(t *testing.T) {
+	t.Parallel()
 	st, _ := openTest(t)
 	ctx := context.Background()
 	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "x")
@@ -319,6 +379,7 @@ func TestVersionMovesOnItemOnlyWrites(t *testing.T) {
 // A workspace job's heads and an item's PRs keep their order, and each
 // write replaces the last.
 func TestWorkspaceHeadsAndPRs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it := newItem(t, s, 1)
@@ -345,6 +406,7 @@ func TestWorkspaceHeadsAndPRs(t *testing.T) {
 // One job of a kind across two processes, as `factory tune` and the
 // daemon are: the second EnqueueSole queues nothing.
 func TestEnqueueSoleAcrossHandles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, path := openTest(t)
 	s2, err := Open(path)

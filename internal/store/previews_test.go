@@ -6,6 +6,7 @@ import (
 )
 
 func TestPreviews(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	if p, err := s.Preview(ctx, 1); p != nil || err != nil {

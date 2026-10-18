@@ -100,6 +100,7 @@ func orchestratorOn(e *env) {
 // An epic is split into issues through the MCP tools; the dependent child
 // waits until its dependency's PR merges, then builds.
 func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	orchestratorOn(e)
@@ -236,6 +237,7 @@ func callTool(t *testing.T, tools map[string]mcp.Tool, name string, args any) (s
 }
 
 func TestOrchestratorToolPolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Orchestrator.DailyIssueCap = 1
@@ -306,6 +308,7 @@ func TestOrchestratorToolPolicy(t *testing.T) {
 }
 
 func TestOrchestrateRequestsCoalesce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	for i := 0; i < 3; i++ {
@@ -336,6 +339,7 @@ func TestOrchestrateRequestsCoalesce(t *testing.T) {
 // Two failures in a row on an item ask the orchestrator to look at it, and
 // the daily summary goes to the notification channel.
 func TestFailuresAndSummaryTriggerOrchestrator(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	orchestratorOn(e)
@@ -368,6 +372,7 @@ func TestFailuresAndSummaryTriggerOrchestrator(t *testing.T) {
 // Triggers that piled up while the daemon was down, plus the run it
 // interrupted, fire as one fresh orchestrator run after a restart.
 func TestRestartCoalescesOrchestratorRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	for _, in := range []string{`{"reasons":["interrupted"]}`, `{"reasons":["epic"]}`, `{"reasons":["summary"],"summary":true}`} {
@@ -394,6 +399,7 @@ func TestRestartCoalescesOrchestratorRuns(t *testing.T) {
 
 // Dependencies set after a child was triaged hold back its queued build.
 func TestLateDependencyHoldsQueuedBuild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	a, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 1, "a")
@@ -419,6 +425,7 @@ func TestLateDependencyHoldsQueuedBuild(t *testing.T) {
 }
 
 func TestOrchestratorRetryCap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(80)
@@ -444,6 +451,7 @@ func TestOrchestratorRetryCap(t *testing.T) {
 }
 
 func TestEpicEdgeCases(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	orchestratorOn(e)
@@ -473,6 +481,7 @@ func TestEpicEdgeCases(t *testing.T) {
 
 // Over the build budget only orchestrator runs start, and still one at a time.
 func TestOneOrchestratorAtATimeOverBudget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.DailyTotal = 0

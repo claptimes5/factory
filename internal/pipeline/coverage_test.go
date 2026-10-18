@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseCoverage(t *testing.T) {
+	t.Parallel()
 	out := "ok  \tfixture/calc\t0.002s\tcoverage: 75.0% of statements\n" +
 		"\tfixture/empty\t\tcoverage: 0.0% of statements\n" +
 		"FAIL\tfixture/bad\t0.01s\n" +
@@ -29,6 +30,7 @@ func TestParseCoverage(t *testing.T) {
 // Code added without tests lowers its package's coverage and fails the
 // gate; the same code with a test passes.
 func TestCoverageFloor(t *testing.T) {
+	t.Parallel()
 	seed := map[string]string{
 		"calc/calc.go":      "package calc\n\nfunc Double(x int) int { return 2 * x }\n",
 		"calc/calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestDouble(t *testing.T) {\n\tif Double(2) != 4 {\n\t\tt.Fatal()\n\t}\n}\n",
@@ -75,6 +77,7 @@ func TestCoverageFloor(t *testing.T) {
 }
 
 func TestCoverable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for name, body := range map[string]string{
 		"a/a.go":            "package a\n",
@@ -104,6 +107,7 @@ func TestCoverable(t *testing.T) {
 
 // Packages compare by directory: a renamed module still has its floor.
 func TestByDir(t *testing.T) {
+	t.Parallel()
 	dirs := map[string]bool{".": true, "calc": true}
 	got := byDir(map[string]float64{"renamed": 50, "renamed/calc": 80, "renamed/other": 10}, "renamed", dirs)
 	if len(got) != 2 || got["."] != 50 || got["calc"] != 80 {
@@ -113,6 +117,7 @@ func TestByDir(t *testing.T) {
 
 // Untested code in a new package doesn't escape the floor.
 func TestCoverageNewPackageNeedsTests(t *testing.T) {
+	t.Parallel()
 	seed := map[string]string{
 		"calc/calc.go":      "package calc\n\nfunc Double(x int) int { return 2 * x }\n",
 		"calc/calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestDouble(t *testing.T) {\n\tif Double(2) != 4 {\n\t\tt.Fatal()\n\t}\n}\n",

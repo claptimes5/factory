@@ -12,6 +12,7 @@ import (
 // A label from someone who can't approve work starts nothing: it comes
 // off, with a note saying who can add it.
 func TestOutsiderLabelStartsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -50,6 +51,7 @@ func TestOutsiderLabelStartsNothing(t *testing.T) {
 // An issue edited after it was approved stops before anything else runs
 // on it, and an approver's retry approves the new text.
 func TestEditAfterApprovalParks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -99,6 +101,7 @@ func TestEditAfterApprovalParks(t *testing.T) {
 // An issue edited between the label and intake isn't what was approved:
 // the label comes off and nothing starts.
 func TestEditBeforeIntakeStartsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -119,6 +122,7 @@ func TestEditBeforeIntakeStartsNothing(t *testing.T) {
 
 // The orchestrator only reads issues someone approved, as approved.
 func TestOrchestratorReadsOnlyApprovedText(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	tools := toolsByName(e.p, 0)
@@ -146,6 +150,7 @@ func TestOrchestratorReadsOnlyApprovedText(t *testing.T) {
 // An item with no approval on record (say its recording failed) parks
 // rather than approving whatever the issue says by then.
 func TestNoApprovalParks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -165,6 +170,7 @@ func TestNoApprovalParks(t *testing.T) {
 }
 
 func TestIssueHashIgnoresLineEndings(t *testing.T) {
+	t.Parallel()
 	a := IssueHash(github.Issue{Title: "t", Body: "a\r\nb\n"})
 	if b := IssueHash(github.Issue{Title: "t", Body: "a\nb"}); a != b {
 		t.Fatal("CRLF changed the hash")

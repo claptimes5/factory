@@ -51,6 +51,7 @@ func (e *env) jobsOf(t *testing.T, n int, kind string) []*store.Job {
 // A finding the verifier refutes doesn't block: the PR opens with it as a
 // note, and the verifier's run is a job of its own on the cheap route.
 func TestVerifierRefutesAFindingSoItDoesNotBlock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -96,6 +97,7 @@ func TestVerifierRefutesAFindingSoItDoesNotBlock(t *testing.T) {
 // A confirmed finding blocks; the builder answers it by id, and the next
 // review sees the answer, reads only what changed, and rules on it.
 func TestFindingAnswersReachTheNextRound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -151,6 +153,7 @@ func TestFindingAnswersReachTheNextRound(t *testing.T) {
 // A builder that calls a finding wrong is heard: the review can uphold it,
 // so it blocks again under the same id, or withdraw it.
 func TestDisputedFindingUpheldThenWithdrawn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -195,6 +198,7 @@ func TestDisputedFindingUpheldThenWithdrawn(t *testing.T) {
 
 // When the verifier can't run, the finding blocks: it fails safe.
 func TestVerifierFailsSafe(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("error", func(t *testing.T) {
 		e := setup(t)
@@ -258,6 +262,7 @@ func TestVerifierFailsSafe(t *testing.T) {
 
 // A pre-existing finding never blocks, and isn't sent to the verifier.
 func TestPreExistingFindingNeverBlocks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -277,6 +282,7 @@ func TestPreExistingFindingNeverBlocks(t *testing.T) {
 
 // A big change is listed by file in a re-review, not repeated.
 func TestReReviewListsFilesOfABigChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -306,6 +312,7 @@ func TestReReviewListsFilesOfABigChange(t *testing.T) {
 // A paired high-risk review runs the critic beside the reviewer and
 // blocks on what either raises that the verifier confirms.
 func TestPairedHighRiskReview(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -342,6 +349,7 @@ func TestPairedHighRiskReview(t *testing.T) {
 
 // Cancelling a verifier cancels the review it runs in.
 func TestSubJobsAreHandledThroughTheirParent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -364,6 +372,7 @@ func TestSubJobsAreHandledThroughTheirParent(t *testing.T) {
 // a ruling lifts a block. Of two rulings on one finding, the upheld one
 // stands.
 func TestAnOpenFindingWithoutARulingStillBlocks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, round2 := range map[string]string{
 		"no ruling":   pass,
@@ -407,6 +416,7 @@ func TestAnOpenFindingWithoutARulingStillBlocks(t *testing.T) {
 // note still doesn't block, and the critic's minor finding it blocked on
 // does.
 func TestPairKeepsEachReviewersBlockingFindings(t *testing.T) {
+	t.Parallel()
 	rv, err := verdict.ParseReview([]byte(`{"decision":"pass","findings":[{"severity":"major","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -427,6 +437,7 @@ func TestPairKeepsEachReviewersBlockingFindings(t *testing.T) {
 // A paired critic that can't run now (here, the daily budget can't cover
 // it) isn't paired: the critic follows the reviewer as usual.
 func TestAPairedCriticThatCantRunFollowsTheReview(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -451,6 +462,7 @@ func TestAPairedCriticThatCantRunFollowsTheReview(t *testing.T) {
 // without using a retry, as the reviewer's own harness would; the next run
 // isn't paired while the critic still can't sign in.
 func TestAPairedCriticSignedOutRequeuesTheReview(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	g := &gatedHarness{fakeHarness: e.claude, signOuts: 1, stage: "parallel_critic"}
@@ -487,6 +499,7 @@ func TestAPairedCriticSignedOutRequeuesTheReview(t *testing.T) {
 // A paired critic that runs after the reviewer, on a harness they can't
 // share, doesn't run when the reviewer failed.
 func TestADeferredCriticSkipsAFailedReview(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Harnesses["codex"] = &gatedHarness{fakeHarness: e.codex, one: true}
@@ -511,6 +524,7 @@ func TestADeferredCriticSkipsAFailedReview(t *testing.T) {
 // The PR's reviewer notes are the passing review's and, on a high-risk
 // item, the critic's that followed it, each under its own heading.
 func TestPassNotesIncludeReviewerAndCritic(t *testing.T) {
+	t.Parallel()
 	note := func(claim string) string {
 		return `{"decision":"pass","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"` + claim + `","evidence":"e","id":"F1","blocks":false}],"challenged_assumptions":[]}`
 	}
@@ -538,6 +552,7 @@ func TestPassNotesIncludeReviewerAndCritic(t *testing.T) {
 // In a paired review, one side's block without a finding stands, even
 // when the other side raised only notes; either way round.
 func TestPairKeepsABlockWithoutFindings(t *testing.T) {
+	t.Parallel()
 	bare := `{"decision":"block","findings":[],"challenged_assumptions":["the design is wrong"]}`
 	note := `{"decision":"pass","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`
 	for _, order := range [][2]string{{bare, note}, {note, bare}} {
@@ -565,6 +580,7 @@ func TestPairKeepsABlockWithoutFindings(t *testing.T) {
 // End to end: the reviewer blocks with no finding, the paired critic
 // leaves a note, and the round goes back to the builder.
 func TestPairedReviewBlockWithoutFindingsSendsItBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -587,6 +603,7 @@ func TestPairedReviewBlockWithoutFindingsSendsItBack(t *testing.T) {
 // Notifications raised while the claim lock is held are sent after it's
 // let go: sending one can take seconds.
 func TestNotesWaitForTheClaimLock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.DailyTotal = 0

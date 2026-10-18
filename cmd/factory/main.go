@@ -950,6 +950,9 @@ func pull(ctx context.Context, cfg *config.Config, st *store.Store, arg string) 
 // deploy/upgrade.sh. It fails when that job failed before its agent did
 // any work (cost 0), which points at the daemon or the image rather than
 // at the task. Nothing finishing in time is not a failure.
+// waitJobEvery is how often waitJob looks again; tests shorten it.
+var waitJobEvery = 10 * time.Second
+
 func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) error {
 	after, err := strconv.ParseInt(afterArg, 10, 64)
 	if err != nil {
@@ -979,7 +982,7 @@ func waitJob(ctx context.Context, st *store.Store, afterArg, timeoutArg string) 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(waitJobEvery):
 		}
 	}
 	// An idle factory runs no job; upgrade.sh then relies on the daemon

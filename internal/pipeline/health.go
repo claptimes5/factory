@@ -54,8 +54,13 @@ const (
 	maxLogs = 5
 )
 
-// healthNow is the clock; tests move it.
-var healthNow = time.Now
+// healthNow is the clock.
+func (p *Pipeline) healthNow() time.Time {
+	if p.healthNowFn != nil {
+		return p.healthNowFn()
+	}
+	return time.Now()
+}
 
 // HealthForge is a client that can read a branch's CI and close issues.
 // Both real clients can; a fake or the eval's in-memory GitHub may not,
@@ -365,7 +370,7 @@ func before(at string, t time.Time) bool {
 // A check whose issue was closed as not planned is muted for muteFor, and
 // one whose issue carries factory:mute stays muted.
 func (p *Pipeline) followHealth(ctx context.Context, r *healthReading, h store.HealthIssue, c *checkState, settled bool) error {
-	gh, now := p.gh(h.Repo), healthNow()
+	gh, now := p.gh(h.Repo), p.healthNow()
 	if c == nil {
 		if !settled {
 			return nil
@@ -515,7 +520,7 @@ func (p *Pipeline) fileHealth(ctx context.Context, r *healthReading, h store.Hea
 		h.IssueNumber, h.Kind = is.Number, kind // filed before the store knew of it
 		return p.Store.SetHealthIssue(ctx, h)
 	}
-	since := healthNow().UTC().Format("2006-01-02") + "T00:00:00"
+	since := p.healthNow().UTC().Format("2006-01-02") + "T00:00:00"
 	n, err := p.Store.CountEventsFor(ctx, "main_health_filed", h.Repo, since)
 	if err != nil {
 		return err

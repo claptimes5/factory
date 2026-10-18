@@ -72,6 +72,7 @@ func field(st APISettings, path ...string) *APISetting {
 }
 
 func TestSettingsSave(t *testing.T) {
+	t.Parallel()
 	base, path, _, fr := settingsSetup(t, "127.0.0.1:8080")
 	orig, _ := os.ReadFile(path)
 	var st APISettings
@@ -179,6 +180,7 @@ func TestSettingsSave(t *testing.T) {
 }
 
 func TestSettingsReadOnlyWithoutAPassword(t *testing.T) {
+	t.Parallel()
 	// A tailnet address needs no password to look, but does to change.
 	base, path, s, fr := settingsSetup(t, "100.64.0.7:8080")
 	orig, _ := os.ReadFile(path)

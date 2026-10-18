@@ -27,10 +27,10 @@ func (d *diskRunner) Disks(context.Context, []string) ([]runner.Disk, error) {
 // No job starts without room on disk: a drain says why, you hear about it
 // once, and again when there's room with some to spare.
 func TestNoJobsWhenDiskIsLow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
-	defer func(f func(string) (uint64, error)) { freeAt = f }(freeAt)
-	freeAt = func(string) (uint64, error) { return 1e12, nil }
+	e.p.freeAtFn = func(string) (uint64, error) { return 1e12, nil }
 	dr := &diskRunner{free: 3e9}
 	e.p.Runner = dr
 	var said []string

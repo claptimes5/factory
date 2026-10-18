@@ -49,6 +49,7 @@ func sh(t *testing.T, dir string, args ...string) string {
 func TestCaptureMergedPR(t *testing.T) {
 	for _, how := range []string{"merge", "squash", "rebase", "ff"} {
 		t.Run(how, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			root := t.TempDir()
 			seed := filepath.Join(root, "seed")

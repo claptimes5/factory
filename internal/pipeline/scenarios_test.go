@@ -15,6 +15,7 @@ import (
 // A failing hidden scenario sends the work back like a failed gate, but the
 // builder learns only its name and that it failed, never its contents.
 func TestHiddenScenarioFailsWithoutLeaking(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	dir := t.TempDir()
@@ -55,6 +56,7 @@ func TestHiddenScenarioFailsWithoutLeaking(t *testing.T) {
 }
 
 func TestScenariosDirMissingIsMisconfigured(t *testing.T) {
+	t.Parallel()
 	e := setup(t)
 	e.p.Cfg.Gates.ScenariosDir = filepath.Join(t.TempDir(), "nope")
 	rs := e.p.runScenarios(context.Background(), "o/r", 1, t.TempDir(), e.p.Cfg.Gates.ScenariosDir, "")

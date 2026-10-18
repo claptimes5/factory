@@ -30,6 +30,7 @@ import (
 // frontend's types come from the spec, so a field the Go side sends but
 // the spec lacks (or the reverse) would be a silent break.
 func TestOpenAPIMatchesGo(t *testing.T) {
+	t.Parallel()
 	var spec struct {
 		Components struct {
 			Schemas map[string]schema `yaml:"schemas"`
@@ -160,6 +161,7 @@ func getJSON(t *testing.T, u string, v any) {
 }
 
 func TestAPIReads(t *testing.T) {
+	t.Parallel()
 	base, st, _, _ := apiSetup(t)
 	var b APIBoard
 	getJSON(t, base+"/api/v1/board", &b)
@@ -283,6 +285,7 @@ func TestAPIReads(t *testing.T) {
 }
 
 func TestAPIActionsNeedSameOriginJSON(t *testing.T) {
+	t.Parallel()
 	base, _, fa, _ := apiSetup(t)
 	post := func(path, ct, origin, body string) int {
 		req, _ := http.NewRequest("POST", base+path, strings.NewReader(body))
@@ -323,6 +326,7 @@ func TestAPIActionsNeedSameOriginJSON(t *testing.T) {
 }
 
 func TestAPIStreamAndLog(t *testing.T) {
+	t.Parallel()
 	base, st, _, _ := apiSetup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -354,6 +358,7 @@ func TestAPIStreamAndLog(t *testing.T) {
 }
 
 func TestTerminal(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
 	}
@@ -396,6 +401,7 @@ func httpServer(t *testing.T, h http.Handler) string {
 }
 
 func TestAppServesIndexForRoutes(t *testing.T) {
+	t.Parallel()
 	base, _, _, _ := apiSetup(t)
 	for _, p := range []string{"/app/", "/app/items/2", "/app/board"} {
 		resp, err := http.Get(base + p)
@@ -416,6 +422,7 @@ func TestAppServesIndexForRoutes(t *testing.T) {
 // A critic that blocks after the reviewer passed is what the PR panel and
 // the diff viewer must show, both from the same job.
 func TestPanelAndDiffFollowTheLatestVerdict(t *testing.T) {
+	t.Parallel()
 	base, st, _, s := apiSetup(t)
 	ctx := context.Background()
 	itemID := int64(2)
@@ -444,6 +451,7 @@ func TestPanelAndDiffFollowTheLatestVerdict(t *testing.T) {
 }
 
 func TestNotificationIDsSurviveItemEdits(t *testing.T) {
+	t.Parallel()
 	base, st, _, _ := apiSetup(t)
 	ids := func() map[string]bool {
 		var n APINotifications
@@ -469,6 +477,7 @@ func TestNotificationIDsSurviveItemEdits(t *testing.T) {
 
 // A running job's card says what its log shows it doing now.
 func TestLiveActivity(t *testing.T) {
+	t.Parallel()
 	log := filepath.Join(t.TempDir(), "log.jsonl")
 	write := func(lines ...string) {
 		os.WriteFile(log, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
@@ -506,6 +515,7 @@ func TestLiveActivity(t *testing.T) {
 
 // A card shows the latest attempt's gates, not an earlier attempt's.
 func TestCardGatesFollowTheLatestAttempt(t *testing.T) {
+	t.Parallel()
 	base, st, _, _ := apiSetup(t)
 	ctx := context.Background()
 	it, _, _ := st.UpsertItem(ctx, "o/r", 3, "Retry it")
@@ -538,6 +548,7 @@ func TestCardGatesFollowTheLatestAttempt(t *testing.T) {
 // A workspace change lists its PRs in merge order, and its main PR is the
 // one in the item's own repo.
 func TestWorkspacePRs(t *testing.T) {
+	t.Parallel()
 	base, st, _, _ := apiSetup(t)
 	ctx := context.Background()
 	it, _, _ := st.UpsertItem(ctx, "o/web", 4, "Show totals")
@@ -560,6 +571,7 @@ func TestWorkspacePRs(t *testing.T) {
 // The item's page shows the newest build's screenshots, and serves only
 // the images its manifest lists.
 func TestAPIPreview(t *testing.T) {
+	t.Parallel()
 	base, st, _, s := apiSetup(t)
 	ctx := context.Background()
 	if resp, _ := http.Get(base + "/api/v1/items/2/preview"); resp.StatusCode != 404 {

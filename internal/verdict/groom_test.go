@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroomParse(t *testing.T) {
+	t.Parallel()
 	var g Groom
 	ok := `{"duplicates":[{"canonical":1,"duplicates":[2],"why":"Both ask for dark mode."}],"stale":[],"too_big":[],"summary":"one pair"}`
 	if err := Parse([]byte(ok), &g); err != nil || len(g.Duplicates) != 1 {
@@ -28,6 +29,7 @@ func TestGroomParse(t *testing.T) {
 }
 
 func TestGroomSift(t *testing.T) {
+	t.Parallel()
 	scope := GroomScope{
 		Flaggable: map[int]bool{2: true, 3: true, 4: true, 5: true},
 		Old:       map[int]bool{2: true, 3: true},
@@ -115,6 +117,7 @@ func TestGroomSift(t *testing.T) {
 // never flagged itself, and an issue already proposed closed is no one's
 // canonical.
 func TestGroomSiftCanonicals(t *testing.T) {
+	t.Parallel()
 	all := map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true}
 	scope := GroomScope{Flaggable: all, Old: all, Known: all, NotCanonical: map[int]bool{5: true}}
 	g := Groom{

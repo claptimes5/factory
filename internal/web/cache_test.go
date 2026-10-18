@@ -8,6 +8,7 @@ import (
 )
 
 func TestTTLCache(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(0, 0)
 	c := newTTL[int, int](time.Minute)
 	c.now = func() time.Time { return now }

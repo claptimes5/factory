@@ -7,19 +7,19 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 func TestWaitJob(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	defer func(d time.Duration) { waitJobEvery = d }(waitJobEvery)
+	waitJobEvery = 10 * time.Millisecond
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	finish := func(r store.Result) int64 {
 		id, _ := st.EnqueueJob(ctx, store.Job{Kind: "triage", Harness: "claude", Model: "m", BudgetUSD: 1})
 		st.ClaimJob(ctx)
@@ -43,11 +43,7 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func TestMainHealthLines(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	cfg := &config.Config{Repos: []config.Repo{{Name: "o/r"}, {Name: "o/web"}}}
 	if l := mainHealthLines(ctx, st, cfg); l != nil {
 		t.Fatalf("off and never read: %q", l)
@@ -67,11 +63,7 @@ func TestMainHealthLines(t *testing.T) {
 
 func TestSourceLines(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	cfg := &config.Config{Repos: []config.Repo{{Name: "o/r"}, {Name: "o/web"}}}
 	if l := sourceLines(ctx, st, cfg); l != nil {
 		t.Fatalf("all off and never read: %q", l)
@@ -107,11 +99,7 @@ func TestSentryTokenLeavesTheEnvironment(t *testing.T) {
 
 func TestEstimateCellAndPlanBilled(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "t")
 	if c := estimateCell(ctx, st, it.ID); c != "-" {
 		t.Fatalf("no estimate: %q", c)

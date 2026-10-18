@@ -54,6 +54,7 @@ func markAgo(t *testing.T, e *env, name string, d time.Duration) {
 }
 
 func TestTuneTrigger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, msgs := tuneSetup(t, nil)
 	now := time.Now()
@@ -125,6 +126,7 @@ const tuneAnswer = `{"summary":"Builds went well; the daily cap binds.","changes
 	"ideas":["Tell the builder to run go vet first: 2 parks were vet failures."]}`
 
 func TestTuneProposal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, msgs := tuneSetup(t, nil)
 	var req harness.RunRequest
@@ -204,6 +206,7 @@ func TestTuneProposal(t *testing.T) {
 }
 
 func TestTuneOpensADraftPR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := tuneSetup(t, map[string]string{"deploy/factory.yaml": testConfig})
 	e.p.Cfg.Tuning.Repo, e.p.Cfg.Tuning.Path = "o/r", "deploy/factory.yaml"
@@ -258,6 +261,7 @@ func TestTuneOpensADraftPR(t *testing.T) {
 // A tuning.path that is missing, a symlink, or behind one opens no PR,
 // writes nothing outside the clone, and says why on the proposal.
 func TestTunePRRefusesLinksAndMissingFiles(t *testing.T) {
+	t.Parallel()
 	outside := filepath.Join(t.TempDir(), "factory.yaml")
 	if err := os.WriteFile(outside, []byte(testConfig), 0o644); err != nil {
 		t.Fatal(err)
@@ -319,6 +323,7 @@ func TestTunePRRefusesLinksAndMissingFiles(t *testing.T) {
 // The model's output is normalised before anything is applied, and what
 // stays the human's call is never proposed.
 func TestTuneNormalisesItsAnswer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := tuneSetup(t, nil)
 	var prompt string
@@ -370,6 +375,7 @@ func TestTuneNormalisesItsAnswer(t *testing.T) {
 // A due run waits while today's budget is spent, and a queued one isn't
 // claimed until there's budget again.
 func TestTuneWaitsForBudget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, msgs := tuneSetup(t, nil)
 	e.p.Cfg.Budgets.DailyTotal = 0.01 // the build that tuneSetup ran spent more
@@ -426,6 +432,7 @@ func mustClaim(t *testing.T, e *env, kind string) int64 {
 }
 
 func TestTunePeriod(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := tuneSetup(t, nil)
 	to := time.Now().UTC()

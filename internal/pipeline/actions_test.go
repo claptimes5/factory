@@ -12,6 +12,7 @@ import (
 )
 
 func TestRetryTierUpAfterPark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Escalation.Implement = []string{"sonnet", "opus", "opus-max"}
@@ -40,6 +41,7 @@ func TestRetryTierUpAfterPark(t *testing.T) {
 }
 
 func TestRetryTierUpAttempt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(21)
@@ -66,6 +68,7 @@ func TestRetryTierUpAttempt(t *testing.T) {
 }
 
 func TestCancelQueuedParks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(22)
@@ -85,6 +88,7 @@ func TestCancelQueuedParks(t *testing.T) {
 // A cancel that lands after the agent finished (here, during the gates)
 // still stops the job: no PR, and the item parks.
 func TestCancelDuringGatesStopsBeforePR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(90)
@@ -115,6 +119,7 @@ func TestCancelDuringGatesStopsBeforePR(t *testing.T) {
 
 // A job whose item was parked while it waited in the queue does not run.
 func TestParkedItemsQueuedJobDoesNotRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 91, "x")
@@ -135,6 +140,7 @@ func TestParkedItemsQueuedJobDoesNotRun(t *testing.T) {
 // fresh one. A retry after failed gates starts from a fresh checkout, so it
 // does not resume.
 func TestImplementRetryResumesSession(t *testing.T) {
+	t.Parallel()
 	fix := func(w string) error {
 		writeFile(w, "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n")
 		return commitIn(w, "fix")

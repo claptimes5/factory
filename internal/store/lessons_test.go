@@ -8,6 +8,7 @@ import (
 
 // A signal recorded twice is kept once; a used one is no longer unused.
 func TestSignals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	a, b := newItem(t, s, 1), newItem(t, s, 2)
@@ -40,6 +41,7 @@ func TestSignals(t *testing.T) {
 // A proposed line is kept once, moves to the PR that proposes it again,
 // and remembers what became of it.
 func TestLessons(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	for _, l := range []Lesson{{Repo: "o/R", Line: "Check X.", Norm: "check x"}, {Repo: "o/r", Line: "check x", Norm: "check x", PRNumber: 6}} {
@@ -64,6 +66,7 @@ func TestLessons(t *testing.T) {
 
 // A finding a retried review job records again is kept once.
 func TestSignalOncePerFinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	a := newItem(t, s, 1)
@@ -81,6 +84,7 @@ func TestSignalOncePerFinding(t *testing.T) {
 
 // Unused signals are found through their index, whatever the repo's case.
 func TestUnusedSignalsUseTheIndex(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	rows, err := s.read.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT `+signalCols+` FROM lesson_signals `+unusedSignals, "o/r", "")
@@ -110,6 +114,7 @@ func TestUnusedSignalsUseTheIndex(t *testing.T) {
 
 // A human edit is recorded with its commits first and its diff later.
 func TestSignalDiffLater(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	a := newItem(t, s, 1)
@@ -130,6 +135,7 @@ func TestSignalDiffLater(t *testing.T) {
 
 // Only one learn job per repo is queued or running at a time.
 func TestEnqueueSoleFor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	learn := func(repo string) Job {
