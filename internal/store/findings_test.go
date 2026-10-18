@@ -86,3 +86,30 @@ func TestSubJobsNeverQueue(t *testing.T) {
 		t.Fatal("the parent wasn't requeued")
 	}
 }
+
+// A review's findings and its finish are one transaction: if the job
+// can't finish, its rulings aren't applied either.
+func TestFinishReviewIsAllOrNothing(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTest(t)
+	it := newItem(t, s, 1)
+	first, _ := s.EnqueueJob(ctx, Job{ItemID: &it.ID, Kind: "review", Harness: "codex", Model: "m", BudgetUSD: 1})
+	s.ClaimJob(ctx)
+	f := ReviewFinding{ItemID: it.ID, FID: "F1", Seq: 1, Kind: "review", Round: 1, Severity: "major", Claim: "a", Blocking: true, Outcome: OutcomeOpen}
+	if err := s.FinishReview(ctx, first, Result{State: state.Succeeded, Verdict: "{}"}, []ReviewFinding{f}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Queued, not running: it can't finish, so its ruling is rolled back.
+	next, _ := s.EnqueueJob(ctx, Job{ItemID: &it.ID, Kind: "review", Harness: "codex", Model: "m", BudgetUSD: 1})
+	f.Ruling, f.RulingJob, f.Outcome = "withdrawn", next, OutcomeWithdrawn
+	if err := s.FinishReview(ctx, next, Result{State: state.Succeeded}, nil, []ReviewFinding{f}); err == nil {
+		t.Fatal("a queued job finished")
+	}
+	fs, _ := s.ItemFindings(ctx, it.ID, 0)
+	if len(fs) != 1 || fs[0].Ruling != "" || fs[0].Outcome != OutcomeOpen {
+		t.Fatalf("findings %+v", fs)
+	}
+	if j, _ := s.GetJob(ctx, first); j.State != state.Succeeded {
+		t.Fatalf("first review %s", j.State)
+	}
+}

@@ -24,7 +24,7 @@ func TestMetricsFromRealRuns(t *testing.T) {
 		reviews []string
 	}{
 		{[]func(string) error{goodBuild}, []string{pass}},
-		{[]func(string) error{badBuild, badBuild, goodBuild, fix}, []string{block, pass}},
+		{[]func(string) error{badBuild, badBuild, goodBuild, fix}, []string{block, resolveF1}},
 		{[]func(string) error{goodBuild}, []string{pass}},
 	}
 	for i, r := range runs {

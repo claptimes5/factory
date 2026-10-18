@@ -182,3 +182,41 @@ func TestVerifyAndAnswersParse(t *testing.T) {
 		t.Fatal("accepted a bad outcome")
 	}
 }
+
+// Which findings block is judged when each is raised, against its own
+// reviewer's decision, and carried findings always block: a decision the
+// daemon changes later doesn't move it.
+func TestBlockingIsMarkedWhenRaised(t *testing.T) {
+	r, err := ParseReview([]byte(`{"decision":"pass","findings":[{"severity":"major","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Findings[0].Blocks == nil || *r.Findings[0].Blocks {
+		t.Fatalf("a major finding under a pass is marked %v", r.Findings[0].Blocks)
+	}
+	// An upheld minor finding carried into the round turns it into a block;
+	// the reviewer's major note still doesn't block, and the carried one does.
+	yes := true
+	r.Findings = append(r.Findings, Finding{Severity: Minor, File: "b.go", Claim: "upheld", ID: "F1", Carried: true, Blocks: &yes})
+	r.Decision = "block"
+	if b := r.Blocking(); len(b) != 1 || b[0] != 1 {
+		t.Fatalf("blocking %v", b)
+	}
+	// Refuting the major finding can't hide the upheld minor one.
+	r.Findings[0].Check = &Check{Status: Refuted}
+	if !r.Blocks() {
+		t.Fatal("an upheld finding didn't block")
+	}
+	// A model can't mark its own findings.
+	if _, err := ParseReview([]byte(`{"decision":"block","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"c","evidence":"e","blocks":false}],"challenged_assumptions":[]}`)); err == nil {
+		t.Fatal("a reviewer set blocks")
+	}
+	// A verdict stored before the marks falls back to the rule.
+	var old Review
+	if err := Parse([]byte(`{"decision":"block","findings":[{"severity":"major","file":"a.go","line":1,"claim":"c","evidence":"e"},{"severity":"minor","file":"a.go","line":2,"claim":"m","evidence":"e"}],"challenged_assumptions":[]}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if b := old.Blocking(); len(b) != 1 || b[0] != 0 {
+		t.Fatalf("unmarked blocking %v", b)
+	}
+}

@@ -30,6 +30,8 @@ In `earlier`, rule on every open finding by its id:
 - `upheld`: it is still there; say where in `reason`. An upheld finding blocks again, with its id: don't list it again in `findings`.
 - `withdrawn`: the builder showed that the finding is wrong or outside the issue, and you agree.
 
+An open finding you don't rule on is taken as upheld, and blocks again.
+
 List in `findings` only what is new. Don't raise again what the block says was already raised, unless you have new evidence.
 
 {{.Earlier}}

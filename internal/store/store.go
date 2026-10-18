@@ -817,31 +817,33 @@ func (s *Store) FinishJob(ctx context.Context, id int64, r Result) error {
 	if !r.State.Terminal() {
 		return fmt.Errorf("FinishJob needs a terminal state, got %s", r.State)
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		var from string
-		var item sql.NullInt64
-		if err := tx.QueryRow(`SELECT state, item_id FROM jobs WHERE id = ?`, id).Scan(&from, &item); err != nil {
+	return s.tx(ctx, func(tx *sql.Tx) error { return finishJob(tx, id, r) })
+}
+
+func finishJob(tx *sql.Tx, id int64, r Result) error {
+	var from string
+	var item sql.NullInt64
+	if err := tx.QueryRow(`SELECT state, item_id FROM jobs WHERE id = ?`, id).Scan(&from, &item); err != nil {
+		return err
+	}
+	if err := state.CheckJob(state.JobState(from), r.State); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE jobs SET state = ?, cost_usd = ?, tokens_in = ?, tokens_out = ?, verdict = ?, error = ?, finished_at = ? WHERE id = ?`,
+		string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), Now(), id); err != nil {
+		return err
+	}
+	if r.CostUSD > 0 {
+		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), r.CostUSD); err != nil {
 			return err
 		}
-		if err := state.CheckJob(state.JobState(from), r.State); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE jobs SET state = ?, cost_usd = ?, tokens_in = ?, tokens_out = ?, verdict = ?, error = ?, finished_at = ? WHERE id = ?`,
-			string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), Now(), id); err != nil {
-			return err
-		}
-		if r.CostUSD > 0 {
-			if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), r.CostUSD); err != nil {
-				return err
-			}
-		}
-		var itemID *int64
-		if item.Valid {
-			itemID = &item.Int64
-		}
-		return insertEvent(tx, Event{Actor: "daemon", ItemID: itemID, JobID: &id, Type: "job_finished", Reason: r.Error,
-			Data: fmt.Sprintf(`{"state":%q,"cost_usd":%g}`, r.State, r.CostUSD)})
-	})
+	}
+	var itemID *int64
+	if item.Valid {
+		itemID = &item.Int64
+	}
+	return insertEvent(tx, Event{Actor: "daemon", ItemID: itemID, JobID: &id, Type: "job_finished", Reason: r.Error,
+		Data: fmt.Sprintf(`{"state":%q,"cost_usd":%g}`, r.State, r.CostUSD)})
 }
 
 // RequeueRunning is the restart reconciliation: every running job whose

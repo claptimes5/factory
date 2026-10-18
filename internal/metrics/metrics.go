@@ -435,7 +435,7 @@ func roundsToPass(jobs []*store.Job, it *store.WorkItem) (int, bool) {
 		if v.Blocks() {
 			n++
 			passed = false
-		} else if v.Decision == "pass" {
+		} else if v.Decision != "questions" { // a pass, or a block the verifier refuted
 			passed = true
 		}
 	}

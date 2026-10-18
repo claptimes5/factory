@@ -139,7 +139,10 @@ type Pipeline struct {
 	// plan rather than bill dollars, for the cost estimate.
 	PlanBilled map[string]bool
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// claimMu holds the scheduler's caps still while it claims a job, or
+	// while a running job checks them and starts a sub-job (see startSub).
+	claimMu    sync.Mutex
 	clientsMu  sync.Mutex
 	clientsBy  map[string]RepoClients
 	running    int
@@ -438,6 +441,8 @@ func (p *Pipeline) Drain(ctx context.Context) error {
 
 // claimNext applies every daemon-enforced cap, then claims one job.
 func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
+	p.claimMu.Lock()
+	defer p.claimMu.Unlock()
 	p.mu.Lock()
 	running := p.running
 	p.mu.Unlock()
@@ -1081,6 +1086,16 @@ func scrub(s string, secrets map[string]string) string {
 }
 
 func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st state.JobState, verdict, errMsg string) {
+	if err := p.Store.FinishJob(ctx, j.ID, p.result(ctx, j, run, st, verdict, errMsg)); err != nil {
+		p.log().Error("finish job", "job", j.ID, "err", err)
+	}
+	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On && !store.IsSubKind(j.Kind) {
+		p.failedTwice(ctx, j)
+	}
+}
+
+// result is how job j ended, for the store.
+func (p *Pipeline) result(ctx context.Context, j *store.Job, run agentRun, st state.JobState, verdict, errMsg string) store.Result {
 	r := store.Result{State: st, CostUSD: run.cost, Verdict: verdict, Error: errMsg}
 	if run.res != nil {
 		r.TokensIn, r.TokensOut = run.res.TokensIn, run.res.TokensOut
@@ -1091,12 +1106,7 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: j.ItemID, JobID: &j.ID, Type: "budget_exceeded",
 			Reason: fmt.Sprintf("job cost $%.2f over its $%.2f budget", run.cost, j.BudgetUSD)}), "AddEvent")
 	}
-	if err := p.Store.FinishJob(ctx, j.ID, r); err != nil {
-		p.log().Error("finish job", "job", j.ID, "err", err)
-	}
-	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On && !store.IsSubKind(j.Kind) {
-		p.failedTwice(ctx, j)
-	}
+	return r
 }
 
 func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {

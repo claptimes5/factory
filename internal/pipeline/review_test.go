@@ -25,6 +25,7 @@ func fixer() func(string) error {
 const (
 	confirmF1 = `{"checks":[{"id":"F1","verdict":"confirmed","reason":"add.go:3 has no check"}]}`
 	refuteF1  = `{"checks":[{"id":"F1","verdict":"refuted","reason":"ints here are bytes, they can't overflow"}]}`
+	resolveF1 = `{"decision":"pass","findings":[],"earlier":[{"id":"F1","ruling":"resolved","reason":"the check is there"}],"challenged_assumptions":[]}`
 	answerF1  = `{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":"","answers":[{"id":"F1","outcome":"fixed","why":"added a bounds check"}]}`
 )
 
@@ -198,14 +199,14 @@ func TestVerifierFailsSafe(t *testing.T) {
 		e := setup(t)
 		e.addIssue(1)
 		e.claude.builds = []func(string) error{goodBuild, fixer()}
-		e.codex.reviews = []string{block, pass}
+		e.codex.reviews = []string{block, resolveF1}
 		// No verifier verdict scripted: its run fails.
 		e.p.Drain(ctx)
 		if n := len(e.claude.prompts["implement"]); n != 2 {
 			t.Fatalf("the unverified finding didn't block: %d builds", n)
 		}
 		fs := e.findings(t, 1)
-		if len(fs) != 1 || fs[0].Check != verdict.Unverified || !strings.Contains(fs[0].CheckReason, "the verifier failed") || fs[0].Outcome != store.OutcomeOpen {
+		if len(fs) != 1 || fs[0].Check != verdict.Unverified || !strings.Contains(fs[0].CheckReason, "the verifier failed") || fs[0].Outcome != store.OutcomeResolved {
 			t.Fatalf("findings %+v", fs)
 		}
 		if vs := e.jobsOf(t, 1, store.KindVerify); len(vs) != 1 || vs[0].State != state.Failed {
@@ -216,7 +217,7 @@ func TestVerifierFailsSafe(t *testing.T) {
 		e := setup(t)
 		e.addIssue(1)
 		e.claude.builds = []func(string) error{goodBuild, fixer()}
-		e.codex.reviews = []string{block, pass}
+		e.codex.reviews = []string{block, resolveF1}
 		e.claude.verifies = []string{refuteF1}
 		// Today's spend leaves less than a verifier's cap.
 		e.p.Cfg.Budgets.DailyTotal = 0.65
@@ -233,7 +234,7 @@ func TestVerifierFailsSafe(t *testing.T) {
 		e := setup(t)
 		e.addIssue(1)
 		e.claude.builds = []func(string) error{goodBuild, fixer()}
-		e.codex.reviews = []string{block, pass}
+		e.codex.reviews = []string{block, resolveF1}
 		e.claude.verifies = []string{`{"checks":[{"id":"F9","verdict":"refuted","reason":"not it"}]}`}
 		e.p.Drain(ctx)
 		if fs := e.findings(t, 1); len(fs) != 1 || fs[0].Check != verdict.Unverified || len(e.claude.prompts["implement"]) != 2 {
@@ -244,7 +245,7 @@ func TestVerifierFailsSafe(t *testing.T) {
 		e := setup(t)
 		e.addIssue(1)
 		e.claude.builds = []func(string) error{goodBuild, fixer()}
-		e.codex.reviews = []string{block, pass}
+		e.codex.reviews = []string{block, resolveF1}
 		off := false
 		e.p.Cfg.Reviews.Verify = &off
 		e.p.Drain(ctx)
@@ -281,7 +282,7 @@ func TestReReviewListsFilesOfABigChange(t *testing.T) {
 	e.p.Cfg.Reviews.ContextBytes = 10
 	e.claude.builds = []func(string) error{goodBuild, fixer()}
 	e.claude.verifies = []string{confirmF1}
-	e.codex.reviews = []string{block, pass}
+	e.codex.reviews = []string{block, resolveF1}
 	e.p.Drain(ctx)
 	re := e.codex.prompts["review"][1]
 	if !strings.Contains(re, "## Files the whole change touches") || !strings.Contains(re, "add_test.go") || strings.Contains(re, "## The whole change, for context") {
@@ -294,7 +295,7 @@ func TestReReviewListsFilesOfABigChange(t *testing.T) {
 	e2.p.Cfg.Reviews.Incremental = &off
 	e2.claude.builds = []func(string) error{goodBuild, fixer()}
 	e2.claude.verifies = []string{confirmF1}
-	e2.codex.reviews = []string{block, pass}
+	e2.codex.reviews = []string{block, resolveF1}
 	e2.p.Drain(ctx)
 	if re := e2.codex.prompts["review"][1]; strings.Contains(re, "Changes since your last review") || !strings.Contains(re, "add_test.go") {
 		t.Fatalf("full re-review prompt:\n%s", re)
@@ -355,5 +356,180 @@ func TestSubJobsAreHandledThroughTheirParent(t *testing.T) {
 	}
 	if _, ok := e.p.cancelled.Load(parent); !ok {
 		t.Fatal("the parent review wasn't cancelled")
+	}
+}
+
+// An open finding the re-review doesn't rule on stands, as if upheld: only
+// a ruling lifts a block. Of two rulings on one finding, the upheld one
+// stands.
+func TestAnOpenFindingWithoutARulingStillBlocks(t *testing.T) {
+	ctx := context.Background()
+	for name, round2 := range map[string]string{
+		"no ruling":   pass,
+		"two rulings": `{"decision":"pass","findings":[],"earlier":[{"id":"F1","ruling":"resolved","reason":"gone"},{"id":"F1","ruling":"upheld","reason":"still there"}],"challenged_assumptions":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := setup(t)
+			e.addIssue(1)
+			f := fixer()
+			e.claude.builds = []func(string) error{goodBuild, f, f}
+			e.claude.implVerdict = answerF1
+			e.claude.verifies = []string{confirmF1, confirmF1}
+			e.codex.reviews = []string{block, round2, `{"decision":"pass","findings":[],"earlier":[{"id":"F1","ruling":"resolved","reason":"the check is there"}],"challenged_assumptions":[]}`}
+			if err := e.p.Drain(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if st := e.item(t, 1).Stage; st != state.AwaitingHuman {
+				t.Fatalf("stage %s", st)
+			}
+			if n := len(e.claude.prompts["implement"]); n != 3 {
+				t.Fatalf("F1 didn't block round 2: %d builds", n)
+			}
+			var v verdict.Review
+			verdict.Parse([]byte(e.jobsOf(t, 1, "review")[1].Verdict), &v)
+			if v.Decision != "block" || len(v.Findings) != 1 || v.Findings[0].ID != "F1" || !v.Findings[0].Carried || !v.Blocks() ||
+				len(v.Earlier) != 1 || v.Earlier[0].Ruling != "upheld" {
+				t.Fatalf("round 2 verdict %+v", v)
+			}
+			if name == "no ruling" && !strings.Contains(v.Findings[0].Evidence, "the review didn't rule on it") {
+				t.Fatalf("evidence %q", v.Findings[0].Evidence)
+			}
+			if fs := e.findings(t, 1); len(fs) != 1 || fs[0].Ruling != "resolved" || fs[0].Outcome != store.OutcomeFixed {
+				t.Fatalf("findings %+v", fs)
+			}
+		})
+	}
+}
+
+// What blocks is judged against each reviewer's own decision when it
+// raises a finding: merged with a critic's block, a reviewer's passing
+// note still doesn't block, and the critic's minor finding it blocked on
+// does.
+func TestPairKeepsEachReviewersBlockingFindings(t *testing.T) {
+	rv, err := verdict.ParseReview([]byte(`{"decision":"pass","findings":[{"severity":"major","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := verdict.ParseReview([]byte(`{"decision":"block","findings":[{"severity":"minor","file":"b.go","line":2,"claim":"blocker","evidence":"e"}],"challenged_assumptions":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok := pair(rv, cr)
+	if !ok || v.Decision != "block" {
+		t.Fatalf("paired %+v", v)
+	}
+	if b := v.Blocking(); len(b) != 1 || v.Findings[b[0]].Claim != "blocker" {
+		t.Fatalf("blocking %v of %+v", b, v.Findings)
+	}
+}
+
+// A paired critic that can't run now (here, the daily budget can't cover
+// it) isn't paired: the critic follows the reviewer as usual.
+func TestAPairedCriticThatCantRunFollowsTheReview(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.p.Cfg.Reviews.PairedHighRisk = true
+	e.p.Cfg.Budgets.DailyTotal = 2 // below what's spent plus a critic's $3 cap
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.claude.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.item(t, 1).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage %s", st)
+	}
+	if e.claude.calls["parallel_critic"] != 0 || e.claude.calls["critic"] != 1 || len(e.jobsOf(t, 1, store.KindParallelCritic)) != 0 {
+		t.Fatalf("calls %v", e.claude.calls)
+	}
+}
+
+// A paired critic that can't sign in sends the review back to the queue
+// without using a retry, as the reviewer's own harness would; the next run
+// isn't paired while the critic still can't sign in.
+func TestAPairedCriticSignedOutRequeuesTheReview(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	g := &gatedHarness{fakeHarness: e.claude, signOuts: 1, stage: "parallel_critic"}
+	e.p.Harnesses["claude"] = g
+	e.addIssue(1)
+	e.p.Cfg.Reviews.PairedHighRisk = true
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass, pass}
+	e.claude.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var states []string
+	for _, r := range e.jobsOf(t, 1, "review") {
+		states = append(states, fmt.Sprintf("%d:%s", r.Attempt, r.State))
+	}
+	if want := "1:succeeded 1:cancelled"; strings.Join(states, " ") != want {
+		t.Fatalf("reviews %s, want %s", strings.Join(states, " "), want)
+	}
+	pc := e.jobsOf(t, 1, store.KindParallelCritic)
+	if len(pc) != 1 || pc[0].State != state.Cancelled || !strings.Contains(pc[0].Error, signedOutNote) {
+		t.Fatalf("paired critic jobs %+v", pc)
+	}
+	g.signIn()
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.item(t, 1).Stage; st != state.AwaitingHuman || e.claude.calls["critic"] != 1 {
+		t.Fatalf("stage %s, calls %v", st, e.claude.calls)
+	}
+}
+
+// A paired critic that runs after the reviewer, on a harness they can't
+// share, doesn't run when the reviewer failed.
+func TestADeferredCriticSkipsAFailedReview(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Harnesses["codex"] = &gatedHarness{fakeHarness: e.codex, one: true}
+	e.p.Cfg.Routing["critic"] = e.p.Cfg.Routing["review"]
+	e.addIssue(1)
+	e.p.Cfg.Reviews.PairedHighRisk = true
+	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.critics = []string{pass, pass}
+	// No review scripted: the reviewer fails, twice, and the item parks.
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.item(t, 1).Stage; st != state.Parked || e.codex.calls["review"] != maxReviewAttempts {
+		t.Fatalf("stage %s, calls %v", st, e.codex.calls)
+	}
+	if e.codex.calls["parallel_critic"] != 0 || len(e.jobsOf(t, 1, store.KindParallelCritic)) != 0 {
+		t.Fatalf("the critic ran after a failed review: %v", e.codex.calls)
+	}
+}
+
+// The PR's reviewer notes are the passing review's and, on a high-risk
+// item, the critic's that followed it, each under its own heading.
+func TestPassNotesIncludeReviewerAndCritic(t *testing.T) {
+	note := func(claim string) string {
+		return `{"decision":"pass","findings":[{"severity":"minor","file":"a.go","line":1,"claim":"` + claim + `","evidence":"e","id":"F1","blocks":false}],"challenged_assumptions":[]}`
+	}
+	jobs := []*store.Job{ // newest first
+		{Kind: "critic", State: state.Succeeded, Verdict: note("from the critic")},
+		{Kind: "review", State: state.Succeeded, Verdict: note("from the reviewer")},
+		{Kind: "critic", State: state.Succeeded, Verdict: note("an older critic")},
+		{Kind: "triage", State: state.Succeeded},
+	}
+	e := setup(t)
+	got := e.p.passNotes(jobs)
+	for _, want := range []string{"From the reviewer:", "from the reviewer", "From the critic:", "from the critic"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("notes missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "an older critic") {
+		t.Errorf("notes include a critic from before the review:\n%s", got)
+	}
+	if got := e.p.passNotes(jobs[1:]); strings.Contains(got, "From the") || !strings.Contains(got, "from the reviewer") {
+		t.Errorf("a review alone:\n%s", got)
 	}
 }

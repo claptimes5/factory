@@ -70,30 +70,47 @@ func (s *Store) NextFindingSeq(ctx context.Context, itemID, jobID int64) (int, e
 // findings it raised (any it raised before, when it ran again, are
 // replaced), and updated are earlier findings it ruled on or carried.
 func (s *Store) SaveReview(ctx context.Context, jobID int64, raised, updated []ReviewFinding) error {
-	now := Now()
+	return s.tx(ctx, func(tx *sql.Tx) error { return saveReview(tx, jobID, raised, updated) })
+}
+
+// FinishReview finishes a review job and records its findings in one
+// transaction, so a crash can't leave its rulings applied to a review that
+// never finished (whose rerun would read them as settled).
+func (s *Store) FinishReview(ctx context.Context, jobID int64, r Result, raised, updated []ReviewFinding) error {
+	if !r.State.Terminal() {
+		return fmt.Errorf("FinishReview needs a terminal state, got %s", r.State)
+	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`DELETE FROM review_findings WHERE job_id = ?`, jobID); err != nil {
+		if err := saveReview(tx, jobID, raised, updated); err != nil {
 			return err
 		}
-		for _, f := range raised {
-			if f.Outcome == "" {
-				f.Outcome = OutcomeOpen
-			}
-			if _, err := tx.Exec(`INSERT INTO review_findings(item_id, fid, seq, job_id, kind, route, harness, model, round, severity, file, line, claim, evidence,
-				blocking, check_status, check_reason, check_by, confirmed, outcome, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				f.ItemID, f.FID, f.Seq, jobID, f.Kind, f.Route, f.Harness, f.Model, f.Round, f.Severity, f.File, f.Line, f.Claim, f.Evidence,
-				f.Blocking, f.Check, f.CheckReason, f.CheckBy, f.Confirmed, f.Outcome, now, now); err != nil {
-				return err
-			}
-		}
-		for _, f := range updated {
-			if err := updateFinding(tx, f, now); err != nil {
-				return err
-			}
-		}
-		return nil
+		return finishJob(tx, jobID, r)
 	})
+}
+
+func saveReview(tx *sql.Tx, jobID int64, raised, updated []ReviewFinding) error {
+	now := Now()
+	if _, err := tx.Exec(`DELETE FROM review_findings WHERE job_id = ?`, jobID); err != nil {
+		return err
+	}
+	for _, f := range raised {
+		if f.Outcome == "" {
+			f.Outcome = OutcomeOpen
+		}
+		if _, err := tx.Exec(`INSERT INTO review_findings(item_id, fid, seq, job_id, kind, route, harness, model, round, severity, file, line, claim, evidence,
+			blocking, check_status, check_reason, check_by, confirmed, outcome, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.ItemID, f.FID, f.Seq, jobID, f.Kind, f.Route, f.Harness, f.Model, f.Round, f.Severity, f.File, f.Line, f.Claim, f.Evidence,
+			f.Blocking, f.Check, f.CheckReason, f.CheckBy, f.Confirmed, f.Outcome, now, now); err != nil {
+			return err
+		}
+	}
+	for _, f := range updated {
+		if err := updateFinding(tx, f, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func updateFinding(tx *sql.Tx, f ReviewFinding, now string) error {

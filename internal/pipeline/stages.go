@@ -674,9 +674,11 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	schema, _ := verdict.Schema("review")
-	var critic func() pairedRun
+	// A critic that can't run now isn't paired: it follows the reviewer,
+	// as it would without paired_high_risk (see afterReview).
+	var critic func(bool) pairedRun
 	if p.paired(j, it) {
-		critic = p.startCritic(ctx, j, it, work, data)
+		critic = p.startCritic(ctx, j, it, work, partRepos(parts), data)
 	}
 	x := agentExtras{repo: p.members(it)[0]}
 	for _, s := range shots {
@@ -685,13 +687,29 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	run := p.runAgentWith(ctx, j, work, out, prompt, schema, p.Cfg.Timeout("review"), x)
 	var cr pairedRun
 	if critic != nil {
-		cr = critic() // it ends with the reviewer's context, if that is cancelled
+		_, _, bad := runFailure(run)
+		signedOut := run.res != nil && run.res.SignedOut
+		cr = critic(!bad && !signedOut && ctx.Err() == nil)
 	}
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
 	if st, msg, bad := runFailure(run); bad {
 		return fail(run, st, msg)
+	}
+	// The critic couldn't sign in: the review waits for it as it would for
+	// its own harness, queued again without using a retry.
+	if cr.run.res != nil && cr.run.res.SignedOut {
+		res := *cr.run.res
+		res.Error = "the paired critic: " + res.Error
+		if run.res != nil {
+			res.TokensIn, res.TokensOut = run.res.TokensIn, run.res.TokensOut
+		}
+		held := run // the reviewer's run, which the job is charged for
+		held.res = &res
+		if p.requeueSignedOut(ctx, j, held) {
+			return nil
+		}
 	}
 	// Only the final message counts: a file in the checkout or the output
 	// directory could have been planted by the builder's code.
@@ -701,10 +719,13 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	}
 	by := map[string]reviewer{"": {j.Kind, j.Route, j.Harness, j.Model}, "review": {j.Kind, j.Route, j.Harness, j.Model}}
 	checkable := true
-	if critic != nil {
-		if cr.err != "" || cr.v == nil {
-			return fail(run, state.Failed, "the paired critic: "+cr.err)
-		}
+	switch {
+	case critic == nil:
+	case cr.skipped != "":
+		p.log().Info("review not paired", "job", j.ID, "why", cr.skipped)
+	case cr.err != "" || cr.v == nil:
+		return fail(run, state.Failed, "the paired critic: "+cr.err)
+	default:
 		by["critic"] = reviewer{"critic", cr.job.Route, cr.job.Harness, cr.job.Model}
 		v, checkable = pair(v, cr.v)
 	}
@@ -718,9 +739,7 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 			return nil
 		}
 	}
-	p.saveFindings(ctx, j, it, v, rr, changed, by)
-	norm, _ := json.Marshal(v)
-	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
+	p.finishReview(ctx, j, it, run, v, rr, changed, by)
 	p.recordFindings(ctx, j, it, v)
 	return p.afterReview(ctx, it, j.Kind, v, in)
 }
@@ -902,18 +921,40 @@ func (p *Pipeline) prBody(ctx context.Context, it *store.WorkItem, in ReviewInpu
 	return b.String(), nil
 }
 
-// passNotes are the non-blocking findings of the item's latest review.
+// passNotes are the non-blocking findings of the reviews that passed the
+// item: its latest review, and the critic that followed it on a high-risk
+// item, each under its own heading when there are both.
 func (p *Pipeline) passNotes(jobs []*store.Job) string {
+	var review, critic string
+	seenCritic := false
 	for _, j := range jobs { // newest first
-		if (j.Kind == "review" || j.Kind == "critic") && j.State == state.Succeeded {
-			var v verdict.Review
-			if verdict.Parse([]byte(j.Verdict), &v) != nil {
-				return ""
-			}
-			return reviewNotes(&v)
+		if j.Kind == "triage" {
+			break
 		}
+		if (j.Kind != "review" && j.Kind != "critic") || j.State != state.Succeeded {
+			continue
+		}
+		var v verdict.Review
+		notes := ""
+		if verdict.Parse([]byte(j.Verdict), &v) == nil {
+			notes = reviewNotes(&v)
+		}
+		if j.Kind == "critic" {
+			if !seenCritic { // the newest, which followed the review below
+				critic, seenCritic = notes, true
+			}
+			continue
+		}
+		review = notes
+		break
 	}
-	return ""
+	switch {
+	case review != "" && critic != "":
+		return "From the reviewer:\n\n" + review + "\nFrom the critic:\n\n" + critic
+	case review != "":
+		return review
+	}
+	return critic
 }
 
 // partRepos names the repos a change spans, in order.

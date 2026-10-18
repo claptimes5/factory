@@ -72,6 +72,10 @@ type Finding struct {
 	By string `json:"by,omitempty"`
 	// Carried marks an earlier round's finding this round's reviewer upheld.
 	Carried bool `json:"carried,omitempty"`
+	// Blocks says whether it can block, as judged when it was raised (see
+	// MarkBlocking); a carried finding always can. Nil in verdicts stored
+	// before it was recorded.
+	Blocks *bool `json:"blocks,omitempty"`
 	// Check is the verifier's ruling on a blocking finding.
 	Check *Check `json:"check,omitempty"`
 }
@@ -105,17 +109,38 @@ type Review struct {
 	Reviewers []string `json:"reviewers,omitempty"`
 }
 
-// Blocking lists, by index, the findings that can block: on a block
-// decision the critical and major ones (or, with none, the minor ones the
-// reviewer blocked on), otherwise only critical ones. A pre-existing
-// finding never blocks.
+// Blocking lists, by index, the findings that can block. Each finding
+// says so itself (Blocks), as the daemon marked it when it was raised. A
+// verdict stored before findings carried that mark falls back to the rule
+// MarkBlocking applies.
 func (r *Review) Blocking() []int {
-	var hard, minor []int
+	marked := len(r.Findings) > 0
+	for _, f := range r.Findings {
+		marked = marked && f.Blocks != nil
+	}
+	if !marked {
+		return blockingByRule(r.Decision, r.Findings)
+	}
+	var out []int
 	for i, f := range r.Findings {
+		if *f.Blocks {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// blockingByRule is which findings can block under a reviewer's own
+// decision: on a block, the critical and major ones (or, with none, the
+// minor ones it blocked on), otherwise only critical ones. A pre-existing
+// finding never blocks.
+func blockingByRule(decision string, fs []Finding) []int {
+	var hard, minor []int
+	for i, f := range fs {
 		switch {
-		case f.Severity == Critical, f.Severity == Major && r.Decision == "block":
+		case f.Severity == Critical, f.Severity == Major && decision == "block":
 			hard = append(hard, i)
-		case f.Severity == Minor && r.Decision == "block":
+		case f.Severity == Minor && decision == "block":
 			minor = append(minor, i)
 		}
 	}
@@ -123,6 +148,21 @@ func (r *Review) Blocking() []int {
 		return minor
 	}
 	return hard
+}
+
+// MarkBlocking records on each finding of a reviewer's own verdict whether
+// it can block, judged against that reviewer's decision. Called once, as
+// the verdict is read, so merging it with another reviewer's or carrying
+// earlier findings into it can't change what blocks.
+func (r *Review) MarkBlocking() {
+	can := map[int]bool{}
+	for _, i := range blockingByRule(r.Decision, r.Findings) {
+		can[i] = true
+	}
+	for i := range r.Findings {
+		b := can[i]
+		r.Findings[i].Blocks = &b
+	}
 }
 
 // Blocks reports whether the review sends the work back: a block decision
@@ -252,13 +292,14 @@ func ParseReview(raw []byte) (*Review, error) {
 		errs = append(errs, errors.New("verified and reviewers are the factory's to set"))
 	}
 	for n, f := range r.Findings {
-		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil {
-			errs = append(errs, fmt.Errorf("findings[%d]: id, by, carried and check are the factory's to set", n))
+		if f.ID != "" || f.By != "" || f.Carried || f.Check != nil || f.Blocks != nil {
+			errs = append(errs, fmt.Errorf("findings[%d]: id, by, carried, blocks and check are the factory's to set", n))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("verdict: %w", err)
 	}
+	r.MarkBlocking()
 	return &r, nil
 }
 

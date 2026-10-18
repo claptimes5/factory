@@ -76,3 +76,24 @@ func TestReviewPrecisionAndRoundsToPass(t *testing.T) {
 		t.Fatalf("empty %+v", r)
 	}
 }
+
+// A review that blocked only on findings the verifier refuted passed the
+// item, so it counts as the passing round.
+func TestRoundsToPassRefutedBlock(t *testing.T) {
+	refuted := `{"decision":"block","findings":[{"severity":"major","file":"a","line":1,"claim":"c","evidence":"e","id":"F1","blocks":true,` +
+		`"check":{"status":"refuted","reason":"no"}}],"challenged_assumptions":[],"verified":true}`
+	blocked := `{"decision":"block","findings":[{"severity":"major","file":"a","line":1,"claim":"c","evidence":"e","id":"F1","blocks":true}],"challenged_assumptions":[]}`
+	jobs := []*store.Job{
+		{Kind: "triage", State: state.Succeeded},
+		{Kind: "review", State: state.Succeeded, Verdict: blocked},
+		{Kind: "review", State: state.Succeeded, Verdict: refuted},
+	}
+	n, passed := roundsToPass(jobs, &store.WorkItem{Stage: state.AwaitingHuman})
+	if n != 2 || !passed {
+		t.Fatalf("rounds %d, passed %v; want 2, true", n, passed)
+	}
+	n, passed = roundsToPass(jobs[:2], &store.WorkItem{Stage: state.AwaitingHuman})
+	if passed {
+		t.Fatalf("rounds %d passed with only a block", n)
+	}
+}

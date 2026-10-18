@@ -131,6 +131,13 @@ whether it can block:
 | `minor` | Only when the reviewer blocks on minor findings alone. |
 | `pre-existing` | Never. It's a real problem the change didn't introduce, kept as a note. |
 
+That's judged once, when the finding is raised, against the decision of
+the reviewer who raised it, and kept on the finding. So a critic's block
+in a paired review doesn't make the reviewer's passing notes block, and
+a round that blocks only because it upheld an earlier finding doesn't
+turn its new notes into blocks. A finding carried from an earlier round
+always blocks.
+
 **Verified before it blocks.** Every finding that would block goes to the
 verifier (`routing.verify`, a cheap model), with the issue, the diff and
 a read-only checkout. It confirms each one or refutes it, with a reason;
@@ -150,7 +157,10 @@ unanswered.
 **Ruled on by the next review.** The next round's reviewer sees its open
 findings with the builder's answers, also fenced, and rules on each:
 `resolved`, `upheld` (it blocks again, with the same id, and is verified
-again) or `withdrawn` (the builder was right). It's told not to raise
+again) or `withdrawn` (the builder was right). One it doesn't rule on
+stands as upheld, with "the review didn't rule on it" as its evidence:
+only a ruling lifts a block. Of two rulings on one finding (a paired
+review's reviewer and critic, say), an upheld one wins. It's told not to raise
 again what was already raised or refuted. It reviews the diff since the
 commit it last reviewed, with the whole change as context when that's
 small (see [How review checks itself](configuration.md#how-review-checks-itself)).
@@ -168,6 +178,14 @@ real runs, and are to be looked at again once the metrics have data:
   run on every high-risk round.
 - A finding the builder doesn't answer is recorded as unanswered and the
   build goes on; it could fail the round instead.
+- A refuted finding goes on the list of what not to raise again, so one
+  wrong refutation sticks for the rest of the item's rounds.
+- A `withdrawn` or `resolved` ruling lifts a block the verifier confirmed,
+  with no second check: the reviewer's word alone.
+- The verifier is a cheaper model than the reviewer and reads untrusted
+  text (the diff, the issue, the findings). It is fenced, and all it can
+  do is refute, but refuting is removing a block: a verifier talked into
+  refuting passes code the reviewer stopped.
 
 ## Feature map
 

@@ -182,20 +182,29 @@ func findingLoc(file string, line int) string {
 
 // settle applies a review's rulings on the open findings it was shown,
 // carries each one it upheld into this round with its id (an upheld
-// finding blocks again), and names the findings it raised. It returns the
-// earlier findings it changed, for saveFindings.
+// finding blocks again), and names the findings it raised. An open
+// finding it didn't rule on stands as if upheld: only a ruling can lift
+// a block. It returns the earlier findings it changed, for finishReview.
 func (p *Pipeline) settle(ctx context.Context, j *store.Job, it *store.WorkItem, v *verdict.Review, rr *reviewRound) (map[string]*store.ReviewFinding, error) {
-	open := map[string]*store.ReviewFinding{}
-	for i := range rr.open {
-		open[rr.open[i].FID] = &rr.open[i]
+	// One ruling per finding it was shown; of two, an upheld one stands.
+	rulings := map[string]verdict.Ruling{}
+	for _, e := range v.Earlier {
+		if !slices.ContainsFunc(rr.open, func(f store.ReviewFinding) bool { return f.FID == e.ID }) {
+			continue
+		}
+		if prev, seen := rulings[e.ID]; !seen || (e.Ruling == "upheld" && prev.Ruling != "upheld") {
+			rulings[e.ID] = e
+		}
 	}
 	changed := map[string]*store.ReviewFinding{}
 	var kept []verdict.Ruling
 	var carried []verdict.Finding
-	for _, e := range v.Earlier {
-		f, ok := open[e.ID]
-		if !ok || changed[e.ID] != nil {
-			continue // not one it was shown, or ruled on twice
+	yes := true
+	for i := range rr.open {
+		f := &rr.open[i]
+		e, ok := rulings[f.FID]
+		if !ok {
+			e = verdict.Ruling{ID: f.FID, Ruling: "upheld", Reason: noRuling}
 		}
 		kept = append(kept, e)
 		f.Ruling, f.RulingReason, f.RulingJob = e.Ruling, truncate(e.Reason, 1000), j.ID
@@ -210,12 +219,15 @@ func (p *Pipeline) settle(ctx context.Context, j *store.Job, it *store.WorkItem,
 		case "upheld":
 			f.Outcome = store.OutcomeOpen
 			ev := f.Evidence
-			if strings.TrimSpace(e.Reason) != "" {
+			switch {
+			case !ok:
+				ev = strings.TrimSpace(noRuling + ", so it stands. " + f.Evidence)
+			case strings.TrimSpace(e.Reason) != "":
 				ev = e.Reason
 			}
-			carried = append(carried, verdict.Finding{Severity: f.Severity, File: f.File, Line: f.Line, Claim: f.Claim, Evidence: ev, ID: f.FID, Carried: true})
+			carried = append(carried, verdict.Finding{Severity: f.Severity, File: f.File, Line: f.Line, Claim: f.Claim, Evidence: ev, ID: f.FID, Carried: true, Blocks: &yes})
 		}
-		changed[e.ID] = f
+		changed[f.FID] = f
 	}
 	v.Earlier = kept
 	// An upheld finding still stands, so the round can't pass over it.
@@ -234,13 +246,17 @@ func (p *Pipeline) settle(ctx context.Context, j *store.Job, it *store.WorkItem,
 	return changed, nil
 }
 
+// noRuling is the reason an open finding the review didn't rule on stands.
+const noRuling = "the review didn't rule on it"
+
 // reviewer names who raised findings in a review: the job's own reviewer,
 // and in a paired review the critic beside it.
 type reviewer struct{ kind, route, harness, model string }
 
-// saveFindings records this round's findings and the earlier ones it
-// changed, with how each stands now.
-func (p *Pipeline) saveFindings(ctx context.Context, j *store.Job, it *store.WorkItem, v *verdict.Review, rr *reviewRound, changed map[string]*store.ReviewFinding, by map[string]reviewer) {
+// finishReview ends a review that produced verdict v, recording this
+// round's findings and the earlier ones it changed, with how each stands
+// now, in the same transaction.
+func (p *Pipeline) finishReview(ctx context.Context, j *store.Job, it *store.WorkItem, run agentRun, v *verdict.Review, rr *reviewRound, changed map[string]*store.ReviewFinding, by map[string]reviewer) {
 	blocking := v.Blocking()
 	var raised, updated []store.ReviewFinding
 	for i, f := range v.Findings {
@@ -277,7 +293,10 @@ func (p *Pipeline) saveFindings(ctx context.Context, j *store.Job, it *store.Wor
 		updated = append(updated, *f)
 	}
 	slices.SortFunc(updated, func(a, b store.ReviewFinding) int { return a.Seq - b.Seq })
-	p.warn(p.Store.SaveReview(ctx, j.ID, raised, updated), "SaveReview")
+	norm, _ := json.Marshal(v)
+	if err := p.Store.FinishReview(ctx, j.ID, p.result(ctx, j, run, state.Succeeded, string(norm), ""), raised, updated); err != nil {
+		p.log().Error("finish review", "job", j.ID, "err", err)
+	}
 }
 
 func seqOf(fid string) int {
@@ -306,14 +325,10 @@ func (p *Pipeline) verifyFindings(ctx context.Context, j *store.Job, it *store.W
 		}
 	}
 	r := p.Cfg.VerifyRoute()
-	if why := p.cantVerify(ctx, j, r.Harness); why != "" {
-		mark(why)
-		return
-	}
-	sub, err := p.Store.StartSubJob(ctx, j.ID, store.Job{ItemID: &it.ID, Kind: store.KindVerify, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
+	sub, why := p.startSub(ctx, j, store.Job{ItemID: &it.ID, Kind: store.KindVerify, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
 		Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("verify", ""), Branch: j.Branch, Route: "verify"})
-	if err != nil {
-		mark("the verifier couldn't start: " + err.Error())
+	if sub == nil {
+		mark(why)
 		return
 	}
 	out := filepath.Join(p.jobDir(sub.ID), "out")
@@ -370,11 +385,14 @@ func (p *Pipeline) verifyFindings(ctx context.Context, j *store.Job, it *store.W
 	mark("the verifier didn't rule on it")
 }
 
-// cantVerify says why the verifier can't run now, or "": a harness that
-// isn't there, can't sign in, is held by its usage limit or is in use by
-// another job it can't share a sign-in with, or a daily budget its cap
-// would go over.
-func (p *Pipeline) cantVerify(ctx context.Context, j *store.Job, h string) string {
+// cantRun says why a sub-job of job j can't run on harness h now, or "":
+// a harness that isn't there, can't sign in, is held by its usage limit or
+// is in use by another job it can't share a sign-in with, or a daily
+// budget its cap would go over. It is the scheduler's check for a sub-job,
+// which the scheduler doesn't claim: the caller holds claimMu from the
+// check to the sub-job's start, so the scheduler can't claim a job for h
+// in between.
+func (p *Pipeline) cantRun(ctx context.Context, j *store.Job, h string, budget float64) string {
 	hn, ok := p.Harnesses[h]
 	if !ok {
 		return fmt.Sprintf("no %s harness", h)
@@ -402,10 +420,25 @@ func (p *Pipeline) cantVerify(ctx context.Context, j *store.Job, h string) strin
 	if err != nil {
 		return err.Error()
 	}
-	if spent+p.Cfg.JobBudget("verify", "") > p.Cfg.Budgets.DailyTotal {
+	if spent+budget > p.Cfg.Budgets.DailyTotal {
 		return fmt.Sprintf("the daily budget can't cover it ($%.2f of $%.2f spent)", spent, p.Cfg.Budgets.DailyTotal)
 	}
 	return ""
+}
+
+// startSub starts sub-job sub of job j once cantRun allows it, or says
+// why it can't.
+func (p *Pipeline) startSub(ctx context.Context, j *store.Job, sub store.Job) (*store.Job, string) {
+	p.claimMu.Lock()
+	defer p.claimMu.Unlock()
+	if why := p.cantRun(ctx, j, sub.Harness, sub.BudgetUSD); why != "" {
+		return nil, why
+	}
+	started, err := p.Store.StartSubJob(ctx, j.ID, sub)
+	if err != nil {
+		return nil, "it couldn't start: " + err.Error()
+	}
+	return started, ""
 }
 
 // finishSub ends a sub-job, whose parent may already be cancelled.
@@ -421,25 +454,32 @@ func (p *Pipeline) paired(j *store.Job, it *store.WorkItem) bool {
 	return j.Kind == "review" && it.Risk == "high" && p.Cfg.Reviews.PairedHighRisk
 }
 
-// pairedRun is the critic's half of a paired review.
+// pairedRun is the critic's half of a paired review. skipped says it
+// didn't run, so the review isn't paired and the critic follows it.
 type pairedRun struct {
-	job *store.Job
-	v   *verdict.Review
-	err string
+	job     *store.Job
+	run     agentRun
+	v       *verdict.Review
+	err     string
+	skipped string
 }
 
 // startCritic starts the critic of a paired review on the reviewer's
-// checkout and returns a wait for its verdict. When it shares a harness
+// checkout and returns a wait for its verdict, or nil when it can't run
+// now (see cantRun), so the review isn't paired. When it shares a harness
 // that runs one job at a time with the reviewer, it runs when wait is
-// called, after the reviewer, instead of beside it.
-func (p *Pipeline) startCritic(ctx context.Context, j *store.Job, it *store.WorkItem, work string, d PromptData) func() pairedRun {
+// called, after the reviewer, instead of beside it. wait(false) means the
+// reviewer failed: a critic beside it is stopped, and one after it
+// doesn't run.
+func (p *Pipeline) startCritic(ctx context.Context, j *store.Job, it *store.WorkItem, work string, repos []string, d PromptData) func(goOn bool) pairedRun {
 	r := p.Cfg.CriticRoute()
-	sub, err := p.Store.StartSubJob(ctx, j.ID, store.Job{ItemID: &it.ID, Kind: store.KindParallelCritic, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
-		Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""), Branch: j.Branch, Route: "critic"})
-	if err != nil {
-		return func() pairedRun { return pairedRun{err: err.Error()} }
-	}
-	run := func() pairedRun {
+	want := store.Job{ItemID: &it.ID, Kind: store.KindParallelCritic, Harness: r.Harness, Model: r.Model, Effort: r.Effort,
+		Priority: it.Priority, BudgetUSD: p.Cfg.JobBudget("review", ""), Branch: j.Branch, Route: "critic"}
+	// The critic's own instructions: its route's, and the repos' for critics.
+	as := want
+	as.Kind = "critic"
+	d.Screenshots = nil // they are in the reviewer's output directory
+	run := func(ctx context.Context, sub *store.Job) pairedRun {
 		res := pairedRun{job: sub}
 		out := filepath.Join(p.jobDir(sub.ID), "out")
 		if err := os.MkdirAll(out, 0o755); err != nil {
@@ -448,11 +488,8 @@ func (p *Pipeline) startCritic(ctx context.Context, j *store.Job, it *store.Work
 			return res
 		}
 		defer func() { _ = os.RemoveAll(out) }()
-		// The critic's own instructions: its route's, and the repos' for critics.
-		as := *sub
-		as.Kind = "critic"
-		d.Screenshots = nil // they are in the reviewer's output directory
-		prompt, err := p.renderStep(&as, "review", []string{it.Repo}, d)
+		as.ID = sub.ID
+		prompt, err := p.renderStep(&as, "review", repos, d)
 		if err != nil {
 			res.err = err.Error()
 			p.finishSub(ctx, sub, agentRun{}, state.Failed, "", res.err)
@@ -460,9 +497,13 @@ func (p *Pipeline) startCritic(ctx context.Context, j *store.Job, it *store.Work
 		}
 		schema, _ := verdict.Schema("review")
 		ar := p.runAgentWith(ctx, sub, work, out, prompt, schema, p.Cfg.Timeout("review"), agentExtras{repo: p.members(it)[0]})
+		res.run = ar
 		if st, msg, bad := runFailure(ar); bad {
-			if ctx.Err() != nil {
+			switch {
+			case ctx.Err() != nil:
 				st = state.Cancelled
+			case ar.res != nil && ar.res.SignedOut:
+				st, msg = state.Cancelled, msg+signedOutNote
 			}
 			res.err = msg
 			p.finishSub(ctx, sub, ar, st, "", msg)
@@ -481,11 +522,39 @@ func (p *Pipeline) startCritic(ctx context.Context, j *store.Job, it *store.Work
 	}
 	g, gated := p.Harnesses[r.Harness].(harness.Gated)
 	if r.Harness == j.Harness && gated && g.OneAtATime() {
-		return run
+		// It runs after the reviewer, in the harness the reviewer holds;
+		// whether it can is checked now, and again when it runs.
+		if why := p.cantRun(ctx, j, r.Harness, want.BudgetUSD); why != "" {
+			p.log().Info("review not paired", "job", j.ID, "why", why)
+			return nil
+		}
+		return func(goOn bool) pairedRun {
+			if !goOn {
+				return pairedRun{skipped: "the reviewer failed"}
+			}
+			sub, why := p.startSub(ctx, j, want)
+			if sub == nil {
+				return pairedRun{skipped: why}
+			}
+			return run(ctx, sub)
+		}
 	}
+	sub, why := p.startSub(ctx, j, want)
+	if sub == nil {
+		p.log().Info("review not paired", "job", j.ID, "why", why)
+		return nil
+	}
+	cctx, stop := context.WithCancel(ctx)
 	ch := make(chan pairedRun, 1)
-	go func() { ch <- run() }()
-	return func() pairedRun { return <-ch }
+	go func() { ch <- run(cctx, sub) }()
+	return func(goOn bool) pairedRun {
+		if !goOn {
+			stop()
+		}
+		res := <-ch
+		stop()
+		return res
+	}
 }
 
 // pair merges a paired review's two verdicts into one: either one's block

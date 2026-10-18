@@ -471,7 +471,7 @@ values below are this repo's.
 | `triage`, `review` | Dollars per triage or review job. |
 | `verify` | Dollars per verifier run, which checks a review's blocking findings (0.5 here; left out, `triage`'s). |
 | `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. |
-| `concurrent_jobs` | Jobs running at once (3). |
+| `concurrent_jobs` | Jobs running at once (3). A paired critic (`review.paired_high_risk`) runs inside its review and isn't counted. |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
@@ -885,7 +885,7 @@ review:
 | Key | Default | What it does |
 | --- | --- | --- |
 | `verify` | `true` | Each blocking finding goes to the verifier, `routing.verify`, which confirms or refutes it against the code. Only a confirmed finding blocks; a refuted one stays on the PR as a note. If the verifier can't run (the daily budget can't cover `budgets.verify`, its harness is held or signed out, it fails, or it skips a finding), the finding blocks. `false` blocks on the reviewer's word, as before. |
-| `paired_high_risk` | `false` | A high-risk item's reviewer and critic read the change at the same time, instead of the critic after the reviewer passes it. The round blocks on any finding either raises that the verifier confirms. It costs a critic run on every high-risk round, but saves a round when the critic would have blocked. |
+| `paired_high_risk` | `false` | A high-risk item's reviewer and critic read the change at the same time, instead of the critic after the reviewer passes it. The round blocks on any finding either raises that the verifier confirms. It costs a critic run on every high-risk round, but saves a round when the critic would have blocked. When the critic can't start (its harness is held or signed out, busy with another job it can't share a sign-in with, or the daily budget can't cover its `budgets.review` cap), the round isn't paired and the critic follows the reviewer as usual. The paired critic doesn't count toward `concurrent_jobs`: each high-risk review in progress can run one agent more than that allows. |
 | `incremental` | `true` | From round two, a reviewer gets the diff since the commit it last reviewed, with its open findings and the builder's answers, rather than the whole diff again. |
 | `context_bytes` | `20000` | A re-review also gets the whole diff, for context, when it's at most this many bytes; a bigger one is listed by file, which the reviewer can read in its checkout. |
 
