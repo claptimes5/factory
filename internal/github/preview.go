@@ -111,7 +111,7 @@ func (c *Client) rewritePreviews(ctx context.Context, add []treeEntry, drop map[
 		// Only ever the factory's own commit: a branch of yours by that
 		// name keeps its history.
 		if len(commit.Parents) > 0 || strings.TrimSpace(commit.Message) != previewMessage {
-			return fmt.Errorf("github: %s holds commits that aren't the factory's screenshots, so it is left alone; rename that branch to let the factory use it", PreviewBranch)
+			return fmt.Errorf("%w: github: %s holds commits that aren't the factory's screenshots, so it is left alone; rename that branch to let the factory use it", ErrNotRemovable, PreviewBranch)
 		}
 		var tree struct {
 			Tree      []treeEntry `json:"tree"`
@@ -121,7 +121,7 @@ func (c *Client) rewritePreviews(ctx context.Context, add []treeEntry, drop map[
 			return err
 		}
 		if tree.Truncated {
-			return fmt.Errorf("github: %s holds too many files to rewrite; delete the branch to start it over", PreviewBranch)
+			return fmt.Errorf("%w: github: %s holds too many files to rewrite; delete the branch to start it over", ErrNotRemovable, PreviewBranch)
 		}
 		for _, e := range tree.Tree {
 			if e.Type == "blob" && !drop[e.Path] && !adding[e.Path] {

@@ -68,7 +68,7 @@ func (p *Pipeline) capturePreview(ctx context.Context, jobID int64, pt *part, ga
 	}
 	if len(plans) == 0 {
 		m.Notes = append(m.Notes, "previews.max_screenshots leaves no room for one screenshot of each side")
-		m.Summary = m.Notes
+		m.Summary = slices.Clone(m.Notes)
 	}
 	p.warn(m.Save(dest), "save preview")
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", JobID: &jobID, Type: "preview",
@@ -107,13 +107,13 @@ func (p *Pipeline) captureSide(ctx context.Context, jobID int64, repo, dir strin
 	switch {
 	case errors.Is(err, runner.ErrTimeout):
 		notes = append(notes, fmt.Sprintf("the capture timed out after %s (previews.timeout)", roundDur(timeout)))
-		summary = notes
+		summary = slices.Clone(notes)
 	case err != nil:
 		notes = append(notes, "the capture couldn't run: "+truncate(err.Error(), 300))
 		summary = []string{"the capture couldn't run"}
 	case code == preview.ExitNoBrowser:
 		notes = []string{"the job image has no Playwright: build it with --build-arg PLAYWRIGHT=1 (`factory images --force` does for a repo with preview)"}
-		return nil, notes, notes
+		return nil, notes, slices.Clone(notes)
 	case code == preview.ExitNotReady:
 		return nil, []string{fmt.Sprintf("the app didn't answer %s on port %d within %s; the end of its log:\n%s", ready, pl.Port, roundDur(pl.Wait), tail(appLog(out), 800))},
 			[]string{fmt.Sprintf("the app didn't answer %s within %s", ready, roundDur(pl.Wait))}
@@ -193,6 +193,7 @@ func (p *Pipeline) postPreview(ctx context.Context, it *store.WorkItem, pr *gith
 	if prev == nil {
 		prev = &store.Preview{ItemID: it.ID, Repo: it.Repo}
 	}
+	orig := *prev // as recorded, for when the comment can't be written
 	if prev.PRNumber != pr.Number {
 		prev.CommentID = 0 // a new PR gets its own comment
 	}
@@ -226,10 +227,16 @@ func (p *Pipeline) postPreview(ctx context.Context, it *store.WorkItem, pr *gith
 	id, err := fp.UpsertPRComment(ctx, pr.Number, prev.CommentID, body)
 	if err != nil {
 		// The comment still shows the last build's images: keep them,
-		// and record the new ones too so they're removed in time.
+		// and record the new ones too so they're removed in time. The
+		// rest stays as recorded (the old PR's comment, the last post's
+		// time), but a first post's uploads are this PR's.
 		p.warn(err, "preview comment")
-		p.warn(p.Store.SetPreview(ctx, store.Preview{ItemID: it.ID, Repo: it.Repo, PRNumber: prev.PRNumber, CommentID: prev.CommentID, JobID: prev.JobID,
-			Uploads: append(slices.Clone(refs), old...)}), "SetPreview")
+		keep := orig
+		if keep.PRNumber == 0 {
+			keep.PRNumber = pr.Number
+		}
+		keep.Uploads = append(slices.Clone(refs), old...)
+		p.warn(p.Store.SetPreview(ctx, keep), "SetPreview")
 		return
 	}
 	if len(old) > 0 {

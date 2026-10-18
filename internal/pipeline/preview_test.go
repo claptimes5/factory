@@ -484,3 +484,44 @@ func TestTruncateKeepsRunesWhole(t *testing.T) {
 		t.Fatalf("truncate = %q", got)
 	}
 }
+
+// A failed comment keeps the record as it was, so nothing is lost: a
+// first post's uploads are recorded on its PR (never PR 0), and a new
+// PR's failed post keeps the old PR's comment and the last post's time.
+func TestPreviewFailedCommentKeepsTheRecord(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t)
+	pg, _ := e.withPreviews(config.Preview{Start: "npm start"})
+	pg.upsertErr = fmt.Errorf("502 Bad Gateway")
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	it := e.item(t, 1)
+	rec, _ := e.p.Store.Preview(ctx, it.ID)
+	if rec == nil || rec.PRNumber != it.PRNumber || rec.PRNumber == 0 || rec.CommentID != 0 || len(rec.Uploads) != 2 {
+		t.Fatalf("first post: record %+v", rec)
+	}
+	// Posted on PR 101 once; now a build for another PR fails to comment.
+	pg.upsertErr = nil
+	pr, _ := e.gh.GetPR(ctx, it.PRNumber)
+	e.p.postPreview(ctx, it, pr, e.secondBuild(t))
+	before, _ := e.p.Store.Preview(ctx, it.ID)
+	if before.CommentID == 0 {
+		t.Fatalf("not posted: %+v", before)
+	}
+	time.Sleep(10 * time.Millisecond) // a later posted_at, were it rewritten
+	pg.upsertErr = fmt.Errorf("502 Bad Gateway")
+	other := *pr
+	other.Number = 202
+	in := e.secondBuild(t)
+	in.ImplementJob = 998
+	dir := filepath.Join(e.p.jobDir(998), preview.Dir)
+	(&preview.Manifest{Head: "beef000000", Shots: []preview.Shot{{File: "after-01-desktop.png", Page: "/", Viewport: "desktop", Side: preview.After}}}).Save(dir)
+	os.WriteFile(filepath.Join(dir, "after-01-desktop.png"), shotPNG(), 0o644)
+	e.p.postPreview(ctx, it, &other, in)
+	after, _ := e.p.Store.Preview(ctx, it.ID)
+	if after.PRNumber != before.PRNumber || after.CommentID != before.CommentID || after.JobID != before.JobID || after.PostedAt != before.PostedAt || len(after.Uploads) != 2 {
+		t.Fatalf("record %+v, was %+v", after, before)
+	}
+}

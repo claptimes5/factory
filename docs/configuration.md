@@ -728,6 +728,10 @@ goes on.
 uploaded and shown as usual, but stay until you delete them (Settings >
 General > Uploads); the comment says so.
 
+**Branch deploys.** A hosting integration that deploys every branch
+(Vercel, Netlify) sees each rewrite of `factory/previews`; exclude that
+branch in its settings.
+
 A page with a long scroll is cut at 4000 pixels. Previews aren't
 supported for a repo in a [workspace](#workspaces-one-change-across-repos)
 yet.

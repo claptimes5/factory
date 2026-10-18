@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ type fakeGit struct {
 	// factoryBranch is a branch named factory, which git won't let
 	// factory/previews sit beside.
 	factoryBranch bool
+	truncated     bool // the tree listing is cut short
 }
 
 func newFakeGit() *fakeGit {
@@ -64,7 +66,7 @@ func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// With the folders, as GitHub lists them.
 		es := append([]treeEntry{{Path: "pr-1", Type: "tree"}}, f.trees[strings.TrimPrefix(p, "/repos/o/r/git/trees/")]...)
-		j(map[string]any{"tree": es, "truncated": false})
+		j(map[string]any{"tree": es, "truncated": f.truncated})
 	case r.Method == "POST" && p == "/repos/o/r/git/trees":
 		b, _ := json.Marshal(in["tree"])
 		var es []treeEntry
@@ -212,10 +214,20 @@ func TestPreviewBranchLeavesOthersAlone(t *testing.T) {
 		if _, err := c.UploadPreview(ctx, 5, "k", []File{{"a.png", []byte("x")}}); err == nil || !strings.Contains(err.Error(), "left alone") {
 			t.Fatalf("%s: upload: %v", name, err)
 		}
-		if err := c.RemovePreview(ctx, 5, []string{"x"}); err == nil || f.ref != "h1" {
+		// For good: the factory stops trying and says so.
+		if err := c.RemovePreview(ctx, 5, []string{"x"}); !errors.Is(err, ErrNotRemovable) || f.ref != "h1" {
 			t.Fatalf("%s: remove: %v, ref %q", name, err, f.ref)
 		}
 	}
+	// A branch too big to list in one go can't be rewritten either.
+	f.commits["h1"], f.parents["h1"], f.messages["h1"], f.truncated = "t0", 0, previewMessage, true
+	if _, err := c.UploadPreview(ctx, 5, "k", []File{{"a.png", []byte("x")}}); err == nil || !strings.Contains(err.Error(), "too many files") {
+		t.Fatalf("truncated: upload: %v", err)
+	}
+	if err := c.RemovePreview(ctx, 5, []string{"x"}); !errors.Is(err, ErrNotRemovable) || f.ref != "h1" {
+		t.Fatalf("truncated: remove: %v, ref %q", err, f.ref)
+	}
+	f.truncated = false
 	f.ref, f.factoryBranch = "", true
 	if _, err := c.UploadPreview(ctx, 5, "k", []File{{"a.png", []byte("x")}}); err == nil || !strings.Contains(err.Error(), "a branch named factory") {
 		t.Fatalf("factory branch: %v", err)

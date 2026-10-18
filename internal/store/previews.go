@@ -19,17 +19,21 @@ type Preview struct {
 	PostedAt  string
 }
 
-// SetPreview records what was posted on an item's PR.
+// SetPreview records what was posted on an item's PR, at p.PostedAt or
+// now.
 func (s *Store) SetPreview(ctx context.Context, p Preview) error {
 	if p.Uploads == nil {
 		p.Uploads = []string{}
+	}
+	if p.PostedAt == "" {
+		p.PostedAt = Now()
 	}
 	up, _ := json.Marshal(p.Uploads)
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO previews(item_id, repo, pr_number, comment_id, job_id, uploads, posted_at) VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(item_id) DO UPDATE SET repo = excluded.repo, pr_number = excluded.pr_number, comment_id = excluded.comment_id,
 			job_id = excluded.job_id, uploads = excluded.uploads, posted_at = excluded.posted_at`,
-			p.ItemID, p.Repo, p.PRNumber, p.CommentID, p.JobID, string(up), Now())
+			p.ItemID, p.Repo, p.PRNumber, p.CommentID, p.JobID, string(up), p.PostedAt)
 		return err
 	})
 }

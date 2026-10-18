@@ -148,7 +148,12 @@ it's held to the gates' rules:
   itself, so anyone who can read the repo can read them, as with the PR.
   A removed image stays reachable by its commit's link until GitHub's
   garbage collection.
-  It has no workflow files, so it runs no CI. On GitLab they're project
+  It has no workflow files, so it runs no CI. The factory checks that
+  the branch is its own (one parentless "factory: PR screenshots"
+  commit) and then force-updates it, but the two steps aren't atomic:
+  GitHub has no compare-and-swap on refs, so a push that lands between
+  them is overwritten. Only the factory should write to the branch. On
+  GitLab they're project
   uploads, with GitLab's own access rules; removing them takes the
   Maintainer role and GitLab 17.2.
 - **The dashboard serves only the images a build's manifest lists**, as
