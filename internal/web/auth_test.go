@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -79,5 +80,28 @@ func TestNeedsLogin(t *testing.T) {
 		if got := NeedsLogin(addr); got != want {
 			t.Errorf("%s: %v", addr, got)
 		}
+	}
+}
+
+func TestLoginLimits(t *testing.T) {
+	if clientKey("[2001:db8:1:2:3:4:5:6]:99") != clientKey("[2001:db8:1:2:ffff::1]:1") {
+		t.Error("one IPv6 /64 should share a limit")
+	}
+	if clientKey("10.0.0.1:1") == clientKey("10.0.0.2:1") {
+		t.Error("IPv4 addresses should have their own limits")
+	}
+	l := &Login{Password: "correct horse battery", Secret: make([]byte, 32)}
+	req := func(addr string) *http.Request {
+		r := httptest.NewRequest("POST", "/login", nil)
+		r.RemoteAddr = addr
+		return r
+	}
+	// Many addresses, a few guesses each, still hit the overall cap.
+	limited := false
+	for i := 0; i < maxAllFailures; i++ {
+		limited = l.limited(req(fmt.Sprintf("10.0.%d.%d:1", i/250, i%250)), true)
+	}
+	if !limited || !l.limited(req("192.0.2.1:1"), false) {
+		t.Error("the overall cap didn't hold")
 	}
 }

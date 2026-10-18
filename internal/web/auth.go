@@ -36,8 +36,15 @@ type Login struct {
 
 const sessionCookie = "factory_session"
 
-// maxFailures is how many wrong passwords an address may try a minute.
-const maxFailures = 5
+// maxFailures is how many wrong passwords an address may try a minute,
+// and maxAllFailures how many all addresses together may: past it nobody
+// can try, so spreading guesses over many addresses buys nothing.
+const (
+	maxFailures    = 5
+	maxAllFailures = 60
+	// MinPassword is the shortest password the control room accepts.
+	MinPassword = 12
+)
 
 // LoadSecret reads the cookie secret at path, making one the first time.
 func LoadSecret(path string) ([]byte, error) {
@@ -100,24 +107,59 @@ func (l *Login) signedIn(r *http.Request) bool {
 // limited records a wrong password from r's address and reports whether
 // it has had too many in the last minute.
 func (l *Login) limited(r *http.Request, failed bool) bool {
-	addr, _, _ := net.SplitHostPort(r.RemoteAddr)
+	addr := clientKey(r.RemoteAddr)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.failures == nil {
 		l.failures = map[string][]time.Time{}
 	}
 	now := time.Now()
-	var recent []time.Time
-	for _, t := range l.failures[addr] {
-		if now.Sub(t) < time.Minute {
-			recent = append(recent, t)
+	fresh := func(ts []time.Time) []time.Time {
+		var out []time.Time
+		for _, t := range ts {
+			if now.Sub(t) < time.Minute {
+				out = append(out, t)
+			}
 		}
+		return out
 	}
+	recent := fresh(l.failures[addr])
 	if failed {
 		recent = append(recent, now)
 	}
-	l.failures[addr] = recent
-	return len(recent) >= maxFailures
+	if len(recent) == 0 {
+		delete(l.failures, addr)
+	} else {
+		l.failures[addr] = recent
+	}
+	all := 0
+	for k, ts := range l.failures {
+		if ts = fresh(ts); len(ts) == 0 {
+			delete(l.failures, k)
+			continue
+		}
+		l.failures[k] = ts
+		all += len(ts)
+	}
+	return len(recent) >= maxFailures || all >= maxAllFailures
+}
+
+// clientKey is the address a limit counts against: an IPv6 client by its
+// /64, which one host usually holds whole.
+func clientKey(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	if a = a.Unmap(); a.Is6() {
+		p, _ := a.Prefix(64)
+		return p.String()
+	}
+	return a.String()
 }
 
 func secure(r *http.Request) bool {

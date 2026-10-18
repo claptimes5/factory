@@ -649,6 +649,11 @@ func TTYDAttach(st *store.Store, host string) func(ctx context.Context, jobID in
 		if _, err := exec.LookPath("ttyd"); err != nil {
 			return manual, nil
 		}
+		// ttyd has no login of its own: only where the control room needs
+		// none may it listen. Elsewhere the in-page terminal does instead.
+		if NeedsLogin(net.JoinHostPort(host, "0")) {
+			return manual, nil
+		}
 		l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 		if err != nil {
 			return manual, nil

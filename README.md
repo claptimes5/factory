@@ -211,8 +211,12 @@ while five PRs wait for you.
 changing the password signs everyone out. A wrong password is limited to
 five tries a minute per address. The password is required whenever
 `web.listen` reaches beyond this machine and a tailnet, as `0.0.0.0` or a
-LAN address does. Without one, the factory won't start. Behind HTTPS (for
-example `tailscale serve`), the session cookie is marked secure.
+LAN address does. Without one, the factory won't start. It must be at
+least 12 characters. The control room serves plain HTTP, so on a public
+address put it behind an HTTPS proxy (Caddy, or `tailscale serve`); the
+session cookie is then marked secure. There, Attach gives you the
+`docker exec` command rather than starting a terminal server, since that
+server has no login. The terminal inside the page still works.
 
 - **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
 - **Board:** items by stage, with model and cost.

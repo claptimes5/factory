@@ -382,6 +382,9 @@ func serveWeb(ctx context.Context, cfg *config.Config, st *store.Store, p *pipel
 		srv.Exec = web.DockerExec(st)
 	}
 	if pw := os.Getenv("FACTORY_WEB_PASSWORD"); pw != "" {
+		if len(pw) < web.MinPassword {
+			return fmt.Errorf("FACTORY_WEB_PASSWORD is %d characters; use at least %d", len(pw), web.MinPassword)
+		}
 		secret, err := web.LoadSecret(filepath.Join(cfg.Path(cfg.DataDir), "web.secret"))
 		if err != nil {
 			return err
