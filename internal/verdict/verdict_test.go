@@ -8,6 +8,7 @@ import (
 )
 
 func TestReviewParse(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		raw    string
@@ -39,6 +40,7 @@ func TestReviewParse(t *testing.T) {
 }
 
 func TestTriageParkNeedsQuestion(t *testing.T) {
+	t.Parallel()
 	var tr Triage
 	if err := Parse([]byte(`{"decision":"park","complexity":"S","risk":"low","question":"","summary":""}`), &tr); err == nil {
 		t.Fatal("park without question must fail")
@@ -49,6 +51,7 @@ func TestTriageParkNeedsQuestion(t *testing.T) {
 }
 
 func TestLoadPrefersFileThenFinal(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "verdict.json")
 	var r Review
@@ -65,6 +68,7 @@ func TestLoadPrefersFileThenFinal(t *testing.T) {
 }
 
 func TestSchemasAreJSON(t *testing.T) {
+	t.Parallel()
 	for k, s := range schemas {
 		var v map[string]any
 		if err := json.Unmarshal([]byte(s), &v); err != nil {
@@ -74,6 +78,7 @@ func TestSchemasAreJSON(t *testing.T) {
 }
 
 func TestPreExistingNeverBlocks(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		`{"decision":"block","findings":[{"severity":"pre-existing","file":"a.go","line":1,"claim":"old bug","evidence":"y"}],"challenged_assumptions":[]}`,
 		`{"decision":"pass","findings":[{"severity":"pre-existing","file":"a.go","line":1,"claim":"old bug","evidence":"y"}],"challenged_assumptions":[]}`,
@@ -94,6 +99,7 @@ func TestPreExistingNeverBlocks(t *testing.T) {
 }
 
 func TestBlockingFindings(t *testing.T) {
+	t.Parallel()
 	f := func(sev string) Finding { return Finding{Severity: sev, Claim: "c"} }
 	cases := []struct {
 		name     string
@@ -122,6 +128,7 @@ func TestBlockingFindings(t *testing.T) {
 // Only a refuted finding stops blocking: one the verifier confirmed, or
 // couldn't check, still blocks.
 func TestVerifierRulingsDecideTheBlock(t *testing.T) {
+	t.Parallel()
 	r := Review{Decision: "block", Verified: true, Findings: []Finding{{Severity: Major, Claim: "a", Check: &Check{Status: Refuted, Reason: "handled"}}}}
 	if r.Blocks() {
 		t.Fatal("a refuted finding blocked")
@@ -147,6 +154,7 @@ func TestVerifierRulingsDecideTheBlock(t *testing.T) {
 
 // A reviewer can't set what only the daemon sets.
 func TestParseReviewRefusesDaemonFields(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		`{"decision":"block","findings":[{"severity":"major","file":"","line":0,"claim":"x","evidence":"","check":{"status":"refuted","reason":"r"}}],"challenged_assumptions":[]}`,
 		`{"decision":"block","findings":[{"severity":"major","file":"","line":0,"claim":"x","evidence":"","id":"F9"}],"challenged_assumptions":[]}`,
@@ -165,6 +173,7 @@ func TestParseReviewRefusesDaemonFields(t *testing.T) {
 }
 
 func TestVerifyAndAnswersParse(t *testing.T) {
+	t.Parallel()
 	var v Verify
 	if err := Parse([]byte(`{"checks":[{"id":"F1","verdict":"refuted","reason":"the nil check is on line 3"}]}`), &v); err != nil {
 		t.Fatal(err)
@@ -187,6 +196,7 @@ func TestVerifyAndAnswersParse(t *testing.T) {
 // reviewer's decision, and carried findings always block: a decision the
 // daemon changes later doesn't move it.
 func TestBlockingIsMarkedWhenRaised(t *testing.T) {
+	t.Parallel()
 	r, err := ParseReview([]byte(`{"decision":"pass","findings":[{"severity":"major","file":"a.go","line":1,"claim":"note","evidence":"e"}],"challenged_assumptions":[]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +235,7 @@ func TestBlockingIsMarkedWhenRaised(t *testing.T) {
 // later (carried from an earlier round, or a paired reviewer's) can't
 // hide it.
 func TestABlockWithoutFindingsIsKept(t *testing.T) {
+	t.Parallel()
 	r, err := ParseReview([]byte(`{"decision":"block","findings":[],"challenged_assumptions":["it's untested"]}`))
 	if err != nil || !r.BlockedWithoutFinding {
 		t.Fatalf("%v %+v", err, r)

@@ -10,15 +10,12 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 func TestGroomCommand(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	cfg := &config.Config{Repos: []config.Repo{{Name: "o/r"}, {Name: "o/web"}},
 		Routing: map[string]config.Route{"groom": {Harness: "claude", Model: "sonnet"}}}
 	cfg.Budgets.Triage = 0.5
@@ -45,11 +42,7 @@ func TestGroomCommand(t *testing.T) {
 
 func TestGroomLines(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	cfg := &config.Config{Repos: []config.Repo{{Name: "o/r"}, {Name: "o/web"}}}
 	if l := groomLines(ctx, st, cfg); l != nil {
 		t.Fatalf("off and never ran: %q", l)

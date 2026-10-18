@@ -6,6 +6,8 @@ on:
 permissions:
   contents: read
 jobs:
+  # The race-enabled tests are the long pole; vet, build and lint run
+  # beside them in their own job instead of after them.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -14,10 +16,24 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: vet
-        run: go vet ./...
+          # Each job lists different files so it keeps its own build cache
+          # (this one with -race) instead of racing the others for one key.
+          cache-dependency-path: go.sum
       - name: test
         run: go test -race ./...
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .golangci.yml
+      - name: vet
+        run: go vet ./...
       - name: build
         run: go build ./...
       - uses: golangci/golangci-lint-action@v8
@@ -34,6 +50,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            web/package-lock.json
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -48,7 +67,19 @@ jobs:
         run: |
           git status --porcelain -- . ../internal/web/app
           test -z "$(git status --porcelain -- . ../internal/web/app)"
-      - run: npx playwright install --with-deps chromium
+      # The browser is cached by Playwright's version and the runner image;
+      # the system libraries it needs are installed either way.
+      - id: pwver
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pwver.outputs.v }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.playwright.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       - name: playwright (desktop and phone)
         run: npm run e2e
       - uses: actions/upload-artifact@v4

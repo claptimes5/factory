@@ -11,6 +11,7 @@ import (
 // The derived views over a first-pass item, an escalated one with a
 // review block, and one whose PR a human changed before merging.
 func TestMetricsFromRealRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	fix := func(w string) error {

@@ -30,6 +30,7 @@ const featureMap = `features:
 // the feature's risk, and shows its blast radius to the reviewer and in
 // the PR.
 func TestFeatureMapBlastRadius(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"features.yaml": featureMap})
 	e.addIssue(1)
@@ -87,6 +88,7 @@ func TestFeatureMapBlastRadius(t *testing.T) {
 
 // A failing feature check fails the gates, like any other check.
 func TestFeatureCheckFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// Passes on base, which has no add.go; fails once the change adds it.
 	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok", "test ! -f add.go || { echo broken; exit 3; }", 1)})
@@ -115,6 +117,7 @@ func TestFeatureCheckFails(t *testing.T) {
 // A check that fails on the base branch too doesn't block the change: the
 // builder can't fix the map, and it isn't the change's fault.
 func TestFeatureCheckRedOnBase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok", "exit 3", 1)})
 	e.addIssue(1)
@@ -136,6 +139,7 @@ func TestFeatureCheckRedOnBase(t *testing.T) {
 // The base gets the change's install step before the check reruns there,
 // so a check that only fails for want of dependencies isn't excused.
 func TestFeatureCheckBaseGetsInstall(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"features.yaml": strings.Replace(featureMap, "test -f add_test.go && echo math-ok",
 		"test -f .installed || exit 3; test ! -f add.go || exit 3", 1)})
@@ -152,6 +156,7 @@ func TestFeatureCheckBaseGetsInstall(t *testing.T) {
 
 // An issue triage rated high still hears where the high-risk features are.
 func TestImplementPromptHighRisk(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"features.yaml": featureMap})
 	e.claude.triage = `{"decision":"ready","complexity":"M","risk":"high","question":"","summary":"add Add"}`
@@ -171,6 +176,7 @@ func TestImplementPromptHighRisk(t *testing.T) {
 // A text-only issue builds on the XS route and budget, the builder is
 // told it needs no test, and the reviewer is told to check that.
 func TestTextOnlyLane(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"README.md": "# Fixture\n"})
 	e.p.Cfg.Gates.Commands["test"] = "grep -q fixture README.md"
@@ -202,6 +208,7 @@ func TestTextOnlyLane(t *testing.T) {
 }
 
 func TestStepInstructionsReachPrompts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	r := e.p.Cfg.Routing["implement.M"]
@@ -230,6 +237,7 @@ func TestStepInstructionsReachPrompts(t *testing.T) {
 }
 
 func TestAutoMergeUpToARiskLevel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
 		name, upTo, size string
@@ -292,6 +300,7 @@ func TestAutoMergeUpToARiskLevel(t *testing.T) {
 }
 
 func TestAutoMergeIsCancelledBeforeAnythingNewCanMerge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
@@ -322,6 +331,7 @@ func TestAutoMergeIsCancelledBeforeAnythingNewCanMerge(t *testing.T) {
 }
 
 func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"features.yaml": "features: [not valid"})
 	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
@@ -342,6 +352,7 @@ func TestNoAutoMergeWhenTheFeatureMapCantBeRead(t *testing.T) {
 }
 
 func TestNoPushWhileAutoMergeCantBeTurnedOff(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
@@ -372,6 +383,7 @@ func TestNoPushWhileAutoMergeCantBeTurnedOff(t *testing.T) {
 }
 
 func TestFastModeJobs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	r := e.p.Cfg.Routing["implement.M"]
@@ -398,6 +410,7 @@ func TestFastModeJobs(t *testing.T) {
 }
 
 func TestJobsWaitWhileAHarnessIsAtItsUsageLimit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	var notes []string
@@ -439,6 +452,7 @@ func TestJobsWaitWhileAHarnessIsAtItsUsageLimit(t *testing.T) {
 }
 
 func TestRunsRecordTheirUsageLimits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	reset := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -453,6 +467,7 @@ func TestRunsRecordTheirUsageLimits(t *testing.T) {
 }
 
 func TestUsagePausesOnceAndOnlyOnSharedWindows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	var notes []string

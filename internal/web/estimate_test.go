@@ -13,6 +13,7 @@ import (
 // An item waiting on its estimate shows it, needs you, and can be
 // approved only behind the password or from this machine.
 func TestAPIEstimate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base, st, fa, s := apiSetup(t)
 	// Item 2 was built: its estimate is compared with what it cost ($1.25).

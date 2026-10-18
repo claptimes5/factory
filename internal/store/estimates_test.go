@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +10,7 @@ import (
 )
 
 func TestEstimates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	it, _, _ := s.UpsertItem(ctx, "o/r", 1, "t")
@@ -35,6 +36,7 @@ func TestEstimates(t *testing.T) {
 }
 
 func TestItemCosts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	harness := "claude"
@@ -116,6 +118,7 @@ func TestItemCosts(t *testing.T) {
 // Upgrading marks the health fixes already in flight, so their cost
 // isn't held once the health issue is gone.
 func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, path := openTest(t)
 	fix, _, _ := s.UpsertItem(ctx, "o/r", 7, "Main is red: test")
@@ -134,16 +137,17 @@ func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
 		}
 	}
 	s.Close()
-	// The first open's backups may share this second's name.
-	baks, _ := filepath.Glob(path + ".bak-*")
-	for _, b := range baks {
-		os.Remove(b)
-	}
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	// An existing database is backed up before each migration.
+	for _, v := range []int{12, 13, 14} {
+		if baks, _ := filepath.Glob(fmt.Sprintf("%s.bak-v%d-*", path, v)); len(baks) != 1 {
+			t.Fatalf("backups before migrating from v%d: %v", v, baks)
+		}
+	}
 	if ok, _ := s.IsHealthItem(ctx, fix.ID); !ok {
 		t.Fatal("the health fix in flight wasn't marked")
 	}

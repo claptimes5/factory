@@ -17,6 +17,7 @@ import (
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 // --- fakes ---
@@ -423,11 +424,9 @@ func setupWith(t *testing.T, files map[string]string) *env {
 	wd, _ := os.Getwd()
 	cfg.PromptsDir = filepath.Join(wd, "..", "..", "prompts")
 	cfg.SkillsDir = filepath.Join(root, "skills")
-	st, err := store.Open(filepath.Join(root, "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	// Tests don't depend on the host's free disk; disk_test.go turns it on.
+	cfg.Budgets.MinFreeDiskGB = -1
+	st := storetest.Open(t, filepath.Join(root, "f.db"))
 	gh := newFakeGH()
 	cl := &fakeHarness{name: "claude", triage: `{"decision":"ready","complexity":"M","risk":"low","question":"","summary":"add Add"}`}
 	cx := &fakeHarness{name: "codex"}
@@ -477,6 +476,7 @@ func (e *env) item(t *testing.T, n int) *store.WorkItem {
 
 // The happy path: a labeled issue becomes a reviewed draft PR with no human action.
 func TestIssueBecomesReviewedDraftPR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -550,6 +550,7 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 
 // A gate failure retries the builder with the failure attached.
 func TestGateFailureRetriesWithFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(2)
@@ -579,6 +580,7 @@ func TestGateFailureRetriesWithFailure(t *testing.T) {
 
 // Install runs before the other gates, and nothing else runs when it fails.
 func TestInstallRunsFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Gates.Install = `grep -q "func Add" add.go && touch deps-installed`
@@ -614,6 +616,7 @@ func TestInstallRunsFirst(t *testing.T) {
 // A check that edits or deletes the commit's own files fails, even if its
 // command exits 0: the diff guard never saw that change.
 func TestChecksMayNotEditTheCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Gates.Commands["types"] = "rm -f go.mod; true"
@@ -637,6 +640,7 @@ func TestChecksMayNotEditTheCommit(t *testing.T) {
 // Gates run in the repo's image with its env. Only a repo with an install
 // step gets the dependency cache, and only install may write it.
 func TestGateContainers(t *testing.T) {
+	t.Parallel()
 	e := setup(t)
 	log := filepath.Join(t.TempDir(), "docker.log")
 	bin := filepath.Join(t.TempDir(), "docker")
@@ -676,6 +680,7 @@ func TestGateContainers(t *testing.T) {
 
 // Failures escalate one model tier, then park.
 func TestEscalationThenPark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(3)
@@ -700,6 +705,7 @@ func TestEscalationThenPark(t *testing.T) {
 
 // A reviewer block sends findings back; a third block parks.
 func TestReviewBlockRoundsThenPark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(4)
@@ -730,6 +736,7 @@ func TestReviewBlockRoundsThenPark(t *testing.T) {
 
 // An unparseable review never passes.
 func TestMalformedReviewFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(5)
@@ -744,6 +751,7 @@ func TestMalformedReviewFailsClosed(t *testing.T) {
 
 // The builder may not edit protected paths, whatever the gates say.
 func TestDiffGuardBlocksProtectedEdit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Gates.DiffGuard.ProtectedPaths = []string{".github/"}
@@ -764,6 +772,7 @@ func TestDiffGuardBlocksProtectedEdit(t *testing.T) {
 }
 
 func TestTriageParkAndUnpark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(7)
@@ -795,6 +804,7 @@ func TestTriageParkAndUnpark(t *testing.T) {
 }
 
 func TestDailyBudgetStopsDequeuing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.DailyTotal = 0.05 // the first job's $0.10 crosses it
@@ -812,6 +822,7 @@ func TestDailyBudgetStopsDequeuing(t *testing.T) {
 }
 
 func TestRecoverRequeuesRunning(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 9, "x")
@@ -829,6 +840,7 @@ func TestRecoverRequeuesRunning(t *testing.T) {
 // there must have no effect on the daemon's git, and the diff guard must
 // still see the real diff.
 func TestBuilderGitTamperingIsIgnored(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Gates.DiffGuard.ProtectedPaths = []string{"factory.yaml"}
@@ -871,6 +883,7 @@ func TestBuilderGitTamperingIsIgnored(t *testing.T) {
 // A verdict file in the output or checkout never overrides the reviewer's
 // final message.
 func TestPlantedReviewVerdictIsIgnored(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(11)
@@ -885,6 +898,7 @@ func TestPlantedReviewVerdictIsIgnored(t *testing.T) {
 
 // Tests that pass without the fix do not prove it.
 func TestProvesFixRejectsVacuousTests(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Gates.ProvesFix = "true {pkgs}" // the tests "pass" on base code
@@ -899,6 +913,7 @@ func TestProvesFixRejectsVacuousTests(t *testing.T) {
 
 // Closing the PR without merging parks the item; it does not restart.
 func TestClosedPRParksForGood(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(13)
@@ -918,6 +933,7 @@ func TestClosedPRParksForGood(t *testing.T) {
 // A failure after a job succeeded (here, GitHub refusing to open the PR)
 // leaves no job queued; Reconcile resumes the item without rerunning agents.
 func TestReconcileResumesStuckItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(14)
@@ -941,6 +957,7 @@ func TestReconcileResumesStuckItem(t *testing.T) {
 
 // A requeued job must not trip over a previous run's leftovers.
 func TestRequeuedJobStartsClean(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(15)
@@ -959,6 +976,7 @@ func TestRequeuedJobStartsClean(t *testing.T) {
 }
 
 func TestFence(t *testing.T) {
+	t.Parallel()
 	if f := fence("a ``` b"); f != "````" {
 		t.Fatalf("fence = %q", f)
 	}
@@ -970,6 +988,7 @@ func TestFence(t *testing.T) {
 // If the branch moves between the gates and the review, the review job
 // finishes (it is not left running) and the item parks.
 func TestReviewOfMovedBranchFinishesJob(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(16)
@@ -997,6 +1016,7 @@ func TestReviewOfMovedBranchFinishesJob(t *testing.T) {
 }
 
 func TestAskPassIsPrivateAndConcurrent(t *testing.T) {
+	t.Parallel()
 	g := &Git{AskPassDir: t.TempDir()}
 	var wg sync.WaitGroup
 	paths := make([]string, 8)
@@ -1025,6 +1045,7 @@ func TestAskPassIsPrivateAndConcurrent(t *testing.T) {
 // Two repos with the same issue number are separate items, each built from
 // and opened against its own repo, with its own gates.
 func TestSeveralRepos(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	cfg, err := config.Parse([]byte(strings.Replace(testConfig, "repo: o/r\n", `repos:
@@ -1036,6 +1057,7 @@ func TestSeveralRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.DataDir, cfg.PromptsDir, cfg.SkillsDir = e.p.Cfg.DataDir, e.p.Cfg.PromptsDir, e.p.Cfg.SkillsDir
+	cfg.Budgets.MinFreeDiskGB = e.p.Cfg.Budgets.MinFreeDiskGB
 	e.p.Cfg = cfg
 	web := setup(t) // a second remote and GitHub
 	clients := map[string]RepoClients{
@@ -1085,6 +1107,7 @@ func TestSeveralRepos(t *testing.T) {
 // A restart waits for running jobs, starts no new ones, and is reported
 // once nothing runs.
 func TestRestartWaitsForRunningJobs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)

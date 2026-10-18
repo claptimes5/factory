@@ -41,6 +41,7 @@ func (e *env) past(t *testing.T, repo string, n int, size string, impl, rev floa
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 func TestQuantile(t *testing.T) {
+	t.Parallel()
 	vs := []float64{4, 1, 3, 2}
 	if q := quantile(vs, 0.5); !near(q, 2.5) {
 		t.Fatalf("median %v", q)
@@ -54,6 +55,7 @@ func TestQuantile(t *testing.T) {
 }
 
 func TestEstimateRange(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		e    store.Estimate
 		want string
@@ -72,6 +74,7 @@ func TestEstimateRange(t *testing.T) {
 // The estimate is the repo's own history once it has enough of the size,
 // else every repo's, else the budgets'.
 func TestEstimateFallsBackFromRepoToAllToBudgets(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := &store.WorkItem{ID: 999, Repo: "o/r", Complexity: "M", Risk: "low"}
@@ -122,6 +125,7 @@ func TestEstimateFallsBackFromRepoToAllToBudgets(t *testing.T) {
 // Work on a subscription isn't billed: the estimate says so, and only the
 // dollars count against the threshold.
 func TestEstimateOnAPlan(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.PlanBilled = map[string]bool{"claude": true}
@@ -197,6 +201,7 @@ func heldItem(t *testing.T, e *env) *store.WorkItem {
 
 // Over the threshold, an item waits; a maintainer's factory:go builds it.
 func TestEstimateOverThresholdWaitsForGo(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	var notes []string
@@ -230,6 +235,7 @@ func TestEstimateOverThresholdWaitsForGo(t *testing.T) {
 
 // factory:go from someone who can't approve work comes off and frees nothing.
 func TestEstimateGoFromOutsiderRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	heldItem(t, e)
@@ -254,6 +260,7 @@ func TestEstimateGoFromOutsiderRefused(t *testing.T) {
 // The dashboard's OK builds it; a second OK, or one for an item not
 // waiting, is refused.
 func TestEstimateApprovedFromDashboard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := heldItem(t, e)
@@ -279,6 +286,7 @@ func TestEstimateApprovedFromDashboard(t *testing.T) {
 // An OK is for the text and the estimate it was given: a re-triage of the
 // same text doesn't ask again, an edit approved with factory:retry does.
 func TestEstimateAsksAgainAfterAnEdit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := heldItem(t, e)
@@ -327,6 +335,7 @@ func TestEstimateAsksAgainAfterAnEdit(t *testing.T) {
 
 // A main health fix is never held for its cost: a red main is urgent.
 func TestEstimateExemptsMainHealthFixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -348,6 +357,7 @@ func TestEstimateExemptsMainHealthFixes(t *testing.T) {
 
 // A repo's own confirm_over replaces the top level's; 0 turns it off.
 func TestEstimateRepoOverride(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -367,6 +377,7 @@ func TestEstimateRepoOverride(t *testing.T) {
 // No road to a build skips a waiting estimate: not the orchestrator's
 // enqueue, not a direct call, and a wait isn't "stuck" work for it.
 func TestEstimateWaitingRefusesEveryEnqueue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := heldItem(t, e)
@@ -396,6 +407,7 @@ func TestEstimateWaitingRefusesEveryEnqueue(t *testing.T) {
 // Priority 100 is not what exempts a fix: the orchestrator can't set it,
 // and an item given it otherwise still waits.
 func TestEstimatePriorityIsNoExemption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -424,6 +436,7 @@ func TestEstimatePriorityIsNoExemption(t *testing.T) {
 // A main health fix stays exempt after main is green again and its
 // health issue is cleared: the item was marked when it came in.
 func TestEstimateHealthMarkOutlivesTheHealthIssue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -447,6 +460,7 @@ func TestEstimateHealthMarkOutlivesTheHealthIssue(t *testing.T) {
 // factory:go on an item that isn't waiting comes off with a note and
 // approves nothing later.
 func TestEstimateGoOnAnItemNotWaiting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -473,6 +487,7 @@ func TestEstimateGoOnAnItemNotWaiting(t *testing.T) {
 // factory:go added while the item was in triage, before the wait was
 // announced, comes off with the announcement: only one added after counts.
 func TestEstimateGoBeforeTheWaitDoesNotCount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.ConfirmOver = 1
@@ -503,6 +518,7 @@ func TestEstimateGoBeforeTheWaitDoesNotCount(t *testing.T) {
 // A wait that ends in a park still needs the OK: a retry of a build is
 // refused whatever the stage.
 func TestEstimateParkedWhileWaitingStillNeedsOK(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := heldItem(t, e)
@@ -528,6 +544,7 @@ func TestEstimateParkedWhileWaitingStillNeedsOK(t *testing.T) {
 
 // A re-triage that needn't wait takes factory:awaiting-you off.
 func TestEstimateRetriageUnderClearsTheLabel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := heldItem(t, e)
@@ -553,6 +570,7 @@ func TestEstimateRetriageUnderClearsTheLabel(t *testing.T) {
 // A wait whose comment didn't go out is announced on a later poll, and
 // until then no factory:go counts.
 func TestEstimateWaitAnnouncedAfterAFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	var notes []string
@@ -605,6 +623,7 @@ func TestEstimateWaitAnnouncedAfterAFailure(t *testing.T) {
 
 // Failing to read factory:go labels doesn't stop the rest of intake.
 func TestEstimateGoFailureKeepsIntakeGoing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.addIssue(1)
@@ -632,6 +651,7 @@ func TestEstimateGoFailureKeepsIntakeGoing(t *testing.T) {
 // A size raised after triage is estimated again: the orchestrator can't
 // enqueue an item under the limit as M with complexity L, over it.
 func TestEstimateRaisedSizeIsEstimatedAgain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	m, _ := e.p.estimate(ctx, &store.WorkItem{ID: 999, Repo: "o/r", Complexity: "M", Risk: "low"})

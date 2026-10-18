@@ -72,6 +72,7 @@ func (e *env) lessonsMD(t *testing.T) string {
 // learn job runs, and its lesson lands in AGENTS.md in a draft PR that
 // waits for a human even with auto_merge on. A second run adds to it.
 func TestHumanEditBecomesALessonsPR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n\nRun the tests.\n\n## Style\n\nUse gofmt.\n"})
 	e.p.Cfg.AutoMerge = &config.AutoMerge{UpTo: "medium", MaxSize: "L"}
@@ -162,13 +163,13 @@ func TestHumanEditBecomesALessonsPR(t *testing.T) {
 // forgetDay lets the learn loop run again, as if a day had passed.
 func forgetDay(t *testing.T, e *env) {
 	t.Helper()
-	learnDay = func() string { return "tomorrow" }
-	t.Cleanup(func() { learnDay = store.Today })
+	e.p.learnDayFn = func() string { return "tomorrow" }
 }
 
 // Blocking findings that repeat across items start a learn job; the same
 // finding in one item, or with learning off, doesn't.
 func TestRepeatFindingsTriggerLearn(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		items int
@@ -242,6 +243,7 @@ func TestRepeatFindingsTriggerLearn(t *testing.T) {
 
 // The lessons section is appended to, or made, without touching the rest.
 func TestAppendLessons(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ in, want string }{
 		{"", "## Lessons from the factory\n\n- A.\n- B.\n"},
 		{"# Agents\n\nRun tests.\n", "# Agents\n\nRun tests.\n\n## Lessons from the factory\n\n- A.\n- B.\n"},
@@ -257,6 +259,7 @@ func TestAppendLessons(t *testing.T) {
 
 // Findings group by file glob or alike claims.
 func TestGroupFindings(t *testing.T) {
+	t.Parallel()
 	f := func(item int64, file, claim string) store.Signal {
 		return store.Signal{Kind: store.SignalFinding, ItemID: item, File: file, Claim: claim}
 	}
@@ -284,6 +287,7 @@ func TestGroupFindings(t *testing.T) {
 
 // A long diff is cut at whole hunks.
 func TestCapDiff(t *testing.T) {
+	t.Parallel()
 	hunk := func(n int) string { return fmt.Sprintf("@@ -%d +%d @@\n%s", n, n, strings.Repeat("+x\n", 40)) }
 	diff := "diff --git a/a b/a\n--- a/a\n+++ b/a\n" + hunk(1) + hunk(2) + "diff --git a/b b/b\n--- a/b\n+++ b/b\n" + hunk(3)
 	got := capDiff(diff, 200)
@@ -298,6 +302,7 @@ func TestCapDiff(t *testing.T) {
 // A line you take out of the lessons PR, or whose PR you close without
 // merging, is remembered as declined and never proposed again.
 func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n\nRun the tests.\n"})
 	lesson := func(lines ...string) string {
@@ -312,10 +317,9 @@ func TestDeclinedLessonsAreNotProposedAgain(t *testing.T) {
 		e.built(t, n)
 		e.merge(fmt.Sprintf("factory/issue-%d", n), e.humanPush(t, fmt.Sprintf("factory/issue-%d", n), "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
 		e.claude.learn = append(e.claude.learn, learn)
-		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.p.learnDayFn = func() string { return fmt.Sprintf("day %d", n) }
 		e.poll(t)
 	}
-	t.Cleanup(func() { learnDay = store.Today })
 
 	edit(1, lesson("Check for overflow.", "Document exported functions."))
 	first := e.gh.prs[LessonsBranch].Number
@@ -377,6 +381,7 @@ func (e *env) editSignal(t *testing.T, it *store.WorkItem, pr int) {
 // A repo has one learn job queued or running at a time: a second would
 // push over the first's lines.
 func TestOneLearnJobAtATime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := e.built(t, 1)
@@ -416,6 +421,7 @@ func (e *env) pushSymlink(t *testing.T, name, target string) {
 // runs: no agent is paid for, the signals are set aside, and you hear it
 // once, not every day.
 func TestRefusedLessonsCostNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.pushSymlink(t, "AGENTS.md", "../outside.md")
@@ -425,10 +431,9 @@ func TestRefusedLessonsCostNothing(t *testing.T) {
 		e.built(t, n)
 		branch := fmt.Sprintf("factory/issue-%d", n)
 		e.merge(branch, e.humanPush(t, branch, "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
-		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.p.learnDayFn = func() string { return fmt.Sprintf("day %d", n) }
 		e.poll(t)
 	}
-	t.Cleanup(func() { learnDay = store.Today })
 	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{Kind: "learn"})
 	if len(jobs) != 2 || jobs[0].State != state.Failed || !strings.Contains(jobs[0].Error, "symlink out of the repo") {
 		t.Fatalf("learn jobs = %+v", jobs)
@@ -454,6 +459,7 @@ func TestRefusedLessonsCostNothing(t *testing.T) {
 // the repo, CLAUDE.md for Claude unless it loads AGENTS.md, and a new
 // AGENTS.md (with a CLAUDE.md loading it, for Claude) when there's none.
 func TestLessonsTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, c := range map[string]struct {
 		files  map[string]string // a value of "-> x" is a symlink to x
@@ -514,6 +520,7 @@ func TestLessonsTarget(t *testing.T) {
 // A repo whose AGENTS.md links to its CLAUDE.md gets its lessons in
 // CLAUDE.md, where Claude builders read them, with the link kept.
 func TestLessonsFollowTheLink(t *testing.T) {
+	t.Parallel()
 	e := setupWith(t, map[string]string{"CLAUDE.md": "# Claude\n\nRun the tests.\n"})
 	e.pushSymlink(t, "AGENTS.md", "CLAUDE.md")
 	e.built(t, 1)
@@ -537,6 +544,7 @@ func TestLessonsFollowTheLink(t *testing.T) {
 // A repo with its own CLAUDE.md gets its lessons in AGENTS.md, and its
 // CLAUDE.md keeps what it says and gains a line loading AGENTS.md.
 func TestLessonsLoadedFromClaudeMD(t *testing.T) {
+	t.Parallel()
 	e := setupWith(t, map[string]string{"CLAUDE.md": "# Claude\n\nRun the tests.\n"})
 	e.built(t, 1)
 	e.merge("factory/issue-1", e.humanPush(t, "factory/issue-1", "add.go", "package fixture\n\n// Add adds, checked.\nfunc Add(a, b int) int { return a + b }\n"))
@@ -561,8 +569,7 @@ func (e *env) learnFrom(t *testing.T, n int, lessons ...string) {
 	e.built(t, n)
 	e.merge(fmt.Sprintf("factory/issue-%d", n), e.humanPush(t, fmt.Sprintf("factory/issue-%d", n), "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
 	e.claude.learn = append(e.claude.learn, `{"lessons":[`+strings.Join(ls, ",")+`],"skip_reason":""}`)
-	learnDay = func() string { return fmt.Sprintf("day %d", n) }
-	t.Cleanup(func() { learnDay = store.Today })
+	e.p.learnDayFn = func() string { return fmt.Sprintf("day %d", n) }
 	e.poll(t)
 }
 
@@ -570,6 +577,7 @@ func (e *env) learnFrom(t *testing.T, n int, lessons ...string) {
 // CLAUDE.md: they stay proposed, not declined, and aren't proposed again.
 // The PR says why it changes CLAUDE.md, and adds the import once.
 func TestLessonsInClaudeMDOnAnOpenPRStayProposed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
 	e.learnFrom(t, 1, "Check for overflow.")
@@ -597,6 +605,7 @@ func TestLessonsInClaudeMDOnAnOpenPRStayProposed(t *testing.T) {
 // An import added on base since the lessons PR opened isn't added again
 // on the PR's branch.
 func TestLessonsImportAddedOnBaseIsNotRepeated(t *testing.T) {
+	t.Parallel()
 	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n", "CLAUDE.md": "# Claude\n"})
 	e.learnFrom(t, 1, "Check for overflow.")
 	e.humanPush(t, LessonsBranch, "CLAUDE.md", "# Claude\n")
@@ -610,6 +619,7 @@ func TestLessonsImportAddedOnBaseIsNotRepeated(t *testing.T) {
 // The file is written through an os.Root, never through a symlink, which
 // on a case-insensitive disk could stand in for AGENTS.md unseen by git.
 func TestWritePlain(t *testing.T) {
+	t.Parallel()
 	dir, outside := t.TempDir(), filepath.Join(t.TempDir(), "outside.md")
 	writeFile(filepath.Dir(outside), "outside.md", "keep\n")
 	if err := os.Symlink(outside, filepath.Join(dir, "AGENTS.md")); err != nil {
@@ -643,6 +653,7 @@ func TestWritePlain(t *testing.T) {
 // Model text in the PR body is fenced, so a "fixed #12" or an @mention in
 // it acts on nothing, and a long why is cut.
 func TestLessonEntriesAreFenced(t *testing.T) {
+	t.Parallel()
 	e := setup(t)
 	why := "You fixed #12 by hand, cc @bob. " + strings.Repeat("More. ", 300)
 	got := e.p.lessonEntries("o/r", []verdict.Lesson{{Line: "Check for overflow.", Why: why, Evidence: []string{"#1"}}}, []store.Signal{{IssueNumber: 1}})
@@ -657,6 +668,7 @@ func TestLessonEntriesAreFenced(t *testing.T) {
 // What a human changed is their own commits: not what an "Update branch"
 // merge or a rebase brought in from base, nor the factory's work rebased.
 func TestHumanDiffIsTheHumansOwn(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"update branch", "rebase"} {
 		t.Run(how, func(t *testing.T) {
 			ctx := context.Background()
@@ -704,6 +716,7 @@ func TestHumanDiffIsTheHumansOwn(t *testing.T) {
 // A merge records only the two commits; the learn job reads the diff, and
 // one it can't read now waits for the next run rather than being lost.
 func TestHumanEditIsReadLater(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.built(t, 1)
@@ -736,6 +749,7 @@ func TestHumanEditIsReadLater(t *testing.T) {
 // Signals the caps leave out are set aside with the rest, so they don't
 // start a job on old news the next day.
 func TestTrimmedSignalsAreUsed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it := e.built(t, 1)
@@ -763,6 +777,7 @@ func TestTrimmedSignalsAreUsed(t *testing.T) {
 // Lines are recorded once pushed, before the PR: a PR that fails to open
 // leaves them tracked.
 func TestLessonsRecordedBeforeThePR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.built(t, 1)
@@ -783,6 +798,7 @@ func TestLessonsRecordedBeforeThePR(t *testing.T) {
 // A merged line a human later deletes from the file counts as declined:
 // the factory doesn't put it back.
 func TestDeletedLessonIsDeclined(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setupWith(t, map[string]string{"AGENTS.md": "# Agents\n\nRun the tests.\n"})
 	lesson := func(line string) string {
@@ -794,10 +810,9 @@ func TestDeletedLessonIsDeclined(t *testing.T) {
 		branch := fmt.Sprintf("factory/issue-%d", n)
 		e.merge(branch, e.humanPush(t, branch, "add.go", fmt.Sprintf("package fixture\n\n// Add adds (edit %d).\nfunc Add(a, b int) int { return a + b }\n", n)))
 		e.claude.learn = append(e.claude.learn, learn)
-		learnDay = func() string { return fmt.Sprintf("day %d", n) }
+		e.p.learnDayFn = func() string { return fmt.Sprintf("day %d", n) }
 		e.poll(t)
 	}
-	t.Cleanup(func() { learnDay = store.Today })
 	edit(1, lesson("Check for overflow."))
 	// You merge the lessons PR, then later take the line out.
 	main := e.clone(t, "main")

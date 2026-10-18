@@ -191,6 +191,7 @@ func lastGroomJob(t *testing.T, e *env) *store.Job {
 }
 
 func TestGroomGathersAndSkips(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	e.gh.issues[8] = &github.Issue{Number: 8, Title: "Has an item", Body: "x", State: "open"}
@@ -257,6 +258,7 @@ func TestGroomGathersAndSkips(t *testing.T) {
 func jsonOf(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func TestGroomFlagsOnceWithMarker(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, msgs := groomSetup(t)
 	e.claude.groom = func(req harness.RunRequest) (string, error) {
@@ -344,6 +346,7 @@ func TestGroomFlagsOnceWithMarker(t *testing.T) {
 }
 
 func TestGroomDismissal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	e.claude.groom = func(harness.RunRequest) (string, error) { return groomVerdict("It names the removed v1 API."), nil }
@@ -375,6 +378,7 @@ func TestGroomDismissal(t *testing.T) {
 }
 
 func TestGroomConfirmSplit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, msgs := groomSetup(t)
 	e.claude.groom = func(harness.RunRequest) (string, error) { return groomVerdict("Old."), nil }
@@ -443,6 +447,7 @@ func TestGroomConfirmSplit(t *testing.T) {
 }
 
 func TestGroomConfirmClose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	e.claude.groom = func(harness.RunRequest) (string, error) { return groomVerdict("It names the removed v1 API."), nil }
@@ -474,6 +479,7 @@ func TestGroomConfirmClose(t *testing.T) {
 }
 
 func TestGroomUnauthorizedLabeler(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	e.claude.groom = func(harness.RunRequest) (string, error) { return groomVerdict("Old."), nil }
@@ -509,6 +515,7 @@ func TestGroomUnauthorizedLabeler(t *testing.T) {
 }
 
 func TestGroomBudgetGate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, msgs := groomSetup(t)
 	e.p.Cfg.Grooming.Every = 168 * time.Hour
@@ -557,6 +564,7 @@ func TestGroomBudgetGate(t *testing.T) {
 }
 
 func TestGroomTriggerQueuesEachRepo(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, _ := groomSetup(t)
 	e.p.Cfg.Grooming.Every = 168 * time.Hour
@@ -573,6 +581,7 @@ func TestGroomTriggerQueuesEachRepo(t *testing.T) {
 }
 
 func TestGroomLabelsAreSetUp(t *testing.T) {
+	t.Parallel()
 	have := map[string]bool{}
 	for _, l := range Labels("factory:ready") {
 		have[l.Name] = true
@@ -619,6 +628,7 @@ func groomStatus(t *testing.T, e *env, n int) string {
 // A duplicate's canonical issue may not itself be proposed closed: not in
 // the job's scope, and not at confirm time.
 func TestGroomCanonicalGuards(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	// #3 is proposed stale already: #2 can't be closed as its duplicate.
@@ -665,6 +675,7 @@ func TestGroomCanonicalGuards(t *testing.T) {
 // An issue that changed since it was flagged, or that an open PR would
 // now close, isn't closed on confirmation.
 func TestGroomConfirmRechecks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	e.gh.issues[1].Body = "The v1 API needs a retry flag. Still wanted for v2."
@@ -686,6 +697,7 @@ func TestGroomConfirmRechecks(t *testing.T) {
 
 // An issue the factory takes up loses its proposal and its question mark.
 func TestGroomTakenUpWithdraws(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	if _, _, err := e.p.Store.UpsertItem(ctx, "o/r", 1, "x"); err != nil {
@@ -700,6 +712,7 @@ func TestGroomTakenUpWithdraws(t *testing.T) {
 
 // Labels are read at most every groomPollEvery.
 func TestGroomPollThrottled(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	now := time.Now()
@@ -719,6 +732,7 @@ func TestGroomPollThrottled(t *testing.T) {
 // The issue is read again just before it's flagged: one that changed, or
 // was taken up, while the job ran is left alone.
 func TestGroomRereadsBeforeFlagging(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	e.p.Cfg.Repos[0].Env = map[string]string{"REPO_SECRET": "s"}
@@ -747,6 +761,7 @@ func TestGroomRereadsBeforeFlagging(t *testing.T) {
 // A flag whose label fails leaves no record; the next run finds its
 // comment and finishes it, without commenting twice.
 func TestGroomFlagRollsBackAndRepairs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	fg.failLabel = LabelStaleQ
@@ -768,6 +783,7 @@ func TestGroomFlagRollsBackAndRepairs(t *testing.T) {
 // A sub-issue filed before a failure is found by its marker, not filed
 // twice.
 func TestGroomSplitResumes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	fg.loseCreate = 1
@@ -796,6 +812,7 @@ func TestGroomSplitResumes(t *testing.T) {
 // An epic whose sub-issues all closed unbuilt is done, and can't be split
 // again by the orchestrator.
 func TestGroomEpicFinishesUnbuilt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	_ = e.gh.AddLabels(ctx, 4, LabelSplit)
@@ -825,6 +842,7 @@ func TestGroomEpicFinishesUnbuilt(t *testing.T) {
 }
 
 func TestGroomBudgetStoreError(t *testing.T) {
+	t.Parallel()
 	e, _, _ := groomSetup(t)
 	_ = e.p.Store.Close()
 	if why := e.p.groomBudget(context.Background()); !strings.Contains(why, "can't be read") {
@@ -836,6 +854,7 @@ func TestGroomBudgetStoreError(t *testing.T) {
 // itself, so no issue is closed as its duplicate: not when proposing, and
 // not on confirmation.
 func TestGroomSourceIssueIsNoCanonical(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg, _ := groomSetup(t)
 	src := store.SourceIssue{Repo: "o/r", Source: "sentry", Key: "k6", IssueNumber: 6}
@@ -880,6 +899,7 @@ func TestGroomSourceIssueIsNoCanonical(t *testing.T) {
 // A duplicate is closed as a duplicate where the forge can say so; a stale
 // issue as not planned.
 func TestGroomClosesAsDuplicate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := flagged(t)
 	dg := &dupGH{fakeGroomGH: e.p.GH.(*fakeGroomGH)}
@@ -905,6 +925,7 @@ func (f *dupGH) CloseDuplicate(ctx context.Context, n int) error {
 // A sub-issue approved while its split is half filed is adopted once the
 // epic exists.
 func TestGroomChildApprovedMidSplit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fg := flagged(t)
 	fg.loseCreate, fg.loseAfter = 1, 1 // the second sub-issue's filing fails
@@ -943,6 +964,7 @@ func TestGroomChildApprovedMidSplit(t *testing.T) {
 
 // A split's sub-issue is no exemption from the cost-estimate gate.
 func TestGroomChildGoesThroughEstimates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := flagged(t)
 	_ = e.gh.AddLabels(ctx, 4, LabelSplit)

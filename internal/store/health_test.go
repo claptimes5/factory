@@ -6,6 +6,7 @@ import (
 )
 
 func TestHealth(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openTest(t)
 	if h, err := s.RepoHealth(ctx, "o/r"); h != nil || err != nil {

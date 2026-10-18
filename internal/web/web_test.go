@@ -15,6 +15,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 type fakeActions struct{ calls []string }
@@ -39,11 +40,7 @@ func (f *fakeActions) ApproveEstimate(_ context.Context, id int64) error {
 func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(dir, "f.db"))
 	ctx := context.Background()
 	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "Add <script>alert(1)</script>")
 	st.SetStage(ctx, it.ID, state.Parked, "daemon", "needs a human")
@@ -84,6 +81,7 @@ func get(t *testing.T, u string) string {
 }
 
 func TestPagesRender(t *testing.T) {
+	t.Parallel()
 	srv, _, _, id := setup(t)
 	pages := map[string][]string{
 		"/":                 {"Needs you", "needs a human"},
@@ -113,6 +111,7 @@ func TestPagesRender(t *testing.T) {
 func itoa(i int64) string { return strconv.FormatInt(i, 10) }
 
 func TestStreamSendsEscapedLinesThenDone(t *testing.T) {
+	t.Parallel()
 	srv, _, _, id := setup(t)
 	body := get(t, srv.URL+"/jobs/"+itoa(id)+"/stream")
 	if !strings.Contains(body, "event: line") || !strings.Contains(body, "writing &lt;b&gt;tests&lt;/b&gt;") || !strings.Contains(body, "event: done") {
@@ -121,6 +120,7 @@ func TestStreamSendsEscapedLinesThenDone(t *testing.T) {
 }
 
 func TestActionsAndCrossSiteRefusal(t *testing.T) {
+	t.Parallel()
 	srv, _, fa, id := setup(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.PostForm(srv.URL+"/items/1/park", url.Values{"reason": {"later"}})
@@ -145,6 +145,7 @@ func TestActionsAndCrossSiteRefusal(t *testing.T) {
 }
 
 func TestSummarize(t *testing.T) {
+	t.Parallel()
 	if got := summarize(`{"type":"item.completed","item":{"type":"command_execution","command":"go test ./..."}}`); got != "→ go test ./..." {
 		t.Fatalf("got %q", got)
 	}

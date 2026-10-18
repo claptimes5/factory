@@ -77,7 +77,7 @@ func (p *Pipeline) disks(ctx context.Context) ([]runner.Disk, error) {
 	data := p.Cfg.Path(p.Cfg.DataDir)
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		errs = append(errs, err)
-	} else if free, err := freeAt(data); err != nil {
+	} else if free, err := p.freeAt(data); err != nil {
 		errs = append(errs, err)
 	} else {
 		disks = append(disks, runner.Disk{Where: "the data directory (" + data + ")", Free: free})
@@ -90,7 +90,7 @@ func (p *Pipeline) disks(ctx context.Context) ([]runner.Disk, error) {
 		}
 	}
 	if drive := p.Cfg.Runner.WSLDrive; drive != "" && runner.WSL() {
-		if free, err := freeAt(drive); err == nil {
+		if free, err := p.freeAt(drive); err == nil {
 			disks = append(disks, runner.Disk{Where: "the Windows drive holding WSL's disks (" + drive + ")", Free: free})
 		} else {
 			errs = append(errs, err)
@@ -116,8 +116,13 @@ func (p *Pipeline) jobImages() []string {
 	return out
 }
 
-// freeAt measures a host directory; tests replace it.
-var freeAt = runner.FreeAt
+// freeAt measures a host directory.
+func (p *Pipeline) freeAt(dir string) (uint64, error) {
+	if p.freeAtFn != nil {
+		return p.freeAtFn(dir)
+	}
+	return runner.FreeAt(dir)
+}
 
 // DiskLow is why jobs aren't starting for lack of disk, as last measured,
 // or "".

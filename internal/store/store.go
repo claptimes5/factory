@@ -183,8 +183,11 @@ func (s *Store) migrate() error {
 	if cur > len(ms) {
 		return fmt.Errorf("database schema version %d is newer than this binary (%d); refusing to run", cur, len(ms))
 	}
+	// A new database has nothing to back up; an existing one is backed
+	// up before each migration.
+	existing := cur > 0
 	for _, m := range ms[cur:] {
-		if cur > 0 {
+		if existing {
 			bak := fmt.Sprintf("%s.bak-v%d-%s", s.path, cur, time.Now().UTC().Format("20060102T150405"))
 			if _, err := s.write.ExecContext(ctx, `VACUUM INTO ?`, bak); err != nil {
 				return fmt.Errorf("backup before %s: %w", m.name, err)
@@ -215,15 +218,15 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 // Path returns the database file path.
 func (s *Store) Path() string { return s.path }
 
-// Backup writes a consistent copy of the database to dst.
+// Backup writes a consistent copy of the database to dst. VACUUM INTO
+// can't run inside a transaction; on a connection of its own it reads one
+// snapshot, whatever is written meanwhile.
 func (s *Store) Backup(ctx context.Context, dst string) error {
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("%s already exists", dst)
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`VACUUM INTO ?`, dst)
-		return err
-	})
+	_, err := s.read.ExecContext(ctx, `VACUUM INTO ?`, dst)
+	return err
 }
 
 // --- work items ---

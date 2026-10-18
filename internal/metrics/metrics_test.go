@@ -7,18 +7,16 @@ import (
 
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 // Precision counts settled blocking findings: refuted ones and ones a
 // review ruled on, or any once the item is out of the loop; rounds to
 // pass counts the review rounds of items that passed.
 func TestReviewPrecisionAndRoundsToPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "f.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	review := func(it *store.WorkItem, v string) int64 {
 		id, _ := st.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "review", Harness: "codex", Model: "m", BudgetUSD: 1})
 		st.ClaimJob(ctx)
@@ -70,8 +68,7 @@ func TestReviewPrecisionAndRoundsToPass(t *testing.T) {
 		t.Fatalf("by reviewer %+v", r.Precision)
 	}
 	// No findings, no data.
-	empty, _ := store.Open(filepath.Join(t.TempDir(), "e.db"))
-	defer empty.Close()
+	empty := storetest.Open(t, filepath.Join(t.TempDir(), "e.db"))
 	if r, _ := Compute(ctx, empty); r.ReviewPrecision != -1 || r.RoundsToPass != -1 || r.Precision == nil {
 		t.Fatalf("empty %+v", r)
 	}
@@ -80,6 +77,7 @@ func TestReviewPrecisionAndRoundsToPass(t *testing.T) {
 // A review that blocked only on findings the verifier refuted passed the
 // item, so it counts as the passing round.
 func TestRoundsToPassRefutedBlock(t *testing.T) {
+	t.Parallel()
 	refuted := `{"decision":"block","findings":[{"severity":"major","file":"a","line":1,"claim":"c","evidence":"e","id":"F1","blocks":true,` +
 		`"check":{"status":"refuted","reason":"no"}}],"challenged_assumptions":[],"verified":true}`
 	blocked := `{"decision":"block","findings":[{"severity":"major","file":"a","line":1,"claim":"c","evidence":"e","id":"F1","blocks":true}],"challenged_assumptions":[]}`

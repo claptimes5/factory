@@ -51,8 +51,13 @@ const (
 	signalHorizon = 30 * 24 * time.Hour // older unused signals are left out
 )
 
-// learnDay is the day a learn job is counted against; tests move it.
-var learnDay = store.Today
+// learnDay is the day a learn job is counted against.
+func (p *Pipeline) learnDay() string {
+	if p.learnDayFn != nil {
+		return p.learnDayFn()
+	}
+	return store.Today()
+}
 
 // LearnInput is carried by a learn job: its repo and the signals it reads.
 // Trimmed are the ones the caps left out, set aside with the rest so they
@@ -238,7 +243,7 @@ func (p *Pipeline) learnTriggers(ctx context.Context) {
 	}
 	since := time.Now().Add(-signalHorizon).UTC().Format(store.TimeFormat)
 	for _, repo := range p.Cfg.RepoNames() {
-		key := learnDay() + " " + repo
+		key := p.learnDay() + " " + repo
 		if seen, err := p.Store.HasEvent(ctx, "learn_queued", key); err != nil || seen {
 			continue
 		}

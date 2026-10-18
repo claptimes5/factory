@@ -168,6 +168,11 @@ type Pipeline struct {
 	diskMsg  string    // why there isn't room to start a job, or ""
 	diskHalt bool      // the low disk was announced
 
+	// Clocks and probes a test replaces; nil is the real one.
+	freeAtFn    func(dir string) (uint64, error) // runner.FreeAt
+	healthNowFn func() time.Time                 // time.Now, for main's CI health
+	learnDayFn  func() string                    // store.Today, the day a learn job counts against
+
 	lastOrch    time.Time // last scheduled orchestrator request
 	lastSummary string    // day the daily summary was requested
 	lastDrain   time.Time // last drained-queue orchestrator request

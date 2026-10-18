@@ -100,6 +100,7 @@ func TestCompareSkillSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Budgets.MinFreeDiskGB = -1 // not the host's free disk
 	wd, _ := os.Getwd()
 	cfg.PromptsDir = filepath.Join(wd, "..", "..", "prompts")
 	cfg.SkillsDir = filepath.Join(root, "skills")

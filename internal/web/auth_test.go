@@ -11,6 +11,7 @@ import (
 )
 
 func TestLogin(t *testing.T) {
+	t.Parallel()
 	l := &Login{Password: "hunter22", Secret: make([]byte, 32)}
 	h := l.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("inside")) }))
 	do := func(method, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -75,6 +76,7 @@ func TestLogin(t *testing.T) {
 }
 
 func TestNeedsLogin(t *testing.T) {
+	t.Parallel()
 	for addr, want := range map[string]bool{"127.0.0.1:8080": false, "localhost:8080": false, "[::1]:8080": false,
 		"100.101.102.103:8080": false, "0.0.0.0:8080": true, ":8080": true, "192.168.1.5:8080": true, "myhost:8080": true} {
 		if got := NeedsLogin(addr); got != want {
@@ -84,6 +86,7 @@ func TestNeedsLogin(t *testing.T) {
 }
 
 func TestLoginLimits(t *testing.T) {
+	t.Parallel()
 	if clientKey("[2001:db8:1:2:3:4:5:6]:99") != clientKey("[2001:db8:1:2:ffff::1]:1") {
 		t.Error("one IPv6 /64 should share a limit")
 	}

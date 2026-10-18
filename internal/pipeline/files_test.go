@@ -17,6 +17,7 @@ import (
 // The owner's checkout's .env reaches the builder and the gates, and never
 // the branch, even when the builder's .gitignore un-ignores it.
 func TestRepoFilesReachJobsButNotTheBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	host := t.TempDir()
@@ -69,6 +70,7 @@ func TestRepoFilesReachJobsButNotTheBranch(t *testing.T) {
 }
 
 func TestPlaceFilesNeverOverwritesOrFollowsLinks(t *testing.T) {
+	t.Parallel()
 	from, dst, outside := t.TempDir(), t.TempDir(), t.TempDir()
 	writeFile(from, "kept", "host\n")
 	writeFile(from, "link/secret", "host\n")
@@ -90,6 +92,7 @@ func TestPlaceFilesNeverOverwritesOrFollowsLinks(t *testing.T) {
 }
 
 func TestWorktreeIncludePicksIgnoredMatches(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	from := t.TempDir()
 	git(t, from, "init", "-q")
@@ -106,6 +109,7 @@ func TestWorktreeIncludePicksIgnoredMatches(t *testing.T) {
 }
 
 func TestEscapePattern(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		".env":       ".env",
 		"a[1]*.txt":  `a\[1\]\*.txt`,
@@ -120,6 +124,7 @@ func TestEscapePattern(t *testing.T) {
 }
 
 func TestFilesConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, tc := range []struct{ yaml, err string }{
 		{"files: {from: " + dir + ", paths: [.env]}", ""},
@@ -141,6 +146,7 @@ func TestFilesConfig(t *testing.T) {
 // A listed folder brings only what git doesn't track there, and only
 // plain files; a missing checkout fails the job with its path.
 func TestHostFilesSkipTrackedAndSpecialFiles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	host := t.TempDir()

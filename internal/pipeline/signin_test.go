@@ -49,6 +49,7 @@ func (g *gatedHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<
 }
 
 func TestOneCodexJobAtATimeOnAChatGPTPlan(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, one := range []bool{true, false} { // the auth file; an API key or access token
 		e := setup(t)
@@ -76,6 +77,7 @@ func TestOneCodexJobAtATimeOnAChatGPTPlan(t *testing.T) {
 }
 
 func TestASignedOutCodexJobWaitsWithoutUsingARetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	var notes []string
@@ -131,6 +133,7 @@ func (g *gatedHarness) signIn() {
 }
 
 func TestAJobThatKeepsSigningOutFailsAsUsual(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	g := &gatedHarness{fakeHarness: e.codex, one: true, signOuts: maxSignedOut + 1}
@@ -157,6 +160,7 @@ func TestAJobThatKeepsSigningOutFailsAsUsual(t *testing.T) {
 }
 
 func TestASignedOutJobThatCantBeQueuedAgainFailsAsUsual(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	g := &gatedHarness{fakeHarness: e.codex, one: true, signOuts: 1}
@@ -187,6 +191,7 @@ func TestASignedOutJobThatCantBeQueuedAgainFailsAsUsual(t *testing.T) {
 }
 
 func TestRecoverCleansUpHarnessSignIns(t *testing.T) {
+	t.Parallel()
 	e := setup(t)
 	r := &recoverHarness{fakeHarness: e.codex}
 	e.p.Harnesses["codex"] = r
@@ -206,6 +211,7 @@ type recoverHarness struct {
 func (r *recoverHarness) Recover() error { r.recovered = true; return nil }
 
 func TestRunLogsLoseTheSignInsTokens(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Harnesses["claude"] = &tokenHarness{fakeHarness: e.claude}

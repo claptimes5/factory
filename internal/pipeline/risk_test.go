@@ -11,6 +11,7 @@ import (
 // this run: after a retry and a new triage, an old run's feature isn't
 // why. Events saved before they carried data still name it.
 func TestRiskWhy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 5, "x")
