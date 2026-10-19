@@ -99,6 +99,11 @@ as `tailscale serve`. Anywhere else the screen is read-only. Values that
 would quietly stop the factory, such as no jobs at once or a poll every
 second, are refused. See [Control room login](security.md#control-room-login).
 
+**Remove the factory**, at the bottom, lists the factory's labels on your
+repos (with how many open issues and PRs carry each), the job images it
+built and its job data, then removes them once you confirm. The same
+access as saving applies. See [Removing the factory](setup.md#removing-the-factory).
+
 ## What to do with a parked item
 
 A parked item waits for you and nothing runs on it. Its card, its page
@@ -120,6 +125,29 @@ the dashboard (Items, then its issue number). The comment is public, so
 it names no address.
 The `factory:retry` label still works, but you don't have to go to the
 issue unless the factory asked a question there (a park from triage).
+
+### What happened
+
+The header shows only where an item is now, so a build that failed and
+then had its retry cancelled reads as just "parked". A parked item, or
+one whose latest jobs failed, ran out of turns, timed out or were
+cancelled, has a **What happened** box at the top of its page. It tells
+the last few jobs in order from what the factory recorded, each linked
+to its job: "The build ran out of turns (job #12), then its retry was
+cancelled by you (job #14)." An item parked with no job to blame (a
+question from triage) shows why it was parked.
+
+### Split it
+
+When an item's build failed or ran out of turns, or the item was
+parked, it may be too big for one build. **Split it** in the What
+happened box starts a new [chat](#chat-drafting-issues-with-the-orchestrator)
+with the orchestrator's model and sends it a message naming the item,
+its issue and what happened, with the failed run's job to read. The
+model drafts smaller issues, each with this item as its parent; nothing
+is filed until you press Create issue on a draft. The button is off,
+with the reason, while chat can't reply (its daily budget is spent, for
+one).
 
 ### When a build runs out of turns or budget
 
@@ -221,6 +249,7 @@ the command name to use other files.
 | `factory setup` | Guided first-run setup: repo, Docker, GitHub App, labels, keys; saves `factory.env` |
 | `factory codex-login` | Sign Codex in to a ChatGPT plan, or again once its sign-in stops working (see [Codex on a ChatGPT plan](setup.md#codex-on-a-chatgpt-plan)) |
 | `factory images [--rebuild]` | Build the missing job images; `--rebuild` rebuilds them all |
+| `factory uninstall [--data] [--dry-run]` | List, then remove, the factory's labels and job images, and with `--data` its data folder (see [Removing the factory](setup.md#removing-the-factory)) |
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |

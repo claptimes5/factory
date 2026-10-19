@@ -370,3 +370,76 @@ func TestListLabelsPages(t *testing.T) {
 		t.Fatalf("labels = %d %v", len(names), err)
 	}
 }
+
+func TestDeleteLabel(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.EscapedPath())
+		if strings.HasSuffix(r.URL.Path, "/gone") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/locked") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"Must have admin rights"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	ctx := context.Background()
+	if err := c.DeleteLabel(ctx, "factory:split?"); err != nil {
+		t.Fatal(err)
+	}
+	// One already deleted is what was asked for.
+	if err := c.DeleteLabel(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteLabel(ctx, "locked"); err == nil {
+		t.Fatal("a refused delete passed")
+	}
+	if got[0] != "DELETE /repos/o/r/labels/factory:split%3F" {
+		t.Fatalf("requests = %q", got)
+	}
+}
+
+func TestCountOpenLabeled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/repos/o/r/issues" || q.Get("labels") != "factory:parked" || q.Get("state") != "open" {
+			t.Errorf("unexpected %s", r.URL)
+		}
+		// Issues and PRs both count.
+		n := 3
+		if q.Get("page") == "1" {
+			n = 100
+		}
+		var page []map[string]any
+		for i := range n {
+			page = append(page, map[string]any{"number": i, "pull_request": map[string]any{}})
+		}
+		json.NewEncoder(w).Encode(page)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	n, err := c.CountOpenLabeled(context.Background(), "factory:parked")
+	if err != nil || n != 103 {
+		t.Fatalf("count = %d %v", n, err)
+	}
+}
+
+func TestCountOpenLabeledStopsAtItsCap(t *testing.T) {
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		page := make([]map[string]int, 100)
+		json.NewEncoder(w).Encode(page)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	n, err := c.CountOpenLabeled(context.Background(), "factory:ready")
+	if err != nil || n != LabelCountCap || pages != 10 {
+		t.Fatalf("count = %d after %d pages, %v", n, pages, err)
+	}
+}

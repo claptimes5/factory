@@ -34,6 +34,12 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
+	// Removing the factory, from any process, waits while this runs.
+	unlock, err := runLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	g := p.GitFor(repo)
 	ws, err := g.Prepare(ctx, dir, rc.BaseBranch, "", false, false)
 	if err != nil {

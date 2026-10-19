@@ -36,7 +36,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
   await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(6);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(7);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -119,7 +119,7 @@ test("the palette jumps to an item by number", async ({ page }, info) => {
 test("live activity reads like a log of the day", async ({ page }, info) => {
   await page.goto("/app/live");
   const feed = page.getByTestId("activity");
-  await expect(feed).toContainText("PR #88 is ready for you");
+  await expect(feed).toContainText("PR #92 is ready for you");
   await expect(feed).toContainText("started building with opus");
   await expect(feed).toContainText("Orchestrator on api#103");
   await expect(page.getByText("merged this week")).toBeVisible();
@@ -263,6 +263,48 @@ test("spend and metrics show charts", async ({ page }, info) => {
   await expect(page.getByText("claude/opus")).toBeVisible();
   await shot(page, info, "metrics");
   if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("a stopped item says what happened, job by job, and Split it asks chat for smaller issues", async ({ page }, info) => {
+  await page.goto("/app/");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  await needs.getByTestId("card").filter({ hasText: "Paginate the audit log API" }).filter({ visible: true }).getByRole("link", { name: /Paginate/ }).click();
+  const happened = page.getByTestId("happened");
+  // The header says only "parked"; this says the build failed first.
+  await expect(happened).toContainText(/The build failed: gates failed: test \(TestAuditPage: want 50 rows, got 49\) \(job #\d+\), then its retry was cancelled by you \(job #\d+\)\./);
+  await expect(happened.getByRole("link", { name: /job #/ })).toHaveCount(2);
+  await shot(page, info, "what-happened");
+  if (phone(info)) await noSidewaysScroll(page);
+  const itemURL = page.url();
+  await happened.getByRole("link", { name: /job #/ }).first().click();
+  await expect(page).toHaveURL(/\/jobs\/\d+/);
+  await page.goto(itemURL);
+
+  // Split it starts a new chat with the item, its issue and the failed run in it.
+  await happened.getByRole("button", { name: "Split it" }).click();
+  await expect(page).toHaveURL(/\/orchestrator\?chat=\d+/);
+  const you = page.getByTestId("you").first();
+  await expect(you).toContainText(/Split item #\d+ \(acme\/api#115\) into smaller issues\. Its title:/);
+  await expect(you).toContainText("Paginate the audit log API");
+  await expect(you).toContainText(/Its build stopped: The build failed.*log \(job #\d+\)/);
+  await expect(you).toContainText(/each with parent \d+/);
+});
+
+test("a build that ran out of turns says so at the top, and Split it waits for chat", async ({ page }) => {
+  // Chat says no: the button is off, with its reason.
+  await page.route(/\/api\/v1\/items\/\d+$/, async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    if (body.split) body.split.unavailable = "Today's orchestration budget is spent ($10.00 of $10.00).";
+    await route.fulfill({ response: r, json: body });
+  });
+  await page.goto("/app/");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  await needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true }).getByRole("link", { name: /Add SSO sign-in/ }).click();
+  const happened = page.getByTestId("happened");
+  await expect(happened).toContainText(/The build ran out of turns \(job #\d+\)\./);
+  await expect(happened.getByRole("button", { name: "Split it" })).toBeDisabled();
+  await expect(happened).toContainText("Today's orchestration budget is spent");
 });
 
 test("inbox lists what needs you", async ({ page }, info) => {

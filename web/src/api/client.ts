@@ -45,6 +45,10 @@ export type WizardAccess = S["WizardAccess"];
 export type WizardSecret = S["WizardSecret"];
 export type WizardResult = S["WizardResult"];
 export type WizardManifest = S["WizardManifest"];
+export type Happened = S["Happened"];
+export type Split = S["Split"];
+export type Uninstall = S["Uninstall"];
+export type UninstallResult = S["UninstallResult"];
 
 export class APIError extends Error {
   constructor(
@@ -138,6 +142,9 @@ export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () =>
 export const useNotifications = () =>
   useQuery({ queryKey: ["notifications"], queryFn: () => getJSON<Notifications>("/notifications") });
 export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () => getJSON<Settings>("/settings") });
+/** What removing the factory would remove. It asks every repo's host, so it loads only when asked for. */
+export const useUninstall = (enabled: boolean) =>
+  useQuery({ queryKey: ["uninstall"], queryFn: () => getJSON<Uninstall>("/settings/uninstall"), enabled, refetchInterval: false, staleTime: Infinity });
 
 /** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>

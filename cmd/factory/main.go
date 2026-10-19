@@ -6,6 +6,7 @@
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
 //	factory codex-login sign Codex in to a ChatGPT plan
+//	factory uninstall  remove the factory's labels, job images and (--data) data
 //	factory migrate    apply database migrations and exit
 //	factory backup F   write a consistent copy of the database to F
 package main
@@ -30,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -79,7 +81,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -131,6 +133,10 @@ func run(args []string) error {
 	takeSentryToken() // and the one factory.env sets
 	if fs.Arg(0) == "doctor" {
 		return runDoctor(context.Background(), os.Stdout, *cfgPath, cfg, *envPath)
+	}
+	if fs.Arg(0) == "uninstall" {
+		// Before the database opens, so --data can remove it.
+		return uninstall(context.Background(), os.Stdout, os.Stdin, *cfgPath, cfg, *envPath, fs.Args()[1:])
 	}
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -520,8 +526,35 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	// The setup screen reads the readiness check's reports, and can run it
 	// again: on the daemon's context, so it stops when the daemon does.
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
-	srv.CheckReadiness = func(_ context.Context, repo string) error { return recheckReadiness(ctx, cfg, p, repo) }
+	// A check a crash or restart cut off left its folder behind.
+	sweepReadiness(cfg.Path(cfg.DataDir))
+	// Readiness runs count as busy for removing the factory, and none
+	// starts while it is removed.
+	var readinessRuns atomic.Int32
+	var removing atomic.Bool
+	readinessRun := func() (func(), error) {
+		// Counted first, so a removal that starts now sees it.
+		readinessRuns.Add(1)
+		if removing.Load() {
+			readinessRuns.Add(-1)
+			return nil, errors.New("the factory is being removed")
+		}
+		return func() { readinessRuns.Add(-1) }, nil
+	}
+	srv.CheckReadiness = func(_ context.Context, repo string) error {
+		done, err := readinessRun()
+		if err != nil {
+			return err
+		}
+		defer done()
+		return recheckReadiness(ctx, cfg, p, repo)
+	}
 	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		done, err := readinessRun()
+		if err != nil {
+			return "", err
+		}
+		defer done()
 		return fileReadiness(ctx, cfg, p, repo, queue)
 	}
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
@@ -581,8 +614,45 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return err
 	}
 	srv.Wizard = wz
-	// A restart waits for an image build or a sign-in, as for a job.
-	p.Busy = wz.waitingOn
+	// A restart waits for an image build, a sign-in or a readiness
+	// check, as for a job.
+	p.Busy = func() string {
+		if w := wz.waitingOn(); w != "" {
+			return w
+		}
+		if readinessRuns.Load() > 0 {
+			return "the readiness check"
+		}
+		return ""
+	}
+	// Settings' "Remove the factory" waits for jobs, readiness checks and
+	// compare runs (in any process, by their run locks) and that work too,
+	// and holds off new work while it removes.
+	un := newUninstaller(cfg, cfgPath, envPath, true, func(ctx context.Context) string {
+		if runs := liveRuns(cfg.Path(cfg.DataDir)); len(runs) > 0 {
+			return "Not now: " + joinAnd(runs) + " is running. Wait for it to finish, then try again."
+		}
+		n := p.Running()
+		if m, err := st.CountJobs(ctx, state.Running, ""); err == nil && m > n {
+			n = m
+		}
+		if n > 0 {
+			return fmt.Sprintf("Not now: %d job(s) are running. Wait for them to finish, or cancel them, then try again.", n)
+		}
+		if readinessRuns.Load() > 0 {
+			return "Not now: a readiness check is running. Wait for it to finish, then try again."
+		}
+		if w := wz.waitingOn(); w != "" {
+			return "Not now: " + w + " is running. Wait for it to finish, then try again."
+		}
+		return ""
+	})
+	un.hold = func() func() {
+		release := p.Hold()
+		removing.Store(true)
+		return func() { removing.Store(false); release() }
+	}
+	srv.Uninstaller = un
 	_, err = listenWeb(ctx, cfg, srv)
 	return err
 }
@@ -1331,6 +1401,13 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 		id = strings.ReplaceAll(repo, "/", "__") + "-" + id
 	}
 	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
+	// Removing the factory waits while this runs: it uses a database of
+	// its own, which the main one never sees.
+	unlock, err := runLock(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	rep, err := compare.Run(ctx, compare.Options{
 		Cfg: cfg, Repo: repo, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GitHubFor(repo), Git: p.GitFor(repo),
 		Dir: dir, Push: !*noPush, Budget: max(left, 0),

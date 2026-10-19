@@ -348,3 +348,66 @@ func TestListLabelsIncludesGroups(t *testing.T) {
 		t.Fatalf("labels = %v %v", names, err)
 	}
 }
+
+func TestDeleteLabel(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.EscapedPath())
+		if strings.HasSuffix(r.URL.Path, "/gone") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	ctx := context.Background()
+	if err := c.DeleteLabel(ctx, "factory:ready"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteLabel(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != "DELETE /projects/team%2Fweb/labels/factory:ready" {
+		t.Fatalf("requests = %q", got)
+	}
+}
+
+func TestCountOpenLabeled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("labels") != "factory:parked" || q.Get("state") != "opened" {
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+		switch r.URL.EscapedPath() {
+		case "/projects/team%2Fweb/issues":
+			w.Write([]byte(`[{"iid":1},{"iid":2}]`))
+		case "/projects/team%2Fweb/merge_requests":
+			w.Write([]byte(`[{"iid":3}]`))
+		default:
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	n, err := c.CountOpenLabeled(context.Background(), "factory:parked")
+	if err != nil || n != 3 {
+		t.Fatalf("count = %d %v", n, err)
+	}
+}
+
+// A group's label is marked, so uninstall leaves it to the group.
+func TestLabelsInfoMarksGroupLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("include_ancestor_groups") != "true" {
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+		w.Write([]byte(`[{"name":"factory:ready","description":"Factory: pick this up","is_project_label":false},{"name":"factory:parked","is_project_label":true},{"name":"old"}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	ls, err := c.LabelsInfo(context.Background())
+	if err != nil || len(ls) != 3 || !ls[0].Group || ls[0].Description != "Factory: pick this up" || ls[1].Group || ls[2].Group {
+		t.Fatalf("labels = %+v %v", ls, err)
+	}
+}

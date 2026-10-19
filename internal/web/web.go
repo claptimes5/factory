@@ -130,6 +130,9 @@ type Server struct {
 	Wizard      Wizard
 	SetupMode   bool
 	SetupReason string
+	// Uninstaller lists and removes what the factory made, for Settings'
+	// "Remove the factory" (nil hides it).
+	Uninstaller Uninstaller
 
 	ready      readinessRun
 	tmpl       *template.Template
@@ -231,6 +234,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	s.routesUsage(mux)
 	s.routesChat(mux)
 	s.routesWizard(mux)
+	s.routesUninstall(mux)
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}

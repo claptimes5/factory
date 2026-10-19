@@ -337,6 +337,60 @@ doing any work, it restores the old binary (and the database backup when
 the migration failed). It uses `factory last-job`, `factory wait-job` and
 `factory db-path` to do this.
 
+## Removing the factory
+
+`./factory uninstall` lists what the factory made, then removes it once
+you type `remove` (or, with one repo, its name). `--dry-run` only lists.
+It refuses while something listens on the dashboard's address (stop the
+factory first, or use the dashboard), while jobs are marked running,
+and while a `factory compare` or a readiness check runs anywhere on
+this machine. With `--data`, a data folder that can't go (below) stops
+it before anything is removed.
+
+- **Labels**: each label the factory defines that a repo has, with how
+  many open issues and PRs carry it (counting stops at 1000, shown as
+  1000+). Deleting a label takes it off every issue and PR that has it.
+  A label goes only if its name starts with `factory:` or its
+  description with the `Factory:` setup writes, so an intake label you
+  made yourself is listed as yours to delete by hand. A GitLab label
+  defined in a group stays too: delete it in the group.
+- **Job images**: the job image tags the factory builds, and old
+  untagged copies marked `io.factory.built=1`. A repo's own image (one
+  with `image:` and no `image_from:`) is never removed, and the runner
+  image only when it carries that mark; otherwise it is listed as not
+  marked as built by the factory.
+- **Data**, only with `--data`: the whole data folder, with the
+  database, job logs, kept checkouts, readiness reports and the Codex
+  sign-in. It goes only when it is plainly the factory's: it holds
+  `factory.db`, nothing at its top the factory didn't make (dotfiles
+  such as `.DS_Store` aside), and it is
+  neither your home folder nor holds `factory.yaml` or `factory.env`.
+  Otherwise the list says why it stays.
+
+In the dashboard, Settings, **Remove the factory** shows the same list
+and removes it after you confirm. It needs the same access as saving
+settings. It waits while jobs, a readiness check, a compare run, an
+image build or a Codex sign-in run, starts no new work while it removes
+(a restart asked for meanwhile waits for it too), takes one removal at
+a time, and looks again before the images and the data. The factory
+is still running then, so its database and sign-ins stay: the data
+choice removes only job logs, kept checkouts, readiness reports and repo
+caches, after the same check. Stop the factory afterwards, or it puts
+labels back as it works.
+
+Neither deletes what only you can:
+
+- **The GitHub App.** Only its owner can delete it, from its settings
+  page (`https://github.com/settings/apps/<slug>`, or under the
+  organization's settings for an app an organization owns). You can
+  also just uninstall it from the account. Both links are shown.
+- **Tokens.** Revoke a `GITHUB_TOKEN` you made for the factory, and the
+  `GITLAB_TOKEN` (a personal token, or the project's access token).
+- **`factory.yaml` and `factory.env`.** Delete them yourself;
+  `factory.env` holds the keys.
+
+Each removal is reported as removed or failed, with why.
+
 ## Manual setup
 
 `factory setup` is the easy way. If you'd rather do each step yourself:

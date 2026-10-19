@@ -436,6 +436,32 @@ paths:
         "200": { $ref: "#/components/responses/Action" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
+  /settings/uninstall:
+    get:
+      summary: What removing the factory would remove, and what is left for you to do
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Uninstall" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Remove the factory's labels and job images, and its job data if asked
+      description: |
+        Deleting a label takes it off every issue and PR that has it. Refused
+        while jobs run (409). The GitHub App, tokens and config files are
+        never touched; the result says where to remove them.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: { type: string, enum: [remove] }
+                data: { type: boolean, description: "Remove the job data too (default false)" }
+      responses:
+        "200": { description: How each removal went, content: { application/json: { schema: { $ref: "#/components/schemas/UninstallResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /settings/tuning:
     get:
       summary: The tuning loop's proposal waiting for you, if any
@@ -1135,7 +1161,7 @@ components:
         data: { type: string, description: JSON }
     ItemDetail:
       type: object
-      required: [item, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person]
+      required: [item, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split]
       properties:
         item: { $ref: "#/components/schemas/Item" }
         jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
@@ -1160,6 +1186,105 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Plan"
             - type: "null"
+        happened:
+          description: How a stopped, failed or parked item got there, from its jobs and events; null for one that hasn't stopped
+          oneOf:
+            - $ref: "#/components/schemas/Happened"
+            - type: "null"
+        split:
+          description: The Split it button, for an item whose build failed or ran out of turns, or that was parked; null otherwise
+          oneOf:
+            - $ref: "#/components/schemas/Split"
+            - type: "null"
+    Happened:
+      type: object
+      required: [summary, steps]
+      properties:
+        summary: { type: string, description: "The whole story in a sentence: The build ran out of turns (job #12), then its retry was cancelled by you (job #14)." }
+        steps: { type: array, items: { $ref: "#/components/schemas/HappenedStep" }, description: Its parts in order, each with its job to link }
+    HappenedStep:
+      type: object
+      required: [text, job_id]
+      properties:
+        text: { type: string }
+        job_id: { type: [integer, "null"], format: int64 }
+    Split:
+      type: object
+      required: [prompt, unavailable]
+      properties:
+        prompt: { type: string, description: The chat message that asks for smaller issues, each with this item as parent }
+        unavailable: { type: string, description: "Why chat can't take it now, or empty" }
+    Uninstall:
+      type: object
+      required: [labels, repos, kept, images, images_note, data, manual, refused, writable, reason]
+      properties:
+        kept: { type: array, items: { $ref: "#/components/schemas/UninstallKept" }, description: "What looks like the factory's but stays, with why: a GitLab group's label, an intake label you made, a runner image not marked as the factory's" }
+        labels: { type: array, items: { $ref: "#/components/schemas/UninstallLabel" }, description: "The factory's labels on each repo. Deleting one takes it off every issue and PR that has it" }
+        repos: { type: array, items: { $ref: "#/components/schemas/UninstallRepo" }, description: Repos whose labels couldn't be read }
+        images: { type: array, items: { $ref: "#/components/schemas/UninstallImage" }, description: "The job images the factory built, old copies included" }
+        images_note: { type: string, description: "Why no images could be listed, or empty" }
+        data: { $ref: "#/components/schemas/UninstallData" }
+        manual: { type: array, items: { $ref: "#/components/schemas/UninstallStep" }, description: "What the factory can't do for you: the GitHub App, tokens, its config files" }
+        refused: { type: string, description: "Why nothing can be removed now (jobs running), or empty" }
+        writable: { type: boolean }
+        reason: { type: string, description: "Why this request may not remove anything, or empty" }
+    UninstallLabel:
+      type: object
+      required: [repo, name, open, open_capped]
+      properties:
+        repo: { type: string }
+        name: { type: string }
+        open: { type: integer, description: "Open issues and PRs with it; -1 when it couldn't be counted" }
+        open_capped: { type: boolean, description: "Counting stopped at open, so there are at least that many" }
+    UninstallKept:
+      type: object
+      required: [what, why]
+      properties:
+        what: { type: string }
+        why: { type: string }
+    UninstallRepo:
+      type: object
+      required: [repo, error]
+      properties:
+        repo: { type: string }
+        error: { type: string }
+    UninstallImage:
+      type: object
+      required: [ref, id, size, dangling]
+      properties:
+        ref: { type: string, description: "Its tag, or its ID for an old untagged copy" }
+        id: { type: string }
+        size: { type: string }
+        dangling: { type: boolean }
+    UninstallData:
+      type: object
+      required: [path, exists, size, what, note, blocked]
+      properties:
+        path: { type: string }
+        exists: { type: boolean }
+        size: { type: string }
+        what: { type: string, description: What removing it here removes }
+        note: { type: string, description: "What stays and why, or empty" }
+        blocked: { type: string, description: "Why it can't be removed (it may not be the factory's alone), or empty" }
+    UninstallStep:
+      type: object
+      required: [text, url]
+      properties:
+        text: { type: string }
+        url: { type: string, description: "A link, or empty" }
+    UninstallResult:
+      type: object
+      required: [done, manual]
+      properties:
+        done: { type: array, items: { $ref: "#/components/schemas/UninstallDone" } }
+        manual: { type: array, items: { $ref: "#/components/schemas/UninstallStep" } }
+    UninstallDone:
+      type: object
+      required: [what, ok, error]
+      properties:
+        what: { type: string }
+        ok: { type: boolean }
+        error: { type: string }
     Plan:
       type: object
       required: [job_id, approach, files, risks, tests, waiting, approved_by, replan_of, can_approve]
