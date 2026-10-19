@@ -137,6 +137,22 @@ func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.
 	return nil
 }
 
+// relinkSaved links each saved report to the issues filed for it, without
+// running the check again: a report saved before the check recorded its
+// issues, or before they were filed elsewhere, still shows them.
+func relinkSaved(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) {
+	for _, repo := range cfg.RepoNames() {
+		r, err := readiness.Load(readinessDir(cfg), repo)
+		gh, ok := p.GitHubFor(repo).(forge)
+		if err != nil || r == nil || !ok {
+			continue
+		}
+		if err := relink(ctx, cfg, gh, r); err != nil {
+			slog.Warn("readiness", "repo", repo, "err", err)
+		}
+	}
+}
+
 // marker is hidden in the body of each issue the check files, so a later
 // run knows the gap is already filed even if its title changed.
 func marker(key string) string { return "<!-- factory-readiness: " + key + " -->" }
