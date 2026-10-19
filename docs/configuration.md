@@ -142,8 +142,10 @@ The factory works them the same way: it picks up issues labeled
   Personal access tokens, choose Generate token > Fine-grained token, pick
   the projects (or their group) under Group and project access, and give
   them the permissions below.
-- **A legacy token** works too: give it the `api` and `write_repository`
-  scopes. A project access token limits it to one project; for several,
+- **A legacy token** is quicker to make: give it the `api` and
+  `write_repository` scopes. On gitlab.com,
+  <https://gitlab.com/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository>
+  opens the form with both ticked (use your own host if self-hosted). A project access token limits it to one project; for several,
   use a group access token or a bot account's personal token.
 
 The fine-grained permissions, from each call the factory makes. The

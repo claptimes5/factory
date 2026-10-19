@@ -492,8 +492,10 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 	p.say("  - A legacy token with the api and write_repository scopes: a project access")
 	p.say("    token for one project, or a group token or a bot account's personal token.")
 	for h := range hosts {
-		p.say("  On %s: https://%s/-/user_settings/personal_access_tokens (Generate token >", h, h)
-		p.say("  Fine-grained token), or the project's Settings > Access tokens.")
+		p.say("  On %s, a legacy token with both scopes already ticked:", h)
+		p.say("    https://%s/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository", h)
+		p.say("  or Generate token > Fine-grained token on that page, or the project's")
+		p.say("  Settings > Access tokens.")
 	}
 	client := clientFor(func(repo string) (forge, github.TokenSource, error) {
 		ts := github.StaticToken(vals["GITLAB_TOKEN"])
