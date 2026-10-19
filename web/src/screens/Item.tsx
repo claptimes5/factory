@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router";
-import { ExternalLink } from "lucide-react";
+import { Fragment, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
+import { ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { act, useItem, type Estimate, type Event, type Item, type Plan } from "@/api/client";
+import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split } from "@/api/client";
+import type { components } from "@/api/schema";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { PlanCostNote } from "@/components/PlanUsage";
@@ -17,7 +18,7 @@ export function ItemScreen() {
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person } = data!;
+  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split } = data!;
   const live = jobs.find((j) => j.state === "running");
   return (
     <div className="space-y-4">
@@ -34,6 +35,7 @@ export function ItemScreen() {
         <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
           {it.title} <StageBadge stage={it.stage} />
         </h1>
+        {happened && <HappenedCard h={happened} split={split} />}
         {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}
         {it.choice_job_id != null && it.choices.length > 0 && (
           <Card className="mt-2 border-warning/60" data-testid="next">
@@ -408,6 +410,72 @@ function DiffRisk({ reasons, person }: { reasons: string[]; person: string[] }) 
         <p className="rounded-md bg-warning/10 p-2 text-warning">
           Needs you whatever its risk, so it won't merge itself: it {person.join("; ")}.
         </p>
+      )}
+    </div>
+  );
+}
+
+/** A last step that ends in its own punctuation (a parked question) needs no full stop. */
+const endsSentence = (h: Happened) => {
+  const last = h.steps[h.steps.length - 1];
+  return !!last && last.job_id == null && /[.?!]$/.test(last.text);
+};
+
+/** How a stopped item got there, each step linked to its job, and the offer to split it. */
+function HappenedCard({ h, split }: { h: Happened; split: Split | null }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const splitIt = async () => {
+    if (!split) return;
+    setBusy(true);
+    setErr("");
+    try {
+      // Chat may have become unavailable since the page loaded.
+      const chats = await getJSON<components["schemas"]["Chats"]>("/chats");
+      if (!chats.available) throw new Error(chats.unavailable);
+      const r = await postJSON<components["schemas"]["SentChat"]>("/chats", { chat_id: 0, text: split.prompt });
+      void navigate(`/orchestrator?chat=${r.chat_id}`);
+    } catch (e) {
+      setErr(e instanceof APIError || e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-2 rounded-md border border-warning/60 bg-warning/5 p-3 text-sm" data-testid="happened">
+      <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">What happened</div>
+      <p>
+        {h.steps.map((st, i) => (
+          <Fragment key={i}>
+            {i > 0 && ", then "}
+            {st.text}
+            {st.job_id != null && (
+              <>
+                {" ("}
+                <Link to={`/jobs/${st.job_id}`} className="text-primary hover:underline">
+                  job #{st.job_id}
+                </Link>
+                {")"}
+              </>
+            )}
+          </Fragment>
+        ))}
+        {endsSentence(h) ? "" : "."}
+      </p>
+      {split && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" disabled={busy || !!split.unavailable} onClick={splitIt} title={split.unavailable || undefined}>
+            <Scissors /> {busy ? "Starting a chat…" : "Split it"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {split.unavailable || "Asks the orchestrator's model, in a new chat, to draft smaller issues for it."}
+          </span>
+          {err && (
+            <p role="alert" className="w-full text-destructive">
+              {err}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

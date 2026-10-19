@@ -60,6 +60,50 @@ func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
 	return fmt.Errorf("devserver: would reset auto-merge's breaker for %s", repo)
 }
 
+// uninstaller lists sample labels and images, and pretends to remove them.
+type uninstaller struct{}
+
+func (uninstaller) Plan(context.Context) web.APIUninstall {
+	return web.APIUninstall{
+		Labels: []web.APIUninstallLabel{
+			{Repo: "acme/api", Name: "factory:ready", Open: 4}, {Repo: "acme/api", Name: "factory:parked", Open: 3}, {Repo: "acme/api", Name: "factory:risk-low", Open: 0},
+			{Repo: "acme/web", Name: "factory:ready", Open: 1}, {Repo: "acme/web", Name: "factory:awaiting-you", Open: 2},
+		},
+		Repos: []web.APIUninstallRepo{},
+		Images: []web.APIUninstallImage{
+			{Ref: "factory-job:latest", ID: "3f2a9c1d8e7b", Size: "2.31GB"},
+			{Ref: "a1b2c3d4e5f6", ID: "a1b2c3d4e5f6", Size: "2.29GB", Dangling: true},
+		},
+		Data: web.APIUninstallData{Path: "/srv/factory/data", Exists: true, Size: "418.2MB",
+			What: "Job logs, kept checkouts of stopped builds, readiness reports and repo caches, in /srv/factory/data.",
+			Note: "The database (items, jobs, spend), the Codex sign-in and the dashboard's key stay while the factory runs. Once it's stopped, delete /srv/factory/data, or run ./factory uninstall --data."},
+		Manual: []web.APIUninstallStep{
+			{Text: "Delete the GitHub App acme-factory (only its owner can): its settings page, Advanced, Delete GitHub App.", URL: "https://github.com/settings/apps/acme-factory"},
+			{Text: "If acme owns the app, it's under the organization's settings instead.", URL: "https://github.com/organizations/acme/settings/apps/acme-factory"},
+			{Text: "The factory doesn't delete its settings: delete /srv/factory/factory.yaml and /srv/factory/factory.env yourself once you're done (factory.env holds its keys)."},
+		},
+	}
+}
+
+func (u uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallResult, error) {
+	p := u.Plan(ctx)
+	res := web.APIUninstallResult{Done: []web.APIUninstallDone{}, Manual: append([]web.APIUninstallStep{{Text: "Stop the factory now. While it runs it puts labels back as it works, and it picks up no new issues without its factory:ready label."}}, p.Manual...)}
+	for _, l := range p.Labels {
+		res.Done = append(res.Done, web.APIUninstallDone{What: "label " + l.Name + " on " + l.Repo, OK: true})
+	}
+	for _, im := range p.Images {
+		d := web.APIUninstallDone{What: "image " + im.Ref, OK: !im.Dangling}
+		if im.Dangling {
+			d.Error = "image is being used by stopped container 9c1f0e2a"
+		}
+		res.Done = append(res.Done, d)
+	}
+	if data {
+		res.Done = append(res.Done, web.APIUninstallDone{What: "data /srv/factory/data/jobs", OK: true})
+	}
+	return res, nil
+}
+
 // restarter pretends one job is still running, so a restart stays pending.
 type restarter struct{ pending atomic.Bool }
 
@@ -148,6 +192,7 @@ func main() {
 		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Chat:         &chatter{st: st},
 		Wizard:       newWizard(rs),
+		Uninstaller:  uninstaller{},
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
@@ -232,6 +277,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"},     // its plan waits
 		{"acme/api", 112, "Add SSO sign-in to the admin app", state.Parked, "L"},       // its build ran out of turns
 		{"acme/api", 113, "Make the lint check pass on main", state.Implementing, "S"}, // from the readiness check
+		{"acme/api", 115, "Paginate the audit log API", state.Parked, "M"},             // its build failed, then its retry was cancelled
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -252,6 +298,9 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			reason := "seeded"
 			if to == state.Parked {
 				reason = "Should anchors merge across files, or only within one? The issue does not say."
+				if x.issue == 115 {
+					reason = "Its retry was cancelled from the dashboard. Nothing runs until you choose what's next: retry it, or leave it parked."
+				}
 				if x.issue == 112 {
 					reason = "Its build (sonnet) stopped: it ran out of turns (80 of 80) before it finished. Its work is kept on the factory's machine (nothing was pushed), so it doesn't restart on its own: running out again is likely without a change. " +
 						"Continue picks up where it stopped, in the same checkout and session, with more turns or budget and a note from you (for example, to narrow the scope). " +
@@ -274,6 +323,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 	}
 	// 112's build ran out of turns: its work is kept and waits for you.
 	if err := seedStopped(ctx, st, jobs, ids[112]); err != nil {
+		return err
+	}
+	// 115's build failed its gates, and you cancelled its retry.
+	if err := seedCancelledRetry(ctx, st, ids[115]); err != nil {
 		return err
 	}
 	job := func(issue int, kind, model string, end state.JobState, cost float64, verdict string) (int64, error) {
@@ -518,6 +571,26 @@ var sampleCodexLog = []string{
 	`{"type":"item.completed","item":{"id":"1","type":"command_execution","command":"bash -lc 'git diff HEAD~1'","aggregated_output":"diff --git a/parser/parser.go b/parser/parser.go","exit_code":0,"status":"completed"}}`,
 	`{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"The fix is right; one test gap on multi-byte input."}}`,
 	`{"type":"turn.completed","usage":{"input_tokens":12000,"cached_input_tokens":3000,"output_tokens":800}}`,
+}
+
+// seedCancelledRetry adds a build that failed and a retry a person
+// cancelled before it started.
+func seedCancelledRetry(ctx context.Context, st *store.Store, item int64) error {
+	id, err := st.EnqueueJob(ctx, store.Job{ItemID: &item, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 6, Attempt: 1})
+	if err != nil {
+		return err
+	}
+	if _, err := st.ClaimJob(ctx); err != nil {
+		return err
+	}
+	if err := st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 2.4, Error: "gates failed: test (TestAuditPage: want 50 rows, got 49)"}); err != nil {
+		return err
+	}
+	retry, err := st.EnqueueJob(ctx, store.Job{ItemID: &item, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 6, Attempt: 2})
+	if err != nil {
+		return err
+	}
+	return st.CancelQueued(ctx, retry, "human", "cancelled from the control room")
 }
 
 // seedStopped adds a build that ran out of turns: its log, how it

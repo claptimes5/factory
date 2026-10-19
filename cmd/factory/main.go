@@ -6,6 +6,7 @@
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
 //	factory codex-login sign Codex in to a ChatGPT plan
+//	factory uninstall  remove the factory's labels, job images and (--data) data
 //	factory migrate    apply database migrations and exit
 //	factory backup F   write a consistent copy of the database to F
 package main
@@ -79,7 +80,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -131,6 +132,10 @@ func run(args []string) error {
 	takeSentryToken() // and the one factory.env sets
 	if fs.Arg(0) == "doctor" {
 		return runDoctor(context.Background(), os.Stdout, *cfgPath, cfg, *envPath)
+	}
+	if fs.Arg(0) == "uninstall" {
+		// Before the database opens, so --data can remove it.
+		return uninstall(context.Background(), os.Stdout, os.Stdin, *cfgPath, cfg, *envPath, fs.Args()[1:])
 	}
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -583,6 +588,16 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Wizard = wz
 	// A restart waits for an image build or a sign-in, as for a job.
 	p.Busy = wz.waitingOn
+	// Settings' "Remove the factory" waits for jobs and that work too.
+	srv.Uninstaller = newUninstaller(cfg, cfgPath, envPath, true, func(context.Context) string {
+		if n := p.Running(); n > 0 {
+			return fmt.Sprintf("Not now: %d job(s) are running. Wait for them to finish, or cancel them, then try again.", n)
+		}
+		if w := wz.waitingOn(); w != "" {
+			return "Not now: " + w + " is running. Wait for it to finish, then try again."
+		}
+		return ""
+	})
 	_, err = listenWeb(ctx, cfg, srv)
 	return err
 }

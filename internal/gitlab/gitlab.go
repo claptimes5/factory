@@ -271,6 +271,39 @@ func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// DeleteLabel deletes a project label, which takes it off every issue
+// and merge request that has it. A label already gone is not an error; a
+// group's label can only be deleted in the group.
+func (c *Client) DeleteLabel(ctx context.Context, name string) error {
+	err := c.do(ctx, "DELETE", c.project()+"/labels/"+url.PathEscape(name), nil, nil)
+	if github.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// CountOpenLabeled counts the open issues and merge requests with a
+// label, up to 1000 of each.
+func (c *Client) CountOpenLabeled(ctx context.Context, label string) (int, error) {
+	n := 0
+	for _, kind := range []string{"issues", "merge_requests"} {
+		for page := 1; page <= 10; page++ {
+			var raw []struct {
+				IID int `json:"iid"`
+			}
+			q := url.Values{"state": {"opened"}, "labels": {label}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+			if err := c.do(ctx, "GET", c.project()+"/"+kind+"?"+q.Encode(), nil, &raw); err != nil {
+				return 0, err
+			}
+			n += len(raw)
+			if len(raw) < 100 {
+				break
+			}
+		}
+	}
+	return n, nil
+}
+
 // BranchSHA returns a branch's head commit, or "" if it does not exist.
 func (c *Client) BranchSHA(ctx context.Context, branch string) (string, error) {
 	var r struct {

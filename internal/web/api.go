@@ -301,6 +301,12 @@ type APIItemDetail struct {
 	// NeedsPerson are why the latest build waits for you whatever its
 	// risk (risk.needs_person); empty when nothing does.
 	NeedsPerson []string `json:"needs_person"`
+	// Happened is how a stopped, failed or parked item got there; null
+	// for one that hasn't stopped.
+	Happened *APIHappened `json:"happened"`
+	// Split offers chat a split of an item whose build failed or ran out
+	// of turns, or that was parked; null otherwise.
+	Split *APISplit `json:"split"`
 }
 
 // APIJobDetail is one job with its gates.
@@ -945,6 +951,8 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 	d.Estimate = s.apiEstimate(r, it, jobs)
 	d.Plan = s.apiPlan(r, it)
 	d.RiskReasons, d.NeedsPerson = diffRisk(jobs, evs)
+	d.Happened = s.whatHappened(it, jobs, evs)
+	d.Split = s.splitOffer(ctx, it, jobs, d.Happened)
 	for _, j := range jobs {
 		d.Jobs = append(d.Jobs, apiJob(j))
 		if j.Kind == "triage" && j.State == state.Succeeded {

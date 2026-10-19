@@ -15,6 +15,7 @@ import {
   type TuningChange,
 } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
+import { RemoveFactory } from "@/components/Uninstall";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -217,6 +218,7 @@ function SettingsForm({ s }: { s: Settings }) {
         </div>
       )}
       <p className="text-xs text-muted-foreground">Gate commands, repos, the runner and the network are edited in factory.yaml.</p>
+      <RemoveFactory />
     </div>
   );
 }

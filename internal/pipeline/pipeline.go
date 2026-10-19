@@ -74,6 +74,16 @@ func Labels(intake string) []Label {
 	}
 }
 
+// LabelNames are the names of every label the factory defines: those
+// Labels lists, and LabelReview, which setup doesn't create.
+func LabelNames(intake string) []string {
+	var out []string
+	for _, l := range Labels(intake) {
+		out = append(out, l.Name)
+	}
+	return append(out, LabelReview)
+}
+
 // LabelReadiness marks the issues the readiness check filed, so running it
 // again doesn't file them twice.
 const LabelReadiness = "factory:readiness"

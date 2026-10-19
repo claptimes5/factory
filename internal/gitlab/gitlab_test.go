@@ -348,3 +348,50 @@ func TestListLabelsIncludesGroups(t *testing.T) {
 		t.Fatalf("labels = %v %v", names, err)
 	}
 }
+
+func TestDeleteLabel(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.EscapedPath())
+		if strings.HasSuffix(r.URL.Path, "/gone") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	ctx := context.Background()
+	if err := c.DeleteLabel(ctx, "factory:ready"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteLabel(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != "DELETE /projects/team%2Fweb/labels/factory:ready" {
+		t.Fatalf("requests = %q", got)
+	}
+}
+
+func TestCountOpenLabeled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("labels") != "factory:parked" || q.Get("state") != "opened" {
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+		switch r.URL.EscapedPath() {
+		case "/projects/team%2Fweb/issues":
+			w.Write([]byte(`[{"iid":1},{"iid":2}]`))
+		case "/projects/team%2Fweb/merge_requests":
+			w.Write([]byte(`[{"iid":3}]`))
+		default:
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	n, err := c.CountOpenLabeled(context.Background(), "factory:parked")
+	if err != nil || n != 3 {
+		t.Fatalf("count = %d %v", n, err)
+	}
+}

@@ -1525,6 +1525,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/uninstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What removing the factory would remove, and what is left for you to do */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Uninstall"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        /**
+         * Remove the factory's labels and job images, and its job data if asked
+         * @description Deleting a label takes it off every issue and PR that has it. Refused
+         *     while jobs run (409). The GitHub App, tokens and config files are
+         *     never touched; the result says where to remove them.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        confirm: "remove";
+                        /** @description Remove the job data too (default false) */
+                        data?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description How each removal went */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UninstallResult"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings/tuning": {
         parameters: {
             query?: never;
@@ -2858,6 +2932,85 @@ export interface components {
             estimate: components["schemas"]["Estimate"] | null;
             /** @description The plan of the item's current triage cycle; null when there is none or it isn't written yet */
             plan: components["schemas"]["Plan"] | null;
+            /** @description How a stopped, failed or parked item got there, from its jobs and events; null for one that hasn't stopped */
+            happened: components["schemas"]["Happened"] | null;
+            /** @description The Split it button, for an item whose build failed or ran out of turns, or that was parked; null otherwise */
+            split: components["schemas"]["Split"] | null;
+        };
+        Happened: {
+            /** @description The whole story in a sentence: The build ran out of turns (job #12), then its retry was cancelled by you (job #14). */
+            summary: string;
+            /** @description Its parts in order */
+            steps: components["schemas"]["HappenedStep"][];
+        };
+        HappenedStep: {
+            text: string;
+            /** Format: int64 */
+            job_id: number | null;
+        };
+        Split: {
+            /** @description The chat message that asks for smaller issues */
+            prompt: string;
+            /** @description Why chat can't take it now, or empty */
+            unavailable: string;
+        };
+        Uninstall: {
+            /** @description The factory's labels on each repo. Deleting one takes it off every issue and PR that has it */
+            labels: components["schemas"]["UninstallLabel"][];
+            /** @description Repos whose labels couldn't be read */
+            repos: components["schemas"]["UninstallRepo"][];
+            /** @description The job images the factory built, old copies included */
+            images: components["schemas"]["UninstallImage"][];
+            /** @description Why no images could be listed, or empty */
+            images_note: string;
+            data: components["schemas"]["UninstallData"];
+            /** @description What the factory can't do for you: the GitHub App, tokens, its config files */
+            manual: components["schemas"]["UninstallStep"][];
+            /** @description Why nothing can be removed now (jobs running), or empty */
+            refused: string;
+            writable: boolean;
+            /** @description Why this request may not remove anything, or empty */
+            reason: string;
+        };
+        UninstallLabel: {
+            repo: string;
+            name: string;
+            /** @description Open issues and PRs with it; -1 when it couldn't be counted */
+            open: number;
+        };
+        UninstallRepo: {
+            repo: string;
+            error: string;
+        };
+        UninstallImage: {
+            /** @description Its tag, or its ID for an old untagged copy */
+            ref: string;
+            id: string;
+            size: string;
+            dangling: boolean;
+        };
+        UninstallData: {
+            path: string;
+            exists: boolean;
+            size: string;
+            /** @description What removing it here removes */
+            what: string;
+            /** @description What stays and why, or empty */
+            note: string;
+        };
+        UninstallStep: {
+            text: string;
+            /** @description A link, or empty */
+            url: string;
+        };
+        UninstallResult: {
+            done: components["schemas"]["UninstallDone"][];
+            manual: components["schemas"]["UninstallStep"][];
+        };
+        UninstallDone: {
+            what: string;
+            ok: boolean;
+            error: string;
         };
         Plan: {
             /** @description The plan job */

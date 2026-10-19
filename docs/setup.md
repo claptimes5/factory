@@ -337,6 +337,45 @@ doing any work, it restores the old binary (and the database backup when
 the migration failed). It uses `factory last-job`, `factory wait-job` and
 `factory db-path` to do this.
 
+## Removing the factory
+
+`./factory uninstall` lists what the factory made, then removes it once
+you type `remove` (or, with one repo, its name). `--dry-run` only lists.
+It refuses while the factory is running (stop it first, or use the
+dashboard) and while jobs are marked running.
+
+- **Labels**: each label the factory defines that a repo has, with how
+  many open issues and PRs carry it. Deleting a label takes it off every
+  issue and PR that has it.
+- **Job images**: the images the factory built (labelled
+  `io.factory.built=1`), old untagged copies included, and the job image
+  tags it builds, since images built before that label lack it.
+- **Data**, only with `--data`: the whole data folder, with the
+  database, job logs, kept checkouts, readiness reports and the Codex
+  sign-in. A `data_dir` that also holds `factory.yaml`, `factory.env`
+  or a git checkout is not removed.
+
+In the dashboard, Settings, **Remove the factory** shows the same list
+and removes it after you confirm. It needs the same access as saving
+settings, and waits while jobs, an image build or a Codex sign-in run.
+The factory is still running then, so its database and sign-ins stay:
+the data choice removes only job logs, kept checkouts, readiness reports
+and repo caches. Stop the factory afterwards, or it puts labels back as
+it works.
+
+Neither deletes what only you can:
+
+- **The GitHub App.** Only its owner can delete it, from its settings
+  page (`https://github.com/settings/apps/<slug>`, or under the
+  organization's settings for an app an organization owns). You can
+  also just uninstall it from the account. Both links are shown.
+- **Tokens.** Revoke a `GITHUB_TOKEN` you made for the factory, and the
+  `GITLAB_TOKEN` (a personal token, or the project's access token).
+- **`factory.yaml` and `factory.env`.** Delete them yourself;
+  `factory.env` holds the keys.
+
+Each removal is reported as removed or failed, with why.
+
 ## Manual setup
 
 `factory setup` is the easy way. If you'd rather do each step yourself:
