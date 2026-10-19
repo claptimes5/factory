@@ -244,11 +244,13 @@ type fakeHarness struct {
 	orch    func(req harness.RunRequest) (string, error)
 	tune    func(req harness.RunRequest) (string, error)
 	groom   func(req harness.RunRequest) (string, error)
-	resumes []string            // Resume of each implement call
-	noSess  bool                // fail any resumed run, as if the session were gone
-	nets    map[string][]string // Services of each call, by stage
-	learn   []string            // successive learn verdicts
-	images  [][]string          // Images of each review call
+	resumes []string // Resume of each implement call
+	// sessions are the Resume and SessionDir of each call, by stage.
+	sessions map[string][][2]string
+	noSess   bool                // fail any resumed run, as if the session were gone
+	nets     map[string][]string // Services of each call, by stage
+	learn    []string            // successive learn verdicts
+	images   [][]string          // Images of each review call
 	// verifies are successive verifier verdicts; with none scripted the
 	// verifier fails, and its findings block as unverified.
 	verifies []string
@@ -256,8 +258,12 @@ type fakeHarness struct {
 	security []string // successive verdicts of the security pass
 	// implVerdict replaces the builder's usual verdict.
 	implVerdict string
-	plans       []string // successive plan verdicts
-	planChecks  []string // successive verdicts of the critic's plan check
+	// stops, by implement call, end that build on a cap ("turns" or
+	// "budget") after it ran, as Claude does; turns are each call's cap.
+	stops      []string
+	turns      []int
+	plans      []string // successive plan verdicts
+	planChecks []string // successive verdicts of the critic's plan check
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -274,6 +280,10 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		h.nets = map[string][]string{}
 	}
 	h.nets[req.Stage] = append(h.nets[req.Stage], req.Services)
+	if h.sessions == nil {
+		h.sessions = map[string][][2]string{}
+	}
+	h.sessions[req.Stage] = append(h.sessions[req.Stage], [2]string{req.Resume, req.SessionDir})
 	res := &harness.Result{CostUSD: 0.1, CostKnown: true, TokensIn: 10, TokensOut: 5, Turns: 1}
 	switch req.Stage {
 	case "triage":
@@ -290,6 +300,13 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		}
 		if err := h.builds[n](req.Workdir); err != nil {
 			return nil, err
+		}
+		h.turns = append(h.turns, req.MaxTurns)
+		if n < len(h.stops) && h.stops[n] != "" {
+			os.WriteFile(filepath.Join(req.OutDir, harness.ProgressFile), []byte("Done: half of Add.\nLeft: the test."), 0o644)
+			res.IsError, res.Stopped, res.Turns = true, h.stops[n], req.MaxTurns
+			res.Error = "claude: error_max_" + h.stops[n]
+			return res, nil
 		}
 		v := `{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":""}`
 		if h.implVerdict != "" {

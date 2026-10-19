@@ -147,6 +147,10 @@ func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone strin
 		}
 		switch state.JobState(d.State) {
 		case state.Failed, state.TimedOut:
+			if rest, ok := strings.CutPrefix(e.Reason, "Stopped: "); ok {
+				// Out of turns or budget: not a failure, a wait for you.
+				return withReason(kind+" stopped", rest), "needs_you"
+			}
 			return withReason(kind+" failed", e.Reason), "bad"
 		case state.Cancelled:
 			return kind + " was cancelled", "info"

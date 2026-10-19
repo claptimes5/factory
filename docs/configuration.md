@@ -406,7 +406,9 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - Small builds start on Haiku 5.5 and climb to Sonnet, then Opus, after two
   failed attempts at a tier (`escalation.max_attempts_per_tier`, 2 by
   default). The tiers are `escalation.implement`. After the last tier, the
-  item parks.
+  item parks. A build that runs out of turns or hits its dollar cap isn't
+  a failed attempt: it keeps its work and waits for you (see
+  [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget)).
 - Text-only (`XS`) builds use `routing.implement.XS`, Haiku by default (see
   [Text-only changes](quality.md#text-only-changes)).
 - Larger builds start on Sonnet or Opus.
@@ -416,8 +418,9 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - The [security pass](#the-security-pass) runs on Opus, so a change to
   security-sensitive code is read by both vendors' strongest models.
 
-The daemon refuses a config where a reviewer, or the verifier, could run
-the same harness and model as the builder it reviews.
+A reviewer, or the verifier, may run the same harness and model as the
+builder it reviews: each is a job of its own in a fresh session, never the
+builder's. Cross-vendor review, as here, is still the stronger setup.
 
 The escalation tiers are model names on the implement route's own harness,
 so a Codex builder escalates through Codex models: the daemon refuses a
@@ -707,6 +710,7 @@ values below are this repo's.
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
 | `confirm_over` | Dollars. An item whose cost estimate is over this waits for your OK before it's built (default 0, off). See [Asking before costly builds](#asking-before-costly-builds). |
+| `max_turns` | Turns (model calls) per build (default 80); other steps such as triage and review keep a cap of 80. A build that runs out, or hits its `per_job` cap, stops and waits for you; see [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget). |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
@@ -715,9 +719,9 @@ build budget. `factory compare` arms split what's left of today's budget.
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
 five-hour and a weekly usage window, and so does Codex on a
 [ChatGPT plan](setup.md#codex-on-a-chatgpt-plan). The factory records the latest
-reading each run reports, and `factory status`, the dashboard's
-**Spend** page and the orchestrator show how much is used and when it
-resets. When the five-hour or weekly window reaches `pause_at_usage`, that
+reading each run reports, and `factory status`, a line under the
+dashboard's header, its **Spend** page and the orchestrator show how much
+is used and when it resets. When the five-hour or weekly window reaches `pause_at_usage`, that
 harness's jobs wait in the queue until it resets, instead of failing and
 using up retries. The other harness keeps working, and you're notified
 when it pauses and resumes. A window that only one model has, such as a
@@ -1160,13 +1164,14 @@ coverage floor found, show either way.
 ## Claude-only review
 
 By default Codex reviews what Claude builds, so the reviewer is never the
-model that wrote the code. If you only have Claude, a different Claude
-model can review instead.
+model that wrote the code. If you only have Claude, Claude reviews too.
 
-The rule: the reviewer's model must differ from every model the builder
-can reach, including the tiers a retry escalates to. So a reviewer on Opus
-means Opus cannot be a build tier. Claude models compare by family, so
-`claude-sonnet-4-5` counts as `sonnet`.
+A reviewer may run the same model as the builder, including a tier a retry
+escalates to: every review is a job of its own in a fresh session, which
+never resumes the builder's session or sees its reasoning, only the change.
+So Opus can both build (as the top escalation tier) and review. A weaker
+reviewer would miss more, so keep the reviewer at least as strong as the
+strongest builder; prefer a different model where it is as strong.
 
 Change these entries in `factory.yaml` and leave the rest:
 
@@ -1179,11 +1184,11 @@ routing:
   implement.L:       {harness: claude, model: sonnet}
   review:            {harness: claude, model: opus}
   review.high_risk:  {harness: claude, model: opus, effort: high}   # or fable
-  verify:            {harness: claude, model: opus, effort: low}    # never a builder's model
+  verify:            {harness: claude, model: opus, effort: low}
   # drop security: it runs on a builder tier that didn't build the item,
   # never on the reviewer's model
 escalation:
-  implement: [haiku, sonnet]
+  implement: [haiku, sonnet, opus]   # a build that keeps failing ends on Opus
 ```
 
 No OpenAI key is needed once no route names `codex`, and `factory setup`
@@ -1197,20 +1202,20 @@ runs on Sonnet for an item Haiku built and on Haiku for one Sonnet built;
 give it Fable (`routing.security`) if your account has it.
 
 This is weaker than cross-vendor review: two models from one family tend
-to share blind spots. The rule covers the reviewer, whose approval is
-needed before any PR opens. The critic that also reads high-risk diffs
-runs only after the reviewer approves and can only add a block. So it uses
-`routing.critic` (default: `implement.L`) even when that is the builder's
-model.
+to share blind spots, and one model reviewing its own build shares them
+all, fresh session or not. The critic that also reads high-risk diffs
+uses `routing.critic` (default: `implement.L`) even when that is the
+builder's model, in a fresh session too.
 
 ## Codex-only
 
 Every step can run on Codex instead, with no Claude credential: on an
 OpenAI API key, or on a ChatGPT plan (`FACTORY_CODEX_AUTH=chatgpt`, signed
-in with `./factory codex-login`). The same rule holds: the reviewer's and
-the verifier's model must differ from every model a builder can reach. Codex
-models compare by their exact name, so `gpt-6.1-sol` and `gpt-6-luna` are
-two models. With two, one builds and the other reviews. The names below are
+in with `./factory codex-login`). As with Claude, the reviewer and the
+verifier may run a builder's model, each in a fresh session, but a
+different model catches more. Codex models compare by their exact name, so
+`gpt-6.1-sol` and `gpt-6-luna` are two models. With two, one builds and the
+other reviews. The names below are
 placeholders, as in this repo's own `factory.yaml`: use the ones your sign-in
 offers (`/model` in the `codex` app, signed in the same way, lists them; so
 does OpenAI's Codex models page). Each needs a `pricing` entry, and
@@ -1293,9 +1298,9 @@ review:
 `routing.verify` should be cheap: it reads a few claims and the code
 around them. Left out, it's triage's harness and model, unless a builder
 can run on those (as Haiku can here, for S builds), and then the
-reviewer's. The daemon refuses a `routing.verify` a builder could run on,
-escalation included: a verifier never rules on its own build. Each
-verifier run is a job of its own, kind `verify`, with its own cost and
+reviewer's. Set, it's used even when a builder can run on it: like the
+reviewer, the verifier starts a fresh session and never resumes the
+build's. Each verifier run is a job of its own, kind `verify`, with its own cost and
 log; so is a paired critic, kind `parallel_critic`. Both run inside the
 review that starts them and never wait in the queue. Cancelling one
 cancels its review.

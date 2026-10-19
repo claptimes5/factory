@@ -24,7 +24,7 @@ The factory is a single Go binary that turns labeled GitHub issues into verified
 1. **Few dependencies.** One Go binary (SQLite, web UI, MCP server embedded), Docker, `gh`, and the two CLIs inside the job image.
 2. **The daemon is deterministic; agents decide.** Agents propose. The daemon enforces budgets, concurrency, and permissions.
 3. **Every run starts fresh.** State lives in SQLite and GitHub, never in an agent's conversation.
-4. **The writer never grades its own work.** Review uses a different model, fresh context, and read-only access.
+4. **The writer never grades its own work.** Review runs in a fresh session with read-only access, by default on a different model; it never resumes the builder's session.
 5. **Fail closed.** A missing gate or an unparseable verdict blocks the job; it never passes silently.
 
 Stage procedures (triage, spec, implement, verify) are adapted from [addyosmani/factory](https://github.com/addyosmani/factory); restart and retry behavior borrows from [openai/symphony](https://github.com/openai/symphony).
@@ -199,7 +199,7 @@ Rules:
 
 - Triage sets `complexity` and `risk`; routing reads them. Nothing else picks models.
 - Keep the reviewer strong even when the builder is cheap.
-- The reviewer must differ from the builder in harness or, failing that, in model at every tier the builder can escalate to. The daemon refuses a config where they could match. Cross-harness review is the default.
+- Cross-harness review is the default: another vendor's model shares fewer of the builder's blind spots. The reviewer may still run the builder's harness and model, at any tier the builder escalates to; what keeps it independent is that every reviewer, verifier, critic and security job is a job of its own in a fresh session, never resuming the builder's. The daemon doesn't refuse such a config. The security pass is the one exception: it never runs on a reviewer's model, so it is a second model's read beside the reviewer's.
 
 ## Orchestrator agent
 
@@ -241,7 +241,7 @@ Only one orchestrator job runs at a time; extra triggers coalesce. Each run star
 
 ## Verification and adversarial review
 
-A PR reaches a human only after deterministic gates pass and a different model, with fresh context, fails to block it.
+A PR reaches a human only after deterministic gates pass and a reviewer in a fresh session (by default another vendor's model) fails to block it.
 
 **1. Gates (deterministic).** `gates.sh` runs types, lint, tests, build, and audit, then prints one verdict line the agent may not paraphrase. A required gate with no configured command reports `MISCONFIGURED` and fails the job.
 

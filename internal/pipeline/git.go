@@ -272,6 +272,13 @@ func (g *Git) Ingest(ctx context.Context, ws *Workspace, msg string) (sha string
 	return sha, true, err
 }
 
+// Unstep moves the branch of repo back to sha and leaves the index and
+// work tree as they are, so the next Ingest commits them again on sha.
+func (g *Git) Unstep(ctx context.Context, repo, sha string) error {
+	_, err := g.run(ctx, repo, nil, "reset", "--quiet", "--soft", sha)
+	return err
+}
+
 // Export writes the tree of sha into dst as plain files (no .git). It uses
 // a scratch index and checkout-index rather than git archive, so a builder's
 // .gitattributes (export-ignore) cannot hide files from the gates.

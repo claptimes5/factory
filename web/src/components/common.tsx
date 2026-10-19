@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
-import { act, type Gate } from "@/api/client";
+import { act, useJob, type Gate } from "@/api/client";
+import { Choices } from "@/components/Choices";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, stageName } from "@/lib/utils";
@@ -55,6 +56,8 @@ export function JobStateBadge({ state }: { state: string }) {
         ? "default"
         : state === "queued"
           ? "secondary"
+          : state === "stopped"
+            ? "warning"
           : state === "cancelled"
             ? "outline"
             : "destructive";
@@ -93,8 +96,19 @@ export function GateList({ gates }: { gates: Gate[] }) {
   );
 }
 
-/** Retry, retry a tier up, cancel and park: every press goes through the daemon's own checks. */
+/**
+ * What can be done with a job: once it ended, its choices (Continue, Retry,
+ * Tier up, Park, each explained); while it runs, cancel or park. Every
+ * press goes through the daemon's own checks.
+ */
 export function Actions({ jobId, itemId, running }: { jobId?: number | null; itemId?: number; running?: boolean }) {
+  const job = useJob(jobId ?? 0, { enabled: jobId != null && !running });
+  const choices = job.data?.choices ?? [];
+  if (jobId != null && !running && choices.length > 0) return <Choices jobId={jobId} itemId={itemId} choices={choices} compact />;
+  return <PlainActions jobId={jobId} itemId={itemId} running={running} />;
+}
+
+function PlainActions({ jobId, itemId, running }: { jobId?: number | null; itemId?: number; running?: boolean }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -106,7 +120,7 @@ export function Actions({ jobId, itemId, running }: { jobId?: number | null; ite
     void qc.invalidateQueries();
   };
   const park = () => {
-    const reason = window.prompt("What does a human need to decide? (shown on the issue)", "");
+    const reason = window.prompt("Why park it? (shown on the issue)", "");
     if (reason !== null) void press("park", `/items/${itemId}/park`, { reason });
   };
   return (
@@ -123,12 +137,24 @@ export function Actions({ jobId, itemId, running }: { jobId?: number | null; ite
           </>
         )}
         {jobId != null && running && (
-          <Button size="sm" variant="destructive" disabled={!!busy} onClick={() => press("cancel", `/jobs/${jobId}/cancel`)}>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={!!busy}
+            title="Stops this job now and parks the item. Nothing it did is pushed. Then retry it from its page, or add the factory:retry label on the issue."
+            onClick={() => press("cancel", `/jobs/${jobId}/cancel`)}
+          >
             Cancel job
           </Button>
         )}
         {itemId != null && (
-          <Button size="sm" variant="outline" disabled={!!busy} onClick={park}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!!busy}
+            title="Stops work on the item and takes it off the queue. Nothing is lost. To bring it back, press Retry on its page, or add the factory:retry label on the issue."
+            onClick={park}
+          >
             Park
           </Button>
         )}

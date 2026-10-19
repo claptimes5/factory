@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { useItem, useJob } from "@/api/client";
+import { useItem, useJob, useSavedDiff, type Stop } from "@/api/client";
+import { Choices } from "@/components/Choices";
 import { Actions, Empty, ErrorBox, GateList, JobStateBadge, Loading } from "@/components/common";
+import { DiffView } from "@/components/DiffView";
+import { Markdown } from "@/components/Markdown";
+import { PlanCostNote } from "@/components/PlanUsage";
 import { Terminal } from "@/components/Terminal";
 import { Transcript } from "@/components/Transcript";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +19,7 @@ export function SessionScreen() {
   const [tab, setTab] = useState<"transcript" | "terminal" | "issue">("transcript");
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { job: j, gates, can_attach } = data!;
+  const { job: j, gates, can_attach, stop, choices, can_steer, steer_note } = data!;
   const running = j.state === "running";
   type Tab = "transcript" | "terminal" | "issue";
   const tabs: [Tab, string][] = [["transcript", "Transcript"], ...(can_attach ? [["terminal", "Terminal"] as [Tab, string]] : []), ["issue", "Issue & spec"]];
@@ -36,7 +40,7 @@ export function SessionScreen() {
           )}
         </div>
         <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
-          {j.kind} job #{j.id} <JobStateBadge state={j.state} />
+          {j.kind} job #{j.id} <JobStateBadge state={stop ? "stopped" : j.state} />
         </h1>
         <p className="text-sm text-muted-foreground">
           {j.harness}/{j.model}
@@ -44,9 +48,15 @@ export function SessionScreen() {
           {j.started_at && ` · ${duration(j.started_at, j.finished_at || undefined)}`}
           {j.skillset && ` · skills: ${j.skillset}`}
         </p>
-        {j.error && <p className="mt-1 text-sm text-destructive">{j.error}</p>}
+        <PlanCostNote harnesses={[j.harness]} className="mt-1" />
+        {j.error && !stop && <p className="mt-1 text-sm text-destructive">{j.error}</p>}
+        {stop && <StopPanel jobId={j.id} stop={stop} />}
         <div className="mt-2">
-          <Actions jobId={j.id} itemId={itemId || undefined} running={running} />
+          {!running && choices.length > 0 ? (
+            <Choices jobId={j.id} itemId={itemId || undefined} choices={choices} />
+          ) : (
+            <Actions jobId={j.id} itemId={itemId || undefined} running={running} />
+          )}
         </div>
       </div>
       {/* Phone: one pane at a time. */}
@@ -93,7 +103,7 @@ export function SessionScreen() {
           </Card>
         </div>
         <div className={cn("flex h-[70vh] min-w-0 flex-col", tab !== "transcript" && "hidden xl:flex")}>
-          <Transcript jobId={j.id} />
+          <Transcript jobId={j.id} job={j} stop={stop} canSteer={can_steer} steerNote={steer_note} />
         </div>
         {can_attach && (
           <div className={cn("flex h-[70vh] min-w-0 flex-col", tab !== "terminal" && "hidden xl:flex")}>
@@ -101,6 +111,45 @@ export function SessionScreen() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** A build that ran out of turns or budget: what happened, its note, and the work it kept. */
+function StopPanel({ jobId, stop }: { jobId: number; stop: Stop }) {
+  const [open, setOpen] = useState(false);
+  const diff = useSavedDiff(jobId, open && stop.saved_diff);
+  return (
+    <div data-testid="stop" className="mt-2 space-y-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm">
+      <p className="font-medium">{stop.summary}</p>
+      <p className="text-muted-foreground">
+        {stop.kept
+          ? "Its work is kept on the factory's machine, and nothing was pushed. It doesn't restart on its own: running out again is likely unless something changes. Continue picks up where it stopped, with more turns or budget and a note from you if you like."
+          : "Its work couldn't be kept, so it can only start over."}
+      </p>
+      {stop.note && (
+        <div className="rounded-md bg-card p-2">
+          <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Its note on what's done and what's left</div>
+          <Markdown text={stop.note} />
+        </div>
+      )}
+      {stop.saved_diff && (
+        <div>
+          <button type="button" className="cursor-pointer text-sm text-primary hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "Hide the work it did" : "See the work it did (against the base branch)"}
+          </button>
+          {open &&
+            (diff.isLoading ? (
+              <Loading what="Loading the saved work" />
+            ) : diff.data && diff.data.patch.trim() ? (
+              <div className="mt-2 max-h-[60vh] overflow-auto">
+                <DiffView patch={diff.data.patch} findings={[]} itemId={0} />
+              </div>
+            ) : (
+              <Empty>It hadn't changed any files yet.</Empty>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

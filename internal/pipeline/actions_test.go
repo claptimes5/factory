@@ -166,3 +166,43 @@ func TestImplementRetryResumesSession(t *testing.T) {
 		}
 	}
 }
+
+// A reviewer may run the builder's own harness and model, so what keeps
+// it independent is its session: the review, and the verifier it sends
+// findings to, each start a fresh one, never resuming the build's nor
+// sharing the item's session directory, even with the Docker runner, where
+// a fix round on that model does resume the build.
+func TestReviewNeverResumesTheBuildersSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Runner = &runner.Docker{}
+	e.p.Cfg.Routing["review"] = e.p.Cfg.Routing["implement.S"] // claude/sonnet, as the builder
+	e.addIssue(96)
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.claude.verifies = []string{confirmF1}
+	e.claude.reviews = []string{block, resolveF1}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.item(t, 96).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage = %s", st)
+	}
+	if e.codex.calls["review"] != 0 || e.claude.calls["review"] != 2 || e.claude.calls["verify"] != 1 {
+		t.Fatalf("calls: claude %v, codex %v", e.claude.calls, e.codex.calls)
+	}
+	// The fix round does resume the build: there is a session to take.
+	if got := e.claude.resumes; len(got) != 2 || got[1] != "session-0" {
+		t.Fatalf("implement resumes = %q", got)
+	}
+	for stage, ss := range e.claude.sessions {
+		if stage == "implement" {
+			continue
+		}
+		for i, s := range ss {
+			if s != [2]string{} {
+				t.Errorf("%s call %d ran with resume %q, session dir %q: want a fresh session", stage, i, s[0], s[1])
+			}
+		}
+	}
+}

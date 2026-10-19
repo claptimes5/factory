@@ -27,6 +27,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/preview"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -48,6 +49,12 @@ func (actions) ApproveEstimate(_ context.Context, id, _ int64) error {
 }
 func (actions) Replan(_ context.Context, id, _ int64, ask string) error {
 	return fmt.Errorf("devserver: would ask for another plan for item %d: %s", id, ask)
+}
+func (actions) Continue(_ context.Context, id int64, extra float64, note string) error {
+	return fmt.Errorf("devserver: would continue job %d with %.0f%% more turns and budget (note: %q)", id, extra*100, note)
+}
+func (actions) Steer(_ context.Context, id int64, text string) error {
+	return fmt.Errorf("devserver: would send job %d: %s", id, text)
 }
 func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
 	return fmt.Errorf("devserver: would reset auto-merge's breaker for %s", repo)
@@ -115,9 +122,25 @@ func main() {
 	if err := seedHealth(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	reports := filepath.Join(dir, "readiness")
+	if err := seedReadiness(reports); err != nil {
+		log.Fatal(err)
+	}
+	if err := seedUsage(context.Background(), st); err != nil {
+		log.Fatal(err)
+	}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
+		Choices: sampleChoices(st),
+		SteerUnsupported: func(j *store.Job) string {
+			if j.Kind != "implement" || j.Harness != "claude" {
+				return "Only a running Claude build takes messages."
+			}
+			return ""
+		},
+		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports),
+		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
 				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},
@@ -193,8 +216,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
 		{"acme/web", 109, "Show order totals on the checkout page", state.AwaitingHuman, "M"},
-		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"},         // over the cost limit
-		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"}, // its plan waits
+		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"},             // over the cost limit
+		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"},     // its plan waits
+		{"acme/api", 112, "Add SSO sign-in to the admin app", state.Parked, "L"},       // its build ran out of turns
+		{"acme/api", 113, "Make the lint check pass on main", state.Implementing, "S"}, // from the readiness check
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -215,6 +240,11 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			reason := "seeded"
 			if to == state.Parked {
 				reason = "Should anchors merge across files, or only within one? The issue does not say."
+				if x.issue == 112 {
+					reason = "Its build (sonnet) stopped: it ran out of turns (80 of 80) before it finished. Its work is kept on the factory's machine (nothing was pushed), so it doesn't restart on its own: running out again is likely without a change. " +
+						"Continue picks up where it stopped, in the same checkout and session, with more turns or budget and a note from you (for example, to narrow the scope). " +
+						"Retry starts it from scratch; Tier up starts it from scratch on the next model. Or leave it parked."
+				}
 			}
 			if to == state.Blocked {
 				reason = "Waits on #102, which changes the same client."
@@ -229,6 +259,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 				return err
 			}
 		}
+	}
+	// 112's build ran out of turns: its work is kept and waits for you.
+	if err := seedStopped(ctx, st, jobs, ids[112]); err != nil {
+		return err
 	}
 	job := func(issue int, kind, model string, end state.JobState, cost float64, verdict string) (int64, error) {
 		item := ids[issue]
@@ -251,17 +285,16 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			return 0, err
 		}
 		logPath := filepath.Join(dir, "log.jsonl")
-		lines := []string{
-			`{"type":"system","subtype":"init"}`,
-			`{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the parser and its tests."}]}}`,
-			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./parser"}}]}}`,
-			`{"type":"assistant","message":{"content":[{"type":"text","text":"The loop stops one token early when the input lacks a trailing newline. Writing a failing test first."}]}}`,
+		lines := sampleClaudeLog
+		if harness == "codex" {
+			lines = sampleCodexLog
 		}
+		lines = append([]string{}, lines...)
 		if end == state.Running && kind == "implement" {
-			lines = append(lines, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/work/webhook/retry.go"}}]}}`)
+			lines = append(lines, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t9","name":"Edit","input":{"file_path":"/work/webhook/retry.go","old_string":"return err","new_string":"return backoff(err)"}}]}}`)
 		}
-		if end != state.Running {
-			lines = append(lines, `{"type":"result","subtype":"success","result":"Fixed and tested."}`)
+		if end != state.Running && harness == "claude" {
+			lines = append(lines, `{"type":"result","subtype":"success","is_error":false,"num_turns":14,"total_cost_usd":1.42,"result":"Fixed and tested."}`)
 		}
 		if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 			return 0, err
@@ -453,6 +486,97 @@ func seedTuning(ctx context.Context, st *store.Store) error {
 
 func ptr(v int64) *int64 { return &v }
 
+// sampleClaudeLog is a build's log as Claude Code streams it.
+var sampleClaudeLog = []string{
+	`{"type":"system","subtype":"init","model":"claude-sonnet-4-5","tools":["Bash","Read","Edit","Write","Glob","Grep","TodoWrite"],"session_id":"s1"}`,
+	`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"The bug report says the last token goes missing. Look at the loop bounds first."},{"type":"text","text":"Reading the parser and its tests."}]}}`,
+	`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/work/parser/parser.go"}},{"type":"tool_use","id":"t2","name":"Grep","input":{"pattern":"func Tokens","path":"/work/parser"}}]}}`,
+	`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"package parser\n\nfunc Tokens(in string) []string {\n\ttoks := split(in)\n\tfor i := 0; i < len(toks)-1; i++ {"},{"type":"tool_result","tool_use_id":"t2","content":"parser/parser.go:38:func Tokens(in string) []string {"}]}}`,
+	`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"go test ./parser","description":"Run the parser tests"}}]}}`,
+	`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"--- FAIL: TestLastToken (0.00s)\n    parser_test.go:9: got [\"a\" \"b\"]\nFAIL","is_error":true}]}}`,
+	`{"type":"assistant","message":{"content":[{"type":"text","text":"The loop stops one token early when the input lacks a trailing newline. Writing a failing test first, then:\n\n- fix the bound in ` + "`Tokens`" + `\n- **keep** the empty-input case"}]}}`,
+}
+
+// sampleCodexLog is a review's log as Codex streams it.
+var sampleCodexLog = []string{
+	`{"type":"thread.started","thread_id":"th1"}`,
+	`{"type":"turn.started"}`,
+	`{"type":"item.completed","item":{"id":"0","type":"reasoning","text":"Check the loop bound and the new test."}}`,
+	`{"type":"item.started","item":{"id":"1","type":"command_execution","command":"bash -lc 'git diff HEAD~1'","status":"in_progress"}}`,
+	`{"type":"item.completed","item":{"id":"1","type":"command_execution","command":"bash -lc 'git diff HEAD~1'","aggregated_output":"diff --git a/parser/parser.go b/parser/parser.go","exit_code":0,"status":"completed"}}`,
+	`{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"The fix is right; one test gap on multi-byte input."}}`,
+	`{"type":"turn.completed","usage":{"input_tokens":12000,"cached_input_tokens":3000,"output_tokens":800}}`,
+}
+
+// seedStopped adds a build that ran out of turns: its log, how it
+// stopped, its note and the work it kept.
+func seedStopped(ctx context.Context, st *store.Store, jobs string, item int64) error {
+	id, err := st.EnqueueJob(ctx, store.Job{ItemID: &item, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 15, Attempt: 1})
+	if err != nil {
+		return err
+	}
+	if _, err := st.ClaimJob(ctx); err != nil {
+		return err
+	}
+	dir := filepath.Join(jobs, fmt.Sprint(id))
+	if err := os.MkdirAll(filepath.Join(dir, "kept"), 0o755); err != nil {
+		return err
+	}
+	lines := append([]string{}, sampleClaudeLog...)
+	lines = append(lines,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s1","name":"Write","input":{"file_path":"/work/admin/sso.go","content":"package admin"}},{"type":"tool_use","id":"s2","name":"Edit","input":{"file_path":"/work/admin/routes.go"}},{"type":"tool_use","id":"s3","name":"Bash","input":{"command":"go test ./admin/..."}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"ok"},{"type":"tool_result","tool_use_id":"s2","content":"ok"},{"type":"tool_result","tool_use_id":"s3","content":"ok  admin 0.4s"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"The SSO callback works. Committing what I have and writing down what's left, as I'm near my turn limit."}]}}`,
+		`{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":80,"total_cost_usd":11.84,"result":""}`)
+	logPath := filepath.Join(dir, "log.jsonl")
+	if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		return err
+	}
+	if err := st.SetJobRuntime(ctx, id, "", logPath, ""); err != nil {
+		return err
+	}
+	stop := `{"reason":"turns","summary":"Stopped: it ran out of turns (80 of 80) before it finished.","turns":80,"max_turns":80,"cost_usd":11.84,"budget_usd":15,` +
+		`"note":"Done: the SSO callback and session cookie, with tests.\nLeft: the sign-out route, and the admin settings page for the IdP URL.","kept":true}`
+	patch := "diff --git a/admin/sso.go b/admin/sso.go\nnew file mode 100644\n--- /dev/null\n+++ b/admin/sso.go\n@@ -0,0 +1,3 @@\n+package admin\n+\n+// Callback finishes an SSO sign-in.\n"
+	for name, body := range map[string]string{"stop.json": stop, "saved.patch": patch, "kept/kept.json": `{"job":1}`} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	return st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 11.84, Error: "Stopped: it ran out of turns (80 of 80) before it finished. Its work is kept."})
+}
+
+// sampleChoices are what the daemon would offer for a job that ended.
+func sampleChoices(st *store.Store) func(ctx context.Context, id int64) []web.APIChoice {
+	return func(ctx context.Context, id int64) []web.APIChoice {
+		j, err := st.GetJob(ctx, id)
+		if err != nil || j.ItemID == nil {
+			return nil
+		}
+		it, err := st.GetItem(ctx, *j.ItemID)
+		if err != nil {
+			return nil
+		}
+		var out []web.APIChoice
+		if _, err := os.Stat(filepath.Join(filepath.Dir(j.LogPath), "kept", "kept.json")); err == nil && j.LogPath != "" {
+			out = append(out, web.APIChoice{Action: "continue", Label: "Continue", Model: "claude/sonnet", Available: true,
+				Explain: "Picks up where it stopped, in the checkout it kept and the same Claude session, on claude/sonnet, with a fresh 80 turns and $15.00; you can add up to 200% more. A note you write goes to it first, for example to narrow the scope. Nothing is pushed until its checks pass."})
+		}
+		out = append(out, web.APIChoice{Action: "retry", Label: "Retry", Model: j.Harness + "/" + j.Model, Available: true,
+			Explain: "Starts this step over from scratch, on " + j.Harness + "/" + j.Model + ". Anything this job did is dropped."})
+		if j.Kind == "implement" {
+			out = append(out, web.APIChoice{Action: "tier_up", Label: "Tier up", Model: "claude/opus", Available: true,
+				Explain: "Starts the build over from scratch one model tier up, on claude/opus. Anything this job did is dropped."})
+		}
+		park := web.APIChoice{Action: "park", Label: "Park", Available: it.Stage != state.Parked,
+			Explain: "Stops work on the item and takes it off the queue. Nothing is lost. To bring it back, press Retry (or Continue) here, or add the factory:retry label on the issue."}
+		if it.Stage == state.Parked {
+			park.Why = "It's parked now: nothing runs until you choose. Leaving it parked is fine; bring it back with the buttons here, or add the factory:retry label on the issue."
+		}
+		return append(out, park)
+	}
+}
+
 // seedHealth makes acme/api's main flaky, with its issue filed.
 func seedHealth(ctx context.Context, st *store.Store) error {
 	for _, h := range []store.RepoHealth{
@@ -507,4 +631,73 @@ func seedPreview(dir string) error {
 		}
 	}
 	return m.Save(dir)
+}
+
+// seedReadiness saves readiness reports: acme/api isn't ready (its lint
+// fix is being built, its flaky test waits its turn), and acme/web is.
+func seedReadiness(dir string) error {
+	at := time.Now().Add(-2 * time.Hour).UTC()
+	api := &readiness.Report{Repo: "acme/api", Branch: "main", SHA: "9f2c1e04b7a3", Started: at, Score: 34, Filed: []int{113, 114},
+		Findings: []readiness.Finding{
+			{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on main",
+				Detail: "Every change would fail this check, whatever it does.\n\n```\ninternal/cache/cache.go:41:2: ineffectual assignment to err (ineffassign)\n```\n",
+				Issue:  &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on main", Number: 113, State: "open"}},
+			{Level: readiness.Blocker, Area: "tests", Title: "Tests are flaky",
+				Detail: "They passed, then failed on the same commit.\n\n```\n--- FAIL: TestCacheEviction (0.02s)\n```\n",
+				Issue:  &readiness.Issue{Key: "flaky", Title: "Fix flaky tests", Number: 106, State: "open"}},
+			{Level: readiness.Gap, Area: "feature map", Title: "No feature map",
+				Detail: "A feature map lists what the product does, where each feature lives and which tests prove it.",
+				Issue:  &readiness.Issue{Key: "feature-map", Title: "Start a feature map", Number: 114, State: "open"}},
+			{Level: readiness.Gap, Area: "e2e", Title: "No end-to-end tests",
+				Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests for the main user flows"}},
+			{Level: readiness.Good, Area: "install", Title: "Installs from a clean checkout"},
+			{Level: readiness.Good, Area: "ci", Title: "CI runs on the repo"},
+		}}
+	web := &readiness.Report{Repo: "acme/web", Branch: "main", SHA: "41ab7d2c9e10", Started: at, Score: 92, Ready: true, Filed: []int{114},
+		Findings: []readiness.Finding{
+			{Level: readiness.Gap, Area: "feature map", Title: "No feature map",
+				Issue: &readiness.Issue{Key: "feature-map", Title: "Start a feature map", Number: 114, State: "open"}},
+			{Level: readiness.Good, Area: "install", Title: "Installs from a clean checkout"},
+			{Level: readiness.Good, Area: "checks", Title: "Every required check passes on main: lint, test, build"},
+			{Level: readiness.Good, Area: "tests", Title: "48 test files, passing twice in a row"},
+			{Level: readiness.Good, Area: "e2e", Title: "Has end-to-end tests"},
+		}}
+	for _, r := range []*readiness.Report{api, web} {
+		if _, err := readiness.Save(dir, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recheck pretends to check a repo again: it takes a moment and finds
+// it as it was.
+func recheck(dir string) func(context.Context, string) error {
+	return func(ctx context.Context, repo string) error {
+		select {
+		case <-time.After(1500 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r, err := readiness.Load(dir, repo)
+		if err != nil || r == nil {
+			return fmt.Errorf("devserver: no report for %s", repo)
+		}
+		r.Started = time.Now().UTC()
+		_, err = readiness.Save(dir, r)
+		return err
+	}
+}
+
+// seedUsage records Claude's plan windows; Codex has none yet.
+func seedUsage(ctx context.Context, st *store.Store) error {
+	for _, l := range []store.Limit{
+		{Harness: "claude", Window: "5h", UsedPercent: 42, ResetsAt: time.Now().Add(3 * time.Hour).UTC().Format(store.TimeFormat)},
+		{Harness: "claude", Window: "weekly", UsedPercent: 18, ResetsAt: time.Now().Add(4 * 24 * time.Hour).UTC().Format(store.TimeFormat)},
+	} {
+		if err := st.SetLimit(ctx, l); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/readiness"
+	"github.com/claptimes5/factory/internal/store"
 )
 
 // assess clones a repo's base branch and runs the readiness check on it,
@@ -54,10 +56,79 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 			fmt.Fprintf(out, "  running %s\n", cmd)
 			return p.Exec(ctx, repo, dir, cmd, install)
 		}})
-	if _, err := readiness.Save(filepath.Join(data, "readiness"), r); err != nil {
+	if _, err := readiness.Save(readinessDir(cfg), r); err != nil {
 		return r, err
 	}
 	return r, nil
+}
+
+// readinessDir holds each repo's latest report, which the dashboard and
+// status read.
+func readinessDir(cfg *config.Config) string {
+	return filepath.Join(cfg.Path(cfg.DataDir), "readiness")
+}
+
+// linkFiled records on each of the report's findings the issue filed for
+// it, so the dashboard can link it and follow the factory's work on it.
+// Of several, an open one wins, then the newest.
+func linkFiled(r *readiness.Report, filed []github.Issue) {
+	r.Filed = nil
+	for _, o := range filed {
+		r.Filed = append(r.Filed, o.Number)
+	}
+	for _, f := range r.Findings {
+		if f.Issue == nil {
+			continue
+		}
+		var best *github.Issue
+		for i, o := range filed {
+			if !strings.Contains(o.Body, marker(f.Issue.Key)) && !strings.EqualFold(o.Title, f.Issue.Title) {
+				continue
+			}
+			if best == nil {
+				best = &filed[i]
+				continue
+			}
+			open, bestOpen := o.State == "open", best.State == "open"
+			if open && !bestOpen || open == bestOpen && o.Number > best.Number {
+				best = &filed[i]
+			}
+		}
+		if best != nil {
+			f.Issue.Number, f.Issue.State = best.Number, best.State
+		}
+	}
+}
+
+// relink reads the issues the check filed on repo and saves the report
+// with them linked. A report that can't be linked is still right about
+// the repo, so failing to read them only goes to the log.
+func relink(ctx context.Context, cfg *config.Config, gh forge, r *readiness.Report) error {
+	filed, err := gh.ListIssuesIn(ctx, pipeline.LabelReadiness, "all")
+	if err != nil {
+		return fmt.Errorf("reading the issues it filed: %w", err)
+	}
+	linkFiled(r, filed)
+	_, err = readiness.Save(readinessDir(cfg), r)
+	return err
+}
+
+// recheckReadiness is the dashboard's Check again: the readiness check on
+// repo's base branch, with its issues linked. It only reads: it files
+// and labels nothing. Its containers are named apart from the daemon's
+// jobs, which would otherwise take them for leftovers.
+func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string) error {
+	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
+	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	if err != nil {
+		return err
+	}
+	if gh, ok := daemon.GitHubFor(repo).(forge); ok {
+		if err := relink(ctx, cfg, gh, r); err != nil {
+			slog.Warn("readiness", "repo", repo, "err", err)
+		}
+	}
+	return nil
 }
 
 // marker is hidden in the body of each issue the check files, so a later
@@ -78,6 +149,7 @@ func planIssues(ctx context.Context, gh forge, r *readiness.Report, intake strin
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	linkFiled(r, filed)
 	if r.Ready {
 		for _, o := range filed {
 			if o.State == "open" && untouched(o, intake) {
@@ -120,6 +192,9 @@ func fileIssues(ctx context.Context, gh forge, r *readiness.Report, todo []readi
 		if err != nil {
 			return filed, err
 		}
+		// f.Issue is the report's own, so this links it there.
+		f.Issue.Number, f.Issue.State = n, "open"
+		r.Filed = append(r.Filed, n)
 		filed = append(filed, n)
 	}
 	return filed, nil
@@ -192,13 +267,18 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if r.Incomplete {
 		return nil
 	}
+	gh, ok := p.GitHubFor(repo).(forge)
 	if !file {
+		if ok {
+			if err := relink(ctx, cfg, gh, r); err != nil {
+				fmt.Printf("Couldn't link the report to its issues: %v\n", err)
+			}
+		}
 		if n := len(r.Issues()); n > 0 {
 			fmt.Printf("Run with -file to open %d issue(s) for the gaps, or -queue to have the factory work them.\n", n)
 		}
 		return nil
 	}
-	gh, ok := p.GitHubFor(repo).(forge)
 	if !ok {
 		return fmt.Errorf("no client for its host")
 	}
@@ -207,6 +287,9 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 		return err
 	}
 	filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
+	if _, serr := readiness.Save(readinessDir(cfg), r); err == nil {
+		err = serr
+	}
 	if err != nil {
 		return err
 	}
@@ -274,6 +357,9 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			p.say("Couldn't list %s's issues: %v", repo, err)
 			continue
 		}
+		if _, err := readiness.Save(readinessDir(cfg), r); err != nil {
+			p.say("Couldn't save the report with its issues: %v", err)
+		}
 		if len(waiting) > 0 && p.yes(fmt.Sprintf("%d issue(s) filed earlier wait on blockers that are now fixed. Label them %s so the factory starts on them?", len(waiting), cfg.Intake.Label), true) {
 			if err := queueIssues(ctx, gh, waiting, cfg.Intake.Label); err != nil {
 				p.say("Labeling them failed: %v", err)
@@ -304,6 +390,9 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		queue := p.yes(ask, true)
 		filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
+		if _, serr := readiness.Save(readinessDir(cfg), r); err == nil && serr != nil {
+			p.say("Couldn't save the report with its issues: %v", serr)
+		}
 		if err != nil {
 			p.say("Opening issues on %s failed: %v", repo, err)
 			continue
@@ -313,4 +402,54 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 			p.say("Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", repo)
 		}
 	}
+}
+
+// readinessLines are status's lines on how ready each repo is, from the
+// readiness check's latest reports; none when no repo was ever checked.
+func readinessLines(ctx context.Context, st *store.Store, cfg *config.Config) []string {
+	var out []string
+	checked := false
+	for _, repo := range cfg.RepoNames() {
+		r, err := readiness.Load(readinessDir(cfg), repo)
+		if err != nil {
+			out = append(out, fmt.Sprintf("setup %s:\tcan't read its readiness report: %v", repo, err))
+			continue
+		}
+		if r == nil {
+			out = append(out, fmt.Sprintf("setup %s:\tnot checked yet; run ./factory readiness %s", repo, repo))
+			continue
+		}
+		checked = true
+		done, total := r.Progress()
+		line := fmt.Sprintf("setup %s:\t%d of %d setup steps done, ", repo, done, total)
+		var blockers []string
+		for _, s := range r.Steps() {
+			for _, f := range s.Blockers {
+				b := pipeline.SafeText(strings.ReplaceAll(f.Title, "`", ""), 120)
+				if f.Issue != nil && f.Issue.Number > 0 {
+					where := "not queued"
+					if it, err := st.ItemByIssue(ctx, repo, f.Issue.Number); err == nil {
+						where = strings.ReplaceAll(string(it.Stage), "_", " ")
+					} else if f.Issue.State == "closed" {
+						where = "closed"
+					}
+					b += fmt.Sprintf(" (%s, %s)", issueRef(cfg, repo, f.Issue.Number), where)
+				}
+				blockers = append(blockers, b)
+			}
+		}
+		switch {
+		case r.Incomplete:
+			line += "the check couldn't finish: " + strings.Join(blockers, "; ") + "; fix that and run ./factory readiness " + repo
+		case !r.Ready:
+			line += "not ready: " + strings.Join(blockers, "; ")
+		default:
+			line += fmt.Sprintf("ready; add the %s label to an issue to start", cfg.Intake.Label)
+		}
+		out = append(out, line)
+	}
+	if !checked {
+		return nil
+	}
+	return out
 }

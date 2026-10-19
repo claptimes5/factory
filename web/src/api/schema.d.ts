@@ -442,6 +442,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How much of each subscription plan's usage windows the factory's harnesses have used
+         * @description Only harnesses in use that run on a plan (Claude with a subscription token, Codex on a ChatGPT plan). On a plan, dollar figures are what the work would cost at API prices; the windows are what limit it.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlanUsage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How ready each repo is for the factory, from the readiness check's latest report
+         * @description Each blocker and gap comes with the issue filed for it and the factory's item for that issue.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Readiness"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readiness/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run the readiness check on a repo again, in the background
+         * @description Clones the repo's base branch and runs its install and checks, as a
+         *     build's gates do, then saves the report. It files and labels nothing.
+         *     One check runs at a time (409 while one does). Needs the password, or
+         *     a request from this machine, and a daemon that can run it (403 otherwise).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name */
+                        repo: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{id}": {
         parameters: {
             query?: never;
@@ -490,8 +612,9 @@ export interface paths {
         };
         /**
          * The job's transcript as server-sent events
-         * @description One `line` event per transcript line, with data `{"text": string}`,
-         *     then one `done` event with data `{"state": string}` once the job ends.
+         * @description One `line` event per log line, with data `{"text": string, "entries": [TranscriptEntry]}`:
+         *     the line in short, and its pieces (none for bookkeeping lines). Then one `done` event
+         *     with data `{"state": string}` once the job ends.
          */
         get: {
             parameters: {
@@ -517,6 +640,168 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/log.jsonl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The job's whole log as its CLI wrote it, secrets taken out, to download */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JSON lines */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/saved-diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A stopped build's work against the base branch, kept on this machine */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Diff"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue a build that ran out of turns or budget, in the checkout and session it kept
+         * @description `extra` adds turns and budget as a fraction of the usual (0.5 is half as much again,
+         *     at most 2). Adding any needs the password, or a request from this machine (403
+         *     otherwise), as settings do. `note` goes to the builder first.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        extra?: number;
+                        note?: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a running build a message, which it reads at its next step
+         * @description Claude builds only; Codex reads its whole prompt when it starts.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        text: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                409: components["responses"]["Action"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1170,6 +1455,97 @@ export interface components {
             /** @description This request may reset it (tripped, and behind the password or on this machine) */
             can_reset: boolean;
         };
+        PlanUsage: {
+            plans: components["schemas"]["UsagePlan"][];
+        };
+        UsagePlan: {
+            /** @description claude or codex */
+            harness: string;
+            /** @description Claude, Codex */
+            name: string;
+            /** @description Claude subscription, ChatGPT plan */
+            plan: string;
+            /** @description Its latest readings, five-hour first, then weekly; empty until one arrives */
+            windows: components["schemas"]["Usage"][];
+            /** @description When a reading will come, while there is none; else empty */
+            no_reading: string;
+            /** @description Percent of a five-hour or weekly window at which its jobs wait for the reset */
+            pause_at: number;
+        };
+        Readiness: {
+            repos: components["schemas"]["RepoReadiness"][];
+            /**
+             * @description not_ready while a checked repo has blockers or its check couldn't finish; ready once every checked repo is ready and the factory has worked on nothing but their setup
+             * @enum {string}
+             */
+            banner: "" | "not_ready" | "ready";
+            /** @description The label that hands an issue to the factory */
+            intake_label: string;
+            /** @description This request may run the check here (behind the password or on this machine, with a daemon that can) */
+            can_check: boolean;
+            /** @description Why it can't, or empty */
+            check_note: string;
+        };
+        RepoReadiness: {
+            repo: string;
+            /** @enum {string} */
+            state: "unchecked" | "incomplete" | "not_ready" | "ready";
+            /** @description When the latest report's check started; empty when unchecked */
+            checked_at: string;
+            branch: string;
+            sha: string;
+            /** @description 0 to 100 */
+            score: number;
+            /** @description Setup steps that pass */
+            done: number;
+            /** @description Setup steps in all */
+            total: number;
+            steps: components["schemas"]["ReadinessStep"][];
+            /** @description Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps */
+            extras: components["schemas"]["ReadinessFinding"][];
+            /** @description Issues filed without the intake label */
+            unqueued: number;
+            /** @description Runs the check in a terminal */
+            command: string;
+            /** @description Files and labels what still needs it; empty when nothing does */
+            queue_command: string;
+            /** @description A check started from the dashboard is running */
+            checking: boolean;
+            checking_since: string;
+            /** @description Why the last check started here failed, or empty */
+            check_error: string;
+        };
+        ReadinessStep: {
+            /** @enum {string} */
+            key: "install" | "checks" | "tests";
+            title: string;
+            /** @description What the factory needs it for */
+            why: string;
+            /** @enum {string} */
+            state: "done" | "failing" | "unchecked";
+            /** @description What the check saw when it's done, or empty */
+            passed: string;
+            blockers: components["schemas"]["ReadinessFinding"][];
+        };
+        ReadinessFinding: {
+            /** @enum {string} */
+            level: "blocker" | "gap" | "tip" | "good";
+            area: string;
+            /** @description Markdown: code spans in backticks */
+            title: string;
+            /** @description Markdown, with command output in fenced blocks */
+            detail: string;
+            /** @description 0 when none is filed */
+            issue: number;
+            issue_url: string;
+            /**
+             * @description The work on it: none when there's nothing to file (yours to fix, or in place)
+             * @enum {string}
+             */
+            status: "none" | "not_filed" | "not_queued" | "closed" | "waiting" | "building" | "needs_you" | "done";
+            item_id: number | null;
+            item_stage: string;
+        };
         MainHealth: {
             repo: string;
             branch: string;
@@ -1222,6 +1598,64 @@ export interface components {
             estimate_waiting: boolean;
             /** @description It waits for your OK on its plan */
             plan_waiting: boolean;
+            /** @description The job a parked item's choices act on; null unless it is parked */
+            choice_job_id: number | null;
+            /** @description What a person can do next with a parked item, each explained; empty unless it is parked */
+            choices: components["schemas"]["Choice"][];
+        };
+        Choice: {
+            /** @enum {string} */
+            action: "continue" | "retry" | "tier_up" | "park";
+            label: string;
+            /** @description harness/model it would run on; empty for park */
+            model: string;
+            /** @description What it does */
+            explain: string;
+            available: boolean;
+            /** @description Why it isn't available */
+            why: string;
+        };
+        /** @description How a build that ran out of turns or budget stopped */
+        Stop: {
+            /** @enum {string} */
+            reason: "turns" | "budget";
+            summary: string;
+            turns: number;
+            max_turns: number;
+            cost_usd: number;
+            budget_usd: number;
+            /** @description What the builder wrote down before it stopped */
+            note: string;
+            /** @description Its checkout is still there to continue in */
+            kept: boolean;
+            /** @description Its work against the base branch can be read at /jobs/{id}/saved-diff */
+            saved_diff: boolean;
+        };
+        /** @description One piece of a run's transcript, structured from its CLI's JSON log */
+        TranscriptEntry: {
+            /** @enum {string} */
+            kind: "init" | "text" | "thinking" | "tool" | "tool_result" | "you" | "outcome" | "error";
+            /** @description The agent's words, its thinking, your message, an error, or (outcome) its final message */
+            text: string;
+            tool: string;
+            /** @description A tool call's id; its result carries the same */
+            tool_id: string;
+            /** @description What a tool call did, in a line (Ran go test ./..., Read a.go), or how the run ended */
+            summary: string;
+            /** @description A tool call's whole input */
+            input: string;
+            /** @description A tool result's output, cut at 20000 bytes */
+            output: string;
+            truncated: boolean;
+            is_error: boolean;
+            model: string;
+            tools: number;
+            /** @description outcome: the CLI's own word for how it ended (success, error_max_turns) */
+            subtype: string;
+            turns: number;
+            cost_usd: number;
+            /** @description you: false when the agent had already finished */
+            delivered: boolean;
         };
         LinkedPR: {
             repo: string;
@@ -1374,6 +1808,14 @@ export interface components {
             job: components["schemas"]["Job"];
             gates: components["schemas"]["Gate"][];
             can_attach: boolean;
+            /** @description Set when the build ran out of turns or budget */
+            stop: components["schemas"]["Stop"] | null;
+            /** @description What a person can do next, once the job has ended */
+            choices: components["schemas"]["Choice"][];
+            /** @description A message sent now reaches the running agent */
+            can_steer: boolean;
+            /** @description Why a running job can't take messages; empty when it can */
+            steer_note: string;
         };
         Finding: {
             /** @description F1, F2, ...: the same across an item's review rounds */
@@ -1496,6 +1938,9 @@ export interface components {
             detail: string;
             item_id: number | null;
             at: string;
+            /** @description For a parked item, the job its choices act on */
+            choice_job_id: number | null;
+            choices: components["schemas"]["Choice"][];
         };
         Notifications: {
             notifications: components["schemas"]["Notification"][];

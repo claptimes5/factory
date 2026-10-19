@@ -49,6 +49,12 @@ type Actions interface {
 	Replan(ctx context.Context, itemID, planJob int64, ask string) error
 	// ResetAutoMerge turns a repo's tripped auto-merge breaker off.
 	ResetAutoMerge(ctx context.Context, repo, by string) error
+	// Continue picks up a build that stopped on its turn or dollar cap in
+	// the checkout and session it kept, with extra turns and budget (0.5
+	// is half as much again) and a note to the builder.
+	Continue(ctx context.Context, jobID int64, extra float64, note string) error
+	// Steer sends a running build a message it reads at its next step.
+	Steer(ctx context.Context, jobID int64, text string) error
 }
 
 // Server serves the control room.
@@ -92,7 +98,26 @@ type Server struct {
 	Restarter Restarter
 	// Breakers reads each repo's auto-merge breaker (may be nil).
 	Breakers func(ctx context.Context) []APIBreaker
+	// Choices are what a person can do next with a job that ended:
+	// continue, retry, tier up, park, each explained (may be nil).
+	Choices func(ctx context.Context, jobID int64) []APIChoice
+	// SteerUnsupported says why a job can't take messages while it runs,
+	// or "" (may be nil: then none can).
+	SteerUnsupported func(j *store.Job) string
+	// ReadinessDir holds the readiness check's latest report on each repo
+	// ("" for none), and CheckReadiness runs it again on one, saving the
+	// report there (nil when the dashboard can't). IntakeLabel is the
+	// label that hands an issue to the factory.
+	ReadinessDir   string
+	CheckReadiness func(ctx context.Context, repo string) error
+	IntakeLabel    string
+	// Plans are the harnesses in use that run on a subscription plan,
+	// whose usage windows matter more than dollars, and PauseAtUsage the
+	// percent of a window that holds their jobs.
+	Plans        []string
+	PauseAtUsage float64
 
+	ready      readinessRun
 	tmpl       *template.Template
 	pollPeriod time.Duration
 	settingsMu sync.Mutex
@@ -175,6 +200,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /compare/{id}", s.compareView)
 	mux.HandleFunc("GET /metrics.json", s.metricsJSON)
 	s.routesAPI(mux)
+	s.routesReadiness(mux)
+	s.routesUsage(mux)
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}

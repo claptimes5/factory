@@ -57,10 +57,17 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 		p.warn(p.gh(it.Repo).RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
 	}
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelParked), "AddLabels")
-	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+
-		"\n\nAdd the `"+LabelRetry+"` label to send it back through triage."), "Comment")
+	p.warn(p.gh(it.Repo).Comment(ctx, it.IssueNumber, "**Factory parked this issue.**\n\n"+reason+"\n\n"+p.unparkHow(it)), "Comment")
 	p.notify(ctx, fmt.Sprintf("Parked %s: %s", p.ref(it.Repo, it.IssueNumber), firstLine(reason)))
 	return nil
+}
+
+// unparkHow says, on a parked issue, the ways to bring it back. The
+// comment is public, so it names the dashboard page in words rather than
+// an address that may be internal.
+func (p *Pipeline) unparkHow(it *store.WorkItem) string {
+	return fmt.Sprintf("To bring it back, open it on the factory dashboard (Items > #%d) and press Retry (or Continue, when its work was kept) "+
+		"there, or add the `%s` label here to send it back through triage.", it.IssueNumber, LabelRetry)
 }
 
 func firstLine(s string) string {
@@ -178,6 +185,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		p.finish(ctx, j, run, st, "", msg)
 		next := in
 		next.PreviousFailure = msg
+		next.Continue = nil // the next attempt starts over
 		ok, err := p.enqueueImplement(ctx, it, j.Attempt+1, next)
 		if err != nil {
 			return err
@@ -218,14 +226,41 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		}
 	}
 	onBranch := func(repo string) bool { return len(members) == 1 || !in.FixRound || prev[strings.ToLower(repo)] }
-	parts, err := p.prepareParts(ctx, dir, it, func(repo string) string {
-		if onBranch(repo) {
-			return j.Branch
+	// A continue builds in the checkout the stopped build kept; any
+	// other build leaves nothing for an older one to continue.
+	var parts []*part
+	kept := false
+	// reached is set once the continue's run is over: the kept work is
+	// then this job's, whatever comes next. Until then it goes back to
+	// the build it came from, so a cancel or a requeue loses nothing.
+	reached := false
+	if c := in.Continue; c != nil {
+		if parts, err = p.takeKept(dir, c.From, j.ID); err != nil {
+			msg := fmt.Sprintf("Job %d couldn't continue build job %d: the work it kept is gone (%v), so nothing was built. Retry starts it from scratch.", j.ID, c.From, err)
+			p.finish(ctx, j, agentRun{}, state.Failed, "", msg)
+			return p.park(ctx, it, msg)
 		}
-		return ""
-	}, !in.FixRound, true)
-	if err != nil {
-		return fail(agentRun{}, state.Failed, err.Error())
+		kept = true
+		defer func() {
+			if reached {
+				p.dropKept(c.From)
+			} else {
+				p.restoreKept(dir, c.From)
+			}
+		}()
+	} else {
+		p.sweepKept(ctx)
+	}
+	if parts == nil {
+		parts, err = p.prepareParts(ctx, dir, it, func(repo string) string {
+			if onBranch(repo) {
+				return j.Branch
+			}
+			return ""
+		}, !in.FixRound, true)
+		if err != nil {
+			return fail(agentRun{}, state.Failed, err.Error())
+		}
 	}
 	own := homePart(parts, it.Repo)
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", own.ws.Start), "SetJobRuntime")
@@ -254,13 +289,31 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	x := p.sessionFor(ctx, j, in.FixRound)
+	x := p.sessionFor(ctx, j, in.FixRound, in.Continue)
 	x.repo = members[0]
+	x.maxTurns = p.Cfg.Budgets.MaxTurns
+	if c := in.Continue; c != nil {
+		x.maxTurns = p.continueTurns(c)
+		cont := p.continueText(c, kept, x.maxTurns, j.BudgetUSD, data.OutDir)
+		full := strings.TrimRight(prompt, "\n") + "\n\n" + cont
+		prompt = full
+		if x.resume != "" && kept {
+			// The session has the task; it only needs to hear what's new.
+			prompt, x.fresh = cont, full
+		} else {
+			x.resume = ""
+		}
+		x.say = c.Note
+	}
 	run := p.runAgentWith(ctx, j, work, out, prompt, "", p.Cfg.Timeout("implement"), x)
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
+	reached = true
 	if st, msg, bad := runFailure(run); bad {
+		if run.err == nil && !run.timeout && run.res != nil && run.res.Stopped != "" {
+			return p.stopped(ctx, j, it, run, parts, x.maxTurns)
+		}
 		return fail(run, st, msg)
 	}
 	var v verdict.Implement

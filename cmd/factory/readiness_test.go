@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/readiness"
+	"github.com/claptimes5/factory/internal/state"
+	"github.com/claptimes5/factory/internal/store/storetest"
 )
 
 // With -queue, a ready repo's gaps all go to the factory; a repo that
@@ -90,5 +94,84 @@ func TestRunReadinessQueuesWaiting(t *testing.T) {
 	}
 	if len(f.issues) != 0 || strings.Join(f.labeled, "|") != "/repos/o/r/issues/3/labels factory:ready" {
 		t.Fatalf("issues %v, labeled %v", f.issues, f.labeled)
+	}
+}
+
+// The saved report links each finding to the issue filed for it, old or
+// new, so the dashboard and status can follow the work; status sums it up.
+func TestReadinessLinksIssuesAndStatusSumsUp(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, filed: []map[string]any{
+		{"number": 2, "title": "Start a feature map", "body": "<!-- factory-readiness: feature-map -->", "state": "closed", "state_reason": "not_planned"},
+		{"number": 3, "title": "Start a feature map", "body": "x\n<!-- factory-readiness: feature-map -->", "state": "open"},
+	}}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeline.Pipeline{Cfg: cfg, ClientsFor: func(repo string) pipeline.RepoClients {
+		return pipeline.RepoClients{GH: &github.Client{Repo: repo, BaseURL: srv.URL, Tokens: github.StaticToken("t")}}
+	}}
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	if l := readinessLines(ctx, st, cfg); l != nil {
+		t.Fatalf("never checked: %q", l)
+	}
+	oldAssess := assess
+	t.Cleanup(func() { assess = oldAssess })
+	report := func() *readiness.Report {
+		return &readiness.Report{Repo: "o/r", Branch: "main", Findings: []readiness.Finding{
+			{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on main", Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on main"}},
+			{Level: readiness.Gap, Area: "feature map", Issue: &readiness.Issue{Key: "feature-map", Title: "Start a feature map"}},
+			{Level: readiness.Good, Area: "install", Title: "Installs from a clean checkout"},
+		}}
+	}
+	assess = func(_ context.Context, cfg *config.Config, _ *pipeline.Pipeline, _ string, _ io.Writer) (*readiness.Report, error) {
+		r := report()
+		_, err := readiness.Save(readinessDir(cfg), r)
+		return r, err
+	}
+	if err := runReadiness(ctx, cfg, p, []string{"-queue"}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := readiness.Load(readinessDir(cfg), "o/r")
+	if err != nil || r == nil {
+		t.Fatalf("report %v, %v", r, err)
+	}
+	if lint, fm := r.Findings[0].Issue, r.Findings[1].Issue; lint.Number != 101 || lint.State != "open" || fm.Number != 3 || fm.State != "open" {
+		t.Fatalf("linked %+v %+v", lint, fm)
+	}
+	if fmt.Sprint(r.Filed) != "[2 3 101]" {
+		t.Fatalf("filed %v", r.Filed)
+	}
+
+	it, _, _ := st.UpsertItem(ctx, "o/r", 101, "Make the lint check pass on main")
+	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
+	st.SetStage(ctx, it.ID, state.Implementing, "daemon", "")
+	want := "setup o/r:\t2 of 3 setup steps done, not ready: lint fails on main (#101, implementing)"
+	if got := strings.Join(readinessLines(ctx, st, cfg), "\n"); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+
+	// The plain check links too, without filing.
+	f.issues = nil
+	assess = func(_ context.Context, cfg *config.Config, _ *pipeline.Pipeline, _ string, _ io.Writer) (*readiness.Report, error) {
+		r := report()
+		r.Findings = r.Findings[1:]
+		r.Findings = append(r.Findings, readiness.Finding{Level: readiness.Good, Area: "checks", Title: "Every required check passes on main: lint"})
+		r.Ready = true
+		_, err := readiness.Save(readinessDir(cfg), r)
+		return r, err
+	}
+	if err := runReadiness(ctx, cfg, p, nil); err != nil || len(f.issues) != 0 {
+		t.Fatalf("err %v, issues %v", err, f.issues)
+	}
+	want = "setup o/r:\t3 of 3 setup steps done, ready; add the factory:ready label to an issue to start"
+	if got := strings.Join(readinessLines(ctx, st, cfg), "\n"); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	if r, _ := readiness.Load(readinessDir(cfg), "o/r"); r.Findings[0].Issue.Number != 3 {
+		t.Fatalf("not linked: %+v", r.Findings[0].Issue)
 	}
 }

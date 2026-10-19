@@ -164,6 +164,7 @@ type Pipeline struct {
 	cancelled  sync.Map         // job id -> true for running jobs a human cancelled
 	privacy    sync.Map         // lower-case repo -> whether the forge says it's private
 	jobCancel  sync.Map         // job id -> context.CancelFunc of a running job
+	steer      sync.Map         // job id -> chan harness.SteerMsg of a running builder
 	// act serializes state-changing actions that check and then act:
 	// intake, human actions and the orchestrator's tools.
 	act    sync.Mutex
@@ -755,6 +756,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 // dependents and reconciles items left with no job.
 func (p *Pipeline) closeOut(ctx context.Context) error {
 	p.sweepPreviews(ctx, time.Now())
+	p.sweepKept(ctx)
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return err
@@ -968,6 +970,9 @@ type ImplementInput struct {
 	// Size is the implement route's size when it isn't the item's own:
 	// a rethink and the fix rounds after it build one size up.
 	Size string `json:"size,omitempty"`
+	// Continue picks up a build that stopped on its turn or dollar cap,
+	// in the checkout and session it kept (see continue.go).
+	Continue *ContinueInput `json:"continue,omitempty"`
 }
 
 func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, attempt int, in ImplementInput) (bool, error) {
@@ -990,8 +995,12 @@ func (p *Pipeline) enqueueImplement(ctx context.Context, it *store.WorkItem, att
 		return false, nil
 	}
 	b, _ := json.Marshal(in)
+	budget := p.Cfg.FastBudget(p.Cfg.JobBudget("implement", size), r.FastFor(r.Harness, r.Model))
+	if in.Continue != nil {
+		budget *= 1 + in.Continue.Extra
+	}
 	_, err := p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: p.Cfg.ImplementKey(size), Attempt: attempt, Priority: it.Priority, BudgetUSD: p.Cfg.FastBudget(p.Cfg.JobBudget("implement", size), r.FastFor(r.Harness, r.Model)),
+		Skillset: r.Skills, Route: p.Cfg.ImplementKey(size), Attempt: attempt, Priority: it.Priority, BudgetUSD: budget,
 		Branch: p.branchFor(it), Input: string(b)})
 	return true, err
 }
@@ -1048,6 +1057,9 @@ func (p *Pipeline) runAgent(ctx context.Context, repo string, j *store.Job, work
 }
 
 // agentExtras are the less common knobs of an agent run.
+// stageTurns caps the turns of every run but a build's.
+const stageTurns = 80
+
 type agentExtras struct {
 	repo       string // picks the image and env; "" for the orchestrator
 	writable   bool
@@ -1057,6 +1069,14 @@ type agentExtras struct {
 	mcpConfig  string
 	tools      []string
 	images     []string // screenshots for the reviewer, as it sees them
+	// fresh is the prompt to send instead when resuming fails and the run
+	// starts a new session (a continue's whole task; "" for the same).
+	fresh string
+	// maxTurns is the run's turn cap: budgets.max_turns for a build, more
+	// for a continue; 0 is stageTurns.
+	maxTurns int
+	// say is a person's note to the agent, put in its log where it went in.
+	say string
 }
 
 func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outDir, prompt, schema string, timeout time.Duration, x agentExtras) agentRun {
@@ -1080,6 +1100,22 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	for k, v := range secrets {
 		env[k] = v
 	}
+	if x.say != "" {
+		_, _ = lf.Write([]byte(scrub(string(harness.NoteLine(x.say, true)), secrets) + "\n"))
+	}
+	// budgets.max_turns is the builder's (runImplement sets it); the other
+	// stages keep their own cap.
+	turns := stageTurns
+	if x.maxTurns > 0 {
+		turns = x.maxTurns
+	}
+	var steer chan harness.SteerMsg
+	if x.writable && j.Kind == "implement" {
+		// A person can message the running builder (see Steer).
+		steer = make(chan harness.SteerMsg)
+		p.steer.Store(j.ID, steer)
+		defer p.steer.Delete(j.ID)
+	}
 	events := make(chan harness.Event, 256)
 	done := make(chan struct{})
 	go func() {
@@ -1094,18 +1130,23 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	res, err := h.Run(ctx, harness.RunRequest{
 		Name: p.containerName(j.ID), Stage: j.Kind, Model: j.Model, Effort: j.Effort, Fast: j.Fast, Prompt: prompt,
 		Workdir: workdir, OutDir: outDir, SkillsDir: p.skillsDir(j.Skillset), ReadOnly: !x.writable, Schema: schema,
-		BudgetUSD: j.BudgetUSD, MaxTurns: 80, Env: env, Timeout: timeout, Image: rc.Image, CaptureLimits: p.Cfg.Runner.Kind == "docker", Contained: p.Cfg.Runner.Kind == "docker",
+		BudgetUSD: j.BudgetUSD, MaxTurns: turns, Env: env, Timeout: timeout, Image: rc.Image, CaptureLimits: p.Cfg.Runner.Kind == "docker", Contained: p.Cfg.Runner.Kind == "docker",
 		Mounts: x.mounts, MCPConfig: x.mcpConfig, Tools: x.tools, SessionDir: x.sessionDir, Resume: x.resume, Services: p.servicesOf(j.ID),
-		Images: x.images,
+		Images: x.images, Steer: steer,
 	}, events)
 	if x.resume != "" && err == nil && res != nil && res.IsError && strings.Contains(res.Error, "No conversation found") && ctx.Err() == nil {
 		// Resuming is best effort: if the session is gone, start fresh,
 		// keeping whatever the failed attempt cost.
 		p.log().Warn("resume failed; starting a fresh session", "job", j.ID, "session", x.resume)
 		x.resume = ""
+		if x.fresh != "" {
+			prompt, x.fresh = x.fresh, ""
+		}
+		x.say = ""
 		close(events)
 		<-done
 		_ = lf.Close()
+		p.steer.Delete(j.ID)
 		run := p.runAgentWith(ctx, j, workdir, outDir, prompt, schema, timeout, x)
 		run.cost += res.CostUSD
 		if !res.CostKnown {
@@ -1138,12 +1179,23 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 // attempt's Claude session (same item, same model), so it keeps what it
 // learned. Only with the Docker runner, where the home is per job and the
 // session directory is mounted in.
-func (p *Pipeline) sessionFor(ctx context.Context, j *store.Job, fixRound bool) agentExtras {
+//
+// A continue resumes the session of the build it continues, whichever
+// attempt that was, when it ran on the same harness and model.
+func (p *Pipeline) sessionFor(ctx context.Context, j *store.Job, fixRound bool, cont *ContinueInput) agentExtras {
 	x := agentExtras{writable: true}
 	if _, docker := p.Runner.(*runner.Docker); !docker || j.Harness != "claude" || j.ItemID == nil {
 		return x
 	}
 	x.sessionDir = filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "sessions", fmt.Sprintf("item-%d", *j.ItemID))
+	if cont != nil {
+		if prev, err := p.Store.GetJob(ctx, cont.From); err == nil && prev.Harness == j.Harness && prev.Model == j.Model {
+			if b, err := os.ReadFile(filepath.Join(p.jobDir(prev.ID), "session")); err == nil {
+				x.resume = strings.TrimSpace(string(b))
+			}
+		}
+		return x
+	}
 	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: *j.ItemID, Kind: "implement"})
 	if err != nil {
 		return x
@@ -1201,7 +1253,9 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 	log := p.log().With("job", j.ID, "kind", j.Kind)
 	log.Info("job started", "harness", j.Harness, "model", j.Model, "attempt", j.Attempt, "skillset", j.Skillset)
 	dir := p.jobDir(j.ID)
-	// A requeued job may find a previous run's checkout and verdict here.
+	// A requeued job may find a previous run's checkout and verdict here;
+	// a continue's kept work goes back first.
+	p.restoreInterrupted(j)
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
 		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())

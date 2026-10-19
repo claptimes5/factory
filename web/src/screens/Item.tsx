@@ -4,6 +4,8 @@ import { ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { act, useItem, type Estimate, type Event, type Item, type Plan } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
+import { Choices } from "@/components/Choices";
+import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
 import { Screenshots } from "@/components/Screenshots";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,26 @@ export function ItemScreen() {
           {it.title} <StageBadge stage={it.stage} />
         </h1>
         {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}
+        {it.choice_job_id != null && it.choices.length > 0 && (
+          <Card className="mt-2 border-warning/60" data-testid="next">
+            <CardHeader>
+              <CardTitle>What next?</CardTitle>
+              <Link to={`/jobs/${it.choice_job_id}`} className="text-xs text-primary hover:underline">
+                job #{it.choice_job_id}
+              </Link>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Choices jobId={it.choice_job_id} itemId={it.id} choices={it.choices} />
+              <p className="text-xs text-muted-foreground">
+                Or on{" "}
+                <a href={it.issue_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                  the issue
+                </a>
+                : add the factory:retry label to send it back through triage.
+              </p>
+            </CardContent>
+          </Card>
+        )}
         {live && (
           <Link to={`/jobs/${live.id}`} className="mt-2 inline-flex items-center gap-2 text-sm text-primary hover:underline">
             <span className="size-2 animate-pulse rounded-full bg-primary" /> Watch the running {live.kind} job
@@ -117,6 +139,7 @@ export function ItemScreen() {
                       ))}
                     </tbody>
                   </table>
+                  <PlanCostNote harnesses={jobs.map((j) => j.harness)} className="mt-2" />
                 </div>
               )}
             </CardContent>

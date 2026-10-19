@@ -54,8 +54,10 @@ runner:
   cpus: "2"
   memory: 4g
 
-# The reviewer's model must differ from every model a builder can reach,
-# escalation included: Haiku and Sonnet build, Opus reviews.
+# Haiku and Sonnet build, and a build that keeps failing escalates to
+# Opus; Opus reviews. A reviewer may use a builder's model: each review is
+# a fresh session of its own, never the builder's, though one model
+# reviewing its own work shares its blind spots more than another would.
 routing:
   orchestrate:       {harness: claude, model: opus}
   triage:            {harness: claude, model: haiku}
@@ -65,14 +67,15 @@ routing:
   implement.L:       {harness: claude, model: sonnet}
   review:            {harness: claude, model: opus}
   review.high_risk:  {harness: claude, model: opus, effort: high}
-  # The verifier checks each blocking finding; never a builder's model.
+  # The verifier checks each blocking finding, in a fresh session.
   verify:            {harness: claude, model: opus, effort: low}
   # Left out, the security pass runs on a builder tier that didn't build
-  # the item (it is never the reviewer's model); the critic, plan check,
+  # the item, and never on the reviewer's model, so it is a second model's
+  # read beside the reviewer's; the critic, plan check,
   # hunt, learn and grooming steps default to Claude routes too.
 
 escalation:
-  implement: [haiku, sonnet]
+  implement: [haiku, sonnet, opus]
   max_attempts_per_tier: 2
   max_review_rounds: 2
 

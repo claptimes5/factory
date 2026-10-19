@@ -160,3 +160,20 @@ func TestWaitingLines(t *testing.T) {
 		}
 	}
 }
+
+// Only harnesses the routing uses and that run on a plan count, and one
+// with no reading yet says so in status.
+func TestPlanHarnesses(t *testing.T) {
+	cfg := &config.Config{Routing: map[string]config.Route{"triage": {Harness: "claude"}, "review": {Harness: "codex"}}}
+	if got := planHarnesses(cfg, map[string]bool{"claude": true, "codex": false}); len(got) != 1 || got[0] != "claude" {
+		t.Fatalf("plans %v", got)
+	}
+	cfg.Routing = map[string]config.Route{"triage": {Harness: "codex"}}
+	if got := planHarnesses(cfg, map[string]bool{"claude": true, "codex": true}); len(got) != 1 || got[0] != "codex" {
+		t.Fatalf("unused claude: %v", got)
+	}
+	got := noReadingLines([]string{"claude", "codex"}, []store.Limit{{Harness: "codex", Window: "5h", UsedPercent: 10}})
+	if len(got) != 1 || !strings.Contains(got[0], "claude runs on a plan; no reading yet") {
+		t.Fatalf("lines %q", got)
+	}
+}

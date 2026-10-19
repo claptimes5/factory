@@ -59,6 +59,10 @@ type Issue struct {
 	Key   string `json:"key"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
+	// Number is the issue filed for it, once one is (0 before), and
+	// State is whether that was open or closed when last seen.
+	Number int    `json:"number,omitempty"`
+	State  string `json:"state,omitempty"`
 }
 
 // Run is one command the check ran.
@@ -84,6 +88,9 @@ type Report struct {
 	Incomplete bool      `json:"incomplete,omitempty"`
 	Runs       []Run     `json:"runs"`
 	Findings   []Finding `json:"findings"`
+	// Filed are the numbers of every issue the check has filed on the
+	// repo, as last read, fixed or not.
+	Filed []int `json:"filed,omitempty"`
 }
 
 // Exec runs a command on the export the way gates do; install marks the
@@ -673,7 +680,7 @@ func Save(dir string, r *Report) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, strings.ReplaceAll(r.Repo, "/", "__")+".json")
+	path := Path(dir, r.Repo)
 	return path, os.WriteFile(path, b, 0o644)
 }
 

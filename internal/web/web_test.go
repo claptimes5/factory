@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,14 @@ func (f *fakeActions) ApproveEstimate(_ context.Context, id, planJob int64) erro
 }
 func (f *fakeActions) Replan(_ context.Context, id, planJob int64, ask string) error {
 	f.calls = append(f.calls, "replan:"+strconv.FormatInt(planJob, 10)+":"+ask)
+	return nil
+}
+func (f *fakeActions) Continue(_ context.Context, id int64, extra float64, note string) error {
+	f.calls = append(f.calls, fmt.Sprintf("continue:%d:%g:%s", id, extra, note))
+	return nil
+}
+func (f *fakeActions) Steer(_ context.Context, id int64, text string) error {
+	f.calls = append(f.calls, fmt.Sprintf("steer:%d:%s", id, text))
 	return nil
 }
 func (f *fakeActions) ResetAutoMerge(_ context.Context, repo, by string) error {

@@ -36,7 +36,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
   await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(5);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(6);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -179,8 +179,21 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   if (phone(info)) {
     await expect(page.getByRole("tab", { name: "Terminal" })).toBeVisible();
   }
-  await expect(page.getByTestId("transcript")).toContainText("Writing a failing test first.");
-  await expect(page.getByTestId("transcript")).toContainText("→ Bash");
+  const transcript = page.getByTestId("transcript");
+  await expect(transcript).toContainText("Writing a failing test first");
+  // Narration is the thread; tool calls fold into a line each, failures in sight.
+  await expect(transcript.getByTestId("session-header")).toContainText("claude-sonnet-4-5 · 7 tools");
+  await expect(transcript).toContainText("Ran a command, read a file, searched once (1 failed)");
+  await expect(transcript).toContainText("Ran go test ./parser (failed)");
+  await expect(transcript.locator("strong", { hasText: "keep" })).toBeVisible();
+  await expect(page.getByTestId("now")).toContainText("Now: Edited webhook/retry.go");
+  // The output opens on request.
+  await transcript.getByRole("button", { name: /Ran go test \.\/parser/ }).click();
+  await expect(transcript).toContainText("--- FAIL: TestLastToken");
+  // A message reaches the running agent at its next step.
+  await page.getByLabel("Message the agent").fill("Also cover an empty input.");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "devserver: would send job" })).toBeVisible();
   if (phone(info)) await page.getByRole("tab", { name: "Terminal" }).click();
   await page.getByRole("button", { name: "Connect terminal" }).click();
   const term = page.getByTestId("terminal");
@@ -189,6 +202,48 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   await page.keyboard.type("echo hello-$((6*7))\n");
   await expect(term).toContainText("hello-42");
   await shot(page, info, "session");
+});
+
+test("a build that ran out of turns waits for you, and Continue picks it up with more budget and a note", async ({ page }, info) => {
+  await page.goto("/app/");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  const card = needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true });
+  await expect(card).toContainText("Your call");
+  await expect(card).toContainText("ran out of turns (80 of 80)");
+  await expect(card.getByRole("button", { name: "Retry", exact: true })).toHaveAttribute("title", /from scratch.*claude\/sonnet/);
+  await expect(card.getByRole("button", { name: "Tier up" })).toHaveAttribute("title", /claude\/opus/);
+  await card.getByRole("button", { name: "Continue", exact: true }).click();
+  await card.getByText("+50%").click();
+  await card.getByLabel(/A note for the builder/).fill("Finish sign-out only; leave the settings page.");
+  await card.getByRole("button", { name: "Continue from here" }).click();
+  await expect(card.getByRole("status")).toContainText("devserver: would continue job");
+  await expect(card.getByRole("status")).toContainText("50% more turns and budget");
+  await expect(card.getByRole("status")).toContainText("Finish sign-out only");
+  await shot(page, info, "stopped-card");
+
+  // The item page says what happened and offers the same choices.
+  await card.getByRole("link", { name: /Add SSO sign-in/ }).click();
+  const next = page.getByTestId("next");
+  await expect(next).toContainText("Continue (claude/sonnet): Picks up where it stopped");
+  await expect(next).toContainText("Park: It's parked now");
+  await expect(next).toContainText("factory:retry");
+
+  // The job page: how it stopped, its note, the work it kept and the transcript's ending.
+  await next.getByRole("link", { name: /job #/ }).click();
+  const stop = page.getByTestId("stop");
+  await expect(stop).toContainText("ran out of turns (80 of 80)");
+  await expect(stop).toContainText("Left: the sign-out route");
+  await stop.getByRole("button", { name: /See the work it did/ }).click();
+  await expect(stop).toContainText("admin/sso.go");
+  const transcript = page.getByTestId("transcript");
+  await expect(page.getByTestId("outcome")).toContainText("Continue picks up from here");
+  await expect(page.getByTestId("outcome")).toContainText("80 turns");
+  await transcript.getByRole("button", { name: "Ran a command, edited 2 files" }).click();
+  await transcript.getByRole("button", { name: /Ran go test \.\/admin/ }).click();
+  await expect(transcript).toContainText("ok  admin 0.4s");
+  await expect(page.getByRole("link", { name: "Raw log" })).toHaveAttribute("href", /\/log\.jsonl$/);
+  await shot(page, info, "stopped-session");
+  if (phone(info)) await noSidewaysScroll(page);
 });
 
 test("orchestrator feed filters by item", async ({ page }, info) => {
@@ -216,6 +271,10 @@ test("inbox lists what needs you", async ({ page }, info) => {
   await expect(inbox).toContainText("#101 is ready for your review");
   await expect(inbox).toContainText("#104 needs your input");
   await expect(inbox).toContainText("anchors merge across files");
+  // A stopped build's choices are right in the inbox.
+  const stopped = inbox.getByRole("listitem").filter({ hasText: "#112" });
+  await expect(stopped).toContainText("ran out of turns");
+  await expect(stopped.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await shot(page, info, "inbox");
   if (phone(info)) await noSidewaysScroll(page);
 });

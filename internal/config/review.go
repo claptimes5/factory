@@ -58,11 +58,6 @@ func (c *Config) checkReview() []error {
 	if c.Budgets.Verify < 0 {
 		errs = append(errs, fmt.Errorf("budgets.verify must be > 0, or left out to use budgets.triage"))
 	}
-	if r, ok := c.Routing["verify"]; ok {
-		if size, ok := c.buildsWith(r.Harness, r.Model); ok {
-			errs = append(errs, fmt.Errorf("routing.verify checks findings with %s/%s, which routing.implement.%s can build with (escalation included): the verifier must differ from the builder in harness or model", r.Harness, r.Model, size))
-		}
-	}
 	return errs
 }
 
