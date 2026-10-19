@@ -217,7 +217,7 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	select {
 	case err := <-done:
 		code, err := exitCode(err, stderr.String())
-		if err == nil && code == 125 {
+		if err == nil && code == 125 && dockerFailed(stderr.String()) {
 			err = dockerStartError(stderr.String())
 		}
 		return code, err
@@ -231,13 +231,21 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	}
 }
 
-// dockerStartError explains exit code 125, which is Docker failing to
-// start the container (a missing image, a bad mount) before the job ran.
+// dockerFailed tells Docker failing to start the container (exit code
+// 125, with its own message) from a job command that exits 125 itself.
+func dockerFailed(stderr string) bool {
+	for _, s := range []string{"docker: ", "Error response from daemon", "Unable to find image"} {
+		if strings.Contains(stderr, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// dockerStartError explains exit code 125 when Docker failed to start the
+// container (a missing image, a bad mount) before the job ran.
 func dockerStartError(stderr string) error {
 	msg := tail(stderr, 1000)
-	if msg == "" {
-		msg = "no message from Docker"
-	}
 	hint := ""
 	for _, s := range []string{"Unable to find image", "No such image", "pull access denied", "repository does not exist"} {
 		if strings.Contains(stderr, s) {

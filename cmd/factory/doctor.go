@@ -332,7 +332,9 @@ func (d *doctor) images(ctx context.Context) []finding {
 		r, _ := d.cfg.RepoConf(n)
 		check(r.Image, n)
 	}
-	check(d.cfg.Runner.Image, "the orchestrator")
+	if usesRunnerImage(d.cfg) {
+		check(d.cfg.Runner.Image, runnerImageUsers)
+	}
 	if len(built) > 0 {
 		out = append([]finding{{pass, "Job images built: " + strings.Join(built, ", "), ""}}, out...)
 	}

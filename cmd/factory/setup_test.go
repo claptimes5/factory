@@ -677,8 +677,8 @@ func TestGitLabTokenHelpShowsOnlyTheChosenKind(t *testing.T) {
 	}
 }
 
-// The orchestrator runs in runner.image, so it's built even when every
-// repo has an image of its own.
+// The orchestrator, tuning and grooming run in runner.image, so it's built
+// even when every repo has an image of its own, while any of them is on.
 func TestImagesIncludeTheOrchestrators(t *testing.T) {
 	path := testConfig(t, "o/r")
 	b, _ := os.ReadFile(path)
@@ -687,8 +687,13 @@ func TestImagesIncludeTheOrchestrators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Orchestrator.On, cfg.Tuning.Every, cfg.Grooming.Every = false, 0, 0
+	if ims := jobImages(cfg); len(ims) != 1 {
+		t.Fatalf("with nothing outside a repo on: images %+v", ims)
+	}
+	cfg.Orchestrator.On = true
 	ims := jobImages(cfg)
-	if len(ims) != 2 || ims[1].tag != cfg.Runner.Image || joinAnd(ims[1].repos) != "the orchestrator" {
+	if len(ims) != 2 || ims[1].tag != cfg.Runner.Image || joinAnd(ims[1].repos) != runnerImageUsers {
 		t.Fatalf("images %+v", ims)
 	}
 }

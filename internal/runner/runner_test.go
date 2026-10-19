@@ -90,3 +90,15 @@ func TestDockerExplainsAContainerThatDidntStart(t *testing.T) {
 		t.Fatalf("code %d, %v", code, err)
 	}
 }
+
+// A job command that exits 125 itself is its own failure, not Docker's.
+func TestDockerPassesOnACommandsOwn125(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'xargs: child exited 255' >&2\nexit 125\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := Spec{Name: "j", Image: "img", Workdir: t.TempDir(), OutDir: t.TempDir(), Cmd: []string{"true"}}
+	if code, err := (&Docker{Bin: bin}).Run(context.Background(), s, io.Discard); code != 125 || err != nil {
+		t.Fatalf("code %d, %v", code, err)
+	}
+}

@@ -131,12 +131,19 @@ func jobImages(cfg *config.Config) []jobImage {
 			add(r.Image, "", n)
 		}
 	}
-	// The orchestrator, which belongs to no repo, runs in runner.image even
-	// when every repo has an image of its own.
-	if !slices.ContainsFunc(out, func(im jobImage) bool { return im.tag == cfg.Runner.Image }) {
-		out = append(out, jobImage{tag: cfg.Runner.Image, repos: []string{"the orchestrator"}})
+	// The orchestrator, tuning and grooming belong to no repo, so they run
+	// in runner.image even when every repo has an image of its own.
+	if usesRunnerImage(cfg) && !slices.ContainsFunc(out, func(im jobImage) bool { return im.tag == cfg.Runner.Image }) {
+		out = append(out, jobImage{tag: cfg.Runner.Image, repos: []string{runnerImageUsers}})
 	}
 	return out
+}
+
+const runnerImageUsers = "the orchestrator, tuning and grooming"
+
+// usesRunnerImage says whether a job outside any repo can run.
+func usesRunnerImage(cfg *config.Config) bool {
+	return cfg.Orchestrator.On || cfg.Tuning.Every > 0 || cfg.Grooming.Every > 0
 }
 
 func (im jobImage) buildArgs(dir string) []string {
