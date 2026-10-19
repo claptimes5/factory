@@ -13,9 +13,9 @@ import (
 	"github.com/claptimes5/factory/internal/store"
 )
 
-// A chat reads and drafts; nothing reaches the forge until a person
-// creates the draft, which then goes to the factory approved, like an
-// issue they labeled.
+// A chat reads and opens issues with the orchestrator's tools. Drafts
+// from before it could reach the forge only once a person creates them,
+// and then go to the factory approved, like an issue they labeled.
 func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -29,7 +29,7 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 			if !strings.Contains(req.Prompt, "Make it Sub too") || !strings.Contains(req.Prompt, "Drafted Add.") || !strings.Contains(req.Prompt, "Add an Add function") {
 				t.Errorf("a later turn's prompt lacks the conversation or its drafts:\n%s", req.Prompt)
 			}
-			return `{"reply":"Nothing more to draft."}`, nil
+			return `{"reply":"Nothing more to open."}`, nil
 		}
 		if !strings.Contains(req.Prompt, "We need an Add function") {
 			t.Errorf("prompt lacks the message:\n%s", req.Prompt)
@@ -43,23 +43,8 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 			names = append(names, tl.Name)
 		}
 		slices.Sort(names)
-		if got := strings.Join(names, ","); got != "draft_issue,get_issue,get_item,get_job_log,list_items,queue_status" {
-			t.Errorf("chat tools = %s; it may only read and draft", got)
-		}
-		if out, isErr := m.call("draft_issue", map[string]any{"title": "x"}); !isErr || !strings.Contains(out, "title and a body") {
-			t.Errorf("a draft without a body = %s", out)
-		}
-		if out, isErr := m.call("draft_issue", map[string]any{"title": "x", "body": "y", "repo": "else/where"}); !isErr || !strings.Contains(out, "not one of the factory's repos") {
-			t.Errorf("a draft for another repo = %s", out)
-		}
-		out, isErr := m.call("draft_issue", map[string]any{"title": "Add", "body": "Add func Add.", "labels": []string{"math", "factory:go"}})
-		if isErr || !strings.Contains(out, "dropped: factory:go") {
-			t.Fatalf("draft_issue = %s", out)
-		}
-		var d struct{ Draft int64 }
-		json.Unmarshal([]byte(strings.SplitN(out, "\n", 2)[0]), &d)
-		if out, isErr := m.call("draft_issue", map[string]any{"draft": d.Draft, "title": "Add an Add function", "body": "Add func Add(a, b int) int.", "labels": []string{"math"}}); isErr {
-			t.Fatalf("revising the draft = %s", out)
+		if got := strings.Join(names, ","); got != "close_split,create_issue,get_issue,get_item,get_job_log,list_items,queue_status" {
+			t.Errorf("chat tools = %s; it may only read, open issues and close a split one", got)
 		}
 		return `{"reply":"Drafted Add."}`, nil
 	}
@@ -78,12 +63,12 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	if c, _ := e.p.Store.GetChat(ctx, chat); c.Title != "We need an Add function." {
 		t.Errorf("chat title = %q", c.Title)
 	}
-	drafts, _ := e.p.Store.ChatDrafts(ctx, chat)
-	if len(drafts) != 1 || drafts[0].Title != "Add an Add function" || drafts[0].State != store.DraftOpen || strings.Join(drafts[0].Labels, ",") != "math" {
-		t.Fatalf("drafts = %+v", drafts)
+	if _, err := e.p.Store.SaveDraft(ctx, store.IssueDraft{ChatID: chat, Repo: "o/r", Title: "Add an Add function", Body: "Add func Add(a, b int) int.", Labels: []string{"math"}}); err != nil {
+		t.Fatal(err)
 	}
-	if len(e.gh.issues) != 0 {
-		t.Fatalf("a draft reached the forge: %+v", e.gh.issues)
+	drafts, _ := e.p.Store.ChatDrafts(ctx, chat)
+	if len(drafts) != 1 || drafts[0].State != store.DraftOpen {
+		t.Fatalf("drafts = %+v", drafts)
 	}
 
 	// The next turn reads the conversation and the drafts.

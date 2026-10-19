@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -18,9 +19,10 @@ import (
 )
 
 // A chat is a conversation with the orchestrator's model on the
-// dashboard. Each message a person sends starts one read-only run that
-// can look at the code and the factory's work and draft issues; a draft
-// becomes an issue only when the person creates it. A reply doesn't wait
+// dashboard. Each message a person sends starts one run that can read
+// the code and the factory's work and open issues for the factory to
+// build. Drafts are from chats before it could open them; a draft becomes
+// an issue only when the person creates it. A reply doesn't wait
 // for a free job slot, since it only reads, but one is written at a time,
 // on the orchestrator's daily budget.
 
@@ -37,8 +39,8 @@ const (
 )
 
 // chatTools are the orchestrator's tools a chat may use: those that only
-// read.
-var chatTools = []string{"list_items", "get_item", "get_issue", "queue_status", "get_job_log"}
+// read, and create_issue and close_split to split an item.
+var chatTools = []string{"list_items", "get_item", "get_issue", "queue_status", "get_job_log", "create_issue", "close_split"}
 
 // ChatUnavailable says why a chat can't reply now, or "".
 func (p *Pipeline) ChatUnavailable(ctx context.Context) string {
@@ -260,7 +262,7 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	}
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
-	x, err := p.withTools(sctx, dir, p.ChatTools(j.ID, in.Chat))
+	x, err := p.withTools(sctx, dir, p.ChatTools(j.ID))
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -332,54 +334,15 @@ func chatDrafts(ds []store.IssueDraft) string {
 	return b.String()
 }
 
-// ChatTools are the tools of the run replying in chat chatID: the
-// orchestrator's reads, and draft_issue.
-func (p *Pipeline) ChatTools(jobID, chatID int64) []mcp.Tool {
+// ChatTools are the tools of the run replying in a chat.
+func (p *Pipeline) ChatTools(jobID int64) []mcp.Tool {
 	var out []mcp.Tool
 	for _, t := range p.toolsFor(jobID, "chat") {
-		for _, n := range chatTools {
-			if t.Name == n {
-				out = append(out, t)
-			}
+		if slices.Contains(chatTools, t.Name) {
+			out = append(out, t)
 		}
 	}
-	return append(out, mcp.Tool{Name: "draft_issue",
-		Description: "Draft an issue for the person to create. It is not opened until they do. Pass draft to revise one of your open drafts instead.",
-		InputSchema: schema(`"draft":{"type":"integer","description":"An open draft of this chat to revise"},"title":{"type":"string"},"body":{"type":"string","description":"Markdown: the problem, the expected behavior and how to verify it"},`+
-			`"parent":{"type":"integer","description":"An epic item this is part of"},"depends_on":{"type":"array","items":{"type":"integer"},"description":"Item ids that must be done first"},`+
-			`"labels":{"type":"array","items":{"type":"string"}},`+repoProp, "title", "body"),
-		Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			var a struct {
-				Draft     int64    `json:"draft"`
-				Title     string   `json:"title"`
-				Body      string   `json:"body"`
-				Repo      string   `json:"repo"`
-				Parent    int64    `json:"parent"`
-				DependsOn []int64  `json:"depends_on"`
-				Labels    []string `json:"labels"`
-			}
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return "", err
-			}
-			d, dropped, err := p.checkDraft(ctx, store.IssueDraft{ID: a.Draft, ChatID: chatID, JobID: jobID, Repo: a.Repo, Title: a.Title, Body: a.Body,
-				Parent: a.Parent, DependsOn: a.DependsOn, Labels: a.Labels})
-			if err != nil {
-				return "", err
-			}
-			// Under act, so a revision can't land between a create's
-			// version check and its claim.
-			p.act.Lock()
-			id, err := p.Store.SaveDraft(ctx, d)
-			p.act.Unlock()
-			if err != nil {
-				return "", err
-			}
-			out := fmt.Sprintf(`{"draft":%d}`, id)
-			if len(dropped) > 0 {
-				out += fmt.Sprintf("\nlabels not allowed and dropped: %s", strings.Join(dropped, ", "))
-			}
-			return out, nil
-		}})
+	return out
 }
 
 // checkDraft checks a draft as create_issue checks an issue, fills in its

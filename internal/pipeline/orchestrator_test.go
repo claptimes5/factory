@@ -520,3 +520,63 @@ func TestPickRepoWithoutHost(t *testing.T) {
 		t.Fatal("acme/web matches two repos and should be refused")
 	}
 }
+
+// notPlannedGH closes issues as not planned, as GitHub's client does.
+type notPlannedGH struct {
+	*fakeGH
+	closed []int
+}
+
+func (f *notPlannedGH) CloseNotPlanned(_ context.Context, n int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.issues[n].State = "closed"
+	f.closed = append(f.closed, n)
+	return nil
+}
+
+// Splitting an item from chat opens its children, then closes its issue in
+// favor of them and makes it their epic.
+func TestChatClosesASplitItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	gh := &notPlannedGH{fakeGH: e.gh}
+	e.p.GH = gh
+	e.gh.issues[9] = &github.Issue{Number: 9, Title: "Make lint pass", State: "open"}
+	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 9, "Make lint pass")
+	e.p.Store.SetStage(ctx, it.ID, state.Parked, "test", "")
+	tools := map[string]mcp.Tool{}
+	for _, tl := range e.p.ChatTools(1) {
+		tools[tl.Name] = tl
+	}
+	if _, err := callTool(t, tools, "close_split", map[string]any{"item": it.ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "no child issues") {
+		t.Fatalf("closing with no children = %v", err)
+	}
+	for _, title := range []string{"Lint app/", "Lint test/"} {
+		if out, err := callTool(t, tools, "create_issue", map[string]any{"title": title, "body": "b", "parent": it.ID, "reason": "split"}); err != nil {
+			t.Fatalf("create_issue: %s %v", out, err)
+		}
+	}
+	if _, err := callTool(t, tools, "close_split", map[string]any{"item": it.ID, "reason": "Too big for one build."}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.closed) != 1 || gh.closed[0] != 9 {
+		t.Fatalf("closed = %v", gh.closed)
+	}
+	if cs := e.gh.comments[9]; len(cs) != 1 || !strings.Contains(cs[0], "split into #") || !strings.Contains(cs[0], "Too big") {
+		t.Fatalf("comments = %q", cs)
+	}
+	if got, _ := e.p.Store.GetItem(ctx, it.ID); got.Stage != state.Epic {
+		t.Fatalf("stage = %s", got.Stage)
+	}
+	if n, _ := e.p.Store.CountEventsSince(ctx, "chat", "create_issue", "2000-01-01"); n != 2 {
+		t.Errorf("chat's issues audited = %d", n)
+	}
+	// A building item isn't closed under its build.
+	b, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 10, "b")
+	e.p.Store.SetStage(ctx, b.ID, state.Ready, "test", "")
+	if _, err := callTool(t, tools, "close_split", map[string]any{"item": b.ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "only a parked") {
+		t.Fatalf("closing a ready item = %v", err)
+	}
+}

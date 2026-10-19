@@ -82,8 +82,8 @@ function About({ info }: { info: Chats }) {
       <CardContent className="space-y-1.5 pt-4 text-sm">
         <p>
           Chat with <span className="font-medium">{modelName(info.model)}</span> about what you want built. It reads your code and the
-          factory's work, then drafts issues. Nothing is filed until you press <span className="font-medium">Create issue</span> on a
-          draft; the factory then builds it like any issue you label.
+          factory's work, then opens issues, which the factory builds like any issue you label. Splitting an item closes its issue in
+          favor of the new ones.
         </p>
         <p className="text-muted-foreground">
           {info.orchestrator_on ? (
