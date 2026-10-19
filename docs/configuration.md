@@ -130,14 +130,45 @@ A group with a dot in its name needs `host:` set, as in
 The factory works them the same way: it picks up issues labeled
 `factory:ready` and opens a draft merge request for each.
 
-**The token.** The factory reaches GitLab with `GITLAB_TOKEN`, which
-`factory setup` asks for and checks against each project.
+**The token.** The factory reaches GitLab with `GITLAB_TOKEN`. Either kind
+below works; `factory setup` asks which you'll make, shows just its steps,
+then checks the token against each project.
 
-- A project access token limits it to one project. For several, use a
-  group access token or a personal token for a bot account.
-- The token needs the `api` and `write_repository` scopes.
-- It needs the Developer role, or Maintainer if Developers can't push to
-  the base branch.
+- The token's owner needs the Developer role on each project, or
+  Maintainer if Developers can't push to the base branch. GitLab checks
+  both the token's permissions and its owner's role.
+- **A fine-grained personal token** (beta in GitLab 18.10, generally
+  available in 19.2) can be
+  limited to just the factory's projects. In your profile, go to Access >
+  Personal access tokens, choose Generate token > Fine-grained token, pick
+  the projects (or their group) under Group and project access, and give
+  them the permissions below.
+- **A legacy token** is quicker to make: give it the `api` and
+  `write_repository` scopes. On gitlab.com,
+  <https://gitlab.com/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository>
+  opens the form with both ticked (use your own host if self-hosted). A
+  project access token limits it to one project; for several,
+  use a group access token or a bot account's personal token.
+
+The fine-grained permissions, from each call the factory makes. The
+selector groups resources under headings; its search box finds each by name.
+
+| Tab | Heading | Resource | Permissions | What for |
+| --- | --- | --- | --- | --- |
+| Group and project | (use search) | Code | Download, Push | Cloning and pushing branches |
+| Group and project | Projects | Project | Read | The default branch and settings |
+| Group and project | Repository | Repository | Read | Files and the tree on the base branch |
+| Group and project | Repository | Branch | Read | Branch heads |
+| Group and project | Repository | Commit | Read | Commits and their statuses |
+| Group and project | CI/CD | Pipeline | Read | CI results |
+| Group and project | CI/CD | Job | Read | Failed jobs' logs |
+| Group and project | Project Planning | Work Item | Read, Create, Update | Issues, labels on them, and comments on issues and merge requests |
+| Group and project | Repository | Merge Request | Read, Create, Update, Merge | Draft merge requests; Merge only for auto-merge |
+| Group and project | Project Planning | Label | Read, Create | The factory's labels |
+| Group and project | System Access | Member | Read | Who may start work |
+| Group and project | Projects | Markdown Upload | Create, Delete | Screenshots on merge requests |
+| User | System Access | User | Read | Which account the token is |
+| Global | System Access | Metadata | Read | The GitLab version |
 
 **CI.** On GitLab a pushed branch runs its own `.gitlab-ci.yml` with the
 project's runners and CI variables. So builders may never change

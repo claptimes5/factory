@@ -477,13 +477,12 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 		rc, _ := cfg.RepoConf(r)
 		hosts[rc.Host] = true
 	}
-	p.say("The factory acts on GitLab with an access token. A project access token")
-	p.say("limits it to one project; with several, a group access token or a personal")
-	p.say("token for a bot account does. Give it the api and write_repository scopes and")
-	p.say("the Developer role (Maintainer if the base branch is protected from Developers).")
+	var sorted []string
 	for h := range hosts {
-		p.say("  On %s: the project's Settings > Access tokens, or https://%s/-/user_settings/personal_access_tokens", h, h)
+		sorted = append(sorted, h)
 	}
+	slices.Sort(sorted)
+	gitlabTokenHelp(p, sorted)
 	client := clientFor(func(repo string) (forge, github.TokenSource, error) {
 		ts := github.StaticToken(vals["GITLAB_TOKEN"])
 		return newForge(cfg, repo, ts), ts, nil
@@ -512,6 +511,45 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			p.say("Saving what you entered; run `factory setup` again to fix it.")
 			return nil
 		}
+	}
+}
+
+// gitlabTokenHelp asks which kind of GitLab token you want to make and
+// prints only the steps for that kind.
+func gitlabTokenHelp(p *prompter, hosts []string) {
+	p.say("The factory acts on GitLab with an access token. Its owner needs the Developer")
+	p.say("role on each project (Maintainer if the base branch is protected from Developers).")
+	p.say("Which kind of token will you make?")
+	p.say("  1. Legacy, the quick one: one link opens the form with its scopes already ticked.")
+	p.say("  2. Fine-grained: limited to these projects, but about 20 boxes to tick by hand")
+	p.say("     (GitLab 18.10 beta, GA in 19.2).")
+	for {
+		switch p.ask("Legacy or fine-grained? 1 or 2", "1") {
+		case "1":
+			for _, h := range hosts {
+				p.say("Open this link, set an expiry date and click Generate token:")
+				p.say("  https://%s/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository", h)
+			}
+			p.say("It makes a personal token with the api and write_repository scopes. A project,")
+			p.say("group or bot account token with those scopes works too.")
+			return
+		case "2":
+			for _, h := range hosts {
+				p.say("Open https://%s/-/user_settings/personal_access_tokens and choose", h)
+				p.say("Generate token > Fine-grained token.")
+			}
+			p.say("On the Group and project tab, add each project and give it:")
+			p.say("  Code: Download, Push")
+			p.say("  Project, Repository, Branch, Commit, Pipeline, Job, Member: Read")
+			p.say("  Work Item: Read, Create, Update")
+			p.say("  Merge Request: Read, Create, Update, Merge")
+			p.say("  Label: Read, Create")
+			p.say("  Markdown Upload: Create, Delete")
+			p.say("On the User tab, User: Read. On the Global tab, Metadata: Read.")
+			p.say("The search box finds each one; docs/configuration.md#gitlab-repos has the list.")
+			return
+		}
+		p.say("Type 1 or 2.")
 	}
 }
 
