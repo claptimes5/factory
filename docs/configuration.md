@@ -146,24 +146,25 @@ The factory works them the same way: it picks up issues labeled
   scopes. A project access token limits it to one project; for several,
   use a group access token or a bot account's personal token.
 
-The fine-grained permissions, from each call the factory makes:
+The fine-grained permissions, from each call the factory makes. The
+selector groups resources under headings; its search box finds each by name.
 
-| Tab | Resource | Permissions | What for |
-| --- | --- | --- | --- |
-| Group and project | Code | Download, Push | Cloning and pushing branches |
-| Group and project | Project | Read | The default branch and settings |
-| Group and project | Repository | Read | Files and the tree on the base branch |
-| Group and project | Branch | Read | Branch heads |
-| Group and project | Commit | Read | Commits and their statuses |
-| Group and project | Pipeline | Read | CI results |
-| Group and project | Job | Read | Failed jobs' logs |
-| Group and project | Work Item | Read, Create, Update | Issues, labels on them, and comments on issues and merge requests |
-| Group and project | Merge Request | Read, Create, Update, Merge | Draft merge requests; Merge only for auto-merge |
-| Group and project | Label | Read, Create | The factory's labels |
-| Group and project | Member | Read | Who may start work |
-| Group and project | Markdown Upload | Create, Delete | Screenshots on merge requests |
-| User | User | Read | Which account the token is |
-| Global | Metadata | Read | The GitLab version |
+| Tab | Heading | Resource | Permissions | What for |
+| --- | --- | --- | --- | --- |
+| Group and project | (use search) | Code | Download, Push | Cloning and pushing branches |
+| Group and project | Projects | Project | Read | The default branch and settings |
+| Group and project | Repository | Repository | Read | Files and the tree on the base branch |
+| Group and project | Repository | Branch | Read | Branch heads |
+| Group and project | Repository | Commit | Read | Commits and their statuses |
+| Group and project | CI/CD | Pipeline | Read | CI results |
+| Group and project | CI/CD | Job | Read | Failed jobs' logs |
+| Group and project | Project Planning | Work Item | Read, Create, Update | Issues, labels on them, and comments on issues and merge requests |
+| Group and project | Repository | Merge Request | Read, Create, Update, Merge | Draft merge requests; Merge only for auto-merge |
+| Group and project | Project Planning | Label | Read, Create | The factory's labels |
+| Group and project | System Access | Member | Read | Who may start work |
+| Group and project | Projects | Markdown Upload | Create, Delete | Screenshots on merge requests |
+| User | System Access | User | Read | Which account the token is |
+| Global | System Access | Metadata | Read | The GitLab version |
 
 **CI.** On GitLab a pushed branch runs its own `.gitlab-ci.yml` with the
 project's runners and CI variables. So builders may never change
