@@ -676,3 +676,19 @@ func TestGitLabTokenHelpShowsOnlyTheChosenKind(t *testing.T) {
 		}
 	}
 }
+
+// The orchestrator runs in runner.image, so it's built even when every
+// repo has an image of its own.
+func TestImagesIncludeTheOrchestrators(t *testing.T) {
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	y := strings.Replace(string(b), "repo: o/r", "repos:\n  - name: o/api\n    image_from: ruby:3.4-bookworm\n", 1)
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ims := jobImages(cfg)
+	if len(ims) != 2 || ims[1].tag != cfg.Runner.Image || joinAnd(ims[1].repos) != "the orchestrator" {
+		t.Fatalf("images %+v", ims)
+	}
+}

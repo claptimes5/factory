@@ -145,6 +145,11 @@ func TestDoctorChecks(t *testing.T) {
 		{"image missing", func(_ *testing.T, m *fakeMachine, _ *config.Config) {
 			m.fail["docker image inspect factory-job:latest"] = true
 		}, fail, "Job image factory-job:latest (for o/r) isn't built", "./factory images"},
+		{"orchestrator image missing", func(_ *testing.T, m *fakeMachine, cfg *config.Config) {
+			cfg.Repos[0].ImageFrom = "ruby:3.4-bookworm"
+			cfg.Repos[0].Image = "factory-job-o__r:latest"
+			m.fail["docker image inspect factory-job:latest"] = true
+		}, fail, "Job image factory-job:latest (for the orchestrator) isn't built", "./factory images"},
 		{"low disk", func(_ *testing.T, m *fakeMachine, _ *config.Config) {
 			m.disks = []runner.Disk{{Where: "Docker's storage (/var/lib/docker)", Free: 3e9}}
 		}, fail, "Low on disk: Docker's storage (/var/lib/docker) has 3 GB free", "budgets.min_free_disk_gb"},

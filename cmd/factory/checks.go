@@ -131,6 +131,11 @@ func jobImages(cfg *config.Config) []jobImage {
 			add(r.Image, "", n)
 		}
 	}
+	// The orchestrator, which belongs to no repo, runs in runner.image even
+	// when every repo has an image of its own.
+	if !slices.ContainsFunc(out, func(im jobImage) bool { return im.tag == cfg.Runner.Image }) {
+		out = append(out, jobImage{tag: cfg.Runner.Image, repos: []string{"the orchestrator"}})
+	}
 	return out
 }
 

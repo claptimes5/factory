@@ -313,22 +313,26 @@ func (d *doctor) images(ctx context.Context) []finding {
 	var out []finding
 	var built []string
 	seen := map[string]bool{}
-	for _, n := range d.cfg.RepoNames() {
-		r, _ := d.cfg.RepoConf(n)
-		if seen[r.Image] {
-			continue
+	check := func(image, n string) {
+		if seen[image] {
+			return
 		}
-		seen[r.Image] = true
-		if _, err := d.run(ctx, "docker", "image", "inspect", r.Image); err == nil {
-			built = append(built, r.Image)
-			continue
+		seen[image] = true
+		if _, err := d.run(ctx, "docker", "image", "inspect", image); err == nil {
+			built = append(built, image)
+			return
 		}
 		fix := "./factory images"
-		if !ours[r.Image] {
+		if !ours[image] {
 			fix = "build it yourself: " + n + "'s image names one the factory doesn't build\n(docs/configuration.md#each-repos-toolchain-and-checks)"
 		}
-		out = append(out, finding{fail, fmt.Sprintf("Job image %s (for %s) isn't built", r.Image, n), fix})
+		out = append(out, finding{fail, fmt.Sprintf("Job image %s (for %s) isn't built", image, n), fix})
 	}
+	for _, n := range d.cfg.RepoNames() {
+		r, _ := d.cfg.RepoConf(n)
+		check(r.Image, n)
+	}
+	check(d.cfg.Runner.Image, "the orchestrator")
 	if len(built) > 0 {
 		out = append([]finding{{pass, "Job images built: " + strings.Join(built, ", "), ""}}, out...)
 	}
