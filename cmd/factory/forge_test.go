@@ -61,7 +61,7 @@ func TestSetupWithGitLab(t *testing.T) {
 	cfgPath, envPath, out := runSetup(t, f,
 		"o/api, https://gitlab.com/team/web.git",
 		"3", "ghp_token123", // GitHub
-		"glpat-wrong", "y", "glpat-abc", // GitLab: a bad token, then a good one
+		"", "glpat-wrong", "y", "glpat-abc", // GitLab: a legacy token, a bad one then a good one
 		"y", // create labels on both
 		"",  // run the readiness check
 		"sk-ant-api03-abc",

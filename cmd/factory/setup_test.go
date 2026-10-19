@@ -661,3 +661,18 @@ func TestImagesForPreviews(t *testing.T) {
 		t.Fatalf("images %+v", ims)
 	}
 }
+
+func TestGitLabTokenHelpShowsOnlyTheChosenKind(t *testing.T) {
+	for _, c := range []struct{ answer, want, not string }{
+		{"\n", "scopes=api,write_repository", "Merge Request: Read"},
+		{"2\n", "Merge Request: Read, Create, Update, Merge", "scopes=api"},
+		{"3\n2\n", "Type 1 or 2.", "scopes=api"},
+	} {
+		var b strings.Builder
+		p := &prompter{in: bufio.NewReader(strings.NewReader(c.answer)), out: &b}
+		gitlabTokenHelp(p, []string{"gitlab.example.com"})
+		if out := b.String(); !strings.Contains(out, c.want) || strings.Contains(out, c.not) {
+			t.Errorf("answer %q:\n%s", c.answer, out)
+		}
+	}
+}

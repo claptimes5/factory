@@ -130,8 +130,9 @@ A group with a dot in its name needs `host:` set, as in
 The factory works them the same way: it picks up issues labeled
 `factory:ready` and opens a draft merge request for each.
 
-**The token.** The factory reaches GitLab with `GITLAB_TOKEN`, which
-`factory setup` asks for and checks against each project.
+**The token.** The factory reaches GitLab with `GITLAB_TOKEN`. Either kind
+below works; `factory setup` asks which you'll make, shows just its steps,
+then checks the token against each project.
 
 - The token's owner needs the Developer role on each project, or
   Maintainer if Developers can't push to the base branch. GitLab checks
@@ -145,7 +146,8 @@ The factory works them the same way: it picks up issues labeled
 - **A legacy token** is quicker to make: give it the `api` and
   `write_repository` scopes. On gitlab.com,
   <https://gitlab.com/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository>
-  opens the form with both ticked (use your own host if self-hosted). A project access token limits it to one project; for several,
+  opens the form with both ticked (use your own host if self-hosted). A
+  project access token limits it to one project; for several,
   use a group access token or a bot account's personal token.
 
 The fine-grained permissions, from each call the factory makes. The
