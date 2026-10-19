@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/harness"
@@ -77,7 +78,7 @@ type doctor struct {
 }
 
 func newDoctor(cfg *config.Config) *doctor {
-	d := &doctor{cfg: cfg, lookPath: exec.LookPath, plat: detectPlatform()}
+	d := &doctor{cfg: cfg, lookPath: lookPath, plat: detectPlatform()}
 	d.run = func(ctx context.Context, name string, args ...string) (string, error) {
 		// A wedged Docker Desktop can leave docker hanging.
 		ctx, cancel := context.WithTimeout(ctx, runner.DiskWait)
@@ -118,11 +119,32 @@ func newDoctor(cfg *config.Config) *doctor {
 	return d
 }
 
-// runOutput runs a command through runCmd, which setup's tests replace.
+// lookPath finds a command; tests replace it.
+var lookPath = exec.LookPath
+
+// setupWait bounds each of setup's checks, so a hung Docker can't stop
+// setup at its first screen.
+var setupWait = 15 * time.Second
+
+// runOutput runs a command through runCmd, which setup's tests replace,
+// giving up on it after setupWait.
 func runOutput(_ context.Context, name string, args ...string) (string, error) {
-	var b bytes.Buffer
-	err := runCmd(&b, name, args...)
-	return b.String(), err
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var b bytes.Buffer
+		err := runCmd(&b, name, args...)
+		done <- result{b.String(), err}
+	}()
+	select {
+	case r := <-done:
+		return r.out, r.err
+	case <-time.After(setupWait):
+		return "", fmt.Errorf("%s didn't answer within %s", name, setupWait)
+	}
 }
 
 // checkAll runs the checks, only the system ones if system is set.
@@ -258,7 +280,7 @@ func (d *doctor) dockerVersion(ctx context.Context) []finding {
 	need := strings.Join(needs, " and ")
 	v := versionParts(d.dockerVer)
 	if v == nil {
-		return one(finding{warn, "Couldn't read Docker's version; " + need + " needs Docker 28 or later", "docker version"})
+		return one(finding{fail, "Couldn't read Docker's version, and " + need + " needs Docker 28 or later", "docker version --format '{{.Server.Version}}'   (should print 28 or later)"})
 	}
 	if v[0] >= 28 {
 		return nil
@@ -332,7 +354,7 @@ func (d *doctor) disk(ctx context.Context) []finding {
 	}
 	switch {
 	case len(low) > 0:
-		return one(finding{warn, "Low on disk: " + strings.Join(low, "; "),
+		return one(finding{fail, "Low on disk: " + strings.Join(low, "; "),
 			fmt.Sprintf("free some space: no job starts with less than %g GB (budgets.min_free_disk_gb)\ndocker system prune removes stopped containers and unused images", min)})
 	case err != nil:
 		return one(finding{warn, "Couldn't measure the disk: " + err.Error(), ""})
@@ -352,7 +374,12 @@ func (d *doctor) claude(context.Context) []finding {
 	case os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "":
 		return one(finding{pass, "Claude: subscription token", ""})
 	case os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" || os.Getenv("CLAUDE_CODE_USE_BEDROCK") != "" || os.Getenv("CLAUDE_CODE_USE_VERTEX") != "":
-		return one(finding{pass, "Claude: from the environment", ""})
+		if d.cfg.Runner.Kind != "docker" {
+			return one(finding{pass, "Claude: from the environment", ""})
+		}
+		// Only these two are passed into job containers (see secrets).
+		return one(finding{fail, "Claude: ANTHROPIC_AUTH_TOKEN, Bedrock and Vertex sign-ins don't reach docker jobs",
+			"set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; ./factory setup asks for one (docs/setup.md#what-setup-asks-for)"})
 	}
 	return one(finding{fail, "No Claude credential (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)",
 		"./factory setup asks for one (docs/setup.md#what-setup-asks-for)"})
@@ -377,8 +404,27 @@ func (d *doctor) codex(context.Context) []finding {
 	case os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "":
 		return one(finding{pass, "Codex: OpenAI API key", ""})
 	}
-	return one(finding{fail, "factory.yaml routes reviews to Codex, but there's no OpenAI API key or ChatGPT sign-in",
+	return one(finding{fail, "factory.yaml routes " + codexStage(d.cfg) + " to Codex, but there's no OpenAI API key or ChatGPT sign-in",
 		"./factory setup asks for one; no OpenAI account? see docs/configuration.md#claude-only-review"})
+}
+
+// codexStage names a stage routed to Codex: review if it is, else the
+// first in sorted order.
+func codexStage(cfg *config.Config) string {
+	var stages []string
+	for k, r := range cfg.Routing {
+		if r.Harness == "codex" {
+			stages = append(stages, k)
+		}
+	}
+	slices.Sort(stages)
+	if slices.Contains(stages, "review") {
+		return "review"
+	}
+	if len(stages) == 0 {
+		return "a stage"
+	}
+	return stages[0]
 }
 
 // forges checks the credentials for each host the repos are on, the way
@@ -424,8 +470,12 @@ func (d *doctor) port(context.Context) []finding {
 	}
 	if err := d.listen(d.cfg.Web.Listen); err != nil {
 		_, port, _ := net.SplitHostPort(d.cfg.Web.Listen)
+		who := "ss -ltnp | grep :" + port
+		if d.plat.family == "mac" {
+			who = "lsof -iTCP:" + port + " -sTCP:LISTEN"
+		}
 		return one(finding{warn, "web.listen " + d.cfg.Web.Listen + " is taken; is ./factory serve already running?",
-			"ss -ltnp | grep :" + port + "   (or change web.listen in factory.yaml)"})
+			who + "   (or change web.listen in factory.yaml)"})
 	}
 	return one(finding{pass, "Dashboard port " + d.cfg.Web.Listen + " is free", ""})
 }
@@ -516,7 +566,7 @@ func (p platform) installDocker() string {
 	case p.wsl:
 		return "install Docker Desktop for Windows and turn on Settings > Resources > WSL integration for this distro,\nor install Docker inside WSL: " + getDocker + "\n(docs/setup.md#windows-wsl2)"
 	case p.family == "mac":
-		return "brew install --cask docker   (jobs need Linux or WSL2, though: docs/setup.md#dependencies)"
+		return "brew install --cask docker-desktop   (jobs need Linux or WSL2, though: docs/setup.md#dependencies)"
 	case p.family == "arch":
 		return "sudo pacman -S docker && sudo systemctl enable --now docker"
 	}

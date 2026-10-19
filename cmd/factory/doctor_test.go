@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -146,11 +147,17 @@ func TestDoctorChecks(t *testing.T) {
 		}, fail, "Job image factory-job:latest (for o/r) isn't built", "./factory images"},
 		{"low disk", func(_ *testing.T, m *fakeMachine, _ *config.Config) {
 			m.disks = []runner.Disk{{Where: "Docker's storage (/var/lib/docker)", Free: 3e9}}
-		}, warn, "Low on disk: Docker's storage (/var/lib/docker) has 3 GB free", "budgets.min_free_disk_gb"},
+		}, fail, "Low on disk: Docker's storage (/var/lib/docker) has 3 GB free", "budgets.min_free_disk_gb"},
 		{"no claude", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("ANTHROPIC_API_KEY", "") },
 			fail, "No Claude credential", "./factory setup"},
 		{"no openai", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("OPENAI_API_KEY", "") },
-			fail, "routes reviews to Codex", "docs/configuration.md#claude-only-review"},
+			fail, "routes review to Codex", "docs/configuration.md#claude-only-review"},
+		{"auth token with docker", func(t *testing.T, _ *fakeMachine, _ *config.Config) {
+			t.Setenv("ANTHROPIC_API_KEY", "")
+			t.Setenv("ANTHROPIC_AUTH_TOKEN", "x")
+		}, fail, "don't reach docker jobs", "CLAUDE_CODE_OAUTH_TOKEN"},
+		{"docker version unreadable", func(_ *testing.T, m *fakeMachine, _ *config.Config) { m.out[dockerVersion] = "" },
+			fail, "Couldn't read Docker's version", "docker version"},
 		{"chatgpt not signed in", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("FACTORY_CODEX_AUTH", "chatgpt") },
 			fail, "isn't signed in", "./factory codex-login"},
 		{"no github", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("GITHUB_TOKEN", "") },
@@ -253,7 +260,9 @@ func TestSetupDockerRetry(t *testing.T) {
 		}
 		return nil
 	}
-	t.Cleanup(func() { runCmd = old })
+	oldLook := lookPath
+	lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	t.Cleanup(func() { runCmd, lookPath = old, oldLook })
 	var b strings.Builder
 	p := &prompter{in: bufio.NewReader(strings.NewReader("y\n")), out: &b}
 	if err := checkDocker(context.Background(), p, cfg); err != nil {
@@ -274,8 +283,53 @@ func TestInstallScriptParses(t *testing.T) {
 	if out, err := exec.Command(sh, "-n", "../../scripts/install.sh").CombinedOutput(); err != nil {
 		t.Fatalf("sh -n: %v\n%s", err, out)
 	}
-	if _, err := os.Stat("../../scripts/install.sh"); err != nil {
-		t.Fatal(err)
+}
+
+// install.sh against fake go, git and docker on an Ubuntu: an old Go, or
+// one GOTOOLCHAIN=local keeps from fetching the toolchain, each gets a ✗
+// and its fix, and an old Docker a warning.
+func TestInstallScript(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the script's fixes depend on the platform")
+	}
+	bin := t.TempDir()
+	fake := map[string]string{
+		"go": `case "$*" in
+"env GOVERSION") echo "go$FAKE_GO" ;;
+"env GOTOOLCHAIN") echo "${GOTOOLCHAIN:-auto}" ;;
+esac`,
+		"git":    `echo "git version 2.43.0"`,
+		"docker": `echo 27.5.1`,
+	}
+	for name, body := range fake {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	osRelease := filepath.Join(bin, "os-release")
+	os.WriteFile(osRelease, []byte("ID=ubuntu\nID_LIKE=debian\n"), 0o644)
+	for _, tc := range []struct {
+		goVersion, toolchain string
+		want                 []string
+	}{
+		{"1.18.1", "", []string{"✗ Go 1.18.1 is too old", "sudo rm -rf /usr/local/go && curl -fsSL https://go.dev/dl/go", "export PATH=/usr/local/go/bin:$PATH", "sudo apt remove golang-go"}},
+		{"1.24.7", "local", []string{"✗ Go 1.24.7 is older than", "GOTOOLCHAIN=local stops Go fetching", "unset GOTOOLCHAIN"}},
+	} {
+		cmd := exec.Command("sh", "../../scripts/install.sh")
+		cmd.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "FAKE_GO="+tc.goVersion, "GOTOOLCHAIN="+tc.toolchain,
+			"INSTALL_OS_RELEASE="+osRelease, "INSTALL_NO_BUILD=1")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("Go %s: exit 0", tc.goVersion)
+		}
+		for _, w := range append(tc.want, "✓ git 2.43.0", "! Docker 27.5.1", "runner.egress.mode: open") {
+			if !strings.Contains(string(out), w) {
+				t.Errorf("Go %s: no %q in:\n%s", tc.goVersion, w, out)
+			}
+		}
+		if strings.Contains(string(out), "Building") {
+			t.Errorf("Go %s: it built anyway", tc.goVersion)
+		}
 	}
 }
 

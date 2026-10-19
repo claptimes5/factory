@@ -30,8 +30,9 @@ fixes() { for l in "$@"; do printf '      %s\n' "$l"; done; }
 # "Docker version 27.5.1, build 9f9e405", 1.26.3 in "go1.26.3".
 ver() { printf '%s\n' "$1" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1; }
 
-# at_least VERSION MAJOR MINOR
+# at_least VERSION MAJOR MINOR; false if VERSION isn't one.
 at_least() {
+	case ${1:-} in [0-9]*.[0-9]*) ;; *) return 1 ;; esac
 	maj=${1%%.*}
 	rest=${1#*.}
 	min=${rest%%.*}
@@ -43,9 +44,9 @@ family=
 wsl=0
 if [ "$(uname -s)" = Darwin ]; then
 	family=mac
-elif [ -r /etc/os-release ]; then
-	# shellcheck disable=SC1091
-	ids=$(. /etc/os-release && echo " ${ID:-} ${ID_LIKE:-} ")
+elif [ -r "${INSTALL_OS_RELEASE:=/etc/os-release}" ]; then # tests point it elsewhere
+	# shellcheck disable=SC1090
+	ids=$(. "$INSTALL_OS_RELEASE" && echo " ${ID:-} ${ID_LIKE:-} ")
 	case $ids in
 	*" debian "* | *" ubuntu "*) family=debian ;;
 	*" fedora "* | *" rhel "* | *" centos "*) family=fedora ;;
@@ -76,28 +77,57 @@ fi
 want=$(sed -n 's/^go \([0-9.]*\).*/\1/p' go.mod)
 tool=$(sed -n 's/^toolchain go\([0-9.]*\).*/\1/p' go.mod)
 tool=${tool:-$want}
-case $(uname -m) in x86_64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; *) arch=$(uname -m) ;; esac
-case $family in
-arch | mac) gofix=$(pkg go) gofix2= ;;
-*)
-	gofix="curl -fsSL https://go.dev/dl/go$tool.linux-$arch.tar.gz | sudo tar -C /usr/local -xz"
-	gofix2='export PATH=$PATH:/usr/local/go/bin   (add it to ~/.profile too; more at https://go.dev/doc/install)' ;;
+case $(uname -m) in
+x86_64) arch=amd64 ;;
+aarch64 | arm64) arch=arm64 ;;
+armv6l | armv7l) arch=armv6l ;;
+i386 | i686) arch=386 ;;
+*) arch=$(uname -m) ;;
 esac
+# go_bad MESSAGE [old]: a ✗ for Go, with how to install it ("old" when an
+# older Go is already there).
+go_bad() {
+	case $family in
+	arch) bad "$1" "sudo pacman -Syu go" ;;
+	mac) if [ "${2:-}" = old ]; then bad "$1" "brew upgrade go"; else bad "$1" "brew install go"; fi ;;
+	*)
+		rm=
+		if [ "${2:-}" = old ]; then
+			case $family in
+			debian) rm="and remove the distro's older Go if it came from apt: sudo apt remove golang-go" ;;
+			fedora) rm="and remove the distro's older Go if it came from dnf: sudo dnf remove golang" ;;
+			esac
+		fi
+		bad "$1" "sudo rm -rf /usr/local/go && curl -fsSL https://go.dev/dl/go$tool.linux-$arch.tar.gz | sudo tar -C /usr/local -xz" \
+			'export PATH=/usr/local/go/bin:$PATH   (first, so it wins over any other Go; add it to ~/.profile too)' \
+			${rm:+"$rm"} "(more at https://go.dev/doc/install)" ;;
+	esac
+	nobuild=1
+}
 if ! command -v go >/dev/null 2>&1; then
 	if [ -x /usr/local/go/bin/go ]; then
-		bad "Go is in /usr/local/go but not on your PATH" 'export PATH=$PATH:/usr/local/go/bin   (and add it to ~/.profile)'
+		bad "Go is in /usr/local/go but not on your PATH" 'export PATH=/usr/local/go/bin:$PATH   (and add it to ~/.profile)'
+		nobuild=1
 	else
-		bad "Go isn't installed (the factory needs $want or later)" "$gofix" ${gofix2:+"$gofix2"}
+		go_bad "Go isn't installed (the factory needs $want or later)"
 	fi
-	nobuild=1
 else
 	mine=$(ver "$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null)")
-	if [ -z "$mine" ] || ! at_least "$mine" 1 21; then
-		bad "Go ${mine:-?} is too old: the factory needs $want or later" "$gofix" ${gofix2:+"$gofix2"}
-		nobuild=1
+	wantmin=$(echo "$want" | cut -d. -f2)
+	if ! at_least "$mine" 1 21; then
+		# Too old to fetch a newer toolchain.
+		go_bad "Go ${mine:-?} is too old: the factory needs $want or later" old
 	elif ! out=$(go env GOVERSION 2>&1); then
-		bad "Go $mine couldn't fetch Go $tool, which this build uses (offline?): $(printf '%s\n' "$out" | head -n 1)" "$gofix" ${gofix2:+"$gofix2"}
-		nobuild=1
+		go_bad "Go $mine couldn't fetch Go $tool, which this build uses (offline?): $(printf '%s\n' "$out" | head -n 1)" old
+	elif ! at_least "$(ver "$out")" "${want%%.*}" "$wantmin"; then
+		# Go fetches the toolchain itself unless GOTOOLCHAIN says not to.
+		gt=$(go env GOTOOLCHAIN 2>/dev/null)
+		case $gt in
+		local*) bad "Go $(ver "$out") is older than the $want the factory needs, and GOTOOLCHAIN=$gt stops Go fetching $tool" \
+			"unset GOTOOLCHAIN (and go env -u GOTOOLCHAIN if go env -w set it), or install Go $tool"
+			nobuild=1 ;;
+		*) go_bad "Go $(ver "$out") is too old: the factory needs $want or later" old ;;
+		esac
 	elif [ "$(ver "$out")" != "$mine" ]; then
 		pass "Go $(ver "$out") (fetched by your Go $mine)"
 	else
@@ -116,7 +146,7 @@ if ! command -v docker >/dev/null 2>&1; then
 	if [ $wsl = 1 ]; then
 		bad "Docker isn't installed" "install Docker Desktop for Windows and turn on Settings > Resources > WSL integration for this distro," "or install Docker inside WSL: $getdocker" "(docs/setup.md#windows-wsl2)"
 	elif [ "$family" = mac ]; then
-		bad "Docker isn't installed" "brew install --cask docker"
+		bad "Docker isn't installed" "brew install --cask docker-desktop"
 	elif [ "$family" = arch ]; then
 		bad "Docker isn't installed" "sudo pacman -S docker && sudo systemctl enable --now docker"
 	else
@@ -152,7 +182,7 @@ if [ $web = 1 ]; then
 	elif v=$(ver "$(node --version)") && at_least "$v" 22 12; then
 		pass "Node $v (rebuild the dashboard with: cd web && npm ci && npm run build)"
 	else
-		bad "Node $v is too old: the dashboard needs 22.12 or later" "nvm install 22   (https://github.com/nvm-sh/nvm), or https://nodejs.org/en/download"
+		bad "Node ${v:-?} is too old: the dashboard needs 22.12 or later" "nvm install 22   (https://github.com/nvm-sh/nvm), or https://nodejs.org/en/download"
 	fi
 fi
 
@@ -160,6 +190,9 @@ echo
 if [ $nobuild = 1 ]; then
 	echo "Fix the ✗ lines above, then run sh scripts/install.sh again."
 	exit 1
+fi
+if [ "${INSTALL_NO_BUILD:-}" = 1 ]; then # for tests
+	exit $failed
 fi
 echo "Building ./factory ..."
 CGO_ENABLED=0 go build -o factory ./cmd/factory || exit 1

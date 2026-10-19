@@ -91,8 +91,10 @@ Fix the ✗ lines and run ./factory doctor again. More in docs/setup.md#checking
 ```
 
 It exits non-zero while a ✗ line remains. `factory setup` starts with the
-same checks of the machine, and `factory serve` runs them all as it starts:
-each failure is logged and sent to your phone, and the daemon starts anyway.
+same checks of the machine, and `factory serve` runs them as it starts
+(all but the disk, which it watches while running, and the port, which it
+then holds): each failure is logged and sent to your phone, and the
+daemon starts anyway.
 
 ## What setup asks for
 
