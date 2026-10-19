@@ -336,6 +336,9 @@ address or a proxy such as `tailscale serve` without a password, the
 screen is read-only: someone who can reach your tailnet can look, but not change
 budgets or models, or restart the factory. Nothing that runs commands or
 opens the network (gates, repos, the runner, egress) can be changed there.
+The same rule holds for the buttons that spend money on an item: **Approve
+estimate**, and a plan's **Build it** and **Ask for another plan**.
+Without it, the item's page says which labels to add on the issue instead.
 
 **Use HTTPS on a public address.** The control room serves plain HTTP, so
 put it behind an HTTPS proxy (Caddy, or `tailscale serve`); the session

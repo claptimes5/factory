@@ -54,6 +54,28 @@ type APIItem struct {
 	Estimate string `json:"estimate"`
 	// EstimateWaiting: the item waits for your OK on its estimate.
 	EstimateWaiting bool `json:"estimate_waiting"`
+	// PlanWaiting: the item waits for your OK on its plan.
+	PlanWaiting bool `json:"plan_waiting"`
+}
+
+// APIPlan is the plan the builder wrote before building a big item.
+type APIPlan struct {
+	JobID    int64    `json:"job_id"`
+	Approach string   `json:"approach"`
+	Files    []string `json:"files"`
+	Risks    []string `json:"risks"`
+	Tests    string   `json:"tests"`
+	// Waiting: it waits for your OK. ApprovedBy is how it was approved
+	// ("by @x", "from the dashboard"), or "".
+	Waiting    bool   `json:"waiting"`
+	ApprovedBy string `json:"approved_by"`
+	// ReplanOf is who asked for this plan in place of an earlier one
+	// ("@x", the critic), or "" for a first plan. The factory plans again
+	// only once, so asking for changes to this one parks the item.
+	ReplanOf string `json:"replan_of"`
+	// CanApprove: it waits, and this request may approve it or ask for
+	// another plan here (see settingsWritable); else the labels it is.
+	CanApprove bool `json:"can_approve"`
 }
 
 // APIEstimate is triage's cost estimate for an item, and what it cost.
@@ -237,6 +259,9 @@ type APIItemDetail struct {
 	Spec string `json:"spec"`
 	// Estimate is triage's cost estimate; null before one is made.
 	Estimate *APIEstimate `json:"estimate"`
+	// Plan is the plan of the current triage cycle; null when there is
+	// none or it isn't written yet.
+	Plan *APIPlan `json:"plan"`
 	// RiskReasons are every reason the rating of the latest build's diff
 	// found, each with the level it rates the change at ("high: adds or
 	// changes a migration: `db/1.sql`"), whether or not it raised the
@@ -440,6 +465,50 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.EstimateWaiting = e.Status == store.EstimateWaiting && it.Stage == state.Blocked
 		a.NeedsYou = a.NeedsYou || a.EstimateWaiting
 	}
+	if a.PlanWaiting = s.Store.PlanWaiting(ctx, it); a.PlanWaiting {
+		a.NeedsYou = true
+		// Said here, not as recorded: the page and the card show the plan
+		// and the buttons, and the issue's link, beside it.
+		a.BlockedNote = "Waiting for your OK on the plan. Read it, then build it or ask for another plan."
+		if a.EstimateWaiting {
+			a.BlockedNote = "Waiting for your OK on the plan and the cost (est. " + e.Range() + "). Read the plan, then build it, which approves both, or ask for another plan."
+		}
+	}
+	return a
+}
+
+// apiPlan is the item's plan this cycle once written, or nil.
+func (s *Server) apiPlan(r *http.Request, it *store.WorkItem) *APIPlan {
+	ps, err := s.Store.CurrentPlan(r.Context(), it.ID)
+	if err != nil || ps == nil || ps.Job.State != state.Succeeded {
+		return nil
+	}
+	var v verdict.Plan
+	if verdict.Parse([]byte(ps.Job.Verdict), &v) != nil {
+		return nil
+	}
+	var in struct {
+		Round int    `json:"round"`
+		From  string `json:"from"`
+	}
+	_ = json.Unmarshal([]byte(ps.Job.Input), &in)
+	a := &APIPlan{JobID: ps.Job.ID, Approach: v.Approach, Files: v.Files, Risks: v.Risks, Tests: v.Tests,
+		Waiting: ps.Waiting && it.Stage == state.Blocked}
+	if a.Files == nil {
+		a.Files = []string{}
+	}
+	if a.Risks == nil {
+		a.Risks = []string{}
+	}
+	if ps.Approved {
+		a.ApprovedBy = ps.By
+	}
+	if in.Round > 1 {
+		a.ReplanOf = in.From
+	}
+	if a.Waiting {
+		a.CanApprove, _ = s.settingsWritable(r)
+	}
 	return a
 }
 
@@ -626,6 +695,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/items/{id}/preview/{file}", s.apiPreviewImage)
 	mux.HandleFunc("POST /api/v1/items/{id}/park", s.apiPark)
 	mux.HandleFunc("POST /api/v1/items/{id}/approve-estimate", s.apiApproveEstimate)
+	mux.HandleFunc("POST /api/v1/items/{id}/replan", s.apiReplan)
 	mux.HandleFunc("POST /api/v1/auto-merge/reset", s.apiResetAutoMerge)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.apiJobDetail)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/log", s.apiLog)
@@ -798,6 +868,7 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 		d.DependsOn = []int64{}
 	}
 	d.Estimate = s.apiEstimate(r, it, jobs)
+	d.Plan = s.apiPlan(r, it)
 	d.RiskReasons, d.NeedsPerson = diffRisk(jobs, evs)
 	for _, j := range jobs {
 		d.Jobs = append(d.Jobs, apiJob(j))
@@ -1120,19 +1191,58 @@ func (s *Server) apiPark(w http.ResponseWriter, r *http.Request) {
 	s.act(w, s.Actions.Park(r.Context(), id, reason), "Parked.")
 }
 
-// apiApproveEstimate is the OK on an item whose cost estimate waits for
-// one. It spends money, so like settings it needs the password, or a
-// request from this machine.
+// apiApproveEstimate is the OK on an item whose cost estimate or plan
+// waits for one. It spends money, so like settings it needs the
+// password, or a request from this machine.
 func (s *Server) apiApproveEstimate(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok || !jsonOnly(w, r) {
 		return
 	}
 	if ok, _ := s.settingsWritable(r); !ok {
-		apiErr(w, http.StatusForbidden, "Approving spend here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or add the factory:go label on the issue.")
+		apiErr(w, http.StatusForbidden, "Approving here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or add the factory:go label on the issue.")
 		return
 	}
-	s.act(w, s.Actions.ApproveEstimate(r.Context(), id), "Approved. It builds next.")
+	// The plan the page showed, if any: older pages send none.
+	var in struct {
+		PlanJobID int64 `json:"plan_job_id"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.act(w, s.Actions.ApproveEstimate(r.Context(), id, in.PlanJobID), "Approved. It builds next.")
+}
+
+// apiReplan asks for another plan, with what to change, for an item
+// whose plan waits for an OK. It runs the builder again, so it needs what
+// approving does.
+func (s *Server) apiReplan(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok || !jsonOnly(w, r) {
+		return
+	}
+	if ok, _ := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, "Asking for another plan here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or comment what to change on the issue and add the factory:replan label.")
+		return
+	}
+	var in struct {
+		PlanJobID int64  `json:"plan_job_id"`
+		Ask       string `json:"ask"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.PlanJobID <= 0 {
+		apiErr(w, http.StatusBadRequest, "plan_job_id must be the plan job the page shows")
+		return
+	}
+	if strings.TrimSpace(in.Ask) == "" {
+		apiErr(w, http.StatusBadRequest, "Say what to change about the plan.")
+		return
+	}
+	s.act(w, s.Actions.Replan(r.Context(), id, in.PlanJobID, in.Ask), "Asked for another plan. The builder is writing it now.")
 }
 
 func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
@@ -1215,6 +1325,14 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 		n := APINotification{ItemID: &id, At: it.UpdatedAt}
 		e := ests[it.ID]
 		switch {
+		case it.Stage == state.Blocked && s.Store.PlanWaiting(ctx, it):
+			n.Kind = "needs_input"
+			n.Title = s.ref(it.Repo, it.IssueNumber) + " waits for your OK on its plan"
+			n.Detail = "Open the item to read the plan, then build it or ask for another plan: " + it.Title
+			if e != nil && e.Status == store.EstimateWaiting {
+				n.Title = s.ref(it.Repo, it.IssueNumber) + " waits for your OK on its plan and its cost"
+				n.Detail = fmt.Sprintf("Estimated %s, over the $%.2f limit. Open the item to read the plan, then build it or ask for another plan: %s", e.Range(), e.ThresholdUSD, it.Title)
+			}
 		case it.Stage == state.Blocked && (e == nil || e.Status != store.EstimateWaiting):
 			continue // waiting on its dependencies, not on you
 		case it.Stage == state.Blocked:

@@ -266,10 +266,10 @@ func TestEstimateApprovedFromDashboard(t *testing.T) {
 	it := heldItem(t, e)
 	e.claude.builds = []func(string) error{goodBuild}
 	e.codex.reviews = []string{pass}
-	if err := e.p.ApproveEstimate(ctx, it.ID); err != nil {
+	if err := e.p.ApproveEstimate(ctx, it.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.p.ApproveEstimate(ctx, it.ID); err == nil {
+	if err := e.p.ApproveEstimate(ctx, it.ID, 0); err == nil {
 		t.Fatal("approved twice")
 	}
 	if err := e.p.Drain(ctx); err != nil {
@@ -292,7 +292,7 @@ func TestEstimateAsksAgainAfterAnEdit(t *testing.T) {
 	it := heldItem(t, e)
 	// Approved, then the build fails on every tier and parks.
 	e.claude.builds = []func(string) error{badBuild, badBuild, badBuild, badBuild}
-	if err := e.p.ApproveEstimate(ctx, it.ID); err != nil {
+	if err := e.p.ApproveEstimate(ctx, it.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.p.Drain(ctx); err != nil {
@@ -537,7 +537,7 @@ func TestEstimateParkedWhileWaitingStillNeedsOK(t *testing.T) {
 	if err := e.p.Retry(ctx, id, false); err == nil || !strings.Contains(err.Error(), "approve that first") {
 		t.Fatalf("retry: %v", err)
 	}
-	if err := e.p.ApproveEstimate(ctx, it.ID); err == nil {
+	if err := e.p.ApproveEstimate(ctx, it.ID, 0); err == nil {
 		t.Fatal("approved a parked item")
 	}
 }

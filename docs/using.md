@@ -19,12 +19,12 @@ To reach it from another machine, or to put a password on it, see
 | **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with the question to answer. Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
 | **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
+| **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
 | **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
-| **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
+| **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
 When a repo's base branch is red or flaky (see
@@ -384,18 +384,36 @@ the orchestrator can't set priorities from 100 up.
 An item triage rates `L` isn't built straight away. The builder first
 reads the repo and writes a short plan (approach, files, risks, tests),
 and the factory comments it on the issue, labels it
-`factory:awaiting-you` and notifies you. The item is Blocked until:
+`factory:awaiting-you` and notifies you with the issue's link. The item
+goes to **Needs you** on the Floor, as a **Plan check** card, and shows the
+plan on its page. It's Blocked until you do one of these.
 
-- you add `factory:go`, after the comment, to build it. It counts only
-  from someone with write access, as for an estimate; or
-- you comment what to change, then add `factory:replan`: the builder
-  plans once more with your latest comment, and the new plan is asked
-  about the same way. A second `factory:replan` parks the item; edit the
-  issue and use `factory:retry` to start over.
+**To build it**, either:
+
+1. press **Build it** on the item's page; or
+2. add `factory:go` to the issue, after the factory's comment. It counts
+   only from someone with write access, as for an estimate.
+
+**To get another plan**, either:
+
+1. press **Ask for another plan** on the item's page and say what to
+   change. What you write goes on the issue too, fenced; or
+2. comment on the issue what to change, then add `factory:replan`.
+
+The builder plans once more with what you asked, and the new plan is
+asked about the same way. Asking a second time parks the item; edit the
+issue and use `factory:retry` to start over.
+
+The buttons need what **Approve estimate** does: the control room's
+password, or a browser on the machine the factory runs on (see
+[Control room login](security.md#control-room-login)). Without either,
+the item's page lists the label steps instead, with the issue's link.
+`factory status` lists each item waiting for your OK, with the same
+steps and links.
 
 If the item's [cost estimate](#cost-estimates) waits too, one comment asks
-about both, and one `factory:go` (or **Approve estimate** on the item's
-page) approves both. Nothing builds the item meanwhile, not the
+about both, and one `factory:go` (or **Build it** on the item's page)
+approves both. Nothing builds the item meanwhile, not the
 orchestrator's `enqueue` either. The approved plan goes to the builder and
 the reviewer.
 

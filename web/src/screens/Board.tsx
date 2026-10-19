@@ -25,10 +25,11 @@ export function BoardScreen() {
   const [cols, held] = useMemo(() => {
     const m = new Map<string, CardT[]>();
     for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => !repo || k.repo === repo));
-    // An item waiting for your OK on its cost needs you, not its column.
+    // An item waiting for your OK on its cost or its plan needs you, not its column.
     const blocked = m.get("blocked") ?? [];
-    m.set("blocked", blocked.filter((k) => !k.estimate_waiting));
-    return [m, blocked.filter((k) => k.estimate_waiting)] as const;
+    const ok = (k: CardT) => k.estimate_waiting || k.plan_waiting;
+    m.set("blocked", blocked.filter((k) => !ok(k)));
+    return [m, blocked.filter(ok)] as const;
   }, [data, repo]);
   if (isLoading) return <Loading what="Loading the floor" />;
   if (error) return <ErrorBox error={error} />;
@@ -235,7 +236,8 @@ function Dot({ ok }: { ok: boolean | null }) {
 
 function NeedsYouCard({ card: c }: { card: CardT }) {
   const pr = c.stage === "awaiting_human";
-  const held = c.estimate_waiting;
+  const plan = c.plan_waiting;
+  const held = c.estimate_waiting || plan;
   const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-lg px-3.5 text-sm md:h-9";
   return (
     <article
@@ -247,12 +249,12 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         {pr ? (
           <span className="rounded bg-warning-fill px-1.5 text-xs font-semibold text-warning-ink">PR ready</span>
         ) : (
-          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{held ? "Cost check" : "Question"}</span>
+          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{plan ? "Plan check" : held ? "Cost check" : "Question"}</span>
         )}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
             ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")
-            : [c.complexity && `size ${c.complexity}`, held && c.estimate].filter(Boolean).join(" · ")}
+            : [c.complexity && `size ${c.complexity}`, c.estimate_waiting && c.estimate].filter(Boolean).join(" · ")}
         </span>
       </div>
       <CardLink card={c} className="font-display text-[17px] leading-tight font-semibold" />
@@ -302,8 +304,13 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         )}
         {held && (
           <Link to={`/items/${c.id}`} className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
-            See the estimate
+            {plan ? "Read the plan" : "See the estimate"}
           </Link>
+        )}
+        {plan && c.issue_url && (
+          <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "border border-warning-border hover:bg-warning-fill/10")}>
+            Open the issue <ExternalLink className="size-3.5" aria-hidden />
+          </a>
         )}
         {!pr && !held && c.issue_url && (
           <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>

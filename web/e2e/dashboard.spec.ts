@@ -36,7 +36,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
   await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(4);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(5);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -58,8 +58,34 @@ test("an item over the cost limit waits for an OK on its estimate", async ({ pag
   await expect(est).toContainText("based on 6 past L items across all repos");
   await expect(est).toContainText("waiting for your OK");
   await est.getByRole("button", { name: "Approve estimate" }).click();
-  await expect(est.getByRole("status")).toContainText("devserver: would approve the estimate of item");
+  await expect(est.getByRole("status")).toContainText("devserver: would approve item");
   await shot(page, info, "estimate");
+  if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("an item whose plan waits shows the plan, a Build it button and another plan's ask", async ({ page }, info) => {
+  await page.goto("/app/");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  const card = needs.getByTestId("card").filter({ hasText: "Split billing out of the monolith" }).filter({ visible: true });
+  await expect(card).toContainText("Plan check");
+  await expect(card).toContainText("build it or ask for another plan");
+  await expect(card.getByRole("link", { name: /Open the issue/ })).toHaveAttribute("href", /acme\/api\/issues\/111$/);
+  await card.getByRole("link", { name: "Read the plan" }).click();
+  const plan = page.getByTestId("plan");
+  await expect(plan).toContainText("Plan: waiting for your OK");
+  await expect(plan).toContainText("Move billing/ into a new service");
+  await expect(plan).toContainText("billing/service.go");
+  await expect(plan).toContainText("counted twice");
+  await expect(plan.getByRole("link", { name: /the issue/ })).toHaveAttribute("href", /acme\/api\/issues\/111$/);
+  await plan.getByRole("button", { name: "Ask for another plan" }).click();
+  const send = plan.getByRole("button", { name: "Send and plan again" });
+  await expect(send).toBeDisabled();
+  await plan.getByLabel(/What should change/).fill("Keep the tables in the monolith.");
+  await send.click();
+  await expect(plan.getByRole("status")).toContainText("devserver: would ask for another plan for item");
+  await plan.getByRole("button", { name: "Build it" }).click();
+  await expect(plan.getByRole("status")).toContainText("devserver: would approve item");
+  await shot(page, info, "plan");
   if (phone(info)) await noSidewaysScroll(page);
 });
 

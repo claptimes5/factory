@@ -216,7 +216,11 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		return exitCode(err, stderr.String())
+		code, err := exitCode(err, stderr.String())
+		if err == nil && code == 125 && dockerFailed(stderr.String()) {
+			err = dockerStartError(stderr.String())
+		}
+		return code, err
 	case <-ctx.Done():
 		_ = d.Kill(context.Background(), s.Name)
 		<-done
@@ -225,6 +229,31 @@ func (d *Docker) Run(ctx context.Context, s Spec, stdout io.Writer) (int, error)
 		}
 		return -1, ctx.Err()
 	}
+}
+
+// dockerFailed tells Docker failing to start the container (exit code
+// 125, with its own message) from a job command that exits 125 itself.
+func dockerFailed(stderr string) bool {
+	for _, s := range []string{"docker: ", "Error response from daemon", "Unable to find image"} {
+		if strings.Contains(stderr, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// dockerStartError explains exit code 125 when Docker failed to start the
+// container (a missing image, a bad mount) before the job ran.
+func dockerStartError(stderr string) error {
+	msg := tail(stderr, 1000)
+	hint := ""
+	for _, s := range []string{"Unable to find image", "No such image", "pull access denied", "repository does not exist"} {
+		if strings.Contains(stderr, s) {
+			hint = "\nThe job image isn't built: run ./factory images (./factory doctor lists what's missing)."
+			break
+		}
+	}
+	return fmt.Errorf("docker couldn't start the job container: %s%s", msg, hint)
 }
 
 // serviceNet is the network of a job's services.

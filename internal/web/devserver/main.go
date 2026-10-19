@@ -43,8 +43,11 @@ func (actions) Cancel(_ context.Context, id int64) error {
 func (actions) Park(_ context.Context, id int64, reason string) error {
 	return fmt.Errorf("devserver: would park item %d: %s", id, reason)
 }
-func (actions) ApproveEstimate(_ context.Context, id int64) error {
-	return fmt.Errorf("devserver: would approve the estimate of item %d", id)
+func (actions) ApproveEstimate(_ context.Context, id, _ int64) error {
+	return fmt.Errorf("devserver: would approve item %d (its estimate or its plan)", id)
+}
+func (actions) Replan(_ context.Context, id, _ int64, ask string) error {
+	return fmt.Errorf("devserver: would ask for another plan for item %d: %s", id, ask)
 }
 func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
 	return fmt.Errorf("devserver: would reset auto-merge's breaker for %s", repo)
@@ -190,7 +193,8 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
 		{"acme/web", 109, "Show order totals on the checkout page", state.AwaitingHuman, "M"},
-		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"}, // over the cost limit
+		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"},         // over the cost limit
+		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"}, // its plan waits
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -215,7 +219,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 			if to == state.Blocked {
 				reason = "Waits on #102, which changes the same client."
 				if x.issue == 110 {
-					reason = "Waiting for your OK on the cost: estimated $9.40–$16.20, over the $10.00 limit. Add factory:go or approve it here."
+					reason = "Waiting for your OK on the cost: estimated $9.40–$16.20, over the $10.00 limit. To build it, press Approve estimate on this item's page, or add the factory:go label on the issue."
+				}
+				if x.issue == 111 {
+					reason = "Waiting for your OK on the plan."
 				}
 			}
 			if err := st.SetStage(ctx, it.ID, to, "daemon", reason); err != nil {
@@ -388,6 +395,20 @@ new file mode 100644
 			Detail: "from your budgets, with too few past M items to go by (2; it takes 5): half to all of one M build's $6.00 cap and one review's $3.00"},
 	} {
 		if err := st.SetEstimate(ctx, e); err != nil {
+			return err
+		}
+	}
+	// 111 was planned before its build, as an L item, and the plan waits.
+	if _, err := job(111, "triage", "haiku", state.Succeeded, 0.05, `{"decision":"ready","complexity":"L","risk":"low","question":"","summary":"Move billing into its own service behind the existing API."}`); err != nil {
+		return err
+	}
+	plan, err := job(111, "plan", "opus", state.Succeeded, 0.88, `{"approach":"Move billing/ into a new service and call it over the existing internal API, keeping the database tables where they are for now.",`+
+		`"files":["billing/service.go","api/billing_client.go","deploy/billing.yaml"],"risks":["Invoices issued during the switch-over could be counted twice."],"tests":"Contract tests between the API and the new service, and the existing billing suite."}`)
+	if err != nil {
+		return err
+	}
+	for _, typ := range []string{store.EvPlanWaiting, store.EvPlanAnnounced} {
+		if err := st.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: ptr(ids[111]), JobID: &plan, Type: typ}); err != nil {
 			return err
 		}
 	}

@@ -323,8 +323,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve an item whose cost estimate waits for a human's OK
-         * @description Needs the password, or a request from this machine (403 otherwise), as settings do.
+         * Approve an item whose cost estimate or plan waits for a human's OK
+         * @description One OK covers both when both wait, as factory:go does. Needs the password, or a request from this machine (403 otherwise), as settings do.
          */
         post: {
             parameters: {
@@ -335,9 +335,62 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The plan job the page shows (Plan.job_id), when it shows one: a plan that changed since is refused (409) rather than approved unread */
+                        plan_job_id?: number;
+                    };
+                };
+            };
             responses: {
                 200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{id}/replan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for another plan, saying what to change, for an item whose plan waits for a human's OK
+         * @description What a comment and factory:replan on the issue do; the ask goes on the issue too. A plan that was already asked again parks the item. Needs the password, or a request from this machine (403 otherwise), as settings do.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The plan job the page shows (Plan.job_id): a plan that changed since is refused (409) */
+                        plan_job_id: number;
+                        /** @description What to change about the plan */
+                        ask: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
                 403: components["responses"]["Error"];
                 409: components["responses"]["Action"];
             };
@@ -1167,6 +1220,8 @@ export interface components {
             estimate: string;
             /** @description It waits for your OK on its cost estimate */
             estimate_waiting: boolean;
+            /** @description It waits for your OK on its plan */
+            plan_waiting: boolean;
         };
         LinkedPR: {
             repo: string;
@@ -1255,6 +1310,25 @@ export interface components {
             /** @description Why the latest build waits for you whatever its risk (risk.needs_person); empty when nothing does */
             needs_person: string[];
             estimate: components["schemas"]["Estimate"] | null;
+            /** @description The plan of the item's current triage cycle; null when there is none or it isn't written yet */
+            plan: components["schemas"]["Plan"] | null;
+        };
+        Plan: {
+            /** @description The plan job */
+            job_id: number;
+            approach: string;
+            /** @description The files it expects to touch */
+            files: string[];
+            risks: string[];
+            tests: string;
+            /** @description It waits for your OK */
+            waiting: boolean;
+            /** @description How it was approved (by @x, from the dashboard, by the critic), or empty */
+            approved_by: string;
+            /** @description Who asked for this plan in place of an earlier one (@x, the critic), or empty for a first plan. The factory plans again only once, so asking for changes to this one parks the item */
+            replan_of: string;
+            /** @description It waits, and this request may approve it or ask for another plan here (the password, or a request from this machine); else the factory:go and factory:replan labels it is */
+            can_approve: boolean;
         };
         Estimate: {
             /** @description Median to p75 in a line: $1.80–$3.10, + plan usage, or on your plan */
