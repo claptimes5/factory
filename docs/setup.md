@@ -110,12 +110,14 @@ marked done, needing attention, or optional, with the next one open:
    work yet (no model key, say), it says what. Finish restarts the factory
    with the new settings and the page opens the dashboard when it's up.
 
-The page, like `factory setup`, reads the settings as the factory will
-run with them: a variable exported where the factory starts wins over
-the one saved in `factory.env`, as at startup, and each names the saved
-keys one overrides. That includes a `GITHUB_TOKEN` exported for other
-tools such as `gh`: unset it where the factory starts if the factory
-shouldn't use it.
+The page reads the settings as the factory will run with them: a
+variable exported where the factory starts wins over the one saved in
+`factory.env`, as at startup. That includes a `GITHUB_TOKEN` exported for
+other tools such as `gh`: unset it where the factory starts if the
+factory shouldn't use it. `factory setup` in the terminal offers what is
+saved instead, takes an exported value only for a key the file lacks,
+and never takes an exported `GITHUB_TOKEN`. Both name each saved key an
+export overrides.
 
 Saved keys and tokens never come back to the browser: the page shows only
 whether each is set and its first and last few characters. Answers go in

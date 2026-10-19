@@ -590,7 +590,7 @@ func (w *wizard) checkAccess(ctx context.Context) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
-			case err != nil && ctx.Err() != nil:
+			case isContextErr(err):
 				instErr = "timed out"
 			case err != nil:
 				instErr = err.Error()
@@ -624,8 +624,10 @@ func (w *wizard) checkAccess(ctx context.Context) {
 				mu.Unlock()
 				return
 			}
-			a := w.checkOne(ctx, client, cfg, rc, n, a, labels, vals)
-			if ctx.Err() != nil && a.State != "ok" {
+			a, err := w.checkOne(ctx, client, cfg, rc, n, a, labels, vals)
+			// Only a check cut off by the clock; a real answer such as a
+			// 401 stays as it is.
+			if isContextErr(err) {
 				a = timedOutAccess(a)
 			}
 			mu.Lock()
@@ -653,7 +655,7 @@ func timedOutAccess(a web.APIWizardAccess) web.APIWizardAccess {
 
 // checkOne checks the factory reaches one repo, and its default branch
 // and labels.
-func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Config, rc config.Repo, n string, a web.APIWizardAccess, labels []pipeline.Label, vals map[string]string) web.APIWizardAccess {
+func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Config, rc config.Repo, n string, a web.APIWizardAccess, labels []pipeline.Label, vals map[string]string) (web.APIWizardAccess, error) {
 	if err := checkRepo(ctx, client, cfg, n); err != nil {
 		a.State, a.Error = "failed", err.Error()
 		if rc.GitLab() {
@@ -663,7 +665,7 @@ func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Con
 		} else {
 			a.Hints = append(a.Hints, githubHint(err, n, vals["FACTORY_GITHUB_APP_ID"] != "")...)
 		}
-		return a
+		return a, err
 	}
 	a.State = "ok"
 	if gh, _, err := client(n); err == nil {
@@ -672,7 +674,13 @@ func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Con
 		}
 		a.MissingLabels, a.LabelsError = missingLabels(ctx, gh, labels)
 	}
-	return a
+	return a, nil
+}
+
+// isContextErr says whether err is a context's end: a timeout, not an
+// answer from the forge.
+func isContextErr(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // missingLabels are the factory's labels a repo doesn't have, or why it
@@ -1202,9 +1210,12 @@ func (w *wizard) cancelCodexSignIn() (string, error) {
 	w.mu.Unlock()
 	cancel()
 	w.signInDone.Wait()
-	// It may have finished first: say what happened.
+	// It may have finished first: say what happened, failure included.
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.signIn.failed {
+		return "", errors.New(w.signIn.result)
+	}
 	return w.signIn.result, nil
 }
 

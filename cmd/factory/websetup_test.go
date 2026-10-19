@@ -444,6 +444,7 @@ func TestWizardImageFindingIsAButton(t *testing.T) {
 type codexLoginFake struct {
 	entered chan struct{}
 	late    bool // it signs in even once stopped, as if the code was in first
+	fail    bool // with late, Codex exits saving no sign-in
 	mu      sync.Mutex
 	cmds    []string
 	homes   []string
@@ -476,6 +477,9 @@ func (f *codexLoginFake) install(t *testing.T) {
 			"2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mABCD-12345\x1b[0m\n")
 		if f.late {
 			<-f.entered // Codex already saw the code: it finishes anyway
+			if f.fail {
+				return nil
+			}
 		} else {
 			select {
 			case <-f.entered:
@@ -558,7 +562,7 @@ func TestWizardCancelsCodexSignIn(t *testing.T) {
 // check runs on. A repo a slow forge doesn't answer for in time is marked
 // timed out, and the others keep what they found, so Finish can pass.
 func TestWizardAccessCheckOutlivesTheRequest(t *testing.T) {
-	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}, slow: "o/slow"}, "o/r", false, noDocker)
+	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}, slow: "o/slow", denied: "o/denied"}, "o/r", false, noDocker)
 	if err := w.save(map[string]string{"GITHUB_TOKEN": "ghp_token123"}); err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +572,7 @@ func TestWizardAccessCheckOutlivesTheRequest(t *testing.T) {
 		t.Fatalf("access after a closed request = %+v", a)
 	}
 
-	if err := setRepos(w.cfgPath, []string{"o/slow", "o/r"}); err != nil {
+	if err := setRepos(w.cfgPath, []string{"o/slow", "o/r", "o/denied"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.reload(); err != nil {
@@ -584,8 +588,12 @@ func TestWizardAccessCheckOutlivesTheRequest(t *testing.T) {
 	}
 	a := w.State(context.Background(), false).Access
 	// The slow one comes first, so o/r was checked beside it, not after.
-	if len(a) != 2 || a[1].State != "ok" || a[0].State != "failed" || !strings.Contains(a[0].Error, "timed out") {
+	if len(a) != 3 || a[1].State != "ok" || a[0].State != "failed" || !strings.Contains(a[0].Error, "timed out") {
 		t.Fatalf("access = %+v", a)
+	}
+	// A real refusal keeps its own reason, even when the clock ran out.
+	if a[2].State != "failed" || strings.Contains(a[2].Error, "timed out") {
+		t.Fatalf("o/denied = %+v", a[2])
 	}
 }
 
@@ -678,6 +686,45 @@ func TestWizardCancelAfterSignInSaysSignedIn(t *testing.T) {
 	}
 	if rm := f.ran("docker rm"); len(rm) != 0 {
 		t.Fatalf("removed a container that finished: %q", rm)
+	}
+}
+
+// A sign-in that failed just before Cancel landed is an error, not a success.
+func TestWizardCancelAfterFailedSignInErrs(t *testing.T) {
+	f := fakeCodexLogin()
+	f.late, f.fail = true, true
+	w := testWizard(t, &fakeGitHub{}, "o/r", false, f.run)
+	f.install(t)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "codex/sign-in", web.WizardInput{}); err != nil {
+		t.Fatal(err)
+	}
+	pollSignIn(t, w, func(si web.APIWizardSignIn) bool { return si.Code != "" })
+	type answer struct {
+		msg string
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		msg, err := w.cancelCodexSignIn()
+		got <- answer{msg, err}
+	}()
+	for {
+		w.mu.Lock()
+		asked := w.signIn.cancelled
+		w.mu.Unlock()
+		if asked {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(f.entered)
+	a := <-got
+	if a.err == nil || a.msg != "" {
+		t.Fatalf("cancel said %q, %v", a.msg, a.err)
+	}
+	if w.State(ctx, false).Codex.SignedIn {
+		t.Fatal("signed in after a failure")
 	}
 }
 
