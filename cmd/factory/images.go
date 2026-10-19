@@ -35,7 +35,11 @@ type imageBuilder struct {
 	result   string
 	failed   bool
 	after    []func() // run after every build, whoever started it
+	done     sync.WaitGroup
 }
+
+// wait returns once no build is running, its clean-up and callbacks included.
+func (b *imageBuilder) wait() { b.done.Wait() }
 
 // onDone runs f after every build ends.
 func (b *imageBuilder) onDone(f func()) {
@@ -99,7 +103,9 @@ func (b *imageBuilder) start(cfg *config.Config, done func(err error, built []st
 	}
 	log := b.log
 	b.mu.Unlock()
+	b.done.Add(1)
 	go func() {
+		defer b.done.Done()
 		built, err := b.build(cfg, missing, log)
 		b.mu.Lock()
 		b.running, b.building = false, nil

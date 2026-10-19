@@ -108,6 +108,7 @@ func TestAutoBuildHoldsJobsUntilBuilt(t *testing.T) {
 	useDocker(t, d)
 	cfg := imagesConfig(t)
 	b := &imageBuilder{}
+	t.Cleanup(b.wait) // before the fakes are put back
 	done := make(chan struct{})
 	b.onDone(func() { close(done) })
 	var notes []string
@@ -159,6 +160,7 @@ func TestAutoBuildFailureNotifies(t *testing.T) {
 	cfg := imagesConfig(t)
 	d.failTag = cfg.Runner.Image
 	b := &imageBuilder{}
+	t.Cleanup(b.wait) // before the fakes are put back
 	done := make(chan struct{})
 	b.onDone(func() { close(done) })
 	notes := make(chan string, 1)
@@ -188,6 +190,7 @@ func TestAutoBuildSkipsWithoutDocker(t *testing.T) {
 	useDocker(t, d)
 	cfg := imagesConfig(t)
 	b := &imageBuilder{}
+	t.Cleanup(b.wait) // before the fakes are put back
 	autoBuild(context.Background(), cfg, b, nil)
 	pruneImages(cfg)
 	if c := d.ran("docker build"); len(c) != 0 {
@@ -256,6 +259,7 @@ func TestWizardShowsServesBuild(t *testing.T) {
 	d := &fakeDocker{gate: make(chan struct{}), building: make(chan string, 1), built: map[string]bool{}}
 	w := testWizard(t, &fakeGitHub{}, "o/r", false, d.run)
 	b := &imageBuilder{}
+	t.Cleanup(b.wait) // before the fakes are put back
 	w.builder = b
 	autoBuild(context.Background(), w.cfg, b, nil)
 	<-d.building
