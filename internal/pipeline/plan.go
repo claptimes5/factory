@@ -531,9 +531,14 @@ func (p *Pipeline) intakeReplan(ctx context.Context, repo string) error {
 // on the dashboard.
 const fromDashboard = "someone on the dashboard"
 
+// errPlanChanged refuses a dashboard action on a plan that isn't the
+// current one: a newer plan came while the page was open.
+var errPlanChanged = errors.New("the plan changed since you opened this page; reload to see the new one")
+
 // Replan is the dashboard's ask for another plan, with what to change: what
-// a comment and factory:replan on the issue do.
-func (p *Pipeline) Replan(ctx context.Context, itemID int64, ask string) error {
+// a comment and factory:replan on the issue do. planJob is the plan job
+// the page showed; a plan that changed since is refused.
+func (p *Pipeline) Replan(ctx context.Context, itemID, planJob int64, ask string) error {
 	p.act.Lock()
 	defer p.act.Unlock()
 	ask = strings.TrimSpace(ask)
@@ -548,7 +553,10 @@ func (p *Pipeline) Replan(ctx context.Context, itemID int64, ask string) error {
 	if err != nil {
 		return err
 	}
-	if it.Stage != state.Blocked || s == nil || !s.waiting {
+	if s == nil || s.job.ID != planJob {
+		return errPlanChanged
+	}
+	if it.Stage != state.Blocked || !s.waiting {
 		return fmt.Errorf("item %d's plan isn't waiting for an OK", itemID)
 	}
 	return p.replan(ctx, it, s, fromDashboard, ask)

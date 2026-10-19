@@ -335,9 +335,17 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The plan job the page shows (Plan.job_id), when it shows one: a plan that changed since is refused (409) rather than approved unread */
+                        plan_job_id?: number;
+                    };
+                };
+            };
             responses: {
                 200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
                 403: components["responses"]["Error"];
                 409: components["responses"]["Action"];
             };
@@ -373,6 +381,8 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description The plan job the page shows (Plan.job_id): a plan that changed since is refused (409) */
+                        plan_job_id: number;
                         /** @description What to change about the plan */
                         ask: string;
                     };

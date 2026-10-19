@@ -78,8 +78,16 @@ paths:
       summary: Approve an item whose cost estimate or plan waits for a human's OK
       description: One OK covers both when both wait, as factory:go does. Needs the password, or a request from this machine (403 otherwise), as settings do.
       parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                plan_job_id: { type: integer, description: "The plan job the page shows (Plan.job_id), when it shows one: a plan that changed since is refused (409) rather than approved unread" }
       responses:
         "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
   /items/{id}/replan:
@@ -93,8 +101,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ask]
-              properties: { ask: { type: string, description: What to change about the plan } }
+              required: [plan_job_id, ask]
+              properties:
+                plan_job_id: { type: integer, description: "The plan job the page shows (Plan.job_id): a plan that changed since is refused (409)" }
+                ask: { type: string, description: What to change about the plan }
       responses:
         "200": { $ref: "#/components/responses/Action" }
         "400": { $ref: "#/components/responses/Error" }

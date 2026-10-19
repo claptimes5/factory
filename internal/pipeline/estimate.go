@@ -372,16 +372,19 @@ func (p *Pipeline) estimateNeedsOK(ctx context.Context, itemID int64) bool {
 	return err != nil || e != nil && store.EstimateNeedsOK(e.Status)
 }
 
-// ApproveEstimate is the dashboard's OK on an item whose estimate waits.
-func (p *Pipeline) ApproveEstimate(ctx context.Context, itemID int64) error {
+// ApproveEstimate is the dashboard's OK on an item whose estimate or
+// plan waits. planJob is the plan job the page showed, or 0 when it
+// showed none; a plan that changed since is refused, not approved unread.
+func (p *Pipeline) ApproveEstimate(ctx context.Context, itemID, planJob int64) error {
 	p.act.Lock()
 	defer p.act.Unlock()
-	return p.approveEstimate(ctx, itemID, "the dashboard")
+	return p.approveEstimate(ctx, itemID, planJob, "the dashboard")
 }
 
 // approveEstimate lets a waiting item go on to implement (or to wait on
-// its dependencies). p.act is held.
-func (p *Pipeline) approveEstimate(ctx context.Context, itemID int64, by string) error {
+// its dependencies). planJob, when not 0, must be the current plan's job.
+// p.act is held.
+func (p *Pipeline) approveEstimate(ctx context.Context, itemID, planJob int64, by string) error {
 	it, err := p.Store.GetItem(ctx, itemID)
 	if err != nil {
 		return err
@@ -391,6 +394,9 @@ func (p *Pipeline) approveEstimate(ctx context.Context, itemID int64, by string)
 	pl, err := p.currentPlan(ctx, itemID)
 	if err != nil {
 		return err
+	}
+	if planJob != 0 && (pl == nil || pl.job.ID != planJob) {
+		return errPlanChanged
 	}
 	planWait := pl != nil && pl.waiting
 	if it.Stage != state.Blocked || !estWait && !planWait {
@@ -521,7 +527,7 @@ func (p *Pipeline) intakeGo(ctx context.Context, repo string) error {
 			p.warn(err, "RemoveLabel")
 			continue
 		}
-		p.warn(p.approveEstimate(ctx, it.ID, who), "approve estimate")
+		p.warn(p.approveEstimate(ctx, it.ID, 0, who), "approve estimate")
 	}
 	return nil
 }

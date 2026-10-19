@@ -41,11 +41,12 @@ type Actions interface {
 	Cancel(ctx context.Context, jobID int64) error
 	Park(ctx context.Context, itemID int64, reason string) error
 	// ApproveEstimate lets an item whose cost estimate or plan waits go
-	// on: one OK covers both.
-	ApproveEstimate(ctx context.Context, itemID int64) error
-	// Replan sends a waiting plan back to the builder with what to change,
-	// as a comment and factory:replan on the issue do.
-	Replan(ctx context.Context, itemID int64, ask string) error
+	// on: one OK covers both. planJob is the plan job the page showed (0
+	// for none); a plan that changed since is refused.
+	ApproveEstimate(ctx context.Context, itemID, planJob int64) error
+	// Replan sends the waiting plan planJob back to the builder with what
+	// to change, as a comment and factory:replan on the issue do.
+	Replan(ctx context.Context, itemID, planJob int64, ask string) error
 	// ResetAutoMerge turns a repo's tripped auto-merge breaker off.
 	ResetAutoMerge(ctx context.Context, repo, by string) error
 }

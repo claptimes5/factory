@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,16 +76,25 @@ func TestAPIPlanWaiting(t *testing.T) {
 	if getJSON(t, base+"/api/v1/items/3", &d); d.Plan == nil || !d.Plan.CanApprove {
 		t.Fatalf("plan = %+v", d.Plan)
 	}
-	if code, body := postJSON(t, base+"/api/v1/items/3/replan", "", `{"ask":"  "}`); code != http.StatusBadRequest || !strings.Contains(body, "what to change") {
+	pid := strconv.FormatInt(pj, 10)
+	if code, body := postJSON(t, base+"/api/v1/items/3/replan", "", `{"plan_job_id":`+pid+`,"ask":"  "}`); code != http.StatusBadRequest || !strings.Contains(body, "what to change") {
 		t.Fatalf("empty replan = %d %s", code, body)
 	}
-	if code, body := postJSON(t, base+"/api/v1/items/3/replan", "", `{"ask":"Keep one file"}`); code != http.StatusOK || !strings.Contains(body, "another plan") {
+	// Which plan it's about is required: the page says which one it shows.
+	if code, body := postJSON(t, base+"/api/v1/items/3/replan", "", `{"ask":"Keep one file"}`); code != http.StatusBadRequest || !strings.Contains(body, "plan_job_id") {
+		t.Fatalf("replan without a plan = %d %s", code, body)
+	}
+	if code, body := postJSON(t, base+"/api/v1/items/3/replan", "", `{"plan_job_id":`+pid+`,"ask":"Keep one file"}`); code != http.StatusOK || !strings.Contains(body, "another plan") {
 		t.Fatalf("replan = %d %s", code, body)
 	}
+	if code, body := postJSON(t, base+"/api/v1/items/3/approve-estimate", "", `{"plan_job_id":`+pid+`}`); code != http.StatusOK || !strings.Contains(body, "Approved") {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	// An older page sends no plan: the OK is still taken.
 	if code, body := postJSON(t, base+"/api/v1/items/3/approve-estimate", "", `{}`); code != http.StatusOK || !strings.Contains(body, "Approved") {
 		t.Fatalf("approve = %d %s", code, body)
 	}
-	if strings.Join(fa.calls, "|") != "replan:Keep one file|approve-estimate" {
+	if got := strings.Join(fa.calls, "|"); got != "replan:"+pid+":Keep one file|approve-estimate:"+pid+"|approve-estimate" {
 		t.Fatalf("calls = %v", fa.calls)
 	}
 

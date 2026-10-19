@@ -1203,7 +1203,15 @@ func (s *Server) apiApproveEstimate(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusForbidden, "Approving here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or add the factory:go label on the issue.")
 		return
 	}
-	s.act(w, s.Actions.ApproveEstimate(r.Context(), id), "Approved. It builds next.")
+	// The plan the page showed, if any: older pages send none.
+	var in struct {
+		PlanJobID int64 `json:"plan_job_id"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.act(w, s.Actions.ApproveEstimate(r.Context(), id, in.PlanJobID), "Approved. It builds next.")
 }
 
 // apiReplan asks for another plan, with what to change, for an item
@@ -1219,17 +1227,22 @@ func (s *Server) apiReplan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Ask string `json:"ask"`
+		PlanJobID int64  `json:"plan_job_id"`
+		Ask       string `json:"ask"`
 	}
 	if err := s.readBody(r, &in); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.PlanJobID <= 0 {
+		apiErr(w, http.StatusBadRequest, "plan_job_id must be the plan job the page shows")
 		return
 	}
 	if strings.TrimSpace(in.Ask) == "" {
 		apiErr(w, http.StatusBadRequest, "Say what to change about the plan.")
 		return
 	}
-	s.act(w, s.Actions.Replan(r.Context(), id, in.Ask), "Asked for another plan. The builder is writing it now.")
+	s.act(w, s.Actions.Replan(r.Context(), id, in.PlanJobID, in.Ask), "Asked for another plan. The builder is writing it now.")
 }
 
 func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {

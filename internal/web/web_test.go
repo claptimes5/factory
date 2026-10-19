@@ -32,12 +32,15 @@ func (f *fakeActions) Park(_ context.Context, id int64, reason string) error {
 	f.calls = append(f.calls, "park:"+reason)
 	return nil
 }
-func (f *fakeActions) ApproveEstimate(_ context.Context, id int64) error {
+func (f *fakeActions) ApproveEstimate(_ context.Context, id, planJob int64) error {
 	f.calls = append(f.calls, "approve-estimate")
+	if planJob != 0 {
+		f.calls[len(f.calls)-1] += ":" + strconv.FormatInt(planJob, 10)
+	}
 	return nil
 }
-func (f *fakeActions) Replan(_ context.Context, id int64, ask string) error {
-	f.calls = append(f.calls, "replan:"+ask)
+func (f *fakeActions) Replan(_ context.Context, id, planJob int64, ask string) error {
+	f.calls = append(f.calls, "replan:"+strconv.FormatInt(planJob, 10)+":"+ask)
 	return nil
 }
 func (f *fakeActions) ResetAutoMerge(_ context.Context, repo, by string) error {

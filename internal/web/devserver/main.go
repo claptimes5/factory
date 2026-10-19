@@ -43,10 +43,10 @@ func (actions) Cancel(_ context.Context, id int64) error {
 func (actions) Park(_ context.Context, id int64, reason string) error {
 	return fmt.Errorf("devserver: would park item %d: %s", id, reason)
 }
-func (actions) ApproveEstimate(_ context.Context, id int64) error {
+func (actions) ApproveEstimate(_ context.Context, id, _ int64) error {
 	return fmt.Errorf("devserver: would approve item %d (its estimate or its plan)", id)
 }
-func (actions) Replan(_ context.Context, id int64, ask string) error {
+func (actions) Replan(_ context.Context, id, _ int64, ask string) error {
 	return fmt.Errorf("devserver: would ask for another plan for item %d: %s", id, ask)
 }
 func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {

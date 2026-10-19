@@ -278,7 +278,7 @@ function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; est
             {p.can_approve ? (
               <>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" disabled={busy} onClick={() => run(`/items/${it.id}/approve-estimate`)}>
+                  <Button size="sm" disabled={busy} onClick={() => run(`/items/${it.id}/approve-estimate`, { plan_job_id: p.job_id })}>
                     Build it
                   </Button>
                   <Button size="sm" variant="outline" disabled={busy} aria-expanded={asking} onClick={() => setAsking(!asking)}>
@@ -290,7 +290,7 @@ function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; est
                     className="space-y-2"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      void run(`/items/${it.id}/replan`, { ask });
+                      void run(`/items/${it.id}/replan`, { plan_job_id: p.job_id, ask });
                     }}
                   >
                     <label htmlFor="plan-ask" className="block text-xs font-medium">
