@@ -244,6 +244,7 @@ type fakeHarness struct {
 	orch    func(req harness.RunRequest) (string, error)
 	tune    func(req harness.RunRequest) (string, error)
 	groom   func(req harness.RunRequest) (string, error)
+	chat    func(req harness.RunRequest) (string, error)
 	resumes []string // Resume of each implement call
 	// sessions are the Resume and SessionDir of each call, by stage.
 	sessions map[string][][2]string
@@ -318,6 +319,15 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 			return nil, errors.New("no scripted orchestrator")
 		}
 		final, err := h.orch(req)
+		if err != nil {
+			return nil, err
+		}
+		res.Final = final
+	case "chat":
+		if h.chat == nil {
+			return nil, errors.New("no scripted chat reply")
+		}
+		final, err := h.chat(req)
 		if err != nil {
 			return nil, err
 		}

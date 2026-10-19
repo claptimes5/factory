@@ -22,7 +22,7 @@ To reach it from another machine, or to put a password on it, see
 | **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
 | **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
-| **Orchestrator** | Every decision with its reason, filterable by item and type. |
+| **Orchestrator** | [Chat](#chat-drafting-issues-with-the-orchestrator) with the orchestrator's model to draft issues, and, under Decisions, everything the orchestrator did on its own with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items (with their choices), items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
@@ -324,6 +324,30 @@ The orchestrator also:
   budget.
 
 It sees every repo and names one when it opens an issue.
+
+### Chat: drafting issues with the orchestrator
+
+The Orchestrator screen opens on a chat with the orchestrator's model (the
+`orchestrate` route, Opus by default). Say what you want built, as you would
+to a teammate. Each message starts one read-only run (prompt
+`prompts/chat.md`) that can read your base branches and the factory's work
+with the orchestrator's read tools, and draft issues with `draft_issue`.
+It works whether or not the orchestrator runs on its own schedule.
+
+A draft is not an issue. It shows as a card under the reply, and nothing
+reaches GitHub or GitLab until you press **Create issue**, after editing it
+if you like, or **Dismiss** it. A created issue gets the intake label and
+any of `orchestrator.labels` the draft asked for, is approved as created by
+you, and goes to triage like an issue you labeled. It doesn't count against
+the orchestrator's daily issue cap. Ask the chat to change a draft and it
+revises the same card.
+
+A reply doesn't wait for a free job slot, since it only reads, but one is
+written at a time. Each costs up to `orchestrator.run_budget`, and chat
+shares `orchestrator.daily_budget` with the orchestrator and tuning. A reply
+that fails says why, with **Try again**; **How it got there** on a reply opens
+its run. Issue text no one approved is withheld from it, as from the
+orchestrator: paste it into the chat instead.
 
 ### Epics and dependencies
 

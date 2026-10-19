@@ -503,6 +503,10 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
 	srv.CheckReadiness = func(_ context.Context, repo string) error { return recheckReadiness(ctx, cfg, p, repo) }
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
+	r := cfg.Routing["orchestrate"]
+	srv.Chat = p
+	srv.Orchestrator = web.OrchestratorInfo{On: cfg.Orchestrator.On, Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),
+		RunBudget: cfg.Orchestrator.RunBudget, DailyBudget: cfg.Orchestrator.DailyBudget}
 	// The Settings screen edits the config file; saved changes apply when
 	// the daemon restarts, which it does once running jobs finish.
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)

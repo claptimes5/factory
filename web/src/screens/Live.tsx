@@ -9,7 +9,7 @@ export function LiveScreen() {
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <div className="flex items-center justify-between">
         <LiveHeading>Live activity</LiveHeading>
-        <Link to="/orchestrator" className="text-sm text-primary hover:underline">
+        <Link to="/orchestrator?tab=decisions" className="text-sm text-primary hover:underline">
           Orchestrator decisions
         </Link>
       </div>

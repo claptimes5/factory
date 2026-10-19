@@ -626,15 +626,19 @@ func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
 	return all - orch, err
 }
 
-// orchSpend is today's spend on orchestration: the orchestrator's runs
-// and the tuning loop's, which share orchestrator.daily_budget.
+// orchSpend is today's spend on orchestration: the orchestrator's runs,
+// the tuning loop's and the dashboard chat's, which share
+// orchestrator.daily_budget.
 func (p *Pipeline) orchSpend(ctx context.Context) (float64, error) {
-	orch, err := p.Store.SpendByKind(ctx, store.Today(), "orchestrate")
-	if err != nil {
-		return 0, err
+	var sum float64
+	for _, kind := range []string{"orchestrate", "tune", store.KindChat} {
+		v, err := p.Store.SpendByKind(ctx, store.Today(), kind)
+		if err != nil {
+			return 0, err
+		}
+		sum += v
 	}
-	tune, err := p.Store.SpendByKind(ctx, store.Today(), "tune")
-	return orch + tune, err
+	return sum, nil
 }
 
 // Intake turns labeled issues into work items, sends items a human marked
@@ -1308,6 +1312,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runOrchestrate(ctx, j)
 	case "tune":
 		err = p.runTune(ctx, j)
+	case store.KindChat:
+		err = p.runChat(ctx, j)
 	case "learn":
 		err = p.runLearn(ctx, j)
 	case "groom":

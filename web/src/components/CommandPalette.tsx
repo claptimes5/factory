@@ -33,7 +33,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { key: "s:/", label: "The floor", hint: "Screen", go: go("/") },
       { key: "s:/notifications", label: "Inbox", hint: "Screen", go: go("/notifications") },
       { key: "s:/live", label: "Live activity", hint: "Screen", go: go("/live") },
-      { key: "s:/orchestrator", label: "Orchestrator decisions", hint: "Screen", go: go("/orchestrator") },
+      { key: "s:/orchestrator", label: "Chat: draft issues with the orchestrator", hint: "Screen", go: go("/orchestrator") },
+      { key: "s:/orchestrator/decisions", label: "Orchestrator decisions", hint: "Screen", go: go("/orchestrator?tab=decisions") },
       { key: "s:/metrics", label: "Spend and metrics", hint: "Screen", go: go("/metrics") },
       { key: "s:/settings", label: "Settings", hint: "Screen", go: go("/settings") },
       {

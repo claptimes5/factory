@@ -129,6 +129,9 @@ func main() {
 	if err := seedUsage(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	if err := seedChats(context.Background(), st); err != nil {
+		log.Fatal(err)
+	}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
@@ -141,6 +144,8 @@ func main() {
 		},
 		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports),
 		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
+		Chat:         &chatter{st: st},
+		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
 				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},

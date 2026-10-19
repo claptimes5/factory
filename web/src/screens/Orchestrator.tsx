@@ -2,9 +2,46 @@ import { useSearchParams, Link } from "react-router";
 import { useFeed } from "@/api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/card";
-import { ago } from "@/lib/utils";
+import { ago, cn } from "@/lib/utils";
+import { ChatPanel } from "@/screens/Chat";
 
+/** The orchestrator: a chat with its model, and the decisions it made on its own. */
 export function OrchestratorScreen() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "decisions" ? "decisions" : "chat";
+  const pick = (t: string) => {
+    const p = new URLSearchParams();
+    if (t === "decisions") p.set("tab", t);
+    setParams(p);
+  };
+  return (
+    <div>
+      <PageTitle>Orchestrator</PageTitle>
+      <div role="tablist" className="mb-4 flex gap-1 border-b">
+        {[
+          ["chat", "Chat"],
+          ["decisions", "Decisions"],
+        ].map(([t, label]) => (
+          <button
+            key={t}
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => pick(t)}
+            className={cn(
+              "-mb-px border-b-2 px-3 py-1.5 text-sm",
+              tab === t ? "border-primary font-medium" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "chat" ? <ChatPanel /> : <Decisions />}
+    </div>
+  );
+}
+
+function Decisions() {
   const [params, setParams] = useSearchParams();
   const item = Number(params.get("item")) || undefined;
   const { data, error, isLoading } = useFeed(item);
@@ -19,9 +56,9 @@ export function OrchestratorScreen() {
   };
   return (
     <div>
-      <PageTitle
-        aside={
-          <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">What the orchestrator did on its own, and why.</p>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
             <input
               aria-label="Item id"
               inputMode="numeric"
@@ -36,11 +73,8 @@ export function OrchestratorScreen() {
                 <option key={t}>{t}</option>
               ))}
             </select>
-          </div>
-        }
-      >
-        Orchestrator decisions
-      </PageTitle>
+        </div>
+      </div>
       {isLoading ? (
         <Loading />
       ) : error ? (
