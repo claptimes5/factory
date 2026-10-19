@@ -116,12 +116,17 @@ before moving on:
    `factory:stale?`, `factory:split?`, `factory:split`, `factory:close`).
    On a server you reach over SSH, setup prints the `ssh -L` command that
    lets your own browser open the link.
-4. **Claude:** an API key, or a subscription token from `claude setup-token`.
+4. **Claude:** only if a route in `factory.yaml` uses Claude: an API key, or
+   a subscription token from `claude setup-token`. To run without Claude, see
+   [Codex-only](configuration.md#codex-only).
 5. **OpenAI:** only if `factory.yaml` uses Codex. It asks "API key or
    ChatGPT plan?" and signs Codex in with an API key, a ChatGPT plan, or a
    Business or Enterprise access token (see
    [Codex on a ChatGPT plan](#codex-on-a-chatgpt-plan)). To skip it, see
    [Claude-only review](configuration.md#claude-only-review).
+
+[`docs/examples`](examples/) has complete configs for a GitLab workspace (a
+Rails API and a Vite app) on Claude alone and on Codex alone.
 6. **Phone notifications** (optional): an ntfy, Slack or Discord URL.
 7. **Sentry** (optional, only with `sources.sentry` on): an auth token
    with the `project:read` and `event:read` scopes, saved as
@@ -328,8 +333,11 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
    Codex runs on an [OpenAI API key](https://platform.openai.com/api-keys),
    billed per use, or on a ChatGPT plan (see
    [Codex on a ChatGPT plan](#codex-on-a-chatgpt-plan)). Without either,
-   review jobs fail and their items park. To run on Claude alone, see
-   [Claude-only review](configuration.md#claude-only-review).
+   every job routed to Codex fails (review jobs, in the default
+   `factory.yaml`) and its item parks. To run on Claude alone, see
+   [Claude-only review](configuration.md#claude-only-review); on Codex
+   alone, [Codex-only](configuration.md#codex-only), and leave out the
+   Claude key.
 
 4. **Create the labels** `factory:ready`, `factory:running`, `factory:parked`,
    `factory:retry` and `factory:awaiting-you`.

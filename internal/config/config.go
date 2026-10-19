@@ -897,7 +897,7 @@ func (c *Config) Validate() error {
 		}
 		// Escalation tiers are model names on the route's own harness.
 		if b.Harness == "codex" {
-			for _, m := range c.builderModels(b)[1:] {
+			for _, m := range c.escalatesTo(b) {
 				if _, ok := c.Pricing[m]; !ok {
 					bad("routing.implement.%s runs on codex and escalates to %q, which has no pricing entry: escalation.implement names models of the route's harness, so list Codex models there", size, m)
 					break
@@ -1297,6 +1297,23 @@ func (c *Config) builderModels(r Route) []string {
 		}
 	}
 	return append(ms, tiers[min(start, len(tiers)):]...)
+}
+
+// escalatesTo lists the models a retry moves an implement route to, as
+// Implement picks them: the tiers after the one it starts on, which is its
+// own model's tier, or the first when its model isn't a tier.
+func (c *Config) escalatesTo(r Route) []string {
+	tiers := c.Escalation.Implement
+	start := 0
+	for i, m := range tiers {
+		if m == r.Model {
+			start = i
+		}
+	}
+	if start+1 >= len(tiers) {
+		return nil
+	}
+	return tiers[start+1:]
 }
 
 // sameModel reports whether two model names on one harness may be the same

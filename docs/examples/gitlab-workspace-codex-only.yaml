@@ -51,9 +51,12 @@ runner:
   cpus: "2"
   memory: 4g
 
-# Use the models your plan offers. The reviewer's model must differ from
-# every model a builder can reach, escalation included, so one model
-# builds and another reviews; give each the effort that suits it.
+# The model names are placeholders: use the ones your sign-in offers
+# (`/model` in the codex app, signed in the same way, lists them; so does
+# OpenAI's Codex models page). Each needs a pricing entry below, and
+# escalation.implement must list the builder's. The reviewer's model must
+# differ from every model a builder can reach, escalation included, so one
+# model builds and another reviews; give each the effort that suits it.
 routing:
   orchestrate:       {harness: codex, model: gpt-6.1-sol}   # drives the daemon's MCP tools
   triage:            {harness: codex, model: gpt-6-luna}

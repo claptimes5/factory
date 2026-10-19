@@ -159,7 +159,34 @@ escalation: {implement: [haiku, sonnet, opus]}
 budgets: {per_job: {S: 2, M: 6, L: 15}, triage: 0.5, review: 3, daily_total: 60}
 pricing: {sol: {input_per_mtok: 1, output_per_mtok: 1}, luna: {input_per_mtok: 1, output_per_mtok: 1}}
 `))
-	if err == nil || !strings.Contains(err.Error(), `escalates to "haiku"`) {
+	if err == nil || !strings.Contains(err.Error(), `escalates to "sonnet"`) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A tier Implement never moves a route to needs no pricing: a codex
+// implement.L whose model isn't a tier starts on the first and escalates
+// only to the ones after it.
+func TestCodexTiersAreTheOnesItReaches(t *testing.T) {
+	cfg := func(tiers string) string {
+		return `
+repo: o/r
+runner: {kind: local}
+routing:
+  triage:      {harness: claude, model: haiku}
+  implement.S: {harness: claude, model: haiku}
+  implement.M: {harness: claude, model: sonnet}
+  implement.L: {harness: codex, model: sol}
+  review:      {harness: codex, model: luna}
+escalation: {implement: ` + tiers + `}
+budgets: {per_job: {S: 2, M: 6, L: 15}, triage: 0.5, review: 3, daily_total: 60}
+pricing: {sol: {input_per_mtok: 1, output_per_mtok: 1}, luna: {input_per_mtok: 1, output_per_mtok: 1}}
+`
+	}
+	if _, err := Parse([]byte(cfg("[opus]"))); err != nil {
+		t.Errorf("one tier, never reached: %v", err)
+	}
+	if _, err := Parse([]byte(cfg("[haiku, sonnet]"))); err == nil || !strings.Contains(err.Error(), `implement.L runs on codex and escalates to "sonnet"`) {
+		t.Errorf("a Claude tier it reaches: %v", err)
 	}
 }

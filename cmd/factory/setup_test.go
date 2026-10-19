@@ -426,13 +426,16 @@ func TestRemoteIs(t *testing.T) {
 
 func TestRemoteIsGitLab(t *testing.T) {
 	for url, want := range map[string]bool{
-		"https://gitlab.com/acme/web.git":       true,
-		"git@gitlab.com:acme/web.git":           true,
-		"ssh://git@gitlab.com/acme/web":         true,
-		"https://oauth2@gitlab.com/acme/web":    true,
-		"git@gitlab.example.com:acme/web.git":   false,
-		"https://gitlab.com/other/acme/web.git": false,
-		"https://gitlab.com/acme/web-old.git":   false,
+		"https://gitlab.com/acme/web.git":        true,
+		"git@gitlab.com:acme/web.git":            true,
+		"ssh://git@gitlab.com/acme/web":          true,
+		"https://oauth2@gitlab.com/acme/web":     true,
+		"ssh://git@gitlab.com:2222/acme/web.git": true,
+		"https://gitlab.com:8443/acme/web":       true,
+		"ssh://git@gitlab.com:2222/x/acme/web":   false,
+		"git@gitlab.example.com:acme/web.git":    false,
+		"https://gitlab.com/other/acme/web.git":  false,
+		"https://gitlab.com/acme/web-old.git":    false,
 	} {
 		if remoteIs(url, "gitlab.com/acme/web") != want {
 			t.Errorf("remoteIs(%s) = %v", url, !want)

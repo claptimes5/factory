@@ -1179,7 +1179,11 @@ OpenAI API key, or on a ChatGPT plan (`FACTORY_CODEX_AUTH=chatgpt`, signed
 in with `./factory codex-login`). The same rule holds: the reviewer's and
 the verifier's model must differ from every model a builder can reach. Codex
 models compare by their exact name, so `gpt-6.1-sol` and `gpt-6-luna` are
-two models. With two, one builds and the other reviews:
+two models. With two, one builds and the other reviews. The names below are
+placeholders, as in this repo's own `factory.yaml`: use the ones your sign-in
+offers (`/model` in the `codex` app, signed in the same way, lists them; so
+does OpenAI's Codex models page). Each needs a `pricing` entry, and
+`escalation.implement` must list the builder's models:
 
 ```yaml
 routing:
@@ -1203,14 +1207,19 @@ pricing:                        # every Codex model needs one, even on a plan
 Use the models your plan offers. If it has a third, review with it and let
 the builder escalate through the other two.
 
-- **The builder.** A Codex builder runs without Codex's own sandbox
-  (`--sandbox danger-full-access`), as a Claude builder runs with
-  `bypassPermissions`: the job's container is the sandbox, with the egress
-  allowlist and the services network. Codex's `workspace-write` would keep
-  it from writing its verdict outside the checkout and from installing
-  dependencies or reaching a database. Read-only steps keep Codex's
-  read-only sandbox.
-- **The orchestrator** gets the daemon's MCP tools as Codex `mcp_servers`.
+- **The builder.** With the docker runner a Codex builder runs with
+  `--sandbox danger-full-access`, as a Claude builder runs with
+  `bypassPermissions`. It installs dependencies, reaches the job's services
+  (a database over the services network) and writes its verdict outside the
+  checkout, and the boundary is the job's container and the egress
+  allowlist (see [Isolation](security.md#isolation)). With the local runner
+  it keeps Codex's `workspace-write` sandbox, with the out directory added
+  for the verdict and no network, so a check that installs or reaches a
+  service fails there. Read-only steps keep Codex's read-only sandbox.
+- **The orchestrator** gets the daemon's MCP tools as Codex `mcp_servers`,
+  with their calls approved up front (`codex exec` can't ask, and refuses
+  a call that needs approval). Each tool checks its own call, as for
+  Claude. A tool call Codex couldn't make fails the run.
 - **No session resume.** A fix round on Codex starts a fresh session; only
   Claude continues the last one.
 - **Lessons** go to `AGENTS.md`, which Codex reads, and the readiness check

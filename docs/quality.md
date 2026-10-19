@@ -163,10 +163,12 @@ on a reviewer's; what it gives up is the second vendor's blind spots.
 
 **To revisit after real use.** Judgment calls made before any real runs:
 - A Codex builder runs with `--sandbox danger-full-access` in its
-  container, as Claude's runs with `bypassPermissions`, since Codex's
-  `workspace-write` can't write the verdict outside the checkout or reach
-  the network the container allows. If Codex's sandbox learns to do both
-  inside Docker, it could come back as a second layer.
+  container, as Claude's runs with `bypassPermissions`, with the container
+  and the egress allowlist as the boundary. `workspace-write` with
+  `--add-dir` for the out directory and
+  `sandbox_workspace_write.network_access` could be a second layer inside
+  Docker, if Codex's sandbox runs there and lets installs and services
+  through; the local runner already uses it.
 - Codex models compare by exact name, so a `-codex` variant of a model
   counts as a different model from it. That may be too loose.
 - With two Codex models, the security pass runs on the builder's model,
@@ -174,9 +176,12 @@ on a reviewer's; what it gives up is the second vendor's blind spots.
   (Haiku for a Sonnet build). Neither has been measured against the
   cross-vendor default.
 - The orchestrator reaches the daemon's MCP tools on Codex through
-  `-c mcp_servers.<name>.command/args` overrides; this hasn't run against a
-  real Codex yet, and a Codex that asks to approve MCP calls in `exec`
-  would stall it.
+  `-c mcp_servers.<name>.*` overrides, with `default_tools_approval_mode`
+  set to `approve`: without it Codex 0.163.0 fails every call ("requires
+  approval, but approval policy is never") and still exits 0, so the
+  adapter now fails a run with any tool call Codex couldn't make. Approving
+  up front leaves each tool's own checks (reasons, caps) as the only
+  guard, as with Claude's `--allowedTools mcp__factory`.
 - A workspace's builder runs in its first repo's image. Rails first works
   for a Rails API and a Vite app, since the job image adds Node to a Ruby
   base; a workspace whose first repo uses the default image would need its

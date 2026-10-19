@@ -125,19 +125,55 @@ func TestCodexParsesFinalAndUsage(t *testing.T) {
 	}
 }
 
-// A Codex builder runs without Codex's own sandbox, as a Claude builder
-// runs with bypassPermissions: the container is the sandbox, and Codex's
-// workspace-write would keep it from writing /out/verdict.json.
-func TestCodexBuilderRunsInTheContainersSandbox(t *testing.T) {
+// A Codex builder in a container runs in the container's sandbox, as a
+// Claude builder runs with bypassPermissions; on the host it keeps Codex's
+// workspace-write, with the out directory writable for its verdict.
+func TestCodexBuilderSandbox(t *testing.T) {
+	for _, contained := range []bool{true, false} {
+		fr := &fakeRunner{out: codexStream}
+		r := req(t, false)
+		r.Stage, r.Schema, r.Contained = "implement", "", contained
+		if _, err := NewCodex(fr).Run(context.Background(), r, nil); err != nil {
+			t.Fatal(err)
+		}
+		cmd := strings.Join(fr.spec.Cmd, " ")
+		want, not := "--sandbox danger-full-access", "workspace-write"
+		if !contained {
+			want, not = "--sandbox workspace-write --skip-git-repo-check --cd /work --add-dir /out", "danger-full-access"
+		}
+		if !strings.Contains(cmd, want) || strings.Contains(cmd, not) || strings.Contains(cmd, "--output-schema") {
+			t.Fatalf("contained %v: builder cmd = %s", contained, cmd)
+		}
+	}
+	// Read-only runs keep the read-only sandbox either way.
 	fr := &fakeRunner{out: codexStream}
-	r := req(t, false)
-	r.Stage, r.Schema = "implement", ""
-	if _, err := NewCodex(fr).Run(context.Background(), r, nil); err != nil {
+	r := req(t, true)
+	r.Contained = true
+	NewCodex(fr).Run(context.Background(), r, nil)
+	if cmd := strings.Join(fr.spec.Cmd, " "); !strings.Contains(cmd, "--sandbox read-only") || strings.Contains(cmd, "--add-dir") {
+		t.Fatalf("read-only cmd = %s", cmd)
+	}
+}
+
+// A tool call Codex couldn't make fails the run, though Codex exits 0.
+func TestCodexFailedMCPCallFailsTheRun(t *testing.T) {
+	// As codex exec --json 0.163.0 prints a call refused for approval.
+	failed := `{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"factory","tool":"queue_status","arguments":{},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}` + "\n"
+	fr := &fakeRunner{out: failed + codexStream}
+	r := req(t, true)
+	r.Stage = "orchestrate"
+	res, err := NewCodex(fr).Run(context.Background(), r, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := strings.Join(fr.spec.Cmd, " ")
-	if !strings.Contains(cmd, "--sandbox danger-full-access") || strings.Contains(cmd, "workspace-write") || strings.Contains(cmd, "--output-schema") {
-		t.Fatalf("builder cmd = %s", cmd)
+	if !res.IsError || !strings.Contains(res.Error, "factory.queue_status failed: MCP tool call requires approval") {
+		t.Fatalf("res = %+v", res)
+	}
+	// A call that ran and whose tool reported an error is the agent's to handle.
+	ok := `{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"factory","tool":"enqueue","result":{"content":[{"type":"text","text":"refused"}],"isError":true},"status":"failed"}}` + "\n"
+	fr = &fakeRunner{out: ok + codexStream}
+	if res, _ := NewCodex(fr).Run(context.Background(), r, nil); res.IsError {
+		t.Fatalf("a tool's own error failed the run: %+v", res)
 	}
 }
 
@@ -151,7 +187,8 @@ func TestCodexMCPServers(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := strings.Join(fr.spec.Cmd, " ")
-	for _, want := range []string{`-c mcp_servers.factory.command="/opt/factory/factory"`, `-c mcp_servers.factory.args=["mcp-bridge","/run/factory/mcp.sock"]`} {
+	for _, want := range []string{`-c mcp_servers.factory.command="/opt/factory/factory"`, `-c mcp_servers.factory.args=["mcp-bridge","/run/factory/mcp.sock"]`,
+		`-c mcp_servers.factory.default_tools_approval_mode="approve"`} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("cmd missing %q: %s", want, cmd)
 		}
