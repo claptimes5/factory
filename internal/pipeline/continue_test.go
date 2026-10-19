@@ -2,11 +2,13 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/runner"
@@ -403,5 +405,35 @@ func TestKeptStaleNeedsADefiniteAnswer(t *testing.T) {
 	}
 	if why := e.p.keptStale(context.Background(), stopped.ID); why != "" {
 		t.Fatalf("live: %q", why)
+	}
+}
+
+// Old kept work a continue has taken isn't swept: a cancel gives it back.
+func TestKeptStaleSparesTakenWork(t *testing.T) {
+	t.Parallel()
+	e := setup(t)
+	stopped := stopOne(t, e, 130)
+	path := filepath.Join(keptDir(e.p.jobDir(stopped.ID)), "kept.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var k map[string]any
+	if err := json.Unmarshal(b, &k); err != nil {
+		t.Fatal(err)
+	}
+	k["at"] = time.Now().Add(-keepStoppedFor - time.Hour).UTC().Format(store.TimeFormat)
+	b, _ = json.Marshal(k)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if why := e.p.keptStale(context.Background(), stopped.ID); why == "" {
+		t.Fatal("old untaken work isn't swept")
+	}
+	if err := os.WriteFile(filepath.Join(keptDir(e.p.jobDir(stopped.ID)), takenFile), []byte("999"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if why := e.p.keptStale(context.Background(), stopped.ID); why != "" {
+		t.Fatalf("taken work is swept: %q", why)
 	}
 }

@@ -369,7 +369,9 @@ func (p *Pipeline) keptStale(ctx context.Context, id int64) string {
 	if it.Stage == state.Done {
 		return "its item is done"
 	}
-	if k, err := p.readKept(id); err == nil {
+	// Work a continue has taken waits for it, whatever its age: a cancel
+	// gives it back.
+	if k, err := p.readKept(id); err == nil && p.keptTakenBy(id) == 0 {
 		if at, err := time.Parse(store.TimeFormat, k.At); err == nil && time.Since(at) > keepStoppedFor {
 			return "no one continued it in " + roundDur(keepStoppedFor)
 		}
