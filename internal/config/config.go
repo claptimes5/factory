@@ -888,20 +888,6 @@ func (c *Config) Validate() error {
 		if !ok {
 			continue
 		}
-		for _, rk := range []string{"review", "review.medium_risk", "review.high_risk"} {
-			r, ok := c.Routing[rk]
-			if !ok || r.Harness != b.Harness {
-				continue
-			}
-			// Same harness is allowed only with a different model, at every
-			// tier a retry can move the builder to.
-			for _, m := range c.builderModels(b) {
-				if sameModel(r.Harness, m, r.Model) {
-					bad("routing.%s reviews with %s/%s, which routing.implement.%s can build with (escalation included): a reviewer must differ from the builder in harness or model", rk, r.Harness, r.Model, size)
-					break
-				}
-			}
-		}
 		// Escalation tiers are model names on the route's own harness.
 		if b.Harness == "codex" {
 			for _, m := range c.escalatesTo(b) {

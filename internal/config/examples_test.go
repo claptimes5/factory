@@ -7,7 +7,8 @@ import (
 
 // The single-vendor examples in docs/examples load, and every step,
 // including the ones whose routes default from others, runs on the one
-// vendor, with the reviewer apart from every builder.
+// vendor. The reviewer may share a builder's model (it reviews in a fresh
+// session); the security pass still never runs on a reviewer's.
 func TestSingleVendorExamples(t *testing.T) {
 	for file, vendor := range map[string]string{
 		"gitlab-workspace-claude-only.yaml": "claude",
@@ -38,22 +39,6 @@ func TestSingleVendorExamples(t *testing.T) {
 			for k, r := range routes {
 				if r.Harness != vendor {
 					t.Errorf("%s runs on %s/%s", k, r.Harness, r.Model)
-				}
-			}
-			for _, size := range []string{"XS", "S", "M", "L"} {
-				for attempt := 1; ; attempt++ {
-					b, ok := c.Implement(size, attempt)
-					if !ok {
-						break
-					}
-					for _, risk := range []string{"low", "medium", "high"} {
-						if rv := c.Review(risk); sameModel(vendor, rv.Model, b.Model) {
-							t.Errorf("implement.%s attempt %d builds with %s, which reviews %s risk", size, attempt, b.Model, risk)
-						}
-					}
-					if v := c.VerifyRoute(); sameModel(vendor, v.Model, b.Model) {
-						t.Errorf("the verifier runs on builder model %s", b.Model)
-					}
 				}
 			}
 			if s := c.SecurityRoute(); sameAsAny(s, c.reviewers()) {

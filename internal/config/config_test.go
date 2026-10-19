@@ -68,7 +68,10 @@ func TestSeveralRepos(t *testing.T) {
 	}
 }
 
-func TestReviewerMustDifferFromBuilder(t *testing.T) {
+// A reviewer may run on a builder's harness and model, escalation
+// included: it reviews in a session of its own (see the pipeline's
+// TestReviewNeverResumesTheBuildersSession), so it isn't refused.
+func TestReviewerMayShareTheBuildersModel(t *testing.T) {
 	b, _ := os.ReadFile("../../factory.yaml")
 	claudeReview := func(model, tiers string) string {
 		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-6.1-sol}", "review: {harness: claude, model: "+model+"}", 1)
@@ -77,23 +80,21 @@ func TestReviewerMustDifferFromBuilder(t *testing.T) {
 		y = strings.Replace(y, "implement.L:       {harness: claude, model: opus}", "implement.L:       {harness: claude, model: sonnet}", 1)
 		return strings.Replace(y, "implement: [haiku, sonnet, opus]", "implement: "+tiers, 1)
 	}
-	cases := []struct {
-		name, model, tiers string
-		ok                 bool
-	}{
-		{"same model", "sonnet", "[sonnet]", false},
-		{"model a retry escalates to", "opus", "[sonnet, opus]", false},
-		{"different model at every tier", "opus", "[sonnet]", true},
-		{"names compare without case", "Sonnet", "[sonnet]", false},
-		{"full id of a builder model", "claude-sonnet-4-5", "[sonnet]", false},
-	}
-	for _, tc := range cases {
-		_, err := Parse([]byte(claudeReview(tc.model, tc.tiers)))
-		if tc.ok && err != nil {
-			t.Errorf("%s: want ok, got %v", tc.name, err)
+	for name, tc := range map[string]struct{ model, tiers string }{
+		"same model":                    {"sonnet", "[sonnet]"},
+		"model a retry escalates to":    {"opus", "[sonnet, opus]"},
+		"different model at every tier": {"opus", "[sonnet]"},
+		"full id of a builder model":    {"claude-sonnet-4-5", "[sonnet]"},
+	} {
+		c, err := Parse([]byte(claudeReview(tc.model, tc.tiers)))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
 		}
-		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "differ from the builder")) {
-			t.Errorf("%s: want builder/reviewer clash, got %v", tc.name, err)
+		// A verifier on a builder's model is allowed too.
+		c.Routing["verify"] = c.Routing["implement.M"]
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: verify on a builder's model: %v", name, err)
 		}
 	}
 }
@@ -634,10 +635,11 @@ func TestReviewSettings(t *testing.T) {
 	if r := c.VerifyRoute(); r.Model != "gpt-6-luna" {
 		t.Fatalf("triage's tier %+v", r)
 	}
-	// Set to a model a builder can escalate to, it's refused.
+	// Set, it is used even when a builder can run on it: each verifier
+	// run is a fresh session.
 	c.Routing["verify"] = Route{Harness: "claude", Model: "sonnet"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "routing.verify checks findings with claude/sonnet") {
-		t.Fatalf("verify on a builder's model: %v", err)
+	if r := c.VerifyRoute(); r.Model != "sonnet" || c.Validate() != nil {
+		t.Fatalf("verify on a builder's model: %+v %v", r, c.Validate())
 	}
 	c.Routing["verify"] = Route{Harness: "codex", Model: "gpt-6-luna"}
 	c.Budgets.Verify = 0

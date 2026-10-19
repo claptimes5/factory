@@ -92,7 +92,7 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			bounded(integer("budgets.max_turns", "Turns per job", "The most turns (model calls) one agent run takes. A build that runs out stops, keeps its work and waits for you to continue it.", 80), 1, 0),
 			bounded(num("budgets.fast_multiplier", "Fast mode multiplier", "Scales a job's cap when it runs in fast mode.", 2), 1, 0),
 		}},
-		{Name: "Models", Help: "Which harness and model run each step. A reviewer must differ from the builder in harness or model.", Settings: routes(root)},
+		{Name: "Models", Help: "Which harness and model run each step. A reviewer runs in a fresh session of its own, so it may use the builder's model; another vendor's model, the default, catches more of its blind spots.", Settings: routes(root)},
 		{Name: "Review", Help: "How review checks its own findings.", Settings: []Setting{
 			{Path: []string{"review", "verify"}, Label: "Verify findings", Help: "A second model (routing.verify) checks each blocking finding; only confirmed ones block.", Kind: "bool", Default: true},
 			{Path: []string{"review", "paired_high_risk"}, Label: "Pair high-risk reviews", Help: "The reviewer and the critic read a high-risk change side by side, instead of one after the other.", Kind: "bool", Default: false},

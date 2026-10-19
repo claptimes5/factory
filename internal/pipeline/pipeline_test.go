@@ -244,11 +244,13 @@ type fakeHarness struct {
 	orch    func(req harness.RunRequest) (string, error)
 	tune    func(req harness.RunRequest) (string, error)
 	groom   func(req harness.RunRequest) (string, error)
-	resumes []string            // Resume of each implement call
-	noSess  bool                // fail any resumed run, as if the session were gone
-	nets    map[string][]string // Services of each call, by stage
-	learn   []string            // successive learn verdicts
-	images  [][]string          // Images of each review call
+	resumes []string // Resume of each implement call
+	// sessions are the Resume and SessionDir of each call, by stage.
+	sessions map[string][][2]string
+	noSess   bool                // fail any resumed run, as if the session were gone
+	nets     map[string][]string // Services of each call, by stage
+	learn    []string            // successive learn verdicts
+	images   [][]string          // Images of each review call
 	// verifies are successive verifier verdicts; with none scripted the
 	// verifier fails, and its findings block as unverified.
 	verifies []string
@@ -278,6 +280,10 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		h.nets = map[string][]string{}
 	}
 	h.nets[req.Stage] = append(h.nets[req.Stage], req.Services)
+	if h.sessions == nil {
+		h.sessions = map[string][][2]string{}
+	}
+	h.sessions[req.Stage] = append(h.sessions[req.Stage], [2]string{req.Resume, req.SessionDir})
 	res := &harness.Result{CostUSD: 0.1, CostKnown: true, TokensIn: 10, TokensOut: 5, Turns: 1}
 	switch req.Stage {
 	case "triage":
