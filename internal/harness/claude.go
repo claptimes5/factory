@@ -67,7 +67,7 @@ func (claudeAdapter) command(req RunRequest, p runner.Paths) ([]string, error) {
 	}
 	if wrapUpAt(req) > 0 {
 		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{"matcher": "*",
-			"hooks": []any{map[string]any{"type": "command", "command": "sh " + path.Join(p.Out, wrapUpScript)}}}}}
+			"hooks": []any{map[string]any{"type": "command", "command": "sh " + shellQuote(path.Join(p.Out, wrapUpScript))}}}}}
 	}
 	if len(settings) > 0 {
 		b, _ := json.Marshal(settings)
@@ -112,8 +112,8 @@ func (claudeAdapter) prepare(_ context.Context, req RunRequest, p runner.Paths, 
 		return func(*Result) {}, nil, nil
 	}
 	note := path.Join(p.Out, ProgressFile)
-	soon := fmt.Sprintf("The factory: you have about %d turns left of %d. Stop starting new work. Finish the step you are on, run `git add -A && git commit -m 'wip: <what>'` to commit what you have (a work-in-progress commit is fine), and write %s: a short note of what is done, what is left, and anything the next run should know. If the task is already done, finish it normally and write the verdict.", req.MaxTurns-at, req.MaxTurns, note)
-	last := fmt.Sprintf("The factory: you are about to run out of turns. Commit your work now with `git add -A && git commit -m 'wip'` and write %s with what is done and what is left. Do nothing else.", note)
+	soon := fmt.Sprintf("The factory: you have about %d turns left of %d. Stop starting new work. Finish the step you are on, then commit what you have in each git repository you changed: inside that repository run `git add -A && git commit -m 'wip: <what>'` (a work-in-progress commit is fine; when the work folder holds several repositories, it is not one itself, so do this in each one you changed). Then write %s: a short note of what is done, what is left, and anything the next run should know. If the task is already done, finish it normally and write the verdict.", req.MaxTurns-at, req.MaxTurns, note)
+	last := fmt.Sprintf("The factory: you are about to run out of turns. Commit your work now: in each git repository you changed, run `git add -A && git commit -m 'wip'` inside it. Then write %s with what is done and what is left. Do nothing else.", note)
 	hook := func(msg string) string {
 		b, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "additionalContext": msg}})
 		return string(b)
@@ -123,10 +123,10 @@ func (claudeAdapter) prepare(_ context.Context, req RunRequest, p runner.Paths, 
 # Written by the factory: counts the builder's tool calls and, near its
 # turn cap, tells it to wrap up.
 cat >/dev/null
-n=$(cat '%[1]s' 2>/dev/null)
+n=$(cat %[1]s 2>/dev/null)
 case "$n" in ''|*[!0-9]*) n=0 ;; esac
 n=$((n + 1))
-echo "$n" > '%[1]s'
+echo "$n" > %[1]s
 if [ "$n" -eq %[2]d ]; then
 cat <<'FACTORY_EOF'
 %[3]s
@@ -137,12 +137,16 @@ cat <<'FACTORY_EOF'
 FACTORY_EOF
 fi
 exit 0
-`, count, at, hook(soon), max(at+1, req.MaxTurns-3), hook(last))
+`, shellQuote(count), at, hook(soon), max(at+1, req.MaxTurns-3), hook(last))
 	if err := os.WriteFile(filepath.Join(req.OutDir, wrapUpScript), []byte(script), 0o755); err != nil {
 		return nil, nil, err
 	}
 	return func(*Result) {}, nil, nil
 }
+
+// shellQuote quotes s for sh: a local run's paths may hold spaces or
+// quotes.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func (claudeAdapter) userLine(text string) []byte {
 	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
@@ -151,7 +155,7 @@ func (claudeAdapter) userLine(text string) []byte {
 
 // observe: a replayed message is a user line with text rather than tool
 // results; a result line ends the run.
-func (claudeAdapter) observe(line []byte) (ack, done, stopped bool) {
+func (claudeAdapter) observe(line []byte) (echo string, ok, done, stopped bool) {
 	var l struct {
 		Type    string `json:"type"`
 		Subtype string `json:"subtype"`
@@ -160,31 +164,36 @@ func (claudeAdapter) observe(line []byte) (ack, done, stopped bool) {
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &l) != nil {
-		return false, false, false
+		return "", false, false, false
 	}
 	switch l.Type {
 	case "user":
 		if l.Message == nil {
-			return false, false, false
+			return "", false, false, false
 		}
 		var s string
 		if json.Unmarshal(l.Message.Content, &s) == nil {
-			return true, false, false
+			return s, true, false, false
 		}
 		var blocks []struct {
 			Type string `json:"type"`
+			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(l.Message.Content, &blocks)
+		var text []string
 		for _, b := range blocks {
 			if b.Type == "tool_result" {
-				return false, false, false
+				return "", false, false, false
+			}
+			if b.Type == "text" {
+				text = append(text, b.Text)
 			}
 		}
-		return len(blocks) > 0, false, false
+		return strings.Join(text, ""), len(text) > 0, false, false
 	case "result":
-		return false, true, stopReason(l.Subtype) != ""
+		return "", false, true, stopReason(l.Subtype) != ""
 	}
-	return false, false, false
+	return "", false, false, false
 }
 
 // stopReason names the cap a result's subtype says the run hit, or "".

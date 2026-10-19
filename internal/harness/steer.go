@@ -28,11 +28,11 @@ var ErrNotListening = errors.New("the agent has finished and no longer reads mes
 type steerable interface {
 	// userLine is one message on the CLI's input.
 	userLine(text string) []byte
-	// observe reads one line of output: ack when it is a message from the
-	// input coming back (the CLI took it), done when the run ended (a
-	// result), and stopped when it ended on a cap, after which no message
-	// is answered.
-	observe(line []byte) (ack, done, stopped bool)
+	// observe reads one line of output: echo is the text of a message from
+	// the input coming back (the CLI took it), ok whether the line was
+	// one; done when the run ended (a result), and stopped when it ended
+	// on a cap, after which no message is answered.
+	observe(line []byte) (echo string, ok, done, stopped bool)
 }
 
 // idleClose is how long the input stays open after a result while a
@@ -42,59 +42,134 @@ var idleClose = time.Minute
 
 // feeder is a run's open input. Its read end is a real file, so the
 // runner hands it to the process as is (no copying goroutine that would
-// keep the run from ending while the input is open).
+// keep the run from ending while the input is open). One goroutine
+// writes, in order: the prompt first, then each message. Nothing holds
+// the lock across a write, so a CLI that never reads its input (it
+// failed to start) can't wedge the run: release closes the pipe, which
+// fails the blocked write.
 type feeder struct {
 	mu      sync.Mutex
 	r, w    *os.File
 	a       steerable
-	closed  bool
-	pending int // messages sent since the last result and not taken back
+	closed  bool       // takes no more messages
+	queue   []feedLine // to write
+	unacked []string   // messages written or queued, not yet taken back
 	timer   *time.Timer
+	wake    chan struct{}
+	gone    chan struct{}
+	once    sync.Once
+	writer  sync.WaitGroup
 }
 
-func newFeeder(a steerable) (*feeder, error) {
+type feedLine struct {
+	line []byte
+	done chan error // nil for the prompt
+}
+
+// newFeeder opens the input with the prompt as its first message.
+func newFeeder(a steerable, prompt string) (*feeder, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	return &feeder{r: r, w: w, a: a}, nil
+	f := &feeder{r: r, w: w, a: a, wake: make(chan struct{}, 1), gone: make(chan struct{})}
+	f.queue = []feedLine{{line: a.userLine(prompt)}}
+	f.writer.Add(1)
+	go f.write()
+	return f, nil
 }
 
-// send writes a message; steer counts it as one the CLI must take back
-// before the input closes.
-func (f *feeder) send(text string, steer bool) error {
+// send queues a message, which the CLI must take back before the input
+// closes. The returned channel says once it was written, or why not.
+func (f *feeder) send(text string) <-chan error {
+	done := make(chan error, 1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
-		return ErrNotListening
+		done <- ErrNotListening
+		return done
 	}
-	// A pipe's buffer holds a message or two; the prompt goes in from a
-	// goroutine (see Run) so a large one can't block the start.
-	if _, err := f.w.Write(f.a.userLine(text)); err != nil {
-		return err
+	f.queue = append(f.queue, feedLine{line: f.a.userLine(text), done: done})
+	f.unacked = append(f.unacked, text)
+	f.poke()
+	return done
+}
+
+func (f *feeder) poke() {
+	select {
+	case f.wake <- struct{}{}:
+	default:
 	}
-	if steer {
-		f.pending++
+}
+
+// write is the one goroutine that writes the input, and closes it once
+// it's closed and everything queued went in.
+func (f *feeder) write() {
+	defer f.writer.Done()
+	for {
+		f.mu.Lock()
+		if len(f.queue) == 0 {
+			closed := f.closed
+			f.mu.Unlock()
+			if closed {
+				_ = f.w.Close()
+				return
+			}
+			select {
+			case <-f.wake:
+			case <-f.gone:
+			}
+			continue
+		}
+		l := f.queue[0]
+		f.queue = f.queue[1:]
+		f.mu.Unlock()
+		_, err := f.w.Write(l.line)
+		if err != nil {
+			err = ErrNotListening
+		}
+		if l.done != nil {
+			l.done <- err
+		}
+		if err != nil {
+			f.mu.Lock()
+			f.closed = true
+			for _, q := range f.queue {
+				if q.done != nil {
+					q.done <- ErrNotListening
+				}
+			}
+			f.queue = nil
+			f.mu.Unlock()
+			_ = f.w.Close()
+			return
+		}
 	}
-	return nil
 }
 
 // saw is one line of the CLI's output.
 func (f *feeder) saw(line []byte) {
-	ack, done, stopped := f.a.observe(line)
+	echo, ok, done, stopped := f.a.observe(line)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.timer != nil {
 		f.timer.Stop() // it's working on what it was sent
 		f.timer = nil
 	}
-	if ack && f.pending > 0 {
-		f.pending--
+	if ok {
+		// Only a message the factory sent counts: the prompt's own echo
+		// doesn't.
+		for i, t := range f.unacked {
+			if t == echo {
+				f.unacked = append(f.unacked[:i], f.unacked[i+1:]...)
+				break
+			}
+		}
 	}
 	if !done {
 		return
 	}
-	if stopped || f.pending == 0 {
+	if stopped || len(f.unacked) == 0 {
 		f.closeLocked()
 		return
 	}
@@ -107,23 +182,28 @@ func (f *feeder) close() {
 	f.closeLocked()
 }
 
+// closeLocked takes no more messages; the writer closes the input once
+// what's queued went in.
 func (f *feeder) closeLocked() {
-	if f.closed {
-		return
-	}
 	f.closed = true
-	_ = f.w.Close()
+	f.poke()
 }
 
-// release closes both ends once the run is over.
+// release ends the input once the run is over: a write still blocked
+// (nothing reads it any more) fails, and the writer is gone on return.
 func (f *feeder) release() {
-	f.close()
-	f.mu.Lock()
-	if f.timer != nil {
-		f.timer.Stop()
-	}
-	f.mu.Unlock()
-	_ = f.r.Close()
+	f.once.Do(func() {
+		f.mu.Lock()
+		f.closed = true
+		if f.timer != nil {
+			f.timer.Stop()
+		}
+		f.mu.Unlock()
+		close(f.gone)
+		_ = f.r.Close()
+		_ = f.w.Close()
+		f.writer.Wait()
+	})
 }
 
 // NoteLine is a line the factory adds to a run's log: a message a

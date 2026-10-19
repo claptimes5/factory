@@ -216,16 +216,11 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 	}
 	var feed *feeder
 	if sa, ok := h.a.(steerable); ok && req.Steer != nil {
-		if feed, err = newFeeder(sa); err != nil {
+		if feed, err = newFeeder(sa, req.Prompt); err != nil {
 			return nil, err
 		}
 		defer feed.release()
 		spec.Stdin = feed.r
-		go func() {
-			if err := feed.send(req.Prompt, false); err != nil {
-				feed.close()
-			}
-		}()
 	}
 	stopSteer := make(chan struct{})
 	var steering sync.WaitGroup
@@ -240,7 +235,8 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 				case m := <-req.Steer:
 					err := ErrNotListening
 					if feed != nil {
-						err = feed.send(m.Text, true)
+						// release fails a write nobody reads, so this ends.
+						err = <-feed.send(m.Text)
 					}
 					emit(Event{Kind: "raw", Payload: json.RawMessage(scrub(string(NoteLine(m.Text, err == nil)), redact))})
 					if m.Err != nil {
@@ -274,6 +270,9 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 		_, _ = io.Copy(io.Discard, pr)
 	}()
 	code, runErr := h.runner.Run(ctx, spec, pw)
+	if feed != nil {
+		feed.release() // the CLI is gone: nothing reads its input
+	}
 	_ = pw.Close()
 	<-parsed
 	res.ExitCode = code

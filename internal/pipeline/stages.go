@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/claptimes5/factory/internal/config"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,25 +62,12 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	return nil
 }
 
-// unparkHow says, on a parked issue, the ways to bring it back.
+// unparkHow says, on a parked issue, the ways to bring it back. The
+// comment is public, so it names the dashboard page in words rather than
+// an address that may be internal.
 func (p *Pipeline) unparkHow(it *store.WorkItem) string {
-	return fmt.Sprintf("To bring it back, open it in the factory's dashboard (%s) and press Retry (or Continue, when its work was kept) "+
-		"there, or add the `%s` label here to send it back through triage.", p.dashboardItem(it.ID), LabelRetry)
-}
-
-// dashboardItem is the item's page in the dashboard, as far as the
-// factory can tell its address: web.hosts' first name, else web.listen's.
-func (p *Pipeline) dashboardItem(id int64) string {
-	host, port, err := net.SplitHostPort(p.Cfg.Web.Listen)
-	if err != nil {
-		return fmt.Sprintf("/app/items/%d", id)
-	}
-	if len(p.Cfg.Web.Hosts) > 0 {
-		host = p.Cfg.Web.Hosts[0]
-	} else if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
-		host = "localhost"
-	}
-	return fmt.Sprintf("http://%s/app/items/%d", net.JoinHostPort(host, port), id)
+	return fmt.Sprintf("To bring it back, open it on the factory dashboard (Items > #%d) and press Retry (or Continue, when its work was kept) "+
+		"there, or add the `%s` label here to send it back through triage.", it.IssueNumber, LabelRetry)
 }
 
 func firstLine(s string) string {
@@ -244,12 +230,24 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	// other build leaves nothing for an older one to continue.
 	var parts []*part
 	kept := false
-	if in.Continue != nil {
-		if parts, err = p.takeKept(dir, in.Continue.From); err != nil {
-			p.log().Warn("continuing on a fresh checkout", "job", j.ID, "from", in.Continue.From, "err", err)
-			parts = nil
+	// reached is set once the continue's run is over: the kept work is
+	// then this job's, whatever comes next. Until then it goes back to
+	// the build it came from, so a cancel or a requeue loses nothing.
+	reached := false
+	if c := in.Continue; c != nil {
+		if parts, err = p.takeKept(dir, c.From, j.ID); err != nil {
+			msg := fmt.Sprintf("Job %d couldn't continue build job %d: the work it kept is gone (%v), so nothing was built. Retry starts it from scratch.", j.ID, c.From, err)
+			p.finish(ctx, j, agentRun{}, state.Failed, "", msg)
+			return p.park(ctx, it, msg)
 		}
-		kept = parts != nil
+		kept = true
+		defer func() {
+			if reached {
+				p.dropKept(c.From)
+			} else {
+				p.restoreKept(dir, c.From)
+			}
+		}()
 	} else {
 		p.sweepKept(ctx)
 	}
@@ -311,6 +309,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
+	reached = true
 	if st, msg, bad := runFailure(run); bad {
 		if run.err == nil && !run.timeout && run.res != nil && run.res.Stopped != "" {
 			return p.stopped(ctx, j, it, run, parts, x.maxTurns)

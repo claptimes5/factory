@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
@@ -145,6 +146,8 @@ func TestClaudeStopsAndWrapUpHook(t *testing.T) {
 func TestWrapUpHookScriptCounts(t *testing.T) {
 	r := req(t, false)
 	r.MaxTurns = 12
+	// A local run's paths can hold spaces and quotes.
+	r.OutDir = filepath.Join(t.TempDir(), "it's my out dir")
 	if err := os.MkdirAll(r.OutDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -171,11 +174,94 @@ func TestWrapUpHookScriptCounts(t *testing.T) {
 	if len(said) != 2 || said[0] != 8 || said[1] != 9 {
 		t.Fatalf("warned at %v", said)
 	}
+	b, _ := os.ReadFile(filepath.Join(r.OutDir, wrapUpScript))
+	if !strings.Contains(string(b), "in each git repository you changed") {
+		t.Fatalf("script doesn't cover a workspace of several repos:\n%s", b)
+	}
+}
+
+// A CLI that exits without reading its input (it failed to start) must
+// not wedge the run, however large the prompt.
+func TestSteerableRunEndsWhenTheCLINeverReads(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\necho 'no such image' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := req(t, false)
+	r.Workdir = t.TempDir()
+	r.Prompt = strings.Repeat("x", 200<<10)
+	steer := make(chan SteerMsg, 1)
+	r.Steer = steer
+	errc := make(chan error, 1)
+	steer <- SteerMsg{Text: "hello?", Err: errc}
+	done := make(chan *Result, 1)
+	go func() {
+		res, _ := NewClaude(runner.Local{}).Run(context.Background(), r, make(chan Event, 100))
+		done <- res
+	}()
+	select {
+	case res := <-done:
+		if res == nil || !res.IsError {
+			t.Fatalf("res = %+v", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run never returned")
+	}
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("a message to a CLI that never read was delivered")
+		}
+	default: // Run may end before the message is read.
+	}
+}
+
+// fakeSteer echoes lines as the Claude adapter does.
+type fakeSteer struct{ claudeAdapter }
+
+// The prompt goes in before any message, and only a message's own echo
+// counts as taking it: the prompt's echo doesn't.
+func TestFeederOrderAndEchoes(t *testing.T) {
+	f, err := newFeeder(fakeSteer{}, "the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.release()
+	sent := f.send("steer one")
+	rd := bufio.NewReader(f.r)
+	first, _ := rd.ReadString('\n')
+	second, _ := rd.ReadString('\n')
+	if !strings.Contains(first, "the task") || !strings.Contains(second, "steer one") {
+		t.Fatalf("order: %q then %q", first, second)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	f.saw([]byte(strings.TrimSpace(first))) // the prompt's replay
+	f.saw([]byte(`{"type":"result","subtype":"success"}`))
+	f.mu.Lock()
+	closed, left := f.closed, len(f.unacked)
+	f.mu.Unlock()
+	if closed || left != 1 {
+		t.Fatalf("the prompt's echo counted as the message: closed %v, unacked %d", closed, left)
+	}
+	f.saw([]byte(strings.TrimSpace(second)))
+	f.saw([]byte(`{"type":"result","subtype":"success"}`))
+	f.mu.Lock()
+	closed = f.closed
+	f.mu.Unlock()
+	if !closed {
+		t.Fatal("input stayed open with every message answered")
+	}
+	if _, err := rd.ReadString('\n'); err == nil {
+		t.Fatal("input not closed")
+	}
 }
 
 func runSh(t *testing.T, script string) string {
 	t.Helper()
-	cmd := execCommand("sh", script)
+	cmd := execCommand("sh", "-c", "sh "+shellQuote(script))
 	cmd.Stdin = strings.NewReader(`{"tool_name":"Bash"}`)
 	b, err := cmd.Output()
 	if err != nil {

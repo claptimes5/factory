@@ -407,8 +407,8 @@ type Config struct {
 		// when triage's cost estimate (its p75) is over this many
 		// dollars. 0, the default, never holds one.
 		ConfirmOver float64 `yaml:"confirm_over,omitempty"`
-		// MaxTurns caps the turns (model calls) of one agent run, as
-		// Claude's --max-turns; default 80. A build that runs out stops,
+		// MaxTurns caps the turns (model calls) of one build, as Claude's
+		// --max-turns; default 80. Other steps keep a cap of 80. A build that runs out stops,
 		// keeps its work and waits for a person to continue it.
 		MaxTurns int `yaml:"max_turns,omitempty"`
 	} `yaml:"budgets"`

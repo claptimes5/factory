@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -81,10 +83,13 @@ func TestStoppedBuildKeepsWorkAndWaits(t *testing.T) {
 	}
 	c := e.gh.comments[120]
 	last := c[len(c)-1]
-	for _, want := range []string{"ran out of turns", "Continue picks up", "Retry starts it from scratch", "/app/items/", "factory:retry"} {
+	for _, want := range []string{"ran out of turns", "Continue picks up", "Retry starts it from scratch", "factory dashboard (Items > #120)", "factory:retry"} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("comment lacks %q:\n%s", want, last)
 		}
+	}
+	if strings.Contains(last, "http://") || strings.Contains(last, "localhost") {
+		t.Fatalf("a public comment links an internal address:\n%s", last)
 	}
 	// The choices say what each does and on which model.
 	got := map[string]Choice{}
@@ -239,11 +244,30 @@ func TestSteerRefusals(t *testing.T) {
 	}
 }
 
+// turnsSeen records each stage's turn cap.
+type turnsSeen struct {
+	harness.Harness
+	mu   sync.Mutex
+	caps map[string]int
+}
+
+func (h *turnsSeen) Run(ctx context.Context, req harness.RunRequest, ev chan<- harness.Event) (*harness.Result, error) {
+	h.mu.Lock()
+	h.caps[req.Stage] = req.MaxTurns
+	h.mu.Unlock()
+	return h.Harness.Run(ctx, req, ev)
+}
+
+// budgets.max_turns is the builder's; the other stages keep theirs.
 func TestMaxTurnsConfig(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Budgets.MaxTurns = 33
+	seen := &turnsSeen{caps: map[string]int{}}
+	for name, h := range e.p.Harnesses {
+		e.p.Harnesses[name] = &turnsSeen{Harness: h, caps: seen.caps}
+	}
 	e.addIssue(125)
 	e.claude.builds = []func(string) error{goodBuild}
 	e.codex.reviews = []string{pass}
@@ -251,9 +275,133 @@ func TestMaxTurnsConfig(t *testing.T) {
 	if len(e.claude.turns) != 1 || e.claude.turns[0] != 33 {
 		t.Fatalf("turns = %v", e.claude.turns)
 	}
+	if seen.caps["triage"] != stageTurns || seen.caps["review"] != stageTurns {
+		t.Fatalf("other stages: %v", seen.caps)
+	}
 }
 
 func runGit(dir string, args ...string) (string, error) {
 	g := &Git{}
 	return g.run(context.Background(), dir, nil, args...)
+}
+
+// stopOne runs issue n's first build into its turn cap and returns the
+// stopped job; builds are the ones after it.
+func stopOne(t *testing.T, e *env, n int, builds ...func(string) error) *store.Job {
+	t.Helper()
+	e.p.Runner = &runner.Docker{}
+	e.addIssue(n)
+	e.claude.builds = append([]func(string) error{halfBuild}, builds...)
+	e.claude.stops = []string{"turns"}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return implJobs(t, e, e.item(t, n).ID)[0]
+}
+
+func keptWork(e *env, id int64) bool {
+	_, err := os.Stat(filepath.Join(keptDir(e.p.jobDir(id)), "work", "add.go"))
+	return err == nil
+}
+
+// A continue cancelled mid-run gives the work back to the build it
+// continued, and the item can continue again from there.
+func TestCancelledContinueGivesTheWorkBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	var stopped *store.Job
+	cancelIt := func(string) error {
+		jobs := implJobs(t, e, *stopped.ItemID)
+		// Docker isn't here to kill the container; the cancel still lands.
+		_ = e.p.Cancel(ctx, jobs[0].ID)
+		return nil
+	}
+	stopped = stopOne(t, e, 126, cancelIt, finishBuild)
+	if err := e.p.Continue(ctx, stopped.ID, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.p.Drain(ctx)
+	cont := implJobs(t, e, *stopped.ItemID)[0]
+	if cont.State != state.Cancelled || e.item(t, 126).Stage != state.Parked {
+		t.Fatalf("continue = %s, item %s", cont.State, e.item(t, 126).Stage)
+	}
+	if !keptWork(e, stopped.ID) || e.p.keptTakenBy(stopped.ID) != 0 {
+		t.Fatal("the cancelled continue lost the kept work")
+	}
+	// Continue from the cancelled job picks up the same work.
+	if err := e.p.Continue(ctx, cont.ID, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.p.Drain(ctx)
+	if st := e.item(t, 126).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage = %s", st)
+	}
+	if _, err := os.Stat(keptDir(e.p.jobDir(stopped.ID))); !os.IsNotExist(err) {
+		t.Fatalf("kept work still there once used: %v", err)
+	}
+}
+
+// A continue the daemon restarts in the middle gets the kept work back
+// before its rerun; a continue whose kept work is gone says so and
+// builds nothing.
+func TestContinueSurvivesRestartAndSaysWhenWorkIsGone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	stopped := stopOne(t, e, 127, finishBuild)
+	if err := e.p.Continue(ctx, stopped.ID, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	cont := implJobs(t, e, *stopped.ItemID)[0]
+	// The interrupted run had taken the work into its own directory.
+	if _, err := e.p.takeKept(e.p.jobDir(cont.ID), stopped.ID, cont.ID); err != nil {
+		t.Fatal(err)
+	}
+	if keptWork(e, stopped.ID) || e.p.keptTakenBy(stopped.ID) != cont.ID {
+		t.Fatal("not taken")
+	}
+	e.p.restoreInterrupted(cont)
+	if !keptWork(e, stopped.ID) {
+		t.Fatal("the restart lost the kept work")
+	}
+	e.p.Drain(ctx)
+	if st := e.item(t, 127).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage = %s", st)
+	}
+
+	e2 := setup(t)
+	stopped2 := stopOne(t, e2, 128, finishBuild)
+	if err := e2.p.Continue(ctx, stopped2.ID, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(keptDir(e2.p.jobDir(stopped2.ID)), "work"))
+	e2.p.Drain(ctx)
+	it := e2.item(t, 128)
+	cont2 := implJobs(t, e2, it.ID)[0]
+	if it.Stage != state.Parked || cont2.State != state.Failed || !strings.Contains(cont2.Error, "the work it kept is gone") {
+		t.Fatalf("item %s, job %s %q", it.Stage, cont2.State, cont2.Error)
+	}
+	if e2.claude.calls["implement"] != 1 {
+		t.Fatalf("it built anyway: %d builds", e2.claude.calls["implement"])
+	}
+}
+
+// Kept work goes only on a definite answer: a store error keeps it.
+func TestKeptStaleNeedsADefiniteAnswer(t *testing.T) {
+	t.Parallel()
+	e := setup(t)
+	stopped := stopOne(t, e, 129)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if why := e.p.keptStale(gone, stopped.ID); why != "" {
+		t.Fatalf("a failed lookup removes kept work: %q", why)
+	}
+	if why := e.p.keptStale(context.Background(), stopped.ID+1000); why != "its job is gone" {
+		t.Fatalf("missing job: %q", why)
+	}
+	if why := e.p.keptStale(context.Background(), stopped.ID); why != "" {
+		t.Fatalf("live: %q", why)
+	}
 }

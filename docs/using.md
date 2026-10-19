@@ -115,13 +115,16 @@ with the model it runs on (hover a button, or open "What do these do?"):
   lost; bring it back with Retry or Continue, or add the `factory:retry`
   label on the issue to send it back through triage.
 
-The issue gets a comment saying the same, with a link to the item's page.
+The issue gets a comment saying the same, and where to find the item on
+the dashboard (Items, then its issue number). The comment is public, so
+it names no address.
 The `factory:retry` label still works, but you don't have to go to the
 issue unless the factory asked a question there (a park from triage).
 
 ### When a build runs out of turns or budget
 
-A build has `budgets.max_turns` turns (80 by default) and its size's
+A build has `budgets.max_turns` turns (80 by default; other steps such
+as triage and review keep their own 80) and its size's
 `budgets.per_job` dollars. Ten turns before the end, the factory tells
 Claude to stop starting new work, commit what it has and write what's
 done and what's left to a note. If it still runs out, it doesn't restart
@@ -138,7 +141,10 @@ on its own: the same task would most likely run out again. Instead:
   dashboard password, or the dashboard opened on the factory's machine)
   and a note it reads first, for example to narrow the scope. On the
   local runner, or if the session is gone, it starts a new session that's
-  told where the last one stopped.
+  told where the last one stopped. If a continue is cancelled, or the
+  factory restarts before it's done, the work goes back to the stopped
+  build, so you can continue again. If the kept work is gone, the
+  continue says so and builds nothing.
 - Retry or Tier up start over instead, and the kept checkout is removed.
   It's also removed when the item is done, and after 14 days.
 

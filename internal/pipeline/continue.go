@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,24 +225,33 @@ func (p *Pipeline) readKept(from int64) (*keptCheckout, error) {
 	return &k, nil
 }
 
-// takeKept moves job from's kept checkouts into dir, for the build that
-// continues it, and returns them as parts.
-func (p *Pipeline) takeKept(dir string, from int64) ([]*part, error) {
+// takeKept moves job from's kept checkouts into dir, for build by that
+// continues it, and returns them as parts. The kept record stays, marked
+// as taken by it, until the continue reaches an outcome (dropKept); if
+// it ends before that, or the daemon restarts or requeues it, the
+// checkouts go back (restoreKept), so the work is never lost to a rerun.
+func (p *Pipeline) takeKept(dir string, from, by int64) ([]*part, error) {
 	k, err := p.readKept(from)
 	if err != nil {
 		return nil, err
 	}
 	kd := keptDir(p.jobDir(from))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(kd, takenFile), []byte(strconv.FormatInt(by, 10)), 0o644); err != nil {
+		return nil, err
+	}
 	for _, d := range checkoutDirs {
 		if _, err := os.Lstat(filepath.Join(kd, d)); err != nil {
 			continue
 		}
 		_ = os.RemoveAll(filepath.Join(dir, d))
 		if err := os.Rename(filepath.Join(kd, d), filepath.Join(dir, d)); err != nil {
+			p.restoreKept(dir, from)
 			return nil, err
 		}
 	}
-	_ = os.RemoveAll(kd)
 	var parts []*part
 	for _, kp := range k.Parts {
 		in := func(rel string) (string, error) {
@@ -251,20 +261,72 @@ func (p *Pipeline) takeKept(dir string, from int64) ([]*part, error) {
 			return filepath.Join(dir, rel), nil
 		}
 		repo, err := in(kp.RepoDir)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var work string
+			if work, err = in(kp.WorkDir); err == nil {
+				if err = realDir(work); err == nil {
+					parts = append(parts, &part{repo: kp.Repo, folder: kp.Folder, ws: &Workspace{Repo: repo, Work: work, BaseSHA: kp.BaseSHA,
+						Start: kp.Start, Existed: kp.Existed, Placed: kp.Placed}})
+					continue
+				}
+			}
 		}
-		work, err := in(kp.WorkDir)
-		if err != nil {
-			return nil, err
-		}
-		if err := realDir(work); err != nil {
-			return nil, err
-		}
-		parts = append(parts, &part{repo: kp.Repo, folder: kp.Folder, ws: &Workspace{Repo: repo, Work: work, BaseSHA: kp.BaseSHA,
-			Start: kp.Start, Existed: kp.Existed, Placed: kp.Placed}})
+		p.restoreKept(dir, from)
+		return nil, err
 	}
 	return parts, nil
+}
+
+// takenFile, in a kept checkout, names the job that took it.
+const takenFile = "taken"
+
+// keptTakenBy is the job that took job from's kept checkouts, or 0.
+func (p *Pipeline) keptTakenBy(from int64) int64 {
+	b, err := os.ReadFile(filepath.Join(keptDir(p.jobDir(from)), takenFile))
+	if err != nil {
+		return 0
+	}
+	id, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	return id
+}
+
+// restoreKept moves the checkouts a continue took from job from back out
+// of its job directory dir.
+func (p *Pipeline) restoreKept(dir string, from int64) {
+	kd := keptDir(p.jobDir(from))
+	if _, err := os.Stat(filepath.Join(kd, "kept.json")); err != nil {
+		return
+	}
+	for _, d := range checkoutDirs {
+		src := filepath.Join(dir, d)
+		if _, err := os.Lstat(src); err != nil {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(kd, d))
+		p.warn(os.Rename(src, filepath.Join(kd, d)), "restore kept checkout")
+	}
+	_ = os.Remove(filepath.Join(kd, takenFile))
+}
+
+// dropKept removes job from's kept record once a continue reached an
+// outcome with it.
+func (p *Pipeline) dropKept(from int64) {
+	p.warn(os.RemoveAll(keptDir(p.jobDir(from))), "remove kept checkout")
+}
+
+// restoreInterrupted gives back the kept checkouts a continue job took,
+// when it runs again after a restart: the run before it didn't finish.
+func (p *Pipeline) restoreInterrupted(j *store.Job) {
+	if j.Kind != "implement" || j.Input == "" {
+		return
+	}
+	var in ImplementInput
+	if jsonUnmarshal(j.Input, &in) != nil || in.Continue == nil {
+		return
+	}
+	if p.keptTakenBy(in.Continue.From) == j.ID {
+		p.restoreKept(p.jobDir(j.ID), in.Continue.From)
+	}
 }
 
 // sweepKept removes kept checkouts no one can continue any more: the
@@ -286,12 +348,25 @@ func (p *Pipeline) sweepKept(ctx context.Context) {
 
 // keptStale says why job id's kept checkout should go, or "".
 func (p *Pipeline) keptStale(ctx context.Context, id int64) string {
+	// Only a definite answer removes work: a store error keeps it.
 	j, err := p.Store.GetJob(ctx, id)
-	if err != nil || j.ItemID == nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "its job is gone"
 	}
+	if err != nil {
+		return ""
+	}
+	if j.ItemID == nil {
+		return "its job has no item"
+	}
 	it, err := p.Store.GetItem(ctx, *j.ItemID)
-	if err != nil || it.Stage == state.Done {
+	if errors.Is(err, sql.ErrNoRows) {
+		return "its item is gone"
+	}
+	if err != nil {
+		return ""
+	}
+	if it.Stage == state.Done {
 		return "its item is done"
 	}
 	if k, err := p.readKept(id); err == nil {
@@ -309,8 +384,8 @@ func (p *Pipeline) keptStale(ctx context.Context, id int64) string {
 		}
 		var in ImplementInput
 		_ = jsonUnmarshal(later.Input, &in)
-		if in.Continue != nil && in.Continue.From == id && !later.State.Terminal() {
-			continue // about to take it
+		if in.Continue != nil && in.Continue.From == id {
+			continue // took it, or gave it back
 		}
 		return fmt.Sprintf("job %d started over", later.ID)
 	}
@@ -369,7 +444,17 @@ func (p *Pipeline) canContinue(ctx context.Context, jobID int64) (*store.Job, *s
 	if !j.State.Terminal() {
 		return nil, nil, in, fmt.Errorf("job %d is still %s", jobID, j.State)
 	}
-	if _, err := p.readKept(jobID); err != nil {
+	if _, err := p.readKept(j.ID); err != nil {
+		// A continue that ended before it got anywhere (cancelled, or
+		// queued again) gave the work back to the build it continued.
+		var was ImplementInput
+		if jsonUnmarshal(j.Input, &was) == nil && was.Continue != nil {
+			if _, err := p.readKept(was.Continue.From); err == nil {
+				if src, err := p.Store.GetJob(ctx, was.Continue.From); err == nil {
+					return p.canContinue(ctx, src.ID)
+				}
+			}
+		}
 		return nil, nil, in, errors.New("this build kept no work to continue: only one that ran out of turns or budget does, until the item moves on")
 	}
 	it, err := p.Store.GetItem(ctx, *j.ItemID)

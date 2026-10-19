@@ -1057,6 +1057,9 @@ func (p *Pipeline) runAgent(ctx context.Context, repo string, j *store.Job, work
 }
 
 // agentExtras are the less common knobs of an agent run.
+// stageTurns caps the turns of every run but a build's.
+const stageTurns = 80
+
 type agentExtras struct {
 	repo       string // picks the image and env; "" for the orchestrator
 	writable   bool
@@ -1069,7 +1072,8 @@ type agentExtras struct {
 	// fresh is the prompt to send instead when resuming fails and the run
 	// starts a new session (a continue's whole task; "" for the same).
 	fresh string
-	// maxTurns overrides budgets.max_turns (a continue with more turns).
+	// maxTurns is the run's turn cap: budgets.max_turns for a build, more
+	// for a continue; 0 is stageTurns.
 	maxTurns int
 	// say is a person's note to the agent, put in its log where it went in.
 	say string
@@ -1099,7 +1103,9 @@ func (p *Pipeline) runAgentWith(ctx context.Context, j *store.Job, workdir, outD
 	if x.say != "" {
 		_, _ = lf.Write([]byte(scrub(string(harness.NoteLine(x.say, true)), secrets) + "\n"))
 	}
-	turns := p.Cfg.Budgets.MaxTurns
+	// budgets.max_turns is the builder's (runImplement sets it); the other
+	// stages keep their own cap.
+	turns := stageTurns
 	if x.maxTurns > 0 {
 		turns = x.maxTurns
 	}
@@ -1247,7 +1253,9 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 	log := p.log().With("job", j.ID, "kind", j.Kind)
 	log.Info("job started", "harness", j.Harness, "model", j.Model, "attempt", j.Attempt, "skillset", j.Skillset)
 	dir := p.jobDir(j.ID)
-	// A requeued job may find a previous run's checkout and verdict here.
+	// A requeued job may find a previous run's checkout and verdict here;
+	// a continue's kept work goes back first.
+	p.restoreInterrupted(j)
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
 		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
