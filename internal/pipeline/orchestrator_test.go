@@ -495,3 +495,16 @@ func TestOneOrchestratorAtATimeOverBudget(t *testing.T) {
 		t.Fatalf("a second orchestrator started: %+v", j)
 	}
 }
+
+// Claude Code drops every tool of a server when one schema is invalid, as
+// "required": null is.
+func TestToolSchemasHaveRequiredList(t *testing.T) {
+	for _, s := range []json.RawMessage{schema(""), schema(`"stage":{"type":"string"}`), schema(`"item":{"type":"integer"}`, "item")} {
+		var v struct {
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(s, &v); err != nil || v.Required == nil {
+			t.Fatalf("schema %s: required must be a list (err %v)", s, err)
+		}
+	}
+}

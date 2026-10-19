@@ -403,8 +403,10 @@ func (p *Pipeline) statusText(ctx context.Context) (string, error) {
 
 // --- tools ---
 
+// schema is a tool's input schema. required is never null: Claude Code
+// drops every tool of a server when one schema is invalid.
 func schema(props string, required ...string) json.RawMessage {
-	req, _ := json.Marshal(required)
+	req, _ := json.Marshal(append([]string{}, required...))
 	return json.RawMessage(fmt.Sprintf(`{"type":"object","additionalProperties":false,"properties":{%s},"required":%s}`, props, req))
 }
 
