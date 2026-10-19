@@ -333,3 +333,18 @@ func TestPrivate(t *testing.T) {
 		t.Fatalf("no visibility: %v %v", got, err)
 	}
 }
+
+func TestListLabelsIncludesGroups(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/projects/team%2Fweb/labels" || r.URL.Query().Get("include_ancestor_groups") != "true" {
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+		w.Write([]byte(`[{"name":"factory:ready"},{"name":"bug"}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	names, err := c.ListLabels(context.Background())
+	if err != nil || strings.Join(names, ",") != "factory:ready,bug" {
+		t.Fatalf("labels = %v %v", names, err)
+	}
+}

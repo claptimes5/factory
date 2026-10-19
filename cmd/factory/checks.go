@@ -147,7 +147,8 @@ func usesRunnerImage(cfg *config.Config) bool {
 }
 
 func (im jobImage) buildArgs(dir string) []string {
-	a := []string{"build", "-t", im.tag}
+	// The label lets pruneImages clean up old copies of only our images.
+	a := []string{"build", "-t", im.tag, "--label", imageLabel + "=1"}
 	if im.from != "" {
 		a = append(a, "--build-arg", "BASE="+im.from)
 	}
@@ -164,6 +165,7 @@ func buildImages(out io.Writer, cfg *config.Config, force bool) error {
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
 		return fmt.Errorf("can't find %s next to the config; run this from the factory's checkout", dir)
 	}
+	built := false
 	for _, im := range jobImages(cfg) {
 		if !force && runCmd(io.Discard, "docker", "image", "inspect", im.tag) == nil {
 			fmt.Fprintf(out, "%s is built.\n", im.tag)
@@ -173,6 +175,10 @@ func buildImages(out io.Writer, cfg *config.Config, force bool) error {
 		if err := runCmd(out, "docker", im.buildArgs(dir)...); err != nil {
 			return fmt.Errorf("building %s: %w", im.tag, err)
 		}
+		built = true
+	}
+	if built {
+		pruneImages(cfg)
 	}
 	return nil
 }

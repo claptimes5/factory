@@ -27,6 +27,9 @@ type Restarter interface {
 	CancelRestart(ctx context.Context) bool // says whether one was waiting
 	RestartPending() bool
 	Running() int
+	// RestartWaitsFor names other work a restart waits for, such as "the
+	// job image build", or is "".
+	RestartWaitsFor() string
 }
 
 // APISetting is one value the Settings screen may change.
@@ -57,10 +60,13 @@ type APISettings struct {
 	// overwrite changes made since.
 	Version string `json:"version"`
 	// Changed says the file differs from the one the daemon started with.
-	Changed        bool               `json:"changed"`
-	RestartPending bool               `json:"restart_pending"`
-	RunningJobs    int                `json:"running_jobs"`
-	Groups         []APISettingsGroup `json:"groups"`
+	Changed        bool `json:"changed"`
+	RestartPending bool `json:"restart_pending"`
+	// RestartWaitsFor names other work the pending restart waits for,
+	// such as "the job image build", or is "".
+	RestartWaitsFor string             `json:"restart_waits_for"`
+	RunningJobs     int                `json:"running_jobs"`
+	Groups          []APISettingsGroup `json:"groups"`
 }
 
 // ConfigVersion is the version the Settings screen gives a config file's
@@ -110,6 +116,7 @@ func (s *Server) settings(r *http.Request) (APISettings, []config.SettingGroup, 
 	out.Changed = s.StartedConfig != "" && s.StartedConfig != out.Version
 	if s.Restarter != nil {
 		out.RestartPending, out.RunningJobs = s.Restarter.RestartPending(), s.Restarter.Running()
+		out.RestartWaitsFor = s.Restarter.RestartWaitsFor()
 	} else {
 		out.RunningJobs, _ = s.Store.CountJobs(ctx, state.Running, "")
 	}
@@ -236,14 +243,26 @@ func (s *Server) apiRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := s.Restarter.RequestRestart(r.Context())
-	msg := "Restarting now."
-	if n > 0 {
-		msg = fmt.Sprintf("Restarting once %d running jobs finish. No new jobs start until then.", n)
-		if n == 1 {
-			msg = "Restarting once the running job finishes. No new jobs start until then."
-		}
+	s.act(w, nil, RestartMessage(n, s.Restarter.RestartWaitsFor()))
+}
+
+// RestartMessage says when a restart asked for now happens: n jobs are
+// running, and busy names other work it waits for ("" for none).
+func RestartMessage(n int, busy string) string {
+	var wait []string
+	switch {
+	case n == 1:
+		wait = append(wait, "the running job finishes")
+	case n > 1:
+		wait = append(wait, fmt.Sprintf("%d running jobs finish", n))
 	}
-	s.act(w, nil, msg)
+	if busy != "" {
+		wait = append(wait, busy+" is done")
+	}
+	if len(wait) == 0 {
+		return "Restarting now."
+	}
+	return "Restarting once " + strings.Join(wait, " and ") + ". No new jobs start until then."
 }
 
 func (s *Server) apiCancelRestart(w http.ResponseWriter, r *http.Request) {

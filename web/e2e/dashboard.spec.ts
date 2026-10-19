@@ -337,3 +337,14 @@ test("a flaky main shows above every screen, linked to its fix", async ({ page }
   await expect(health).not.toContainText("web main");
   if (phone(info)) await noSidewaysScroll(page);
 });
+
+test("a restart waiting on an image build says so", async ({ page }) => {
+  await page.route(/\/api\/v1\/settings$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, restart_pending: true, running_jobs: 0, restart_waits_for: "the job image build" } });
+  });
+  await page.goto("/app/settings");
+  await expect(page.getByText("Restart pending, waiting for the job image build. No new jobs start until then.")).toBeVisible();
+  await expect(page.getByText("Restarting…")).toHaveCount(0);
+});

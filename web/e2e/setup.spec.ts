@@ -40,7 +40,10 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   const flaky = steps.nth(2).getByTestId("readiness-finding");
   await expect(flaky).toContainText("Tests are flaky");
   await expect(flaky).toContainText("Waiting its turn");
-  await expect(api).toContainText("./factory readiness -queue acme/api");
+  // Filing is a button, never a command to run.
+  await expect(api).not.toContainText("./factory");
+  await expect(api.getByRole("button", { name: "File issues" })).toBeVisible();
+  await expect(api.getByRole("button", { name: "File and start work" })).toBeVisible();
 
   // A gap that isn't needed to start waits under Worth doing later.
   await api.getByText("Worth doing later (2)").click();
@@ -56,9 +59,21 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
 
   // Check again runs in the background and the page follows it.
   await api.getByRole("button", { name: "Check again" }).click();
-  await expect(api.getByRole("status").first()).toContainText(/Checking (acme\/api|now)/);
+  // The other project may be running one too: one run at a time.
+  await expect(api.getByRole("status").first()).toContainText(/[Cc]hecking/);
   await expect(api.getByRole("button", { name: "Check again" })).toBeVisible({ timeout: 15_000 });
   await expect(api).toContainText(/Checked \d+s ago/);
+
+  // File and start work checks again, then files; the page follows it. The
+  // devserver changes nothing, so the other project sees the same report.
+  if (!phone(info)) {
+    // Retried, since the phone project's own check can hold the one slot.
+    await expect(async () => {
+      await api.getByRole("button", { name: "File and start work" }).click({ timeout: 5_000 });
+      await expect(api.getByRole("status").first()).toContainText(/[Cc]hecking/);
+      await expect(api.getByText("Opened 1 issue(s) on acme/api.")).toBeVisible({ timeout: 8_000 });
+    }).toPass({ timeout: 40_000 });
+  }
 
   // A blocker's work opens from its row.
   await lint.getByRole("link", { name: "See the work" }).click();
@@ -81,4 +96,20 @@ test("plan usage shows as percentages, and dollar costs say they're API-price es
   await expect(note).toContainText("No reading yet: Codex reports usage");
   await shot(page, info, "plan-usage");
   if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("without leave to file, the setup screen names no buttons it doesn't show", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, can_check: false, can_file: false, check_note: "Checking from here needs a dashboard password." } });
+  });
+  await page.goto("/app/setup");
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  await api.getByText("Worth doing later (2)").click();
+  await expect(api).toContainText("No issue yet");
+  await expect(api).not.toContainText("File issues");
+  await expect(api).not.toContainText("File and start work");
+  await expect(api.getByRole("button", { name: /File/ })).toHaveCount(0);
+  await expect(api).toContainText("Checking from here needs a dashboard password.");
 });

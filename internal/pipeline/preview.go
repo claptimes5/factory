@@ -112,7 +112,7 @@ func (p *Pipeline) captureSide(ctx context.Context, jobID int64, repo, dir strin
 		notes = append(notes, "the capture couldn't run: "+truncate(err.Error(), 300))
 		summary = []string{"the capture couldn't run"}
 	case code == preview.ExitNoBrowser:
-		notes = []string{"the job image has no Playwright: build it with --build-arg PLAYWRIGHT=1 (`factory images --force` does for a repo with preview)"}
+		notes = []string{"the job image has no Playwright: build it with --build-arg PLAYWRIGHT=1 (`factory images --rebuild` does for a repo with preview)"}
 		return nil, notes, slices.Clone(notes)
 	case code == preview.ExitNotReady:
 		return nil, []string{fmt.Sprintf("the app didn't answer %s on port %d within %s; the end of its log:\n%s", ready, pl.Port, roundDur(pl.Wait), tail(appLog(out), 800))},

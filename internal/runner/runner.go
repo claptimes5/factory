@@ -249,7 +249,7 @@ func dockerStartError(stderr string) error {
 	hint := ""
 	for _, s := range []string{"Unable to find image", "No such image", "pull access denied", "repository does not exist"} {
 		if strings.Contains(stderr, s) {
-			hint = "\nThe job image isn't built: run ./factory images (./factory doctor lists what's missing)."
+			hint = "\nThe job image isn't built: the factory builds missing images when it starts, or build it from the dashboard's Get started page."
 			break
 		}
 	}

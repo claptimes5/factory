@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
@@ -91,14 +91,14 @@ const statusText: Record<string, { label: string; variant: "default" | "secondar
 };
 
 /** One blocker or gap, with its issue and the factory's work on it. */
-function Finding({ f, label, repo }: { f: FindingT; label: string; repo: RepoReadiness }) {
+function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean }) {
   const [open, setOpen] = useState(false);
   const s = statusText[f.status] ?? { label: f.status, variant: "secondary" as const };
   const hint =
     f.status === "none"
       ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
       : f.status === "not_filed"
-        ? repo.queue_command && `Run ${repo.queue_command} to file it.`
+        ? canFile && repo.unfiled > 0 && "No issue yet: File issues opens one."
         : f.status === "not_queued"
           ? `Add the ${label} label on the issue so the factory works on it.`
           : f.status === "done" && f.level === "blocker"
@@ -145,7 +145,7 @@ function StepIcon({ state }: { state: string }) {
   return <CircleDashed aria-label="Not checked yet" className="size-5 shrink-0 text-muted-foreground" />;
 }
 
-function StepRow({ step, n, label, repo }: { step: Step; n: number; label: string; repo: RepoReadiness }) {
+function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; label: string; repo: RepoReadiness; canFile: boolean }) {
   return (
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
@@ -159,17 +159,13 @@ function StepRow({ step, n, label, repo }: { step: Step; n: number; label: strin
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={repo} />
+              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} />
             ))}
           </ul>
         )}
       </div>
     </li>
   );
-}
-
-function Command({ children }: { children: ReactNode }) {
-  return <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs break-all">{children}</code>;
 }
 
 const stateBadge: Record<string, [string, "success" | "warning" | "destructive" | "secondary"]> = {
@@ -183,13 +179,15 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const check = async () => {
+  const run = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
-    const res = await act("/readiness/check", { repo: r.repo });
+    const res = await act(path, { repo: r.repo, ...body });
     setBusy(false);
     setMsg({ ok: res.ok, text: res.message });
     void qc.invalidateQueries({ queryKey: ["readiness"] });
   };
+  const check = () => run("/readiness/check", {});
+  const canFile = data.can_file && !r.checking && (r.unfiled > 0 || r.can_queue);
   const [badge, variant] = stateBadge[r.state] ?? [r.state, "secondary"];
   const label = data.intake_label;
   const gaps = r.extras.filter((f) => f.level !== "good");
@@ -212,7 +210,8 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <div className="flex flex-col items-end gap-1.5">
           {r.checking ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
-              <Loader2 className="size-4 animate-spin" aria-hidden /> Checking now, started {ago(r.checking_since)}
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "check" ? "Checking now" : "Checking, then filing issues"}, started{" "}
+              {ago(r.checking_since)}
             </span>
           ) : data.can_check ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={check}>
@@ -247,7 +246,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           {r.unqueued > 0 && (
             <p className="mt-1 text-text-2">
               {r.unqueued === 1 ? "1 issue" : `${r.unqueued} issues`} the check filed for later {r.unqueued === 1 ? "isn't" : "aren't"} labeled yet. Label{" "}
-              {r.unqueued === 1 ? "it" : "them"} {r.queue_command ? <>or run <Command>{r.queue_command}</Command></> : null} when you want the factory to work on{" "}
+              {r.unqueued === 1 ? "it" : "them"} {r.can_queue && data.can_file ? "or use File and start work " : ""}when you want the factory to work on{" "}
               {r.unqueued === 1 ? "it" : "them"}.
             </p>
           )}
@@ -256,12 +255,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.state === "not_ready" && (
         <p className="text-sm text-text-2">
           Every job would fail until these are fixed, so add real tasks once they are. The factory can fix most of them itself; this page follows its work.
-          {r.queue_command && (
-            <>
-              {" "}
-              Some have no issue yet: run <Command>{r.queue_command}</Command> to file them and hand the blockers to the factory.
-            </>
-          )}
+          {r.unfiled > 0 && data.can_file && " Some have no issue yet: File and start work files them and hands the blockers to the factory."}
         </p>
       )}
       {r.state === "incomplete" && (
@@ -275,10 +269,30 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           The check clones {r.repo}, installs it and runs its checks twice to catch flaky tests. It takes a few minutes and changes nothing.
         </p>
       )}
-      {!data.can_check && !r.checking && (
-        <p className="text-xs text-muted-foreground">
-          {r.state === "unchecked" ? "Check it" : "Check again"} with <Command>{r.command}</Command>
-          {data.check_note && !data.check_note.includes("can't run") ? `. ${data.check_note}` : "."}
+      {canFile && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap gap-2">
+            {r.unfiled > 0 && (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => run("/readiness/file", { queue: false })}>
+                File issues
+              </Button>
+            )}
+            {r.can_queue && (
+              <Button size="sm" disabled={busy} onClick={() => run("/readiness/file", { queue: true })}>
+                File and start work
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Both check {repoName(r.repo) || r.repo} again first, and skip what's already filed. File issues opens them for later. File and start work also
+            adds the {label} label{r.state === "ready" ? ", including to the ones filed earlier," : " to the blockers"} so the factory works on them.
+          </p>
+        </div>
+      )}
+      {!data.can_check && !r.checking && data.check_note && <p className="text-xs text-muted-foreground">{data.check_note}</p>}
+      {r.result && !r.checking && (
+        <p role="status" className="text-sm text-success">
+          {r.result}
         </p>
       )}
       {r.check_error && (
@@ -295,7 +309,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.steps.length > 0 && (
         <ol aria-label="Setup steps" className="divide-y border-y">
           {r.steps.map((s, i) => (
-            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} />
+            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} />
           ))}
         </ol>
       )}
@@ -306,7 +320,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           <p className="mt-1 text-xs text-muted-foreground">Not needed to start. Each lets the factory verify more of what it changes.</p>
           <ul className="divide-y">
             {gaps.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} />
             ))}
           </ul>
         </details>
@@ -343,6 +357,13 @@ export function SetupScreen() {
           Before the factory can work on real tasks, each repo's install and checks must pass on its base branch, and its tests must give the same answer
           every run. This is where each repo stands.
           {checked.length > 0 && ` ${ready} of ${data.repos.length} ${data.repos.length === 1 ? "repo is" : "repos are"} ready.`}
+        </p>
+        <p className="mt-1 text-sm text-text-2">
+          Repos, access and keys are on the{" "}
+          <Link to="/get-started" className="text-primary hover:underline">
+            get-started page
+          </Link>
+          .
         </p>
       </div>
       {data.repos.map((r) => (

@@ -54,6 +54,10 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Choice": APIChoice{}, "Stop": APIStop{}, "TranscriptEntry": APITranscriptEntry{},
 		"Chats": APIChats{}, "ChatAt": APIChatAt{}, "Chat": APIChat{}, "ChatMessage": APIChatMessage{}, "ChatReply": APIChatReply{},
 		"SentChat": APISentChat{}, "Draft": APIDraft{},
+		"Wizard": APIWizard{}, "WizardStep": APIWizardStep{}, "WizardFinding": APIWizardFinding{}, "WizardSecret": APIWizardSecret{},
+		"WizardAccess": APIWizardAccess{}, "WizardLabel": APIWizardLabel{}, "WizardOwner": APIWizardOwner{}, "WizardGitHub": APIWizardGitHub{},
+		"WizardGitLab": APIWizardGitLab{}, "WizardHost": APIWizardHost{}, "WizardClaude": APIWizardClaude{}, "WizardCodex": APIWizardCodex{}, "WizardSignIn": APIWizardSignIn{},
+		"WizardImages": APIWizardImages{}, "WizardImage": APIWizardImage{}, "WizardManifest": APIWizardManifest{}, "WizardResult": APIWizardResult{},
 	}
 	for name, v := range types {
 		sc, ok := schemas[name]

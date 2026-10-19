@@ -79,12 +79,12 @@ func (a codexAdapter) Unavailable() string {
 	}
 	sum, err := fileSum(c.file)
 	if err != nil {
-		return fmt.Sprintf("Codex isn't signed in to ChatGPT (no %s). Run `factory codex-login`; Codex jobs wait until then.", c.file)
+		return fmt.Sprintf("Codex isn't signed in to ChatGPT (no %s). Sign in from the dashboard's Get started page; Codex jobs wait until then.", c.file)
 	}
 	c.out.Lock()
 	defer c.out.Unlock()
 	if c.outSet && c.outAt == sum {
-		return "Codex's ChatGPT sign-in has expired or was used elsewhere. Run `factory codex-login` again; Codex jobs wait until then."
+		return "Codex's ChatGPT sign-in has expired or was used elsewhere. Sign in again from the dashboard's Get started page; Codex jobs wait until then."
 	}
 	return ""
 }
@@ -138,7 +138,7 @@ func (a codexAdapter) prepare(ctx context.Context, req RunRequest, p runner.Path
 	auth, err := os.ReadFile(c.file)
 	if err != nil {
 		release()
-		return nil, nil, fmt.Errorf("codex: no ChatGPT sign-in: run `factory codex-login` (%w)", err)
+		return nil, nil, fmt.Errorf("codex: no ChatGPT sign-in: sign in from the dashboard's Get started page (%w)", err)
 	}
 	e := runEntry{Out: req.OutDir, Was: digest(auth)}
 	dir := filepath.Join(req.OutDir, codexHomeDir)

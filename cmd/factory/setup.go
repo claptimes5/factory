@@ -27,7 +27,7 @@ import (
 
 // envKeys are the settings `factory setup` asks for, in file order.
 var envKeys = []string{
-	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
+	"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "FACTORY_GITHUB_APP_SLUG", "GITHUB_TOKEN", "GITLAB_TOKEN",
 	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_CODEX_AUTH", "CODEX_ACCESS_TOKEN",
 	"FACTORY_NOTIFY_URL", "SENTRY_AUTH_TOKEN",
 }
@@ -172,11 +172,19 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	if err != nil {
 		return err
 	}
+	exported := envMap(startEnv)
 	for _, k := range envKeys {
 		// A GITHUB_TOKEN exported for other tools (gh, for one) is usually a
 		// broad personal token, so it is never picked up without asking.
 		if _, ok := vals[k]; !ok && k != "GITHUB_TOKEN" {
 			vals[k] = os.Getenv(k)
+		}
+		// The saved value stays the default, but say when an export will
+		// win at startup, by name only.
+		if v, ok := exported[k]; ok {
+			if saved, in := vals[k]; in && saved != "" && saved != v {
+				p.say("%s is set in the environment the factory starts with, so it overrides the one saved in %s.", k, filepath.Base(envPath))
+			}
 		}
 	}
 	save := func() error {
@@ -345,11 +353,9 @@ func setupClaude(p *prompter, vals map[string]string) {
 	for {
 		v := p.secret("Anthropic API key or subscription token", firstOf(vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"]))
 		vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"] = "", ""
-		switch {
-		case strings.HasPrefix(v, "sk-ant-oat"):
-			vals["CLAUDE_CODE_OAUTH_TOKEN"] = v
-		case strings.HasPrefix(v, "sk-ant-"):
-			vals["ANTHROPIC_API_KEY"] = v
+		switch k := claudeKey(v); {
+		case k != "":
+			vals[k] = v
 		case v == "":
 			p.say("factory.yaml routes jobs to Claude, so they can't run without one.")
 			if p.yes("Skip it for now?", false) {
@@ -364,6 +370,33 @@ func setupClaude(p *prompter, vals map[string]string) {
 			vals["ANTHROPIC_API_KEY"] = v
 		}
 		break
+	}
+}
+
+// claudeKey is the variable a Claude credential goes in: a subscription
+// token (sk-ant-oat...) or an API key (sk-ant-...). It is "" for anything
+// else, which doesn't look like either.
+func claudeKey(v string) string {
+	switch {
+	case strings.HasPrefix(v, "sk-ant-oat"):
+		return "CLAUDE_CODE_OAUTH_TOKEN"
+	case strings.HasPrefix(v, "sk-ant-"):
+		return "ANTHROPIC_API_KEY"
+	}
+	return ""
+}
+
+// codexClears are the keys each way of signing Codex in clears from the
+// settings: Codex would use them instead.
+var codexClears = map[string][]string{
+	codexAPIKey:      {"CODEX_API_KEY", "FACTORY_CODEX_AUTH", "CODEX_ACCESS_TOKEN"},
+	codexChatGPT:     {"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"},
+	codexAccessToken: {"OPENAI_API_KEY", "CODEX_API_KEY", "FACTORY_CODEX_AUTH"},
+}
+
+func clearKeys(vals map[string]string, keys []string) {
+	for _, k := range keys {
+		vals[k] = ""
 	}
 }
 
@@ -392,7 +425,7 @@ func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
 		case "1":
 			p.say("Paste an API key from https://platform.openai.com/api-keys.")
 			vals["OPENAI_API_KEY"] = p.secret("OpenAI API key", firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"]))
-			vals["CODEX_API_KEY"], vals["FACTORY_CODEX_AUTH"], vals["CODEX_ACCESS_TOKEN"] = "", "", ""
+			clearKeys(vals, codexClears[codexAPIKey])
 			if vals["OPENAI_API_KEY"] == "" {
 				p.say("Without it, reviews will fail until you add one or switch to Claude-only review.")
 			}
@@ -406,8 +439,8 @@ func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
 			p.say("  - Jobs cost $0 in the factory's budget; the plan's 5-hour and weekly limits")
 			p.say("    show in `./factory status` and on the dashboard's Spend page, and Codex")
 			p.say("    jobs wait when one is nearly used up.")
+			clearKeys(vals, codexClears[codexChatGPT])
 			vals["FACTORY_CODEX_AUTH"] = codexChatGPT
-			vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"], vals["CODEX_ACCESS_TOKEN"] = "", "", ""
 			if !signInCodex(p, cfg) {
 				p.say("Codex jobs wait until you sign in with: ./factory codex-login")
 			}
@@ -416,7 +449,7 @@ func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
 			p.say("See https://learn.chatgpt.com/codex/enterprise/access-tokens for how to make")
 			p.say("one. When it expires, make a new one and run setup again.")
 			vals["CODEX_ACCESS_TOKEN"] = p.secret("Codex access token", vals["CODEX_ACCESS_TOKEN"])
-			vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"], vals["FACTORY_CODEX_AUTH"] = "", "", ""
+			clearKeys(vals, codexClears[codexAccessToken])
 			if vals["CODEX_ACCESS_TOKEN"] == "" {
 				p.say("Without it, reviews will fail until you add one.")
 			}
@@ -472,17 +505,7 @@ func bothHosts(cfg *config.Config, gh, gl clientFor) clientFor {
 // GitLab repo. It returns nil if you chose to skip the check.
 func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[string]string) clientFor {
 	repos := gitlabRepos(cfg)
-	hosts := map[string]bool{}
-	for _, r := range repos {
-		rc, _ := cfg.RepoConf(r)
-		hosts[rc.Host] = true
-	}
-	var sorted []string
-	for h := range hosts {
-		sorted = append(sorted, h)
-	}
-	slices.Sort(sorted)
-	gitlabTokenHelp(p, sorted)
+	gitlabTokenHelp(p, gitlabHosts(cfg))
 	client := clientFor(func(repo string) (forge, github.TokenSource, error) {
 		ts := github.StaticToken(vals["GITLAB_TOKEN"])
 		return newForge(cfg, repo, ts), ts, nil
@@ -495,10 +518,8 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			if err := checkRepo(ctx, client, cfg, repo); err != nil {
 				failed = append(failed, repo)
 				p.say("That didn't work: %v", err)
-				if strings.Contains(err.Error(), "401") {
-					p.say("GitLab didn't accept the token. Check it was copied whole and hasn't expired.")
-				} else if strings.Contains(err.Error(), "404") {
-					p.say("The token can't see %s. A project token only reaches its own project; check the path too.", repo)
+				if h := gitlabHint(err, repo); h != "" {
+					p.say("%s", h)
 				}
 				continue
 			}
@@ -512,6 +533,54 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			return nil
 		}
 	}
+}
+
+// gitlabHint explains why a GitLab token couldn't reach repo, if it can.
+func gitlabHint(err error, repo string) string {
+	switch {
+	case strings.Contains(err.Error(), "401"):
+		return "GitLab didn't accept the token. Check it was copied whole and hasn't expired."
+	case strings.Contains(err.Error(), "404"):
+		return fmt.Sprintf("The token can't see %s. A project token only reaches its own project; check the path too.", repo)
+	}
+	return ""
+}
+
+// gitlabLegacyURL opens GitLab's form for a legacy personal token with
+// the scopes the factory needs already ticked.
+func gitlabLegacyURL(host string) string {
+	return "https://" + host + "/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository"
+}
+
+// gitlabTokensURL is the page fine-grained tokens are made on.
+func gitlabTokensURL(host string) string {
+	return "https://" + host + "/-/user_settings/personal_access_tokens"
+}
+
+// gitlabFineGrained are the permissions a fine-grained token needs on
+// each project, then on the User and Global tabs.
+var gitlabFineGrained = []string{
+	"Code: Download, Push",
+	"Project, Repository, Branch, Commit, Pipeline, Job, Member: Read",
+	"Work Item: Read, Create, Update",
+	"Merge Request: Read, Create, Update, Merge",
+	"Label: Read, Create",
+	"Markdown Upload: Create, Delete",
+}
+
+// gitlabHosts are the GitLab hosts the repos are on, sorted.
+func gitlabHosts(cfg *config.Config) []string {
+	hosts := map[string]bool{}
+	for _, r := range gitlabRepos(cfg) {
+		rc, _ := cfg.RepoConf(r)
+		hosts[rc.Host] = true
+	}
+	var sorted []string
+	for h := range hosts {
+		sorted = append(sorted, h)
+	}
+	slices.Sort(sorted)
+	return sorted
 }
 
 // gitlabTokenHelp asks which kind of GitLab token you want to make and
@@ -528,23 +597,20 @@ func gitlabTokenHelp(p *prompter, hosts []string) {
 		case "1":
 			for _, h := range hosts {
 				p.say("Open this link, set an expiry date and click Generate token:")
-				p.say("  https://%s/-/user_settings/personal_access_tokens?name=factory&scopes=api,write_repository", h)
+				p.say("  %s", gitlabLegacyURL(h))
 			}
 			p.say("It makes a personal token with the api and write_repository scopes. A project,")
 			p.say("group or bot account token with those scopes works too.")
 			return
 		case "2":
 			for _, h := range hosts {
-				p.say("Open https://%s/-/user_settings/personal_access_tokens and choose", h)
+				p.say("Open %s and choose", gitlabTokensURL(h))
 				p.say("Generate token > Fine-grained token.")
 			}
 			p.say("On the Group and project tab, add each project and give it:")
-			p.say("  Code: Download, Push")
-			p.say("  Project, Repository, Branch, Commit, Pipeline, Job, Member: Read")
-			p.say("  Work Item: Read, Create, Update")
-			p.say("  Merge Request: Read, Create, Update, Merge")
-			p.say("  Label: Read, Create")
-			p.say("  Markdown Upload: Create, Delete")
+			for _, l := range gitlabFineGrained {
+				p.say("  %s", l)
+			}
 			p.say("On the User tab, User: Read. On the Global tab, Metadata: Read.")
 			p.say("The search box finds each one; docs/configuration.md#gitlab-repos has the list.")
 			return
@@ -586,7 +652,7 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 				continue
 			}
 			vals["FACTORY_GITHUB_APP_ID"], vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["FACTORY_GITHUB_APP_KEY"] = id, inst, keyPath
-			vals["GITHUB_TOKEN"] = ""
+			vals["FACTORY_GITHUB_APP_SLUG"], vals["GITHUB_TOKEN"] = slug, ""
 			client = appClients(vals)
 		case "2":
 			vals["FACTORY_GITHUB_APP_ID"] = p.ask("App ID (under About on the app's settings page)", vals["FACTORY_GITHUB_APP_ID"])
@@ -610,13 +676,13 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 				p.say("The app isn't installed on %s. Install it from the app's settings page (Install App), then try again.", strings.Join(missing, " or "))
 				continue
 			}
-			vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["GITHUB_TOKEN"] = first, ""
+			vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["GITHUB_TOKEN"], vals["FACTORY_GITHUB_APP_SLUG"] = first, "", ""
 			client = appClients(vals)
 		case "3":
 			p.say("Create a fine-grained token at %s/settings/personal-access-tokens/new", githubWeb)
 			p.say("for %s only, with Contents, Issues and Pull requests set to Read and write.", list)
 			vals["GITHUB_TOKEN"] = p.secret("Token", vals["GITHUB_TOKEN"])
-			vals["FACTORY_GITHUB_APP_ID"], vals["FACTORY_GITHUB_INSTALLATION_ID"], vals["FACTORY_GITHUB_APP_KEY"] = "", "", ""
+			clearKeys(vals, githubAppKeys)
 			tok := github.StaticToken(vals["GITHUB_TOKEN"])
 			client = func(repo string) (forge, github.TokenSource, error) {
 				return &github.Client{Repo: repo, Tokens: tok, BaseURL: githubAPI}, tok, nil
@@ -634,12 +700,8 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			}
 			failed = append(failed, repo)
 			p.say("That didn't work: %v", err)
-			if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not installed") {
-				owner, _, _ := strings.Cut(repo, "/")
-				p.say("Check that the app or token has access to %s itself, not only to its owner.", repo)
-				if vals["FACTORY_GITHUB_APP_ID"] != "" {
-					p.say("For the app: open its settings, Install App, the gear next to %s, and add %s.", owner, repo)
-				}
+			for _, l := range githubHint(err, repo, vals["FACTORY_GITHUB_APP_ID"] != "") {
+				p.say("%s", l)
 			}
 		}
 		if len(failed) == 0 {
@@ -653,6 +715,23 @@ func setupGitHub(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 			return nil, nil
 		}
 	}
+}
+
+// githubAppKeys are the settings of a GitHub App, cleared when a token
+// takes its place.
+var githubAppKeys = []string{"FACTORY_GITHUB_APP_ID", "FACTORY_GITHUB_INSTALLATION_ID", "FACTORY_GITHUB_APP_KEY", "FACTORY_GITHUB_APP_SLUG"}
+
+// githubHint explains why GitHub access to repo failed, if it can.
+func githubHint(err error, repo string, app bool) []string {
+	if !strings.Contains(err.Error(), "422") && !strings.Contains(err.Error(), "404") && !strings.Contains(err.Error(), "not installed") {
+		return nil
+	}
+	owner, _, _ := strings.Cut(repo, "/")
+	out := []string{fmt.Sprintf("Check that the app or token has access to %s itself, not only to its owner.", repo)}
+	if app {
+		out = append(out, fmt.Sprintf("For the app: open its settings, Install App, the gear next to %s, and add %s.", owner, repo))
+	}
+	return out
 }
 
 // checkRepo reads a repo's base branch, or failing that the repo itself:
@@ -772,10 +851,10 @@ func parseRepoList(in string) ([]string, error) {
 		host, name := config.SplitRepo("", f)
 		path := strings.TrimPrefix(name, host+"/")
 		if host != "" {
-			if o, n, ok := strings.Cut(path, "/"); !ok || o == "" || n == "" || strings.Contains(path, "//") {
+			if !gitlabHostRE.MatchString(host) || !gitlabPathRE.MatchString(path) || !strings.Contains(path, "/") || dotSegment(path) {
 				return nil, fmt.Errorf("write %q as %s/group/project", f, host)
 			}
-		} else if o, n, ok := strings.Cut(name, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+		} else if !githubRepoRE.MatchString(name) || dotSegment(name) {
 			return nil, fmt.Errorf("write %q as owner/name, for example octocat/hello-world", f)
 		}
 		f = name
@@ -788,6 +867,19 @@ func parseRepoList(in string) ([]string, error) {
 		return nil, errors.New("name at least one repository, as owner/name")
 	}
 	return names, nil
+}
+
+// The names a repo may have, checked before they go in factory.yaml: a
+// GitHub owner and repo, or a GitLab host and group/project path.
+var (
+	githubRepoRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
+	gitlabHostRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$`)
+	gitlabPathRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$`)
+)
+
+// dotSegment says whether a path has a "." or ".." part.
+func dotSegment(path string) bool {
+	return slices.ContainsFunc(strings.Split(path, "/"), func(p string) bool { return p == "." || p == ".." })
 }
 
 // setRepos changes which repos the config lists, keeping the settings
@@ -820,7 +912,14 @@ func writeRepos(path string, repos []config.Repo) error {
 	}
 	var block string
 	if bare, _ := repos[0].MarshalYAML(); len(repos) == 1 && bare == repos[0].Name {
-		block = "repo: " + repos[0].Name + "\n"
+		// Through YAML, so a name that needs quoting gets it.
+		one, err := yaml.Marshal(struct {
+			Repo string `yaml:"repo"`
+		}{repos[0].Name})
+		if err != nil {
+			return err
+		}
+		block = string(one)
 	} else {
 		var buf bytes.Buffer
 		enc := yaml.NewEncoder(&buf)

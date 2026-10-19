@@ -175,3 +175,52 @@ func TestReadinessLinksIssuesAndStatusSumsUp(t *testing.T) {
 		t.Fatalf("not linked: %+v", r.Findings[0].Issue)
 	}
 }
+
+// The dashboard's File and start work does what -queue does, and says so.
+func TestFileReadinessFromTheDashboard(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, filed: []map[string]any{
+		{"number": 3, "title": "Start a feature map", "body": "x\n<!-- factory-readiness: feature-map -->", "state": "open", "labels": []map[string]string{{"name": "factory:readiness"}}},
+	}}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeline.Pipeline{Cfg: cfg, ClientsFor: func(repo string) pipeline.RepoClients {
+		return pipeline.RepoClients{GH: &github.Client{Repo: repo, BaseURL: srv.URL, Tokens: github.StaticToken("t")}}
+	}}
+	oldAssess := assess
+	t.Cleanup(func() { assess = oldAssess })
+	incomplete := false
+	assess = func(_ context.Context, _ *config.Config, p *pipeline.Pipeline, repo string, _ io.Writer) (*readiness.Report, error) {
+		if !strings.HasPrefix(p.JobPrefix, "ready") {
+			t.Errorf("job prefix %q would collide with the daemon's containers", p.JobPrefix)
+		}
+		return &readiness.Report{Repo: repo, Branch: "main", Ready: true, Incomplete: incomplete, Findings: []readiness.Finding{
+			{Level: readiness.Gap, Issue: &readiness.Issue{Key: "feature-map", Title: "Start a feature map"}},
+			{Level: readiness.Gap, Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests"}},
+		}}, nil
+	}
+	msg, err := fileReadiness(context.Background(), cfg, p, "o/r", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg != "Opened 1 issue(s) on o/r (1 already filed). Labeled 1 issue(s) filed earlier factory:ready, now that the blockers are fixed." {
+		t.Fatal(msg)
+	}
+	if strings.Join(f.issues, "|") != "/repos/o/r/issues Add end-to-end smoke tests factory:readiness,factory:ready" ||
+		strings.Join(f.labeled, "|") != "/repos/o/r/issues/3/labels factory:ready" {
+		t.Fatalf("issues %v, labeled %v", f.issues, f.labeled)
+	}
+	r, err := readiness.Load(readinessDir(cfg), "o/r")
+	if err != nil || r == nil || r.Findings[1].Issue.Number == 0 {
+		t.Fatalf("saved %+v, %v", r, err)
+	}
+
+	f.issues, f.labeled = nil, nil
+	incomplete = true
+	if msg, err := fileReadiness(context.Background(), cfg, p, "o/r", false); err != nil || !strings.Contains(msg, "nothing was filed") || len(f.issues) != 0 {
+		t.Fatalf("msg %q, err %v, issues %v", msg, err, f.issues)
+	}
+}

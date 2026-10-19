@@ -282,26 +282,56 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if !ok {
 		return fmt.Errorf("no client for its host")
 	}
+	msg, err := fileReport(ctx, cfg, gh, r, queue)
+	if msg != "" {
+		fmt.Println(msg)
+	}
+	return err
+}
+
+// fileReport files an issue for each of the report's gaps that has none,
+// and with queue labels the ones filed earlier, now the repo is ready. It
+// saves the report with its issues linked and says what it did.
+func fileReport(ctx context.Context, cfg *config.Config, gh forge, r *readiness.Report, queue bool) (string, error) {
 	todo, waiting, skipped, err := planIssues(ctx, gh, r, cfg.Intake.Label)
 	if err != nil {
-		return err
+		return "", err
 	}
 	filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
 	if _, serr := readiness.Save(readinessDir(cfg), r); err == nil {
 		err = serr
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
-	fmt.Printf("Opened %d issue(s) on %s%s.\n", len(filed), repo, skippedNote(skipped))
+	msg := fmt.Sprintf("Opened %d issue(s) on %s%s.", len(filed), r.Repo, skippedNote(skipped))
 	if !queue || len(waiting) == 0 {
-		return nil
+		return msg, nil
 	}
 	if err := queueIssues(ctx, gh, waiting, cfg.Intake.Label); err != nil {
-		return err
+		return msg, err
 	}
-	fmt.Printf("Labeled %d issue(s) filed earlier %s, now that the blockers are fixed.\n", len(waiting), cfg.Intake.Label)
-	return nil
+	return msg + fmt.Sprintf("\nLabeled %d issue(s) filed earlier %s, now that the blockers are fixed.", len(waiting), cfg.Intake.Label), nil
+}
+
+// fileReadiness is the dashboard's File issues (and with queue, File and
+// start work): the check again on repo, then its issues filed as
+// `factory readiness -file` (or -queue) does.
+func fileReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, queue bool) (string, error) {
+	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
+	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	if err != nil {
+		return "", err
+	}
+	if r.Incomplete {
+		return "The check couldn't finish, so nothing was filed. Fix what it found, then try again.", nil
+	}
+	gh, ok := daemon.GitHubFor(repo).(forge)
+	if !ok {
+		return "", fmt.Errorf("no client for %s's host", repo)
+	}
+	msg, err := fileReport(ctx, cfg, gh, r, queue)
+	return strings.ReplaceAll(msg, "\n", " "), err
 }
 
 func skippedNote(n int) string {

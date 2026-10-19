@@ -295,7 +295,7 @@ func TestCodexPlanSignedOutHoldsItsJobsUntilANewSignIn(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 	g := h.(Gated)
-	if why := g.Unavailable(); !strings.Contains(why, "factory codex-login") {
+	if why := g.Unavailable(); !strings.Contains(why, "Get started page") {
 		t.Fatalf("unavailable = %q", why)
 	}
 	// `factory codex-login` saves a new sign-in: jobs may start again.

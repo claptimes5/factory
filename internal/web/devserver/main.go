@@ -67,6 +67,7 @@ func (r *restarter) RequestRestart(context.Context) int { r.pending.Store(true);
 func (r *restarter) CancelRestart(context.Context) bool { return r.pending.Swap(false) }
 func (r *restarter) RestartPending() bool               { return r.pending.Load() }
 func (r *restarter) Running() int                       { return 1 }
+func (r *restarter) RestartWaitsFor() string            { return "" }
 
 // sampleConfig is the factory.yaml the Settings screen edits.
 const sampleConfig = `# A sample factory.yaml for the devserver.
@@ -132,9 +133,10 @@ func main() {
 	if err := seedChats(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	rs := &restarter{}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
-		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
+		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
 		SteerUnsupported: func(j *store.Job) string {
 			if j.Kind != "implement" || j.Harness != "claude" {
@@ -142,9 +144,10 @@ func main() {
 			}
 			return ""
 		},
-		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports),
+		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports), FileReadiness: fileIssues(reports),
 		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Chat:         &chatter{st: st},
+		Wizard:       newWizard(rs),
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
@@ -181,8 +184,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// GitHub's new-app form, faked here so the app flow runs offline.
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /fake-github/settings/apps/new", fakeGitHub)
+	mux.Handle("/", h)
 	log.Printf("dashboard on http://%s/app/", *listen)
-	srv := &http.Server{Addr: *listen, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -691,6 +698,28 @@ func recheck(dir string) func(context.Context, string) error {
 		r.Started = time.Now().UTC()
 		_, err = readiness.Save(dir, r)
 		return err
+	}
+}
+
+// fileIssues is the check again, then says what it would file. It
+// changes nothing, so every browser test sees the same report.
+func fileIssues(dir string) func(context.Context, string, bool) (string, error) {
+	check := recheck(dir)
+	return func(ctx context.Context, repo string, _ bool) (string, error) {
+		if err := check(ctx, repo); err != nil {
+			return "", err
+		}
+		r, err := readiness.Load(dir, repo)
+		if err != nil || r == nil {
+			return "", fmt.Errorf("devserver: no report for %s", repo)
+		}
+		n := 0
+		for _, f := range r.Findings {
+			if f.Issue != nil && f.Issue.Number == 0 {
+				n++
+			}
+		}
+		return fmt.Sprintf("Opened %d issue(s) on %s.", n, repo), nil
 	}
 }
 

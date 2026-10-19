@@ -841,3 +841,20 @@ func TestDeletedLessonIsDeclined(t *testing.T) {
 		t.Fatal("the deleted line was proposed again")
 	}
 }
+
+func TestJobsWaitForTheirImage(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	var building []string
+	e.p.Building = func() []string { return building }
+	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 9, "x")
+	id, _ := e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "triage", Harness: "claude", Model: "haiku", BudgetUSD: 1})
+	building = []string{e.p.repoConf("o/r").Image}
+	if j, err := e.p.claimNext(ctx); err != nil || j != nil {
+		t.Fatalf("claimed %+v, %v while its image builds", j, err)
+	}
+	building = nil
+	if j, err := e.p.claimNext(ctx); err != nil || j == nil || j.ID != id {
+		t.Fatalf("claimed %+v, %v once it was built", j, err)
+	}
+}

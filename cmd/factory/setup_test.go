@@ -98,13 +98,58 @@ func TestSetupStopsWhenInputEnds(t *testing.T) {
 	cfgPath := testConfig(t, "o/r")
 	cfg, _ := config.Load(cfgPath)
 	var b strings.Builder
-	p := &prompter{in: bufio.NewReader(strings.NewReader("\n")), out: &b}
+	// Repos kept, Docker not checked again: input ends at GitHub.
+	p := &prompter{in: bufio.NewReader(strings.NewReader("\nn\n")), out: &b}
 	err := setup(context.Background(), cfgPath, cfg, filepath.Join(t.TempDir(), "factory.env"), p)
 	if !errors.Is(err, errInputClosed) {
 		t.Fatalf("err = %v, want errInputClosed", err)
 	}
+	if !strings.Contains(b.String(), "3. Use a personal access token") {
+		t.Fatalf("didn't reach GitHub's question:\n%s", b.String())
+	}
 	if strings.Contains(b.String(), "[3]") {
 		t.Fatal("an exported GITHUB_TOKEN must not become the default")
+	}
+}
+
+// An exported GITHUB_TOKEN is never the default nor written to
+// factory.env, and a saved key an export overrides stays saved, with its
+// name (never a value) said.
+func TestSetupKeepsSavedValuesOverExports(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_from_gh")
+	old := startEnv
+	startEnv = append(slices.Clone(old), "GITHUB_TOKEN=ghp_from_gh", "ANTHROPIC_API_KEY=sk-ant-api03-exported")
+	t.Cleanup(func() { startEnv = old })
+	envPath := filepath.Join(t.TempDir(), "factory.env")
+	if err := os.WriteFile(envPath, []byte("ANTHROPIC_API_KEY=sk-ant-api03-saved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(&fakeGitHub{})
+	t.Cleanup(srv.Close)
+	oldAPI, oldRun := githubAPI, runCmd
+	githubAPI = srv.URL
+	runCmd = func(io.Writer, string, ...string) error { return errors.New("no docker") }
+	t.Cleanup(func() { githubAPI, runCmd = oldAPI, oldRun })
+	cfgPath := testConfig(t, "o/r")
+	cfg, _ := config.Load(cfgPath)
+	var b strings.Builder
+	p := &prompter{in: bufio.NewReader(strings.NewReader("\nn\n")), out: &b}
+	if err := setup(context.Background(), cfgPath, cfg, envPath, p); !errors.Is(err, errInputClosed) {
+		t.Fatalf("err = %v", err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "ANTHROPIC_API_KEY is set in the environment the factory starts with") || strings.Contains(out, "exported\n") || strings.Contains(out, "sk-ant-api03-exported") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if strings.Contains(out, "GITHUB_TOKEN is set") {
+		t.Fatal("warned about a GITHUB_TOKEN that isn't saved")
+	}
+	vals, err := readEnvFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals["GITHUB_TOKEN"] != "" || vals["ANTHROPIC_API_KEY"] != "sk-ant-api03-saved" {
+		t.Fatalf("saved %v", vals)
 	}
 }
 
@@ -124,9 +169,21 @@ type fakeGitHub struct {
 	filed    []map[string]any    // issues the check filed before, if set
 	labeled  []string            // path and labels added to issues
 	yaml     func(string) string // edits factory.yaml before setup reads it
+	gone     bool                // the app was uninstalled
+	slow     string              // a repo whose requests never get an answer
+	denied   string              // a repo whose requests get a 401
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if f.slow != "" && (r.URL.Path == "/repos/"+f.slow || strings.HasPrefix(r.URL.Path, "/repos/"+f.slow+"/")) {
+		<-r.Context().Done()
+		return
+	}
+	if f.denied != "" && (r.URL.Path == "/repos/"+f.denied || strings.HasPrefix(r.URL.Path, "/repos/"+f.denied+"/")) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message":"Bad credentials"}`))
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auth = append(f.auth, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
@@ -177,6 +234,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		der := x509.MarshalPKCS1PrivateKey(f.key)
 		j(map[string]any{"id": 42, "slug": "factory-r-ab12", "html_url": "https://github.com/apps/factory-r-ab12", "owner": map[string]string{"login": "o"},
 			"pem": string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}))})
+	case f.gone && (r.URL.Path == "/app/installations" || r.URL.Path == "/repos/o/r/installation"):
+		if r.URL.Path == "/app/installations" {
+			j([]any{})
+		} else {
+			w.WriteHeader(404)
+		}
 	case r.URL.Path == "/app/installations":
 		j([]map[string]any{{"id": 77, "account": map[string]string{"login": "someone-else"}}, {"id": 55, "account": map[string]string{"login": "O"}}})
 	case r.URL.Path == "/repos/o/r/installation":
@@ -194,6 +257,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		j(map[string]string{"name": name})
+	case r.URL.Path == "/repos/o/r/labels" && r.Method == "GET":
+		var names []map[string]string
+		for n, ok := range f.labels {
+			if ok {
+				names = append(names, map[string]string{"name": n})
+			}
+		}
+		for _, n := range f.created {
+			names = append(names, map[string]string{"name": n})
+		}
+		j(names)
 	case r.URL.Path == "/repos/o/r/labels" && r.Method == "POST":
 		var l struct{ Name string }
 		json.NewDecoder(r.Body).Decode(&l)
@@ -344,7 +418,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 	if web.Image != cfg.Runner.Image || strings.Join(web.Gates.Required, ",") != "test,build" || web.Gates.DiffGuard.MaxChangedLines == 0 {
 		t.Fatalf("o/web = %+v %+v", web, web.Gates)
 	}
-	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --build-arg BASE=ruby:3.3.6-bookworm ") {
+	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --label io.factory.built=1 --build-arg BASE=ruby:3.3.6-bookworm ") {
 		t.Fatalf("built %q", built)
 	}
 	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o__api:latest") {

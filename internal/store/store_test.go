@@ -459,3 +459,35 @@ func TestEnqueueSoleAcrossHandles(t *testing.T) {
 		t.Fatal("another kind was refused")
 	}
 }
+
+func TestClaimHoldsReposBeingBuilt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _ := openTest(t)
+	it, _, _ := s.UpsertItem(ctx, "o/web", 7, "a web change")
+	web, _ := s.EnqueueJob(ctx, Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "m", BudgetUSD: 1})
+	learn, _ := s.EnqueueJob(ctx, Job{Kind: "learn", Harness: "claude", Model: "m", BudgetUSD: 1, Input: `{"repo":"o/web"}`})
+	orch, _ := s.EnqueueJob(ctx, Job{Kind: "orchestrate", Harness: "claude", Model: "m", BudgetUSD: 1})
+	// o/web's image is building: only the job for no repo starts.
+	j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web"})
+	if err != nil || j == nil || j.ID != orch {
+		t.Fatalf("claimed %+v, %v; want the orchestrator's job %d", j, err, orch)
+	}
+	if j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web", ""}); err != nil || j != nil {
+		t.Fatalf("claimed %+v, %v while every image builds", j, err)
+	}
+	got := map[int64]bool{}
+	for {
+		j, err := s.ClaimJobHolding(ctx, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j == nil {
+			break
+		}
+		got[j.ID] = true
+	}
+	if !got[web] || !got[learn] {
+		t.Fatalf("after the build: %v", got)
+	}
+}

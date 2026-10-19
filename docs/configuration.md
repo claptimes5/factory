@@ -216,7 +216,7 @@ repos:
 | Key | What it does |
 | --- | --- |
 | `install` | Runs first on each commit's export, with the network on. If it fails, nothing else runs. The builder is told to run it too, along with the repo's own check commands. |
-| `image_from` | The base for the repo's job image: any Debian or Ubuntu image with the toolchain. `./factory images` builds the missing images (`--rebuild` rebuilds them all). |
+| `image_from` | The base for the repo's job image: any Debian or Ubuntu image with the toolchain. `factory serve` builds the missing images as it starts, and jobs wait for them; `./factory images` builds them too (`--rebuild` rebuilds them all). Old copies are removed ([Job images](setup.md#job-images)). |
 | `image` | An image you build yourself, when there's no `image_from`. It needs the agent CLIs, so start it from `deploy/job-image/Dockerfile` with `--build-arg BASE=...`. |
 | `env` | Set in the repo's agent and gate containers. A top-level `env` applies to every repo. Agents can read it, so it is not for secrets. |
 
@@ -1120,7 +1120,7 @@ previews:
 **The job image needs Chromium.** Screenshots are taken with the job
 image's own Playwright, so the repo doesn't depend on it. `factory images`
 builds a repo's image with `--build-arg PLAYWRIGHT=1` once it has a
-`preview`; run `factory images --force` after adding one. An image you
+`preview`; run `factory images --rebuild` after adding one. An image you
 build yourself needs Playwright installed globally (`npm install -g
 playwright && playwright install --with-deps chromium`, with `NODE_PATH`
 pointing at the global modules). Without it, the PR says so and the build

@@ -118,10 +118,16 @@ type Pipeline struct {
 	// ClientsFor makes a repo's clients, once per repo. Without it GH and
 	// Git serve every repo, which is how tests run one.
 	ClientsFor func(repo string) RepoClients
-	GH         GitHub
-	Git        *Git
-	Runner     runner.Runner
-	Harnesses  map[string]harness.Harness
+	// Building names the job images being built right now (may be nil):
+	// jobs that run in one wait in the queue until it is built.
+	Building func() []string
+	// Busy names other work a restart must not cut off, such as "the
+	// job image build", or is "" (may be nil).
+	Busy      func() string
+	GH        GitHub
+	Git       *Git
+	Runner    runner.Runner
+	Harnesses map[string]harness.Harness
 	// Secrets maps a harness name to the env vars injected into its jobs.
 	Secrets map[string]map[string]string
 	Log     *slog.Logger
@@ -346,8 +352,13 @@ func (p *Pipeline) RequestRestart(ctx context.Context) int {
 	n := p.Running() // after the flag, so no job starts uncounted
 	if first {
 		msg := "Restarting to apply new settings."
-		if n > 0 {
+		switch busy := p.RestartWaitsFor(); {
+		case n > 0 && busy != "":
+			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s and %s is done.", n, plural(n, "job finishes", "jobs finish"), busy)
+		case n > 0:
 			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s.", n, plural(n, "job finishes", "jobs finish"))
+		case busy != "":
+			msg = "Restarting to apply new settings once " + busy + " is done."
 		}
 		p.notify(ctx, msg)
 	}
@@ -366,6 +377,14 @@ func (p *Pipeline) CancelRestart(ctx context.Context) bool {
 
 // RestartPending says whether a restart is waiting on running jobs.
 func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
+
+// RestartWaitsFor names the work besides jobs a restart waits for, or "".
+func (p *Pipeline) RestartWaitsFor() string {
+	if p.Busy == nil {
+		return ""
+	}
+	return p.Busy()
+}
 
 // Running is how many jobs this daemon is running, chat replies included.
 func (p *Pipeline) Running() int {
@@ -431,7 +450,7 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 // when no job is left running.
 func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	if p.restart.Load() {
-		if p.Running() == 0 {
+		if p.Running() == 0 && p.RestartWaitsFor() == "" {
 			return ErrRestart
 		}
 		return nil
@@ -524,7 +543,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos()); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -542,7 +561,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx))
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos())
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -551,7 +570,40 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobSkipping(ctx, except, p.heldHarnesses(ctx))
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos())
+}
+
+// heldRepos are the repos whose job image is being built, with the repos
+// that share a workspace with one; "" when the image of jobs for no repo
+// (the orchestrator's, tuning's) is.
+func (p *Pipeline) heldRepos() []string {
+	if p.Building == nil {
+		return nil
+	}
+	building := p.Building()
+	if len(building) == 0 {
+		return nil
+	}
+	var out []string
+	add := func(r string) {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	if slices.Contains(building, p.Cfg.Runner.Image) {
+		add("")
+	}
+	for _, r := range p.Cfg.RepoNames() {
+		if !slices.Contains(building, p.repoConf(r).Image) {
+			continue
+		}
+		add(r)
+		_, members := p.Cfg.Workspace(r)
+		for _, m := range members {
+			add(m)
+		}
+	}
+	return out
 }
 
 // pausedHarnesses are the harnesses whose subscription window is used up

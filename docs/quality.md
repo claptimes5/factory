@@ -635,9 +635,13 @@ A blocker the factory fixed stays on the report until the check runs
 again, since only a fresh run proves it. **Check again** on that screen
 runs it in the background on the base branch as it is now, so a fix made
 outside the factory counts too. It runs the repo's install and checks the
-way a build's gates do and files nothing, one repo at a time. Like
-Settings, it needs the dashboard password or a browser on the factory's
-own machine; otherwise the screen shows the command to run.
+way a build's gates do and files nothing, one repo at a time.
+**File issues** checks again, then files an issue for each gap that has
+none, as `factory readiness -file` does. **File and start work** also
+adds the intake label, as `-queue` does: to the blockers while there are
+any, and once the repo is ready to the issues filed earlier too. Like
+Settings, these need the dashboard password or a browser on the
+factory's own machine.
 
 For what a new repo needs to pass, see [new-project.md](new-project.md).
 

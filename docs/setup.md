@@ -1,6 +1,7 @@
 # Setup
 
-This guide covers installing the factory, what `factory setup` does, running
+This guide covers installing the factory, the dashboard's get-started page
+and what `factory setup` does, running
 it as a service, upgrading, and doing every setup step by hand. For the
 short version, see the [Quickstart](../README.md#quickstart).
 
@@ -37,9 +38,13 @@ and for [services](configuration.md#services-databases-and-the-like).
 ```sh
 git clone https://github.com/claptimes5/factory && cd factory
 sh scripts/install.sh
-./factory setup
 ./factory serve
 ```
+
+Then open http://127.0.0.1:8080/app/get-started and follow the steps (see
+[Setting up in the browser](#setting-up-in-the-browser)). On a server, or
+in a script, run `./factory setup` in a terminal instead: it asks the same
+things (see [What setup asks for](#what-setup-asks-for)).
 
 `scripts/install.sh` checks Go, git and Docker (and Node with `--web`), and
 for anything missing or too old prints the command that fixes it on your
@@ -51,7 +56,7 @@ builds `./factory`. To build by hand instead:
 CGO_ENABLED=0 go build -o factory ./cmd/factory
 ```
 
-Then open the dashboard at http://127.0.0.1:8080/app/. If setup's
+Once setup is done the dashboard is at http://127.0.0.1:8080/app/. If setup's
 readiness check found blockers, the dashboard's **Setup** screen shows what
 each repo still needs and follows the factory's work on it; once it says
 the repo is ready, label an issue `factory:ready`.
@@ -60,6 +65,90 @@ One thing setup can't do for you: **protect `main`**. In the repo's
 settings, require a pull request with your review and the `test` and `web`
 checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
 `factory.yaml`, `prompts/` and the lint config.
+
+## Setting up in the browser
+
+Until the factory can reach your repos, `./factory serve` doesn't stop with
+an error: it starts the dashboard with only its get-started page, prints
+
+```
+Open http://127.0.0.1:8080/app/get-started to finish setup.
+```
+
+and every other screen leads there. The page is a list of steps, each
+marked done, needing attention, or optional, with the next one open:
+
+1. **This machine:** the same checks as `./factory doctor` runs on the
+   machine, each problem with its fix, and a Re-check button.
+2. **Repositories:** which repos the factory works on, saved in
+   `factory.yaml`.
+3. **GitHub:** "Create an app for me" sends you to GitHub with a new app
+   filled in, with only the permissions the factory needs. Click "Create
+   GitHub App" and GitHub brings you back; the app's key is saved next to
+   `factory.env`. Then install it from the link the page shows and press
+   Check. You can use an app you already made (its ID and the path of its
+   key on the factory's machine) or, for a quick try, a personal access
+   token. The page then checks it can reach each repo, says when a repo's
+   default branch differs from the one the factory uses, and shows which of
+   the factory's labels each repo is missing, with a button that creates
+   just those.
+4. **GitLab** (with GitLab repos): links to make a legacy or fine-grained
+   token, and the same access and label checks.
+5. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
+   same choices as `factory setup`. For a ChatGPT plan, **Sign in** runs
+   Codex's device-code sign-in on the factory's machine and shows the link
+   and code to enter, with a Cancel button. A code nobody enters within
+   20 minutes ends the sign-in. The page says when you're
+   signed in. Only someone who may save settings sees the code.
+6. **Notifications** and **Sentry** (both optional), with a button that
+   sends a test notification.
+7. **Job images:** which are built, and a Build button that builds the
+   missing ones while you watch the log. A build `factory serve` started
+   on its own shows here too, and the two never run at once.
+8. **Finish**, once the factory can reach every repo, and not while an
+   image builds or a Codex sign-in runs. If something won't
+   work yet (no model key, say), it says what. Finish restarts the factory
+   with the new settings and the page opens the dashboard when it's up.
+
+The page reads the settings as the factory will run with them: a
+variable exported where the factory starts wins over the one saved in
+`factory.env`, as at startup. That includes a `GITHUB_TOKEN` exported for
+other tools such as `gh`: unset it where the factory starts if the
+factory shouldn't use it. `factory setup` in the terminal offers what is
+saved instead, takes an exported value only for a key the file lacks,
+and never takes an exported `GITHUB_TOKEN`. Both name each saved key an
+export overrides.
+
+Saved keys and tokens never come back to the browser: the page shows only
+whether each is set and its first and last few characters. Answers go in
+the same files, the same way, as `factory setup` writes them. Saving needs
+the dashboard's password, or the browser on the factory's machine itself
+(an SSH tunnel counts); see [security](security.md).
+
+The page stays at `/app/get-started` once the factory runs, linked from
+the Settings and Setup screens, so you can change a key or a repo later or
+see whether setup is still complete: each time it opens it checks again
+that the factory reaches each repo, that the app is still installed and
+that the labels are there. Finish then restarts the factory to apply what
+changed, once running jobs finish.
+
+## Job images
+
+Jobs run in Docker images built from `deploy/job-image/Dockerfile`. When
+`factory serve` starts, it builds any of them that are missing in the
+background, one at a time. Jobs that need an image wait until it is
+built, then start. A build that takes over an hour is stopped, and a
+restart asked for meanwhile waits for the build and says so. If a build fails, the factory logs it and sends it to
+your phone, and those jobs fail as they would without the image. You can
+also build them from the dashboard's get-started page, or with
+`./factory images` (`--rebuild` rebuilds them all).
+
+Every image the factory builds has the label `io.factory.built=1`. A
+rebuild leaves the old copy without a tag, so the factory removes those
+old copies after each build, when `serve` starts, and about once an
+hour. It only removes unused images with that label, never your own.
+An image a repo names with `image` (and no `image_from`) is yours to
+build: the factory only tells you when it is missing.
 
 ## Checking your setup
 
@@ -100,8 +189,9 @@ daemon starts anyway.
 
 ## What setup asks for
 
-`factory setup` walks you through everything else and checks each answer
-before moving on:
+`factory setup` is the terminal version of the get-started page, for a
+server or a script. It walks you through everything else and checks each
+answer before moving on:
 
 1. **Repositories:** which repos the factory works on, one or several. It
    updates `factory.yaml`. For each repo it suggests checks and a job image
@@ -182,8 +272,9 @@ Know the trade-offs before you choose it:
   other way round.
 - **If the sign-in stops working,** for example because it was used on
   another machine, the job goes back in the queue without using a retry,
-  Codex jobs wait, and you're notified once. Run `./factory codex-login`
-  again; the running factory picks it up. A job is queued again this way
+  Codex jobs wait, and you're notified once. Sign in again on the
+  dashboard's get-started page, or with `./factory codex-login`; the
+  running factory picks it up. A job is queued again this way
   at most twice; after that it fails as usual.
 
 `./factory status` shows the sign-in and when it was last refreshed. It
@@ -250,8 +341,9 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
 
 `factory setup` is the easy way. If you'd rather do each step yourself:
 
-1. **Build the job images:** `./factory images`. The default one is
-   `docker build -t factory-job:latest deploy/job-image`.
+1. **Build the job images:** `./factory images`, or let `factory serve`
+   build them as it starts. The default one is
+   `docker build -t factory-job:latest --label io.factory.built=1 deploy/job-image`.
 
 2. **Create a GitHub App.** The factory acts on GitHub as this app, so its
    access is limited to one repo and a few permissions you choose

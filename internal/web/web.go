@@ -110,7 +110,11 @@ type Server struct {
 	// label that hands an issue to the factory.
 	ReadinessDir   string
 	CheckReadiness func(ctx context.Context, repo string) error
-	IntakeLabel    string
+	// FileReadiness checks a repo again and files an issue for each gap
+	// that has none, as `factory readiness -file` does, or -queue with
+	// queue. It says what it did.
+	FileReadiness func(ctx context.Context, repo string, queue bool) (string, error)
+	IntakeLabel   string
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the
 	// percent of a window that holds their jobs.
@@ -120,6 +124,12 @@ type Server struct {
 	// Orchestrator what the dashboard says about the orchestrator.
 	Chat         Chatter
 	Orchestrator OrchestratorInfo
+	// Wizard runs the get-started page (nil for none). SetupMode serves
+	// that page alone, for a factory that can't start until it's done;
+	// SetupReason says why it can't.
+	Wizard      Wizard
+	SetupMode   bool
+	SetupReason string
 
 	ready      readinessRun
 	tmpl       *template.Template
@@ -185,7 +195,20 @@ func (s *Server) Handler() (http.Handler, error) {
 	if s.pollPeriod == 0 {
 		s.pollPeriod = 500 * time.Millisecond
 	}
-	static, _ := fs.Sub(assets, "static")
+	if s.SetupMode && s.Wizard != nil {
+		mux, err := s.setupHandler()
+		if err != nil {
+			return nil, err
+		}
+		if s.Login != nil && s.Login.Password != "" {
+			return s.guard(s.Login.wrap(mux)), nil
+		}
+		return s.guard(mux), nil
+	}
+	static, err := staticFS()
+	if err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("GET /{$}", s.needsYou)
@@ -207,6 +230,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	s.routesReadiness(mux)
 	s.routesUsage(mux)
 	s.routesChat(mux)
+	s.routesWizard(mux)
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}
@@ -215,6 +239,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	}
 	return s.guard(mux), nil
 }
+
+func staticFS() (fs.FS, error) { return fs.Sub(assets, "static") }
 
 // guard refuses requests whose Host is not one the control room serves,
 // so a DNS-rebinding page cannot reach it under its own name, and
