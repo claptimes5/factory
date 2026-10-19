@@ -56,6 +56,37 @@ type APIItem struct {
 	EstimateWaiting bool `json:"estimate_waiting"`
 	// PlanWaiting: the item waits for your OK on its plan.
 	PlanWaiting bool `json:"plan_waiting"`
+	// ChoiceJobID is the job a parked item's choices act on, and Choices
+	// what a person can do next; null and empty unless it is parked.
+	ChoiceJobID *int64      `json:"choice_job_id"`
+	Choices     []APIChoice `json:"choices"`
+}
+
+// APIChoice is one thing a person can do next with a job that ended,
+// said plainly, with the model it would run on.
+type APIChoice struct {
+	Action    string `json:"action"` // continue, retry, tier_up or park
+	Label     string `json:"label"`
+	Model     string `json:"model"` // harness/model; "" for park
+	Explain   string `json:"explain"`
+	Available bool   `json:"available"`
+	Why       string `json:"why"` // why it isn't available
+}
+
+// APIStop is how a build that ran out of turns or budget stopped.
+type APIStop struct {
+	Reason    string  `json:"reason"` // turns or budget
+	Summary   string  `json:"summary"`
+	Turns     int     `json:"turns"`
+	MaxTurns  int     `json:"max_turns"`
+	CostUSD   float64 `json:"cost_usd"`
+	BudgetUSD float64 `json:"budget_usd"`
+	// Note is what the builder wrote down before it stopped.
+	Note string `json:"note"`
+	// Kept: its checkout is still there to continue in.
+	Kept bool `json:"kept"`
+	// SavedDiff: its work against the base branch can be read (saved-diff).
+	SavedDiff bool `json:"saved_diff"`
 }
 
 // APIPlan is the plan the builder wrote before building a big item.
@@ -278,6 +309,14 @@ type APIJobDetail struct {
 	Gates []APIGate `json:"gates"`
 	// CanAttach says whether a live terminal can be opened.
 	CanAttach bool `json:"can_attach"`
+	// Stop is set when the build ran out of turns or budget.
+	Stop *APIStop `json:"stop"`
+	// Choices are what a person can do next, once the job has ended.
+	Choices []APIChoice `json:"choices"`
+	// CanSteer: a message sent now reaches the agent; SteerNote says why
+	// not, for a running job that can't take them.
+	CanSteer  bool   `json:"can_steer"`
+	SteerNote string `json:"steer_note"`
 }
 
 // APIFinding is one reviewer finding.
@@ -400,6 +439,9 @@ type APINotification struct {
 	Detail string `json:"detail"`
 	ItemID *int64 `json:"item_id"`
 	At     string `json:"at"`
+	// For a parked item, what a person can do right here.
+	ChoiceJobID *int64      `json:"choice_job_id"`
+	Choices     []APIChoice `json:"choices"`
 }
 
 // APINotifications is the notifications center.
@@ -459,6 +501,10 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 	a.PRs, a.PRURL = s.linkedPRs(ctx, it)
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
+	}
+	a.Choices = []APIChoice{}
+	if it.Stage == state.Parked {
+		a.ChoiceJobID, a.Choices = s.itemChoices(ctx, it.ID)
 	}
 	if e != nil {
 		a.Estimate = e.Range()
@@ -663,6 +709,31 @@ func apiFindings(v *verdict.Review) []APIFinding {
 	return out
 }
 
+// itemChoices are what a person can do with a parked item: the choices
+// on its latest job (the one Retry acts on).
+func (s *Server) itemChoices(ctx context.Context, itemID int64) (*int64, []APIChoice) {
+	if s.Choices == nil {
+		return nil, []APIChoice{}
+	}
+	jobs, err := s.sortedJobs(ctx, itemID)
+	if err != nil {
+		return nil, []APIChoice{}
+	}
+	for i := len(jobs) - 1; i >= 0; i-- {
+		j := jobs[i]
+		if store.IsSubKind(j.Kind) || !j.State.Terminal() {
+			continue
+		}
+		cs := s.Choices(ctx, j.ID)
+		if cs == nil {
+			cs = []APIChoice{}
+		}
+		id := j.ID
+		return &id, cs
+	}
+	return nil, []APIChoice{}
+}
+
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := idParam(r)
 	if err != nil {
@@ -702,6 +773,10 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/terminal", s.apiTerminal)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", s.apiRetry)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.apiCancel)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/continue", s.apiContinue)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/steer", s.apiSteer)
+	mux.HandleFunc("GET /api/v1/jobs/{id}/saved-diff", s.apiSavedDiff)
+	mux.HandleFunc("GET /api/v1/jobs/{id}/log.jsonl", s.apiRawLog)
 	mux.HandleFunc("GET /api/v1/orchestrator", s.apiFeed)
 	mux.HandleFunc("GET /api/v1/activity", s.apiActivity)
 	mux.HandleFunc("GET /api/v1/metrics", s.metricsJSON)
@@ -1101,18 +1176,100 @@ func (s *Server) apiJobDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gs, _ := s.Store.GateResults(ctx, id)
-	writeJSON(w, http.StatusOK, APIJobDetail{Job: apiJob(j), Gates: apiGates(gs), CanAttach: s.Exec != nil && j.State == state.Running})
+	d := APIJobDetail{Job: apiJob(j), Gates: apiGates(gs), CanAttach: s.Exec != nil && j.State == state.Running, Stop: s.jobStop(j), Choices: []APIChoice{}}
+	if j.State.Terminal() && s.Choices != nil && j.ItemID != nil && !store.IsSubKind(j.Kind) {
+		if cs := s.Choices(ctx, j.ID); cs != nil {
+			d.Choices = cs
+		}
+	}
+	if j.State == state.Running {
+		d.SteerNote = "This job can't take messages while it runs."
+		if s.SteerUnsupported != nil {
+			d.SteerNote = s.SteerUnsupported(j)
+		}
+		d.CanSteer = d.SteerNote == ""
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// jobStop reads how a build that ran out of turns or budget stopped.
+func (s *Server) jobStop(j *store.Job) *APIStop {
+	if s.JobsDir == "" || j.Kind != "implement" {
+		return nil
+	}
+	dir := filepath.Join(s.JobsDir, strconv.FormatInt(j.ID, 10))
+	b, err := os.ReadFile(filepath.Join(dir, "stop.json"))
+	if err != nil {
+		return nil
+	}
+	var st APIStop
+	if json.Unmarshal(b, &st) != nil {
+		return nil
+	}
+	_, err = os.Stat(filepath.Join(dir, "kept", "kept.json"))
+	st.Kept = err == nil
+	_, err = os.Stat(filepath.Join(dir, "saved.patch"))
+	st.SavedDiff = err == nil
+	return &st
+}
+
+// apiSavedDiff is a stopped build's work against the base branch, as it
+// was kept on this machine.
+func (s *Server) apiSavedDiff(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if s.JobsDir == "" {
+		apiErr(w, http.StatusNotFound, "no saved work for this job")
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(s.JobsDir, strconv.FormatInt(id, 10), "saved.patch"))
+	if err != nil {
+		apiErr(w, http.StatusNotFound, "no saved work for this job")
+		return
+	}
+	writeJSON(w, http.StatusOK, APIDiff{JobID: id, Patch: string(b), Findings: []APIFinding{}})
+}
+
+// apiRawLog is the job's whole log, as its CLI wrote it with secrets
+// taken out, to download.
+func (s *Server) apiRawLog(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	j, err := s.Store.GetJob(r.Context(), id)
+	if err != nil || j.LogPath == "" {
+		apiErr(w, http.StatusNotFound, "no log for this job")
+		return
+	}
+	f, err := os.Open(j.LogPath)
+	if err != nil {
+		apiErr(w, http.StatusNotFound, "no log for this job")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="job-%d.jsonl"`, id))
+	_, _ = io.Copy(w, f)
 }
 
 // apiLog streams a job's transcript as SSE: one `line` event per log line
-// (data is {"text": ...}), then one `done` event ({"state": ...}).
+// (data is {"text": ..., "entries": [...]}; see transcript.go), then one
+// `done` event ({"state": ...}).
 func (s *Server) apiLog(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return
 	}
 	s.tailLog(w, r, id, func(line string) string {
-		b, _ := json.Marshal(map[string]string{"text": summarize(line)})
+		es := entries(strings.TrimRight(line, "\n"))
+		if es == nil {
+			es = []APITranscriptEntry{}
+		}
+		b, _ := json.Marshal(map[string]any{"text": summarize(line), "entries": es})
 		return "event: line\ndata: " + string(b) + "\n\n"
 	}, func(st state.JobState) string {
 		b, _ := json.Marshal(map[string]string{"state": string(st)})
@@ -1162,6 +1319,47 @@ func (s *Server) apiRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.act(w, s.Actions.Retry(r.Context(), id, in.TierUp), "Retry queued.")
+}
+
+// apiContinue picks up a stopped build. Adding turns and budget raises a
+// spending cap, so like approving an estimate that needs the password, or
+// a request from this machine; continuing as it was is a retry.
+func (s *Server) apiContinue(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok || !jsonOnly(w, r) {
+		return
+	}
+	var in struct {
+		Extra float64 `json:"extra"`
+		Note  string  `json:"note"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Extra > 0 {
+		if ok, _ := s.settingsWritable(r); !ok {
+			apiErr(w, http.StatusForbidden, "Adding budget here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or continue without adding any.")
+			return
+		}
+	}
+	s.act(w, s.Actions.Continue(r.Context(), id, in.Extra, in.Note), "Continuing. It picks up where it stopped.")
+}
+
+// apiSteer sends a running build a message.
+func (s *Server) apiSteer(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok || !jsonOnly(w, r) {
+		return
+	}
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.act(w, s.Actions.Steer(r.Context(), id, in.Text), "Sent. It reads it at its next step.")
 }
 
 func (s *Server) apiCancel(w http.ResponseWriter, r *http.Request) {
@@ -1359,6 +1557,10 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 			if n.Detail == "" {
 				n.Detail = it.Title
 			}
+			n.ChoiceJobID, n.Choices = s.itemChoices(ctx, it.ID)
+		}
+		if n.Choices == nil {
+			n.Choices = []APIChoice{}
 		}
 		// Stable while the item stays in the stage: priority or parent
 		// changes must not raise the same alert again.

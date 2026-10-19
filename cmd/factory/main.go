@@ -477,6 +477,14 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 		}
 		return out
 	}
+	srv.Choices = func(ctx context.Context, jobID int64) []web.APIChoice {
+		var out []web.APIChoice
+		for _, c := range p.Choices(ctx, jobID) {
+			out = append(out, web.APIChoice{Action: c.Action, Label: c.Label, Model: c.Model, Explain: c.Explain, Available: c.Available, Why: c.Why})
+		}
+		return out
+	}
+	srv.SteerUnsupported = pipeline.SteerUnsupported
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		srv.StartedConfig = web.ConfigVersion(b)
 	}

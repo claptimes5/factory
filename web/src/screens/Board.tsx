@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useBoard, useOverview, type Card as CardT } from "@/api/client";
 import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading } from "@/components/common";
+import { Choices } from "@/components/Choices";
 import { useRepo } from "@/lib/repo";
 import { cn, duration, money, shortRef, stageName } from "@/lib/utils";
 
@@ -238,6 +239,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
   const pr = c.stage === "awaiting_human";
   const plan = c.plan_waiting;
   const held = c.estimate_waiting || plan;
+  const chooser = !pr && !held && c.choice_job_id != null && c.choices.some((x) => x.available);
   const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-lg px-3.5 text-sm md:h-9";
   return (
     <article
@@ -249,7 +251,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         {pr ? (
           <span className="rounded bg-warning-fill px-1.5 text-xs font-semibold text-warning-ink">PR ready</span>
         ) : (
-          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{plan ? "Plan check" : held ? "Cost check" : "Question"}</span>
+          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</span>
         )}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
@@ -313,11 +315,22 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
           </a>
         )}
         {!pr && !held && c.issue_url && (
-          <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
-            Answer on the issue <ExternalLink className="size-3.5" aria-hidden />
+          <a
+            href={c.issue_url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(btn, chooser ? "border border-warning-border hover:bg-warning-fill/10" : "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}
+          >
+            {chooser ? "Open the issue" : "Answer on the issue"} <ExternalLink className="size-3.5" aria-hidden />
           </a>
         )}
       </div>
+      {chooser && (
+        // What to do next, right here: the issue is only the other way.
+        <div className="relative z-10">
+          <Choices jobId={c.choice_job_id!} itemId={c.id} choices={c.choices} compact />
+        </div>
+      )}
     </article>
   );
 }

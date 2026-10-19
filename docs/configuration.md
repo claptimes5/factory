@@ -406,7 +406,9 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - Small builds start on Haiku 5.5 and climb to Sonnet, then Opus, after two
   failed attempts at a tier (`escalation.max_attempts_per_tier`, 2 by
   default). The tiers are `escalation.implement`. After the last tier, the
-  item parks.
+  item parks. A build that runs out of turns or hits its dollar cap isn't
+  a failed attempt: it keeps its work and waits for you (see
+  [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget)).
 - Text-only (`XS`) builds use `routing.implement.XS`, Haiku by default (see
   [Text-only changes](quality.md#text-only-changes)).
 - Larger builds start on Sonnet or Opus.
@@ -707,6 +709,7 @@ values below are this repo's.
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
 | `confirm_over` | Dollars. An item whose cost estimate is over this waits for your OK before it's built (default 0, off). See [Asking before costly builds](#asking-before-costly-builds). |
+| `max_turns` | Turns (model calls) per agent run (default 80). A build that runs out, or hits its `per_job` cap, stops and waits for you; see [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget). |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the

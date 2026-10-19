@@ -16,15 +16,15 @@ To reach it from another machine, or to put a password on it, see
 
 | Screen | What it shows |
 | --- | --- |
-| **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with the question to answer. Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
+| **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with why they stopped and what you can do, with the buttons right there (see [What to do with a parked item](#what-to-do-with-a-parked-item)). Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
 | **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Retry a tier up and Park. |
-| **Session** | The job's transcript live beside the issue and spec, and a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
+| **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
+| **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | Every decision with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
-| **Inbox** | PRs ready for review, parked items, items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
+| **Inbox** | PRs ready for review, parked items (with their choices), items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 
 When a repo's base branch is red or flaky (see
@@ -82,6 +82,59 @@ the page opened as `localhost` or `127.0.0.1`, not through a proxy such
 as `tailscale serve`. Anywhere else the screen is read-only. Values that
 would quietly stop the factory, such as no jobs at once or a poll every
 second, are refused. See [Control room login](security.md#control-room-login).
+
+## What to do with a parked item
+
+A parked item waits for you and nothing runs on it. Its card, its page
+and the inbox say why in plain words, and offer what you can do, each
+with the model it runs on (hover a button, or open "What do these do?"):
+
+- **Continue**, for a build that ran out of turns or budget: picks up
+  where it stopped. See below.
+- **Retry**: starts the step over from scratch, on a fresh checkout, with
+  the same model and a fresh budget. Anything the stopped job did is
+  dropped.
+- **Tier up**: the same, one model tier up (`escalation.implement`).
+- **Park**: stops work on an item and takes it off the queue. Nothing is
+  lost; bring it back with Retry or Continue, or add the `factory:retry`
+  label on the issue to send it back through triage.
+
+The issue gets a comment saying the same, with a link to the item's page.
+The `factory:retry` label still works, but you don't have to go to the
+issue unless the factory asked a question there (a park from triage).
+
+### When a build runs out of turns or budget
+
+A build has `budgets.max_turns` turns (80 by default) and its size's
+`budgets.per_job` dollars. Ten turns before the end, the factory tells
+Claude to stop starting new work, commit what it has and write what's
+done and what's left to a note. If it still runs out, it doesn't restart
+on its own: the same task would most likely run out again. Instead:
+
+- Its checkout is kept as it left it, committed or not, under the data
+  directory (`data/jobs/<id>/kept`), and survives a restart. Nothing is
+  pushed: the forge sees nothing until a build's gates pass, as always.
+- The item parks, and its job page shows the note and the work so far
+  against the base branch.
+- **Continue** picks up in that checkout and, on the Docker runner with
+  the same model, the same Claude session, with a fresh `max_turns` and
+  budget. You can add 50%, 100% or 200% more of both (adding needs the
+  dashboard password, or the dashboard opened on the factory's machine)
+  and a note it reads first, for example to narrow the scope. On the
+  local runner, or if the session is gone, it starts a new session that's
+  told where the last one stopped.
+- Retry or Tier up start over instead, and the kept checkout is removed.
+  It's also removed when the item is done, and after 14 days.
+
+Codex has no turn cap and only reports its cost at the end, so a Codex
+build never stops this way; its overruns are recorded, as before.
+
+### Messaging a running build
+
+While a Claude build runs, the box under its transcript sends it a
+message, which it reads at its next step (Claude runs with streaming
+input for this). Your message shows in the transcript as "You: ...".
+Codex reads its whole prompt when it starts, so its box is off.
 
 ## The classic control room
 

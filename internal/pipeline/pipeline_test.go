@@ -256,8 +256,12 @@ type fakeHarness struct {
 	security []string // successive verdicts of the security pass
 	// implVerdict replaces the builder's usual verdict.
 	implVerdict string
-	plans       []string // successive plan verdicts
-	planChecks  []string // successive verdicts of the critic's plan check
+	// stops, by implement call, end that build on a cap ("turns" or
+	// "budget") after it ran, as Claude does; turns are each call's cap.
+	stops      []string
+	turns      []int
+	plans      []string // successive plan verdicts
+	planChecks []string // successive verdicts of the critic's plan check
 }
 
 func (h *fakeHarness) Name() string { return h.name }
@@ -290,6 +294,13 @@ func (h *fakeHarness) Run(ctx context.Context, req harness.RunRequest, ev chan<-
 		}
 		if err := h.builds[n](req.Workdir); err != nil {
 			return nil, err
+		}
+		h.turns = append(h.turns, req.MaxTurns)
+		if n < len(h.stops) && h.stops[n] != "" {
+			os.WriteFile(filepath.Join(req.OutDir, harness.ProgressFile), []byte("Done: half of Add.\nLeft: the test."), 0o644)
+			res.IsError, res.Stopped, res.Turns = true, h.stops[n], req.MaxTurns
+			res.Error = "claude: error_max_" + h.stops[n]
+			return res, nil
 		}
 		v := `{"status":"done","summary":"did it","tests_added":["TestAdd"],"blocker":""}`
 		if h.implVerdict != "" {

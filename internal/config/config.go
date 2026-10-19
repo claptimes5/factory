@@ -407,6 +407,10 @@ type Config struct {
 		// when triage's cost estimate (its p75) is over this many
 		// dollars. 0, the default, never holds one.
 		ConfirmOver float64 `yaml:"confirm_over,omitempty"`
+		// MaxTurns caps the turns (model calls) of one agent run, as
+		// Claude's --max-turns; default 80. A build that runs out stops,
+		// keeps its work and waits for a person to continue it.
+		MaxTurns int `yaml:"max_turns,omitempty"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -618,6 +622,9 @@ func (c *Config) defaults() {
 	}
 	if c.Budgets.MinFreeDiskGB == 0 {
 		c.Budgets.MinFreeDiskGB = 10
+	}
+	if c.Budgets.MaxTurns == 0 {
+		c.Budgets.MaxTurns = 80
 	}
 	if c.Runner.WSLDrive == "" {
 		c.Runner.WSLDrive = "/mnt/c"
@@ -954,6 +961,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
+	}
+	if c.Budgets.MaxTurns < 0 {
+		bad("budgets.max_turns must be > 0, or left out for 80")
 	}
 	if c.Budgets.DailyTotal <= 0 {
 		bad("budgets.daily_total must be > 0")

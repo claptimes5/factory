@@ -490,8 +490,9 @@ export interface paths {
         };
         /**
          * The job's transcript as server-sent events
-         * @description One `line` event per transcript line, with data `{"text": string}`,
-         *     then one `done` event with data `{"state": string}` once the job ends.
+         * @description One `line` event per log line, with data `{"text": string, "entries": [TranscriptEntry]}`:
+         *     the line in short, and its pieces (none for bookkeeping lines). Then one `done` event
+         *     with data `{"state": string}` once the job ends.
          */
         get: {
             parameters: {
@@ -517,6 +518,168 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/log.jsonl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The job's whole log as its CLI wrote it, secrets taken out, to download */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JSON lines */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/saved-diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A stopped build's work against the base branch, kept on this machine */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Diff"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue a build that ran out of turns or budget, in the checkout and session it kept
+         * @description `extra` adds turns and budget as a fraction of the usual (0.5 is half as much again,
+         *     at most 2). Adding any needs the password, or a request from this machine (403
+         *     otherwise), as settings do. `note` goes to the builder first.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        extra?: number;
+                        note?: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a running build a message, which it reads at its next step
+         * @description Claude builds only; Codex reads its whole prompt when it starts.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        text: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                409: components["responses"]["Action"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1222,6 +1385,64 @@ export interface components {
             estimate_waiting: boolean;
             /** @description It waits for your OK on its plan */
             plan_waiting: boolean;
+            /** @description The job a parked item's choices act on; null unless it is parked */
+            choice_job_id: number | null;
+            /** @description What a person can do next with a parked item, each explained; empty unless it is parked */
+            choices: components["schemas"]["Choice"][];
+        };
+        Choice: {
+            /** @enum {string} */
+            action: "continue" | "retry" | "tier_up" | "park";
+            label: string;
+            /** @description harness/model it would run on; empty for park */
+            model: string;
+            /** @description What it does */
+            explain: string;
+            available: boolean;
+            /** @description Why it isn't available */
+            why: string;
+        };
+        /** @description How a build that ran out of turns or budget stopped */
+        Stop: {
+            /** @enum {string} */
+            reason: "turns" | "budget";
+            summary: string;
+            turns: number;
+            max_turns: number;
+            cost_usd: number;
+            budget_usd: number;
+            /** @description What the builder wrote down before it stopped */
+            note: string;
+            /** @description Its checkout is still there to continue in */
+            kept: boolean;
+            /** @description Its work against the base branch can be read at /jobs/{id}/saved-diff */
+            saved_diff: boolean;
+        };
+        /** @description One piece of a run's transcript, structured from its CLI's JSON log */
+        TranscriptEntry: {
+            /** @enum {string} */
+            kind: "init" | "text" | "thinking" | "tool" | "tool_result" | "you" | "outcome" | "error";
+            /** @description The agent's words, its thinking, your message, an error, or (outcome) its final message */
+            text: string;
+            tool: string;
+            /** @description A tool call's id; its result carries the same */
+            tool_id: string;
+            /** @description What a tool call did, in a line (Ran go test ./..., Read a.go), or how the run ended */
+            summary: string;
+            /** @description A tool call's whole input */
+            input: string;
+            /** @description A tool result's output, cut at 20000 bytes */
+            output: string;
+            truncated: boolean;
+            is_error: boolean;
+            model: string;
+            tools: number;
+            /** @description outcome: the CLI's own word for how it ended (success, error_max_turns) */
+            subtype: string;
+            turns: number;
+            cost_usd: number;
+            /** @description you: false when the agent had already finished */
+            delivered: boolean;
         };
         LinkedPR: {
             repo: string;
@@ -1374,6 +1595,14 @@ export interface components {
             job: components["schemas"]["Job"];
             gates: components["schemas"]["Gate"][];
             can_attach: boolean;
+            /** @description Set when the build ran out of turns or budget */
+            stop: components["schemas"]["Stop"] | null;
+            /** @description What a person can do next, once the job has ended */
+            choices: components["schemas"]["Choice"][];
+            /** @description A message sent now reaches the running agent */
+            can_steer: boolean;
+            /** @description Why a running job can't take messages; empty when it can */
+            steer_note: string;
         };
         Finding: {
             /** @description F1, F2, ...: the same across an item's review rounds */
@@ -1496,6 +1725,9 @@ export interface components {
             detail: string;
             item_id: number | null;
             at: string;
+            /** @description For a parked item, the job its choices act on */
+            choice_job_id: number | null;
+            choices: components["schemas"]["Choice"][];
         };
         Notifications: {
             notifications: components["schemas"]["Notification"][];

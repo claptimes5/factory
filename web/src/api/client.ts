@@ -36,6 +36,9 @@ export type SettingValue = S["SettingValue"];
 export type Tuning = S["Tuning"];
 export type TuningProposal = S["TuningProposal"];
 export type TuningChange = S["TuningChange"];
+export type Choice = S["Choice"];
+export type Stop = S["Stop"];
+export type TranscriptEntry = S["TranscriptEntry"];
 
 export class APIError extends Error {
   constructor(
@@ -109,7 +112,11 @@ export const usePreview = (id: number) =>
   useQuery({ queryKey: ["preview", id], queryFn: () => getJSON<Preview>(`/items/${id}/preview`) });
 export const useDiff = (id: number) =>
   useQuery({ queryKey: ["diff", id], queryFn: () => getJSON<Diff>(`/items/${id}/diff`) });
-export const useJob = (id: number) => useQuery({ queryKey: ["job", id], queryFn: () => getJSON<JobDetail>(`/jobs/${id}`) });
+export const useJob = (id: number, opts: { enabled?: boolean } = {}) =>
+  useQuery({ queryKey: ["job", id], queryFn: () => getJSON<JobDetail>(`/jobs/${id}`), ...opts });
+/** A stopped build's work against the base branch, as kept on the factory's machine. */
+export const useSavedDiff = (id: number, enabled: boolean) =>
+  useQuery({ queryKey: ["saved-diff", id], queryFn: () => getJSON<Diff>(`/jobs/${id}/saved-diff`), enabled });
 export const useFeed = (item?: number) =>
   useQuery({
     queryKey: ["feed", item ?? 0],

@@ -138,11 +138,61 @@ paths:
     get:
       summary: The job's transcript as server-sent events
       description: |
-        One `line` event per transcript line, with data `{"text": string}`,
-        then one `done` event with data `{"state": string}` once the job ends.
+        One `line` event per log line, with data `{"text": string, "entries": [TranscriptEntry]}`:
+        the line in short, and its pieces (none for bookkeeping lines). Then one `done` event
+        with data `{"state": string}` once the job ends.
       parameters: [{ $ref: "#/components/parameters/ID" }]
       responses:
         "200": { description: Event stream, content: { text/event-stream: { schema: { type: string } } } }
+  /jobs/{id}/log.jsonl:
+    get:
+      summary: The job's whole log as its CLI wrote it, secrets taken out, to download
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: JSON lines, content: { text/plain: { schema: { type: string } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{id}/saved-diff:
+    get:
+      summary: A stopped build's work against the base branch, kept on this machine
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Diff" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{id}/continue:
+    post:
+      summary: Continue a build that ran out of turns or budget, in the checkout and session it kept
+      description: |
+        `extra` adds turns and budget as a fraction of the usual (0.5 is half as much again,
+        at most 2). Adding any needs the password, or a request from this machine (403
+        otherwise), as settings do. `note` goes to the builder first.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                extra: { type: number, minimum: 0, maximum: 2 }
+                note: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
+  /jobs/{id}/steer:
+    post:
+      summary: Send a running build a message, which it reads at its next step
+      description: Claude builds only; Codex reads its whole prompt when it starts.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties: { text: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "409": { $ref: "#/components/responses/Action" }
   /jobs/{id}/terminal:
     get:
       summary: A live shell in the running job's container, over WebSocket
@@ -381,7 +431,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting, plan_waiting]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -408,6 +458,55 @@ components:
         estimate: { type: string, description: "Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty" }
         estimate_waiting: { type: boolean, description: It waits for your OK on its cost estimate }
         plan_waiting: { type: boolean, description: It waits for your OK on its plan }
+        choice_job_id: { type: [integer, "null"], description: "The job a parked item's choices act on; null unless it is parked" }
+        choices:
+          type: array
+          description: What a person can do next with a parked item, each explained; empty unless it is parked
+          items: { $ref: "#/components/schemas/Choice" }
+    Choice:
+      type: object
+      required: [action, label, model, explain, available, why]
+      properties:
+        action: { type: string, enum: [continue, retry, tier_up, park] }
+        label: { type: string }
+        model: { type: string, description: "harness/model it would run on; empty for park" }
+        explain: { type: string, description: What it does, in plain words }
+        available: { type: boolean }
+        why: { type: string, description: Why it isn't available }
+    Stop:
+      type: object
+      description: How a build that ran out of turns or budget stopped
+      required: [reason, summary, turns, max_turns, cost_usd, budget_usd, note, kept, saved_diff]
+      properties:
+        reason: { type: string, enum: [turns, budget] }
+        summary: { type: string }
+        turns: { type: integer }
+        max_turns: { type: integer }
+        cost_usd: { type: number }
+        budget_usd: { type: number }
+        note: { type: string, description: What the builder wrote down before it stopped }
+        kept: { type: boolean, description: Its checkout is still there to continue in }
+        saved_diff: { type: boolean, description: "Its work against the base branch can be read at /jobs/{id}/saved-diff" }
+    TranscriptEntry:
+      type: object
+      description: One piece of a run's transcript, structured from its CLI's JSON log
+      required: [kind, text, tool, tool_id, summary, input, output, truncated, is_error, model, tools, subtype, turns, cost_usd, delivered]
+      properties:
+        kind: { type: string, enum: [init, text, thinking, tool, tool_result, you, outcome, error] }
+        text: { type: string, description: "The agent's words, its thinking, your message, an error, or (outcome) its final message" }
+        tool: { type: string }
+        tool_id: { type: string, description: A tool call's id; its result carries the same }
+        summary: { type: string, description: "What a tool call did, in a line (Ran go test ./..., Read a.go), or how the run ended" }
+        input: { type: string, description: "A tool call's whole input" }
+        output: { type: string, description: "A tool result's output, cut at 20000 bytes" }
+        truncated: { type: boolean }
+        is_error: { type: boolean }
+        model: { type: string }
+        tools: { type: integer }
+        subtype: { type: string, description: "outcome: the CLI's own word for how it ended (success, error_max_turns)" }
+        turns: { type: integer }
+        cost_usd: { type: number }
+        delivered: { type: boolean, description: "you: false when the agent had already finished" }
     LinkedPR:
       type: object
       required: [repo, number, ref, url]
@@ -558,11 +657,20 @@ components:
         median_miss_usd: { type: number, description: "Median of actual minus estimated median; positive is over" }
     JobDetail:
       type: object
-      required: [job, gates, can_attach]
+      required: [job, gates, can_attach, stop, choices, can_steer, steer_note]
       properties:
         job: { $ref: "#/components/schemas/Job" }
         gates: { type: array, items: { $ref: "#/components/schemas/Gate" } }
         can_attach: { type: boolean }
+        stop:
+          description: Set when the build ran out of turns or budget
+          oneOf: [{ $ref: "#/components/schemas/Stop" }, { type: "null" }]
+        choices:
+          type: array
+          description: What a person can do next, once the job has ended
+          items: { $ref: "#/components/schemas/Choice" }
+        can_steer: { type: boolean, description: A message sent now reaches the running agent }
+        steer_note: { type: string, description: "Why a running job can't take messages; empty when it can" }
     Finding:
       type: object
       required: [id, severity, file, line, claim, evidence, by, blocks, check, check_reason]
@@ -693,7 +801,7 @@ components:
         estimates: { $ref: "#/components/schemas/Estimates" }
     Notification:
       type: object
-      required: [id, kind, title, detail, item_id, at]
+      required: [id, kind, title, detail, item_id, at, choice_job_id, choices]
       properties:
         id: { type: string }
         kind: { type: string, enum: [needs_input, ready_for_review, budget] }
@@ -701,6 +809,8 @@ components:
         detail: { type: string }
         item_id: { type: [integer, "null"] }
         at: { type: string }
+        choice_job_id: { type: [integer, "null"], description: "For a parked item, the job its choices act on" }
+        choices: { type: array, items: { $ref: "#/components/schemas/Choice" } }
     Notifications:
       type: object
       required: [notifications]

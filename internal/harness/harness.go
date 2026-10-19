@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
@@ -55,7 +56,15 @@ type RunRequest struct {
 	// writes them to its own files (Codex). Only in a container: on the
 	// host those files are the user's own sessions.
 	CaptureLimits bool
+	// Steer carries messages a person sends the running agent (see
+	// steer.go); nil for none. Only a CLI that reads further input takes
+	// them; the others answer each with ErrNotListening.
+	Steer <-chan SteerMsg
 }
+
+// ProgressFile is where, in its out directory, a builder near its turn
+// cap writes what it did and what is left, for whoever continues it.
+const ProgressFile = "progress.md"
 
 // Limit is one usage-limit window the CLI reported, such as a
 // subscription's five-hour or weekly allowance.
@@ -85,8 +94,12 @@ type Result struct {
 	IsError      bool
 	Error        string
 	ExitCode     int
-	SessionID    string // the CLI's session, for a later Resume
-	Limits       []Limit
+	// Stopped says the run ended on a cap rather than by finishing or
+	// failing: "turns" (its turn cap) or "budget" (its dollar cap). Its
+	// work is still in the checkout.
+	Stopped   string
+	SessionID string // the CLI's session, for a later Resume
+	Limits    []Limit
 	// SignedOut is set when the CLI couldn't sign in (Codex on a ChatGPT
 	// plan): the run failed through no fault of the task.
 	SignedOut bool
@@ -201,6 +214,46 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 			}
 		}
 	}
+	var feed *feeder
+	if sa, ok := h.a.(steerable); ok && req.Steer != nil {
+		if feed, err = newFeeder(sa); err != nil {
+			return nil, err
+		}
+		defer feed.release()
+		spec.Stdin = feed.r
+		go func() {
+			if err := feed.send(req.Prompt, false); err != nil {
+				feed.close()
+			}
+		}()
+	}
+	stopSteer := make(chan struct{})
+	var steering sync.WaitGroup
+	// The caller closes events once Run returns: nothing may send after.
+	defer func() { close(stopSteer); steering.Wait() }()
+	if req.Steer != nil {
+		steering.Add(1)
+		go func() {
+			defer steering.Done()
+			for {
+				select {
+				case m := <-req.Steer:
+					err := ErrNotListening
+					if feed != nil {
+						err = feed.send(m.Text, true)
+					}
+					emit(Event{Kind: "raw", Payload: json.RawMessage(scrub(string(NoteLine(m.Text, err == nil)), redact))})
+					if m.Err != nil {
+						m.Err <- err
+					}
+				case <-stopSteer:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
 	parsed := make(chan struct{})
 	go func() {
 		defer close(parsed)
@@ -214,6 +267,9 @@ func (h *cliHarness) Run(ctx context.Context, req RunRequest, events chan<- Even
 			raw := json.RawMessage(scrub(string(line), redact))
 			emit(Event{Kind: "raw", Payload: raw})
 			h.a.parse(line, res, emit)
+			if feed != nil {
+				feed.saw(line)
+			}
 		}
 		_, _ = io.Copy(io.Discard, pr)
 	}()
