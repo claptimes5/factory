@@ -582,7 +582,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	}
 	srv.Wizard = wz
 	// A restart waits for an image build or a sign-in, as for a job.
-	p.Busy = func() bool { return wz.busy() != "" }
+	p.Busy = wz.waitingOn
 	_, err = listenWeb(ctx, cfg, srv)
 	return err
 }

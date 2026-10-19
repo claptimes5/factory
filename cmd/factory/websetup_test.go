@@ -28,9 +28,12 @@ func testWizard(t *testing.T, f *fakeGitHub, repo string, setupMode bool, run fu
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	oldAPI, oldWeb, oldRun := githubAPI, githubWeb, runCmd
+	oldAPI, oldWeb, oldRun, oldCtx := githubAPI, githubWeb, runCmd, runCmdContext
 	githubAPI, githubWeb, runCmd = srv.URL, "https://github.example", run
-	t.Cleanup(func() { githubAPI, githubWeb, runCmd = oldAPI, oldWeb, oldRun })
+	runCmdContext = func(_ context.Context, out io.Writer, name string, args ...string) error {
+		return run(out, name, args...)
+	}
+	t.Cleanup(func() { githubAPI, githubWeb, runCmd, runCmdContext = oldAPI, oldWeb, oldRun, oldCtx })
 	w, err := newWizard(context.Background(), testConfig(t, repo), filepath.Join(t.TempDir(), "factory.env"), setupMode, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -375,8 +378,9 @@ func TestWizardBuildsImages(t *testing.T) {
 // Sign in with ChatGPT runs Codex's device-code sign-in from the page: it
 // shows the link and code Codex prints, then saves the sign-in.
 func TestWizardSignsCodexIn(t *testing.T) {
-	f := fakeCodexLogin(t)
+	f := fakeCodexLogin()
 	w := testWizard(t, &fakeGitHub{}, "o/r", false, f.run)
+	f.install(t)
 	ctx := context.Background()
 	if _, err := w.Do(ctx, "codex/sign-in", web.WizardInput{}); err != nil {
 		t.Fatal(err)
@@ -439,14 +443,19 @@ func TestWizardImageFindingIsAButton(t *testing.T) {
 // stops when its context does.
 type codexLoginFake struct {
 	entered chan struct{}
+	late    bool // it signs in even once stopped, as if the code was in first
 	mu      sync.Mutex
 	cmds    []string
 	homes   []string
 }
 
-func fakeCodexLogin(t *testing.T) *codexLoginFake {
+func fakeCodexLogin() *codexLoginFake {
+	return &codexLoginFake{entered: make(chan struct{})}
+}
+
+// install puts the fake in place of Codex, after testWizard set the rest.
+func (f *codexLoginFake) install(t *testing.T) {
 	t.Helper()
-	f := &codexLoginFake{entered: make(chan struct{})}
 	old := runCmdContext
 	runCmdContext = func(ctx context.Context, out io.Writer, name string, args ...string) error {
 		if slices.Contains(args, "-t") {
@@ -465,10 +474,14 @@ func fakeCodexLogin(t *testing.T) *codexLoginFake {
 		io.WriteString(out, "Follow these steps to sign in with ChatGPT using device code authorization:\n\n"+
 			"1. Open this link in your browser and sign in to your account\n   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n"+
 			"2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mABCD-12345\x1b[0m\n")
-		select {
-		case <-f.entered:
-		case <-ctx.Done():
-			return ctx.Err()
+		if f.late {
+			<-f.entered // Codex already saw the code: it finishes anyway
+		} else {
+			select {
+			case <-f.entered:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		if home == "" {
 			return errors.New("no CODEX_HOME mounted")
@@ -476,7 +489,6 @@ func fakeCodexLogin(t *testing.T) *codexLoginFake {
 		return os.WriteFile(filepath.Join(home, "auth.json"), []byte(testAuth), 0o600)
 	}
 	t.Cleanup(func() { runCmdContext = old })
-	return f
 }
 
 // run is the rest of Docker: the image is built, and rm is recorded.
@@ -501,8 +513,9 @@ func (f *codexLoginFake) ran(prefix string) []string {
 
 // Cancel stops Codex and its container, and removes its folder.
 func TestWizardCancelsCodexSignIn(t *testing.T) {
-	f := fakeCodexLogin(t)
+	f := fakeCodexLogin()
 	w := testWizard(t, &fakeGitHub{}, "o/r", false, f.run)
+	f.install(t)
 	ctx := context.Background()
 	if _, err := w.Do(ctx, "codex/sign-in/cancel", web.WizardInput{}); err == nil {
 		t.Fatal("cancelled a sign-in that isn't running")
@@ -542,9 +555,10 @@ func TestWizardCancelsCodexSignIn(t *testing.T) {
 }
 
 // A page closed mid-check doesn't leave "can't reach" on every repo: the
-// check runs on, and one cut off by its own timeout stores nothing.
+// check runs on. A repo a slow forge doesn't answer for in time is marked
+// timed out, and the others keep what they found, so Finish can pass.
 func TestWizardAccessCheckOutlivesTheRequest(t *testing.T) {
-	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}}, "o/r", false, noDocker)
+	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}, slow: "o/slow"}, "o/r", false, noDocker)
 	if err := w.save(map[string]string{"GITHUB_TOKEN": "ghp_token123"}); err != nil {
 		t.Fatal(err)
 	}
@@ -553,14 +567,25 @@ func TestWizardAccessCheckOutlivesTheRequest(t *testing.T) {
 	if a := w.State(gone, true).Access; len(a) != 1 || a[0].State != "ok" {
 		t.Fatalf("access after a closed request = %+v", a)
 	}
+
+	if err := setRepos(w.cfgPath, []string{"o/slow", "o/r"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.reload(); err != nil {
+		t.Fatal(err)
+	}
 	old := accessWait
-	accessWait = time.Nanosecond
+	accessWait = 300 * time.Millisecond
 	t.Cleanup(func() { accessWait = old })
-	w.mu.Lock()
-	w.checkedAt = time.Time{}
-	w.mu.Unlock()
-	if a := w.State(context.Background(), true).Access; len(a) != 1 || a[0].State != "ok" {
-		t.Fatalf("a timed-out check replaced the last one: %+v", a)
+	start := time.Now()
+	w.checkAccess(context.Background())
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s", d)
+	}
+	a := w.State(context.Background(), false).Access
+	// The slow one comes first, so o/r was checked beside it, not after.
+	if len(a) != 2 || a[1].State != "ok" || a[0].State != "failed" || !strings.Contains(a[0].Error, "timed out") {
+		t.Fatalf("access = %+v", a)
 	}
 }
 
@@ -602,5 +627,112 @@ func TestWizardBaseBranchIsOnlyTheDefault(t *testing.T) {
 	}
 	if rc, _ := w.config().RepoConf("o/r"); rc.BaseBranch != "trunk" {
 		t.Fatalf("base branch %q", rc.BaseBranch)
+	}
+}
+
+func pollSignIn(t *testing.T, w *wizard, until func(web.APIWizardSignIn) bool) web.APIWizardSignIn {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		si := w.State(context.Background(), false).Codex.SignIn
+		if until(si) {
+			return si
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sign-in = %+v", si)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A Cancel that lands after Codex got its code reports the sign-in.
+func TestWizardCancelAfterSignInSaysSignedIn(t *testing.T) {
+	f := fakeCodexLogin()
+	f.late = true
+	w := testWizard(t, &fakeGitHub{}, "o/r", false, f.run)
+	f.install(t)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "codex/sign-in", web.WizardInput{}); err != nil {
+		t.Fatal(err)
+	}
+	pollSignIn(t, w, func(si web.APIWizardSignIn) bool { return si.Code != "" })
+	got := make(chan string, 1)
+	go func() {
+		msg, _ := w.cancelCodexSignIn()
+		got <- msg
+	}()
+	for {
+		w.mu.Lock()
+		asked := w.signIn.cancelled
+		w.mu.Unlock()
+		if asked {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(f.entered)
+	if msg := <-got; msg != "Signed in. Codex uses your ChatGPT plan." {
+		t.Fatalf("cancel said %q", msg)
+	}
+	if !w.State(ctx, false).Codex.SignedIn {
+		t.Fatal("the sign-in wasn't kept")
+	}
+	if rm := f.ran("docker rm"); len(rm) != 0 {
+		t.Fatalf("removed a container that finished: %q", rm)
+	}
+}
+
+// A code nobody enters ends the sign-in, so it can't hold a restart.
+func TestWizardSignInTimesOut(t *testing.T) {
+	old := signInWait
+	signInWait = 50 * time.Millisecond
+	t.Cleanup(func() { signInWait = old })
+	f := fakeCodexLogin()
+	w := testWizard(t, &fakeGitHub{}, "o/r", false, f.run)
+	f.install(t)
+	if _, err := w.Do(context.Background(), "codex/sign-in", web.WizardInput{}); err != nil {
+		t.Fatal(err)
+	}
+	si := pollSignIn(t, w, func(si web.APIWizardSignIn) bool { return !si.Running })
+	if !si.Failed || !strings.Contains(si.Result, "timed out") {
+		t.Fatalf("sign-in = %+v", si)
+	}
+	if w.waitingOn() != "" || len(f.ran("docker rm -f factory-codex-login-")) != 1 {
+		t.Fatalf("still waiting on %q, ran %q", w.waitingOn(), f.cmds)
+	}
+}
+
+// A container Docker hadn't made yet when the sign-in stopped is still
+// removed.
+func TestRemoveContainerRetries(t *testing.T) {
+	oldRun, oldWait := runCmd, rmRetryWait
+	rmRetryWait = time.Millisecond
+	var tries int
+	runCmd = func(out io.Writer, _ string, _ ...string) error {
+		tries++
+		if tries < 3 {
+			io.WriteString(out, "Error response from daemon: No such container: x\n")
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runCmd, rmRetryWait = oldRun, oldWait })
+	removeContainer("x")
+	if tries != 3 {
+		t.Fatalf("tries = %d", tries)
+	}
+}
+
+// A pasted token an exported GITHUB_TOKEN overrides says the exported
+// one is what the factory uses, and what was checked.
+func TestWizardTokenSaveNamesTheExportedOne(t *testing.T) {
+	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}}, "o/r", false, noDocker)
+	w.exported = map[string]string{"GITHUB_TOKEN": "ghp_from_gh_cli_123"}
+	msg, err := w.Do(context.Background(), "github/token", web.WizardInput{Token: "ghp_pasted_456"})
+	if err != nil || !strings.Contains(msg, "GITHUB_TOKEN exported where the factory starts wins") || strings.Contains(msg, "ghp_") {
+		t.Fatalf("msg %q %v", msg, err)
+	}
+	w.exported = map[string]string{"GITHUB_TOKEN": "ghp_pasted_456"}
+	if msg, _ := w.Do(context.Background(), "github/token", web.WizardInput{Token: "ghp_pasted_456"}); strings.Contains(msg, "exported") {
+		t.Fatalf("the same token: %q", msg)
 	}
 }

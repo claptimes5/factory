@@ -129,11 +129,16 @@ function SettingsForm({ s }: { s: Settings }) {
       {s.restart_pending ? (
         <Notice>
           <span className="min-w-0 flex-1">
-            {s.running_jobs > 0
-              ? `Restart pending, waiting for ${s.running_jobs} running ${s.running_jobs === 1 ? "job" : "jobs"}. No new jobs start until then.`
+            {s.running_jobs > 0 || s.restart_waits_for
+              ? `Restart pending, waiting for ${[
+                  s.running_jobs > 0 ? `${s.running_jobs} running ${s.running_jobs === 1 ? "job" : "jobs"}` : "",
+                  s.restart_waits_for,
+                ]
+                  .filter(Boolean)
+                  .join(" and ")}. No new jobs start until then.`
               : "Restarting…"}
           </span>
-          {!ro && s.running_jobs > 0 && (
+          {!ro && (s.running_jobs > 0 || !!s.restart_waits_for) && (
             <Button size="sm" variant="outline" onClick={cancelRestart}>
               Cancel restart
             </Button>

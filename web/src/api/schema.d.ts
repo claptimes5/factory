@@ -3164,6 +3164,8 @@ export interface components {
             /** @description The file differs from the one the factory started with */
             changed: boolean;
             restart_pending: boolean;
+            /** @description Other work the pending restart waits for, such as "the job image build" or "the Codex sign-in"; else empty */
+            restart_waits_for: string;
             running_jobs: number;
             groups: components["schemas"]["SettingsGroup"][];
         };
@@ -3244,6 +3246,8 @@ export interface components {
             /** @description factory.yaml or factory.env changed since the factory started */
             changed: boolean;
             restart_pending: boolean;
+            /** @description Other work the pending restart waits for; else empty */
+            restart_waits_for: string;
             /** @description Why the factory can't start, in setup mode; else empty */
             setup_reason: string;
             /** @description When this process started, so a page waiting on a restart can tell the new one from the old */

@@ -97,7 +97,8 @@ marked done, needing attention, or optional, with the next one open:
 5. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
    same choices as `factory setup`. For a ChatGPT plan, **Sign in** runs
    Codex's device-code sign-in on the factory's machine and shows the link
-   and code to enter, with a Cancel button. The page says when you're
+   and code to enter, with a Cancel button. A code nobody enters within
+   20 minutes ends the sign-in. The page says when you're
    signed in. Only someone who may save settings sees the code.
 6. **Notifications** and **Sentry** (both optional), with a button that
    sends a test notification.
@@ -109,10 +110,12 @@ marked done, needing attention, or optional, with the next one open:
    work yet (no model key, say), it says what. Finish restarts the factory
    with the new settings and the page opens the dashboard when it's up.
 
-The page reads the settings as the factory will run with them: a
-variable exported where the factory starts wins over the one saved in
-`factory.env`, as at startup, and the page names each saved key that one
-overrides.
+The page, like `factory setup`, reads the settings as the factory will
+run with them: a variable exported where the factory starts wins over
+the one saved in `factory.env`, as at startup, and each names the saved
+keys one overrides. That includes a `GITHUB_TOKEN` exported for other
+tools such as `gh`: unset it where the factory starts if the factory
+shouldn't use it.
 
 Saved keys and tokens never come back to the browser: the page shows only
 whether each is set and its first and last few characters. Answers go in
@@ -132,7 +135,8 @@ changed, once running jobs finish.
 Jobs run in Docker images built from `deploy/job-image/Dockerfile`. When
 `factory serve` starts, it builds any of them that are missing in the
 background, one at a time. Jobs that need an image wait until it is
-built, then start. If a build fails, the factory logs it and sends it to
+built, then start. A build that takes over an hour is stopped, and a
+restart asked for meanwhile waits for the build and says so. If a build fails, the factory logs it and sends it to
 your phone, and those jobs fail as they would without the image. You can
 also build them from the dashboard's get-started page, or with
 `./factory images` (`--rebuild` rebuilds them all).

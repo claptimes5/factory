@@ -88,7 +88,9 @@ func TestSetYAMLKeepsComments(t *testing.T) {
 }
 
 func TestSetupStopsWhenInputEnds(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "ghp_from_gh")
+	old := startEnv
+	startEnv = append(slices.Clone(old), "GITHUB_TOKEN=ghp_from_gh")
+	t.Cleanup(func() { startEnv = old })
 	srv := httptest.NewServer(&fakeGitHub{})
 	t.Cleanup(srv.Close)
 	oldAPI, oldRun := githubAPI, runCmd
@@ -98,13 +100,15 @@ func TestSetupStopsWhenInputEnds(t *testing.T) {
 	cfgPath := testConfig(t, "o/r")
 	cfg, _ := config.Load(cfgPath)
 	var b strings.Builder
-	p := &prompter{in: bufio.NewReader(strings.NewReader("\n")), out: &b}
+	p := &prompter{in: bufio.NewReader(strings.NewReader("\nn\n")), out: &b}
 	err := setup(context.Background(), cfgPath, cfg, filepath.Join(t.TempDir(), "factory.env"), p)
 	if !errors.Is(err, errInputClosed) {
 		t.Fatalf("err = %v, want errInputClosed", err)
 	}
-	if strings.Contains(b.String(), "[3]") {
-		t.Fatal("an exported GITHUB_TOKEN must not become the default")
+	// As at startup, the exported token is what the factory would use, so
+	// it is the default, as on the get-started page.
+	if !strings.Contains(b.String(), "[3]") {
+		t.Fatalf("an exported GITHUB_TOKEN is the default, as the factory uses it:\n%s", b.String())
 	}
 }
 
@@ -125,9 +129,14 @@ type fakeGitHub struct {
 	labeled  []string            // path and labels added to issues
 	yaml     func(string) string // edits factory.yaml before setup reads it
 	gone     bool                // the app was uninstalled
+	slow     string              // a repo whose requests never get an answer
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if f.slow != "" && (r.URL.Path == "/repos/"+f.slow || strings.HasPrefix(r.URL.Path, "/repos/"+f.slow+"/")) {
+		<-r.Context().Done()
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auth = append(f.auth, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))

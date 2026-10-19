@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Circle, ExternalLink, Loader2, XCircle } from "lucide-react";
@@ -868,7 +868,7 @@ const restartWait = 120_000;
  * opens it. It stops when a new process answers in setup mode again (the
  * factory still can't start), or after restartWait, and says why.
  */
-function useWaitForFactory(on: boolean, startedAt: string) {
+function useWaitForFactory(on: boolean, startedAt: RefObject<string>) {
   const [failed, setFailed] = useState("");
   useEffect(() => {
     if (!on) {
@@ -889,7 +889,7 @@ function useWaitForFactory(on: boolean, startedAt: string) {
         }
         try {
           const w = await getJSON<Wizard>("/setup");
-          if (w.mode === "setup" && w.started_at !== startedAt) {
+          if (w.mode === "setup" && w.started_at !== startedAt.current) {
             setFailed(`The factory restarted but still can't start: ${w.setup_reason || "see its log"}.`);
             return;
           }
@@ -913,9 +913,13 @@ function useWaitForFactory(on: boolean, startedAt: string) {
 function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const { busy, msg, run } = useAction();
   const [started, setStarted] = useState(false);
-  const failed = useWaitForFactory(started, w.started_at);
+  // The process that was asked to restart, fixed when Finish is pressed:
+  // a refetch reaching the new one mustn't change what the wait looks for.
+  const oldStart = useRef("");
+  const failed = useWaitForFactory(started, oldStart);
   const setup = w.mode === "setup";
   const finish = async () => {
+    oldStart.current = w.started_at;
     const r = await run("finish");
     if (r && setup) setStarted(true);
   };
@@ -937,7 +941,7 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
       )}
       {!setup && w.restart_pending ? (
         <p role="status" className="text-sm text-text-2">
-          A restart is pending. It happens once running jobs finish.
+          A restart is pending. It happens once running jobs finish{w.restart_waits_for ? ` and ${w.restart_waits_for} is done` : ""}.
         </p>
       ) : (
         <div>

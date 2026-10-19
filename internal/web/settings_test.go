@@ -12,7 +12,29 @@ import (
 	"testing"
 )
 
-type fakeRestarter struct{ pending bool }
+type fakeRestarter struct {
+	pending bool
+	busy    string
+}
+
+func (f *fakeRestarter) RestartWaitsFor() string { return f.busy }
+
+func TestRestartMessage(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		busy string
+		want string
+	}{
+		{0, "", "Restarting now."},
+		{1, "", "Restarting once the running job finishes. No new jobs start until then."},
+		{0, "the Codex sign-in", "Restarting once the Codex sign-in is done. No new jobs start until then."},
+		{3, "the job image build", "Restarting once 3 running jobs finish and the job image build is done. No new jobs start until then."},
+	} {
+		if got := RestartMessage(c.n, c.busy); got != c.want {
+			t.Errorf("%d %q: %q", c.n, c.busy, got)
+		}
+	}
+}
 
 func (f *fakeRestarter) RequestRestart(context.Context) int { f.pending = true; return 2 }
 func (f *fakeRestarter) CancelRestart(context.Context) bool {
@@ -170,6 +192,18 @@ func TestSettingsSave(t *testing.T) {
 	if code, body = postJSON(t, base+"/api/v1/settings/restart/cancel", "", `{}`); code != 200 || fr.pending {
 		t.Fatalf("cancel = %d %s", code, body)
 	}
+	// Waiting on an image build says so, not "now".
+	fr.busy = "the job image build"
+	code, body = postJSON(t, base+"/api/v1/settings/restart", "", `{}`)
+	if code != 200 || !strings.Contains(body, "once 2 running jobs finish and the job image build is done") {
+		t.Fatalf("restart while building = %d %s", code, body)
+	}
+	getJSON(t, base+"/api/v1/settings", &st)
+	if st.RestartWaitsFor != "the job image build" {
+		t.Fatalf("waits for %q", st.RestartWaitsFor)
+	}
+	postJSON(t, base+"/api/v1/settings/restart/cancel", "", `{}`)
+	fr.busy = ""
 	// A file broken by hand since: no restart into a config that won't load.
 	if err := os.WriteFile(path, []byte("budgets: [nope\n"), 0o640); err != nil {
 		t.Fatal(err)

@@ -68,11 +68,12 @@ type wizard struct {
 
 // pageSignIn is the ChatGPT sign-in started from the page.
 type pageSignIn struct {
-	running bool
-	log     *tailBuffer
-	result  string
-	failed  bool
-	cancel  context.CancelFunc // stops Codex
+	running   bool
+	log       *tailBuffer
+	result    string
+	failed    bool
+	cancel    context.CancelFunc // stops Codex
+	cancelled bool               // by Cancel, not a timeout or shutdown
 }
 
 // runCmdContext runs a command that ctx can stop; tests replace it.
@@ -558,29 +559,48 @@ func (w *wizard) clients(cfg *config.Config, vals map[string]string) clientFor {
 // checkAccess checks each repo with the saved credentials, as setup
 // does, and reads its default branch.
 func (w *wizard) checkAccess(ctx context.Context) {
-	// A closed request mustn't leave "can't reach" on every repo: the
-	// check runs to the end on its own clock, and a cut-off one is dropped.
+	// A closed request mustn't leave "can't reach" on every repo, so the
+	// check runs on its own clock. Repos are checked side by side; one a
+	// slow forge doesn't answer in time is marked as timed out, and the
+	// rest keep what they found.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessWait)
 	defer cancel()
 	vals := w.vals()
 	w.mu.Lock()
 	cfg, gen := w.cfg, w.credGen
 	w.mu.Unlock()
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		missing []string
+		instErr string
+		results = map[string]web.APIWizardAccess{}
+		slots   = make(chan struct{}, accessParallel)
+	)
 	// Where the app is installed, so an uninstalled one shows too.
-	var missing []string
-	instErr := ""
 	if id := vals["FACTORY_GITHUB_APP_ID"]; id != "" && len(githubRepos(cfg)) > 0 {
-		key, err := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
-		if err == nil {
-			_, missing, err = installations(ctx, &github.AppTokens{AppID: id, Key: key, BaseURL: githubAPI}, githubRepos(cfg))
-		}
-		if err != nil {
-			instErr = err.Error()
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			key, err := github.LoadAppKey(vals["FACTORY_GITHUB_APP_KEY"])
+			var miss []string
+			if err == nil {
+				_, miss, err = installations(ctx, &github.AppTokens{AppID: id, Key: key, BaseURL: githubAPI}, githubRepos(cfg))
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err != nil && ctx.Err() != nil:
+				instErr = "timed out"
+			case err != nil:
+				instErr = err.Error()
+			default:
+				missing = miss
+			}
+		}()
 	}
 	labels := pipeline.Labels(cfg.Intake.Label)
 	client := w.clients(cfg, vals)
-	results := map[string]web.APIWizardAccess{}
 	for _, n := range cfg.RepoNames() {
 		rc, _ := cfg.RepoConf(n)
 		a := web.APIWizardAccess{Repo: n, Host: "github", State: "unchecked", Hints: []string{}}
@@ -592,36 +612,67 @@ func (w *wizard) checkAccess(ctx context.Context) {
 			results[n] = a
 			continue
 		}
-		if err := checkRepo(ctx, client, cfg, n); err != nil {
-			a.State, a.Error = "failed", err.Error()
-			if rc.GitLab() {
-				if h := gitlabHint(err, n); h != "" {
-					a.Hints = append(a.Hints, h)
-				}
-			} else {
-				a.Hints = append(a.Hints, githubHint(err, n, vals["FACTORY_GITHUB_APP_ID"] != "")...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				mu.Lock()
+				results[n] = timedOutAccess(a)
+				mu.Unlock()
+				return
 			}
+			a := w.checkOne(ctx, client, cfg, rc, n, a, labels, vals)
+			if ctx.Err() != nil && a.State != "ok" {
+				a = timedOutAccess(a)
+			}
+			mu.Lock()
 			results[n] = a
-			continue
-		}
-		a.State = "ok"
-		if gh, _, err := client(n); err == nil {
-			if b, err := gh.DefaultBranch(ctx); err == nil {
-				a.DefaultBranch = b
-			}
-			a.MissingLabels, a.LabelsError = missingLabels(ctx, gh, labels)
-		}
-		results[n] = a
+			mu.Unlock()
+		}()
 	}
-	if ctx.Err() != nil {
-		return
-	}
+	wg.Wait()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// Only checks made with the credentials and repos still saved count.
 	if w.credGen == gen && w.cfg == cfg {
 		w.access, w.checkedAt = results, time.Now()
 		w.missing, w.instErr = missing, instErr
 	}
+}
+
+// accessParallel is how many repos are checked at once.
+const accessParallel = 4
+
+func timedOutAccess(a web.APIWizardAccess) web.APIWizardAccess {
+	a.State, a.Error, a.Hints = "failed", "timed out: the forge didn't answer in time; check again", []string{}
+	return a
+}
+
+// checkOne checks the factory reaches one repo, and its default branch
+// and labels.
+func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Config, rc config.Repo, n string, a web.APIWizardAccess, labels []pipeline.Label, vals map[string]string) web.APIWizardAccess {
+	if err := checkRepo(ctx, client, cfg, n); err != nil {
+		a.State, a.Error = "failed", err.Error()
+		if rc.GitLab() {
+			if h := gitlabHint(err, n); h != "" {
+				a.Hints = append(a.Hints, h)
+			}
+		} else {
+			a.Hints = append(a.Hints, githubHint(err, n, vals["FACTORY_GITHUB_APP_ID"] != "")...)
+		}
+		return a
+	}
+	a.State = "ok"
+	if gh, _, err := client(n); err == nil {
+		if b, err := gh.DefaultBranch(ctx); err == nil {
+			a.DefaultBranch = b
+		}
+		a.MissingLabels, a.LabelsError = missingLabels(ctx, gh, labels)
+	}
+	return a
 }
 
 // missingLabels are the factory's labels a repo doesn't have, or why it
@@ -671,6 +722,9 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		w.mu.Unlock()
 		w.credentialsChanged()
 		w.checkAccess(ctx)
+		if v, ok := w.exported["GITHUB_TOKEN"]; ok && v != t {
+			return "Saved the token, but the GITHUB_TOKEN exported where the factory starts wins, so the factory uses that one. This check is of that one: " + w.accessMessage(), nil
+		}
 		return "Saved the token. " + w.accessMessage(), nil
 	case "gitlab/token":
 		t := strings.TrimSpace(in.Token)
@@ -1094,8 +1148,9 @@ func (w *wizard) startCodexSignIn(cfg *config.Config) (string, error) {
 		os.RemoveAll(tmp)
 		return "", errors.New("a sign-in is already running: open the link and enter the code")
 	}
-	// The daemon's context, so it stops with the daemon too.
-	ctx, cancel := context.WithCancel(w.bg)
+	// The daemon's context, so it stops with the daemon too, and a
+	// deadline, so a code nobody enters doesn't hold a restart for long.
+	ctx, cancel := context.WithTimeout(w.bg, signInWait)
 	log := &tailBuffer{max: 8 << 10}
 	w.signIn = pageSignIn{running: true, log: log, cancel: cancel}
 	w.signInDone.Add(1)
@@ -1105,9 +1160,10 @@ func (w *wizard) startCodexSignIn(cfg *config.Config) (string, error) {
 		defer os.RemoveAll(tmp)
 		defer cancel()
 		runErr := runCmdContext(ctx, log, name, args...)
-		stopped := ctx.Err() != nil
+		// Codex that finished before a Cancel landed is a sign-in all the same.
+		stopped := runErr != nil && ctx.Err() != nil
 		if stopped && container != "" {
-			_ = runCmd(io.Discard, "docker", "rm", "-f", container)
+			removeContainer(container)
 		}
 		res, err := "", error(nil)
 		if !stopped {
@@ -1115,10 +1171,15 @@ func (w *wizard) startCodexSignIn(cfg *config.Config) (string, error) {
 		}
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		w.signIn.running, w.signIn.cancel = false, nil
+		cancelled := w.signIn.cancelled
+		w.signIn.running, w.signIn.cancel, w.signIn.cancelled = false, nil, false
 		switch {
-		case stopped:
+		case stopped && cancelled:
 			w.signIn.result = "Sign-in cancelled."
+		case stopped && errors.Is(ctx.Err(), context.DeadlineExceeded):
+			w.signIn.result, w.signIn.failed = fmt.Sprintf("The sign-in timed out: nobody entered the code within %s. Start it again.", signInWait.Round(time.Minute)), true
+		case stopped:
+			w.signIn.result, w.signIn.failed = "The sign-in stopped because the factory is shutting down.", true
 		case err != nil:
 			w.signIn.result, w.signIn.failed = err.Error(), true
 		default:
@@ -1137,10 +1198,36 @@ func (w *wizard) cancelCodexSignIn() (string, error) {
 		w.mu.Unlock()
 		return "", errors.New("no sign-in is running")
 	}
+	w.signIn.cancelled = true
 	w.mu.Unlock()
 	cancel()
 	w.signInDone.Wait()
-	return "Sign-in cancelled.", nil
+	// It may have finished first: say what happened.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.signIn.result, nil
+}
+
+// signInWait is how long a sign-in waits for its code to be entered.
+var signInWait = 20 * time.Minute
+
+// rmRetries and rmRetryWait bound removing a sign-in's container: one
+// cancelled just as Docker made it may not be there on the first try.
+var (
+	rmRetries   = 5
+	rmRetryWait = time.Second
+)
+
+// removeContainer removes a container, trying again a few times while
+// Docker says there's no such container yet.
+func removeContainer(name string) {
+	for i := 0; i < rmRetries; i++ {
+		out, err := runOutput(context.Background(), "docker", "rm", "-f", name)
+		if err == nil && !strings.Contains(out, "No such container") {
+			return
+		}
+		time.Sleep(rmRetryWait)
+	}
 }
 
 // signingIn says whether a sign-in from the page is running.
@@ -1152,11 +1239,28 @@ func (w *wizard) signingIn() bool {
 
 // busy says what a restart now would cut off, or "".
 func (w *wizard) busy() string {
-	if running, _, _, _ := w.builder.status(); running {
+	switch w.waitingOn() {
+	case waitBuild:
 		return "A job image is being built. Finish once it's done, so the restart doesn't cut it off."
+	case waitSignIn:
+		return "A Codex sign-in is running. Finish it or cancel it first."
+	}
+	return ""
+}
+
+// What a restart waits for, besides jobs.
+const (
+	waitBuild  = "the job image build"
+	waitSignIn = "the Codex sign-in"
+)
+
+// waitingOn names the work a restart must wait for, or "".
+func (w *wizard) waitingOn() string {
+	if running, _, _, _ := w.builder.status(); running {
+		return waitBuild
 	}
 	if w.signingIn() {
-		return "A Codex sign-in is running. Finish it or cancel it first."
+		return waitSignIn
 	}
 	return ""
 }

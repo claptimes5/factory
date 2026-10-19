@@ -172,12 +172,19 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	if err != nil {
 		return err
 	}
+	// As the factory will run: a variable exported where it starts wins
+	// over the saved one, as loadEnvFile does, so setup checks and keeps
+	// what will be used. Say which, by name only.
+	exported := envMap(startEnv)
 	for _, k := range envKeys {
-		// A GITHUB_TOKEN exported for other tools (gh, for one) is usually a
-		// broad personal token, so it is never picked up without asking.
-		if _, ok := vals[k]; !ok && k != "GITHUB_TOKEN" {
-			vals[k] = os.Getenv(k)
+		v, ok := exported[k]
+		if !ok {
+			continue
 		}
+		if saved, in := vals[k]; in && saved != v {
+			p.say("%s is set in the environment the factory starts with, so it overrides the one saved in %s.", k, filepath.Base(envPath))
+		}
+		vals[k] = v
 	}
 	save := func() error {
 		return writeEnvFile(envPath, "# Written by `factory setup`. Values set in the environment override these.\n", envKeys, vals)

@@ -1454,7 +1454,7 @@ components:
         fields: { type: array, items: { $ref: "#/components/schemas/Setting" } }
     Settings:
       type: object
-      required: [path, writable, reason, version, changed, restart_pending, running_jobs, groups]
+      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups]
       properties:
         path: { type: string, description: The config file }
         writable: { type: boolean }
@@ -1462,6 +1462,7 @@ components:
         version: { type: string, description: Changes whenever the file does }
         changed: { type: boolean, description: The file differs from the one the factory started with }
         restart_pending: { type: boolean }
+        restart_waits_for: { type: string, description: "Other work the pending restart waits for, such as \"the job image build\" or \"the Codex sign-in\"; else empty" }
         running_jobs: { type: integer }
         groups: { type: array, items: { $ref: "#/components/schemas/SettingsGroup" } }
     TuningChange:
@@ -1496,7 +1497,7 @@ components:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
     Wizard:
       type: object
-      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, setup_reason, started_at]
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
       properties:
         mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
         writable: { type: boolean, description: This request may save here }
@@ -1521,6 +1522,7 @@ components:
         warnings: { type: array, items: { type: string }, description: "What won't work yet if you finish now" }
         changed: { type: boolean, description: factory.yaml or factory.env changed since the factory started }
         restart_pending: { type: boolean }
+        restart_waits_for: { type: string, description: "Other work the pending restart waits for; else empty" }
         setup_reason: { type: string, description: "Why the factory can't start, in setup mode; else empty" }
         started_at: { type: string, description: "When this process started, so a page waiting on a restart can tell the new one from the old" }
     WizardStep:

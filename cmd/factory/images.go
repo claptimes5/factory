@@ -21,6 +21,9 @@ import (
 // never touches anyone else's images.
 const imageLabel = "io.factory.built"
 
+// buildWait is the longest one image's build may take.
+var buildWait = 60 * time.Minute
+
 // pruneEvery is how often serve removes old copies of the factory's images.
 var pruneEvery = time.Hour
 
@@ -138,7 +141,15 @@ func (b *imageBuilder) build(cfg *config.Config, images []jobImage, out io.Write
 	for _, im := range images {
 		slog.Info("building job image", "image", im.tag, "for", joinAnd(im.repos))
 		fmt.Fprintf(out, "Building %s for %s...\n", im.tag, joinAnd(im.repos))
-		if err := runCmd(out, "docker", im.buildArgs(dir)...); err != nil {
+		// A hung build mustn't hold its jobs, and a restart, for ever.
+		ctx, cancel := context.WithTimeout(context.Background(), buildWait)
+		err := runCmdContext(ctx, out, "docker", im.buildArgs(dir)...)
+		timedOut := ctx.Err() != nil
+		cancel()
+		if timedOut {
+			return built, fmt.Errorf("building %s: it took over %s, so it was stopped", im.tag, buildWait)
+		}
+		if err != nil {
 			return built, fmt.Errorf("building %s: %w", im.tag, err)
 		}
 		slog.Info("built job image", "image", im.tag)

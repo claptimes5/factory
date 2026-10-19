@@ -65,6 +65,18 @@ func (d *fakeDocker) run(out io.Writer, name string, args ...string) error {
 	return nil
 }
 
+// runContext is run, stopped early when ctx ends.
+func (d *fakeDocker) runContext(ctx context.Context, out io.Writer, name string, args ...string) error {
+	done := make(chan error, 1)
+	go func() { done <- d.run(out, name, args...) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (d *fakeDocker) ran(prefix string) []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -82,9 +94,10 @@ func useDocker(t *testing.T, d *fakeDocker) {
 	if d.built == nil {
 		d.built = map[string]bool{}
 	}
-	old := runCmd
+	old, oldCtx := runCmd, runCmdContext
 	runCmd = d.run
-	t.Cleanup(func() { runCmd = old })
+	runCmdContext = d.runContext
+	t.Cleanup(func() { runCmd, runCmdContext = old, oldCtx })
 }
 
 func imagesConfig(t *testing.T) *config.Config {
@@ -278,5 +291,24 @@ func TestWizardShowsServesBuild(t *testing.T) {
 			t.Fatal("build didn't finish")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A hung build is stopped, so its jobs and a restart don't wait for ever.
+func TestImageBuildTimesOut(t *testing.T) {
+	d := &fakeDocker{gate: make(chan struct{})}
+	useDocker(t, d)
+	t.Cleanup(func() { close(d.gate) })
+	old := buildWait
+	buildWait = 50 * time.Millisecond
+	t.Cleanup(func() { buildWait = old })
+	cfg := imagesConfig(t)
+	b := &imageBuilder{}
+	if _, err := b.start(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	b.wait()
+	if running, _, result, failed := b.status(); running || !failed || !strings.Contains(result, "took over") || len(b.Building()) != 0 {
+		t.Fatalf("status %v %q %v, building %v", running, result, failed, b.Building())
 	}
 }

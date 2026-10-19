@@ -95,6 +95,8 @@ type APIWizard struct {
 	// started, so Finish restarts it to apply them.
 	Changed        bool `json:"changed"`
 	RestartPending bool `json:"restart_pending"`
+	// RestartWaitsFor names other work the pending restart waits for.
+	RestartWaitsFor string `json:"restart_waits_for"`
 	// SetupReason is why the factory can't start, in setup mode; else "".
 	// StartedAt is when this process started, so the page can tell a
 	// restarted one from the one it asked to restart.
@@ -294,7 +296,7 @@ func (s *Server) wizardState(r *http.Request) APIWizard {
 	}
 	out.StartedAt = processStart
 	if s.Restarter != nil {
-		out.RestartPending = s.Restarter.RestartPending()
+		out.RestartPending, out.RestartWaitsFor = s.Restarter.RestartPending(), s.Restarter.RestartWaitsFor()
 	}
 	return out
 }

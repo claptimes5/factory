@@ -67,6 +67,7 @@ func (r *restarter) RequestRestart(context.Context) int { r.pending.Store(true);
 func (r *restarter) CancelRestart(context.Context) bool { return r.pending.Swap(false) }
 func (r *restarter) RestartPending() bool               { return r.pending.Load() }
 func (r *restarter) Running() int                       { return 1 }
+func (r *restarter) RestartWaitsFor() string            { return "" }
 
 // sampleConfig is the factory.yaml the Settings screen edits.
 const sampleConfig = `# A sample factory.yaml for the devserver.

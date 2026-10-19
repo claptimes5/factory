@@ -121,9 +121,9 @@ type Pipeline struct {
 	// Building names the job images being built right now (may be nil):
 	// jobs that run in one wait in the queue until it is built.
 	Building func() []string
-	// Busy says other work is running that a restart must not cut off,
-	// such as an image build (may be nil).
-	Busy      func() bool
+	// Busy names other work a restart must not cut off, such as "the
+	// job image build", or is "" (may be nil).
+	Busy      func() string
 	GH        GitHub
 	Git       *Git
 	Runner    runner.Runner
@@ -352,8 +352,13 @@ func (p *Pipeline) RequestRestart(ctx context.Context) int {
 	n := p.Running() // after the flag, so no job starts uncounted
 	if first {
 		msg := "Restarting to apply new settings."
-		if n > 0 {
+		switch busy := p.RestartWaitsFor(); {
+		case n > 0 && busy != "":
+			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s and %s is done.", n, plural(n, "job finishes", "jobs finish"), busy)
+		case n > 0:
 			msg = fmt.Sprintf("Restarting to apply new settings once %d running %s.", n, plural(n, "job finishes", "jobs finish"))
+		case busy != "":
+			msg = "Restarting to apply new settings once " + busy + " is done."
 		}
 		p.notify(ctx, msg)
 	}
@@ -372,6 +377,14 @@ func (p *Pipeline) CancelRestart(ctx context.Context) bool {
 
 // RestartPending says whether a restart is waiting on running jobs.
 func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
+
+// RestartWaitsFor names the work besides jobs a restart waits for, or "".
+func (p *Pipeline) RestartWaitsFor() string {
+	if p.Busy == nil {
+		return ""
+	}
+	return p.Busy()
+}
 
 // Running is how many jobs this daemon is running, chat replies included.
 func (p *Pipeline) Running() int {
@@ -437,7 +450,7 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 // when no job is left running.
 func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	if p.restart.Load() {
-		if p.Running() == 0 && (p.Busy == nil || !p.Busy()) {
+		if p.Running() == 0 && p.RestartWaitsFor() == "" {
 			return ErrRestart
 		}
 		return nil
