@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -399,6 +400,39 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	}, nil
 }
 
+// planHarnesses are the harnesses the routing uses that run on a
+// subscription plan, Claude first.
+func planHarnesses(cfg *config.Config, billed map[string]bool) []string {
+	used := map[string]bool{}
+	for _, r := range cfg.Routing {
+		used[r.Harness] = true
+	}
+	var out []string
+	for _, h := range []string{"claude", "codex"} {
+		if used[h] && billed[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// noReadingLines are status's lines on each harness on a plan that has
+// reported no usage yet, so its dollar spend isn't mistaken for the limit.
+func noReadingLines(plans []string, limits []store.Limit) []string {
+	var out []string
+	for _, h := range plans {
+		if slices.ContainsFunc(limits, func(l store.Limit) bool { return l.Harness == h }) {
+			continue
+		}
+		when := "Claude reports usage when it gets close to a limit"
+		if h == "codex" {
+			when = "Codex reports usage after each job it runs with the Docker runner"
+		}
+		out = append(out, fmt.Sprintf("usage limits:\t%s runs on a plan; no reading yet (%s). Its dollar figures are API-price estimates.", h, when))
+	}
+	return out
+}
+
 // planBilled names the harnesses on a subscription plan: Claude signed in
 // with a subscription token and no API key, which Claude Code would use
 // first, nor an auth token or Bedrock or Vertex, all billed by use; and
@@ -464,6 +498,11 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
 	srv.DiskLow = p.DiskLow
+	// The setup screen reads the readiness check's reports, and can run it
+	// again: on the daemon's context, so it stops when the daemon does.
+	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
+	srv.CheckReadiness = func(_ context.Context, repo string) error { return recheckReadiness(ctx, cfg, p, repo) }
+	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	// The Settings screen edits the config file; saved changes apply when
 	// the daemon restarts, which it does once running jobs finish.
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)
@@ -574,8 +613,13 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	}
 	spent, _ := st.SpendOn(ctx, store.Today())
 	fmt.Fprintf(w, "spend today:\t$%.2f of $%.2f\n", spent, cfg.Budgets.DailyTotal)
-	if limits, _ := st.Limits(ctx); len(limits) > 0 {
+	limits, _ := st.Limits(ctx)
+	if len(limits) > 0 {
 		fmt.Fprintf(w, "usage limits:\t%s\n", store.FormatLimits(limits))
+	}
+	// By this shell's settings, as codex sign-in below.
+	for _, l := range noReadingLines(planHarnesses(cfg, planBilled(secrets(), os.Getenv, codexAuthMode())), limits) {
+		fmt.Fprintln(w, l)
 	}
 	if rep, err := metrics.Compute(ctx, st); err == nil {
 		fmt.Fprintf(w, "review:\t%s\n", reviewLine(rep))
@@ -584,6 +628,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	// environment overrides factory.env.
 	if s := codexSignIn(cfg); s != "" {
 		fmt.Fprintf(w, "codex sign-in (by this shell's settings):\t%s\n", s)
+	}
+	for _, l := range readinessLines(ctx, st, cfg) {
+		fmt.Fprintln(w, l)
 	}
 	for _, l := range mainHealthLines(ctx, st, cfg) {
 		fmt.Fprintln(w, l)

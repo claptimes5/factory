@@ -14,6 +14,7 @@ import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
 import { LiveScreen } from "@/screens/Live";
 import { SettingsScreen } from "@/screens/Settings";
+import { SetupScreen } from "@/screens/Setup";
 import "./index.css";
 
 const router = createBrowserRouter(
@@ -30,6 +31,7 @@ const router = createBrowserRouter(
         { path: "/notifications", element: <NotificationsScreen /> },
         { path: "/live", element: <LiveScreen /> },
         { path: "/settings", element: <SettingsScreen /> },
+        { path: "/setup", element: <SetupScreen /> },
         { path: "*", element: <NotFound /> },
       ],
     },

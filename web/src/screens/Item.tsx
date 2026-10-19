@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { act, useItem, type Estimate, type Event, type Item, type Plan } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
 import { Choices } from "@/components/Choices";
+import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
 import { Screenshots } from "@/components/Screenshots";
 import { Button } from "@/components/ui/button";
@@ -138,6 +139,7 @@ export function ItemScreen() {
                       ))}
                     </tbody>
                   </table>
+                  <PlanCostNote harnesses={jobs.map((j) => j.harness)} className="mt-2" />
                 </div>
               )}
             </CardContent>

@@ -5,6 +5,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { act, useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
+import { PlanUsageMeter } from "@/components/PlanUsage";
+import { SetupBanner } from "@/screens/Setup";
 import { useBrowserNotifications } from "@/lib/notify";
 import { setRepo, useRepo } from "@/lib/repo";
 import { cn, money, repoName } from "@/lib/utils";
@@ -61,6 +63,7 @@ const links = [
   { to: "/orchestrator", label: "Orchestrator" },
   { to: "/metrics", label: "Spend" },
   { to: "/settings", label: "Settings" },
+  { to: "/setup", label: "Setup" },
 ];
 
 const tabs = [
@@ -176,6 +179,8 @@ export function Layout() {
           )}
         </div>
       </header>
+      <SetupBanner />
+      <PlanUsageMeter className="border-b px-4 py-2 md:px-6" />
       {o && <MainHealth o={o} />}
       {o && <AutoMergeBreaker o={o} />}
       {o?.disk_low && (

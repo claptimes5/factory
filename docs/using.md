@@ -26,6 +26,7 @@ To reach it from another machine, or to put a password on it, see
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items (with their choices), items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
+| **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): "2 of 3 setup steps done", each step passing or not and why it matters, and each blocker linked to its issue and the factory's item for it (waiting its turn, being built, needs you, done). **Check again** runs the check on the repo as it is now, so blockers fixed outside the factory show as fixed. |
 
 When a repo's base branch is red or flaky (see
 [Keeping main green](#keeping-main-green)), a line under the header says so
@@ -33,6 +34,21 @@ on every screen, with a link to the fix issue. When a repo's
 [auto-merge breaker](#auto-merge-guard-rails) has tripped, a line says
 that too, with a **Reset** button behind the same password check as
 Settings.
+
+While a repo the readiness check looked at has blockers, or its check
+couldn't finish, a line under the header says how far its setup is, with a
+link to **Setup**. Once every checked repo is ready, it says to add the
+`factory:ready` label to issues to start, until the factory has worked on
+anything but setup.
+
+When Claude or Codex runs on a subscription plan, a line under the header
+shows each plan's usage windows ("5-hour: 42% used, resets 6:06pm",
+"Weekly: 18% used"), since on a plan those limit the work, not dollars.
+Until a harness reports a reading it says so: Claude Code only includes a
+percentage once a window gets close to its limit, and Codex reports after
+each job on the Docker runner. Job and item pages say that on a plan the
+dollar figures are estimates at API prices. With API keys there's no line,
+and dollars are what count.
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
@@ -202,7 +218,7 @@ the command name to use other files.
 | `factory readiness [-file\|-queue] [REPO]` | Measure how ready each repo is (see [How ready a repo is](quality.md#how-ready-a-repo-is)) |
 | `factory serve` | Run the daemon: poll GitHub, run jobs, open PRs |
 | `factory run-once` | Poll once, run queued jobs to completion, exit |
-| `factory status` | Items by stage with their cost estimates, queue depth, today's spend, review quality (escape rate, precision, rounds to pass), each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, each repo's auto-merge breaker, the revert rate, recent jobs |
+| `factory status` | Items by stage with their cost estimates, each repo's setup progress from its last readiness check, queue depth, today's spend, a plan with no usage reading yet, review quality (escape rate, precision, rounds to pass), each repo's base branch CI (with main health on), sources, grooming's last run and open proposals, each repo's auto-merge breaker, the revert rate, recent jobs |
 | `factory automerge [reset REPO]` | Show each repo's [auto-merge breaker](#auto-merge-guard-rails); `reset` turns a tripped one off so the repo's PRs may merge themselves again. The running daemon picks it up at once |
 | `factory tune` | Queue a [tuning](#tuning) run now, however few items were built; the daemon runs it |
 | `factory groom [REPO]` | Queue a [backlog grooming](#backlog-grooming) run of one repo, or of each groomed repo, now, whatever `grooming.every` says; the daemon runs it |

@@ -5,6 +5,7 @@ import { Choices } from "@/components/Choices";
 import { Actions, Empty, ErrorBox, GateList, JobStateBadge, Loading } from "@/components/common";
 import { DiffView } from "@/components/DiffView";
 import { Markdown } from "@/components/Markdown";
+import { PlanCostNote } from "@/components/PlanUsage";
 import { Terminal } from "@/components/Terminal";
 import { Transcript } from "@/components/Transcript";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,6 +48,7 @@ export function SessionScreen() {
           {j.started_at && ` · ${duration(j.started_at, j.finished_at || undefined)}`}
           {j.skillset && ` · skills: ${j.skillset}`}
         </p>
+        <PlanCostNote harnesses={[j.harness]} className="mt-1" />
         {j.error && !stop && <p className="mt-1 text-sm text-destructive">{j.error}</p>}
         {stop && <StopPanel jobId={j.id} stop={stop} />}
         <div className="mt-2">

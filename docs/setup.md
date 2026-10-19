@@ -51,8 +51,10 @@ builds `./factory`. To build by hand instead:
 CGO_ENABLED=0 go build -o factory ./cmd/factory
 ```
 
-Then open the dashboard at http://127.0.0.1:8080/app/ and label an issue
-`factory:ready`.
+Then open the dashboard at http://127.0.0.1:8080/app/. If setup's
+readiness check found blockers, the dashboard's **Setup** screen shows what
+each repo still needs and follows the factory's work on it; once it says
+the repo is ready, label an issue `factory:ready`.
 
 One thing setup can't do for you: **protect `main`**. In the repo's
 settings, require a pull request with your review and the `test` and `web`
@@ -187,8 +189,8 @@ Know the trade-offs before you choose it:
 `./factory status` shows the sign-in and when it was last refreshed. It
 goes by its own settings (`factory.env` and its environment), which are the
 daemon's unless the daemon's environment sets other values. The
-plan's 5-hour and weekly usage show there and on the dashboard's **Spend**
-page, and Codex jobs wait when one is nearly used up (see
+plan's 5-hour and weekly usage show there, under the dashboard's header
+and on its **Spend** page, and Codex jobs wait when one is nearly used up (see
 [Subscription usage limits](configuration.md#budgets)).
 
 On ChatGPT Business or Enterprise you can use a Codex access token
