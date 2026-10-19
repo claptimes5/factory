@@ -1063,6 +1063,16 @@ func (p *Pipeline) pickRepo(name string) (string, error) {
 	}
 	r, ok := p.Cfg.RepoConf(name)
 	if !ok {
+		// A GitLab repo named without its host, as owner/name.
+		var hits []string
+		for _, n := range p.Cfg.RepoNames() {
+			if strings.HasSuffix(strings.ToLower(n), "/"+strings.ToLower(name)) {
+				hits = append(hits, n)
+			}
+		}
+		if len(hits) == 1 {
+			return hits[0], nil
+		}
 		return "", fmt.Errorf("refused: %s is not one of the factory's repos (%s)", name, strings.Join(p.Cfg.RepoNames(), ", "))
 	}
 	return r.Name, nil

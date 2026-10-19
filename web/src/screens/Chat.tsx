@@ -118,6 +118,8 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [allMsg, setAllMsg] = useState("");
   const end = useRef<HTMLDivElement>(null);
   const turns = data?.messages.length ?? 0;
   // Braced: newer browsers' scrollIntoView returns a promise, which React
@@ -145,6 +147,21 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
   if (chatId && isLoading) return <Loading />;
   if (chatId && error) return <ErrorBox error={error} />;
   const drafts = data?.drafts ?? [];
+  const open = drafts.filter((d) => d.state === "draft");
+  // One at a time, in the order drafted, each as its Create would; the
+  // first that fails stops the rest.
+  const createAll = async () => {
+    setCreating(true);
+    setAllMsg("");
+    try {
+      for (const d of open) await postJSON<Draft>(`/drafts/${d.id}/create`, { version: d.version });
+    } catch (e) {
+      setAllMsg(e instanceof APIError ? e.message : String(e));
+    } finally {
+      setCreating(false);
+      await qc.invalidateQueries({ queryKey: ["chat", chatId] });
+    }
+  };
   return (
     <div className="min-w-0 space-y-4">
       <Card>
@@ -205,7 +222,25 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
       </Card>
       {drafts.length > 0 && (
         <section className="space-y-2" aria-label="Drafted issues">
-          <h2 className="text-sm font-medium">Drafted issues</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-medium">Drafted issues</h2>
+            {open.length > 1 && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={creating || busy}
+                title={busy ? "Wait for the reply: it may still change these drafts" : undefined}
+                onClick={() => void createAll()}
+              >
+                {creating && <Loader2 className="animate-spin" />} Create all {open.length}
+              </Button>
+            )}
+            {allMsg && (
+              <span role="alert" className="text-sm text-destructive">
+                {allMsg}
+              </span>
+            )}
+          </div>
           {drafts.map((d) => (
             <DraftCard key={d.id} d={d} chatId={chatId} replying={busy} />
           ))}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/mcp"
@@ -506,5 +507,16 @@ func TestToolSchemasHaveRequiredList(t *testing.T) {
 		if err := json.Unmarshal(s, &v); err != nil || v.Required == nil {
 			t.Fatalf("schema %s: required must be a list (err %v)", s, err)
 		}
+	}
+}
+
+// A GitLab repo may be named without its host; an ambiguous name is refused.
+func TestPickRepoWithoutHost(t *testing.T) {
+	p := &Pipeline{Cfg: &config.Config{Repos: []config.Repo{{Name: "gitlab.com/acme/api"}, {Name: "gitlab.example.com/acme/web"}, {Name: "git.example.org/acme/web"}}}}
+	if got, err := p.pickRepo("acme/api"); err != nil || got != "gitlab.com/acme/api" {
+		t.Fatalf("acme/api: %q %v", got, err)
+	}
+	if _, err := p.pickRepo("acme/web"); err == nil {
+		t.Fatal("acme/web matches two repos and should be refused")
 	}
 }
