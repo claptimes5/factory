@@ -125,6 +125,43 @@ func TestCodexParsesFinalAndUsage(t *testing.T) {
 	}
 }
 
+// A Codex builder runs without Codex's own sandbox, as a Claude builder
+// runs with bypassPermissions: the container is the sandbox, and Codex's
+// workspace-write would keep it from writing /out/verdict.json.
+func TestCodexBuilderRunsInTheContainersSandbox(t *testing.T) {
+	fr := &fakeRunner{out: codexStream}
+	r := req(t, false)
+	r.Stage, r.Schema = "implement", ""
+	if _, err := NewCodex(fr).Run(context.Background(), r, nil); err != nil {
+		t.Fatal(err)
+	}
+	cmd := strings.Join(fr.spec.Cmd, " ")
+	if !strings.Contains(cmd, "--sandbox danger-full-access") || strings.Contains(cmd, "workspace-write") || strings.Contains(cmd, "--output-schema") {
+		t.Fatalf("builder cmd = %s", cmd)
+	}
+}
+
+// The orchestrator's MCP bridge reaches Codex as mcp_servers overrides.
+func TestCodexMCPServers(t *testing.T) {
+	fr := &fakeRunner{out: codexStream}
+	r := req(t, true)
+	r.Stage = "orchestrate"
+	r.MCPConfig = `{"mcpServers":{"factory":{"type":"stdio","command":"/opt/factory/factory","args":["mcp-bridge","/run/factory/mcp.sock"]}}}`
+	if _, err := NewCodex(fr).Run(context.Background(), r, nil); err != nil {
+		t.Fatal(err)
+	}
+	cmd := strings.Join(fr.spec.Cmd, " ")
+	for _, want := range []string{`-c mcp_servers.factory.command="/opt/factory/factory"`, `-c mcp_servers.factory.args=["mcp-bridge","/run/factory/mcp.sock"]`} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("cmd missing %q: %s", want, cmd)
+		}
+	}
+	r.MCPConfig = `{"mcpServers":{"a.b":{"command":"x"}}}`
+	if _, err := NewCodex(fr).Run(context.Background(), r, nil); err == nil {
+		t.Fatal("a server name that isn't a TOML bare key was accepted")
+	}
+}
+
 func TestCodexTurnFailed(t *testing.T) {
 	fr := &fakeRunner{out: `{"type":"turn.failed","error":{"message":"rate limited"}}` + "\n", code: 1}
 	res, _ := NewCodex(fr).Run(context.Background(), req(t, true), nil)

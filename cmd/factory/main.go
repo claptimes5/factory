@@ -965,10 +965,14 @@ func reviewEvaluator(daemon *config.Config) pipeline.ReviewEvaluator {
 // the git repository in the current directory and copies the item's job
 // transcripts (and Claude sessions, when kept) next to it.
 // remoteIs reports whether a git remote URL (https or ssh) points at the
-// GitHub repo owner/name.
+// GitHub repo owner/name, or the GitLab project host/group/project.
 func remoteIs(url, repo string) bool {
 	u := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git"))
 	r := strings.ToLower(repo)
+	// A GitLab repo's name starts with its host: gitlab.com/group/project.
+	if host, path, _ := strings.Cut(r, "/"); strings.Contains(host, ".") && strings.Contains(path, "/") {
+		return strings.HasSuffix(u, "//"+r) || strings.HasSuffix(u, "@"+r) || strings.HasSuffix(u, "@"+host+":"+path)
+	}
 	return strings.HasSuffix(u, "/"+r) || strings.HasSuffix(u, ":"+r)
 }
 

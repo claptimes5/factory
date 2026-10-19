@@ -575,7 +575,7 @@ func (c *Config) defaults() {
 		o.NotifyPerHour = 6
 	}
 	if _, ok := c.Routing["orchestrate"]; !ok && c.Routing != nil {
-		c.Routing["orchestrate"] = Route{Harness: "claude", Model: "opus"}
+		c.Routing["orchestrate"] = c.defaultOrchestrate()
 	}
 	t := &c.Tuning
 	switch strings.TrimSpace(t.EveryText) {
@@ -636,6 +636,24 @@ func (c *Config) defaults() {
 		r.Host, r.Name = SplitRepo(r.Host, r.Name)
 		// Unset base_branch and gates follow the top level (see RepoConf).
 	}
+}
+
+// defaultOrchestrate is the orchestrator's route when routing leaves it
+// out: Opus on Claude, or, when no route names Claude (a Codex-only
+// factory), the strongest builder's harness and model, so a factory that
+// has no Claude sign-in never needs one for it, or for tuning.
+func (c *Config) defaultOrchestrate() Route {
+	for _, r := range c.Routing {
+		if r.Harness == "claude" {
+			return Route{Harness: "claude", Model: "opus"}
+		}
+	}
+	for _, k := range []string{"implement.L", "implement.M", "implement.S", "review"} {
+		if r, ok := c.Routing[k]; ok {
+			return Route{Harness: r.Harness, Model: r.Model}
+		}
+	}
+	return Route{Harness: "claude", Model: "opus"}
 }
 
 // SplitRepo reads a repo as written in the config or typed in setup
@@ -877,12 +895,18 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+		// Escalation tiers are model names on the route's own harness.
+		if b.Harness == "codex" {
+			for _, m := range c.builderModels(b)[1:] {
+				if _, ok := c.Pricing[m]; !ok {
+					bad("routing.implement.%s runs on codex and escalates to %q, which has no pricing entry: escalation.implement names models of the route's harness, so list Codex models there", size, m)
+					break
+				}
+			}
+		}
 		if v, ok := c.Budgets.PerJob[size]; (ok || size != "XS") && v <= 0 { // a missing XS falls back to S's
 			bad("budgets.per_job.%s must be > 0", size)
 		}
-	}
-	if r, ok := c.Routing["orchestrate"]; ok && r.Harness != "claude" {
-		bad("routing.orchestrate must use the claude harness (it drives the daemon's MCP tools)")
 	}
 	if len(c.Escalation.Implement) == 0 {
 		bad("escalation.implement needs at least one model tier")

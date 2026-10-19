@@ -60,6 +60,10 @@ Nothing the builder writes is trusted:
   may add files there (dependencies, build output). But a check that edits
   or deletes the commit's own files fails, so it can't get around the diff
   guard by rewriting a lint config or removing a test at run time.
+- **The container is the builder's sandbox.** Claude builds with
+  `bypassPermissions` and Codex with `--sandbox danger-full-access`: inside
+  the job's container, with the egress allowlist, either may run any
+  command. Read-only steps keep each CLI's own read-only mode.
 - **Reviewers only count their final message.** A verdict file anywhere is
   ignored, and Claude's read-only runs ignore the checkout's settings,
   hooks and MCP servers.

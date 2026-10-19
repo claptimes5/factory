@@ -168,7 +168,7 @@ type Event struct {            // normalized from each CLI's JSON stream
 | Harness | Invocation | Output parsed |
 | --- | --- | --- |
 | Claude Code | `claude -p "<prompt>" --model <m> --output-format stream-json --verbose` with `--permission-mode` set per stage | stream-json events; final result + usage |
-| Codex | `codex exec --json --model <m> --sandbox <read-only or workspace-write> "<prompt>"` | JSONL events; final message + usage |
+| Codex | `codex exec --json --model <m> --sandbox <read-only or danger-full-access> "<prompt>"` (a builder runs in the container's sandbox, as Claude's does) | JSONL events; final message + usage |
 
 Exact flags change between CLI versions, so the adapter pins the CLI version in the job image and has a smoke test per harness.
 

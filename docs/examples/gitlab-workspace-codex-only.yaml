@@ -1,0 +1,105 @@
+# A GitLab workspace of a Rails API and a React (Vite) app, every step on
+# Codex signed in to a ChatGPT plan (`./factory codex-login`), and no
+# Claude credential. See docs/configuration.md#codex-only.
+#
+# Copy it to factory.yaml, change the repo names and models, and run
+# ./factory setup. Self-hosted GitLab: name the repos
+# gitlab.example.com/group/project.
+
+repos:
+  - name: gitlab.com/acme/api            # Rails; merges first
+    image_from: ruby:3.4-bookworm        # the job image adds Node, so it builds web/ too
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: factory}
+        ready: pg_isready -U postgres
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:factory@postgres:5432/api_test
+    gates:
+      install: bundle install && bin/rails db:prepare
+      required: [lint, test]
+      commands: {lint: bundle exec rubocop, test: bundle exec rspec}
+      proves_fix: none                   # the proves-fix and coverage checks are Go-only for now
+      coverage: none
+  - name: gitlab.com/acme/web            # React + Vite; Node is in the default image
+    gates:
+      install: npm ci
+      required: [types, lint, test, build]
+      commands:
+        types: npx tsc --noEmit
+        lint: npm run lint
+        test: CI=true npm run test
+        build: npm run build
+      proves_fix: none
+      coverage: none
+
+workspaces:
+  shop: [gitlab.com/acme/api, gitlab.com/acme/web]
+
+base_branch: main
+data_dir: ./data
+
+intake:
+  label: "factory:ready"
+  poll_interval: 60s
+
+runner:
+  kind: docker
+  image: factory-job:latest
+  cpus: "2"
+  memory: 4g
+
+# Use the models your plan offers. The reviewer's model must differ from
+# every model a builder can reach, escalation included, so one model
+# builds and another reviews; give each the effort that suits it.
+routing:
+  orchestrate:       {harness: codex, model: gpt-6.1-sol}   # drives the daemon's MCP tools
+  triage:            {harness: codex, model: gpt-6-luna}
+  implement.XS:      {harness: codex, model: gpt-6.1-sol, effort: low}
+  implement.S:       {harness: codex, model: gpt-6.1-sol, effort: medium}
+  implement.M:       {harness: codex, model: gpt-6.1-sol, effort: high}
+  implement.L:       {harness: codex, model: gpt-6.1-sol, effort: high}
+  review:            {harness: codex, model: gpt-6-luna, effort: medium}
+  review.high_risk:  {harness: codex, model: gpt-6-luna, effort: high}
+  # Never a builder's model.
+  verify:            {harness: codex, model: gpt-6-luna, effort: medium}
+  # Never the reviewer's model; with two models it is the builder's, which
+  # reads the change with its own prompt.
+  security:          {harness: codex, model: gpt-6.1-sol, effort: high}
+  # The critic and plan check default to implement.L; hunt to review;
+  # learn, grooming and tuning follow triage and orchestrate.
+
+escalation:
+  implement: [gpt-6.1-sol]               # one builder model: a retry stays on it
+  max_attempts_per_tier: 3
+  max_review_rounds: 2
+
+orchestrator:
+  enabled: false                         # turn on once builds look right
+
+# On a ChatGPT plan Codex jobs cost $0 here and the plan's 5-hour and
+# weekly limits hold them instead (budgets.pause_at_usage). These still
+# apply if you switch to an API key.
+budgets:
+  per_job: {XS: 0.5, S: 2, M: 6, L: 15}
+  triage: 0.5
+  review: 3
+  verify: 0.5
+  daily_total: 60
+  concurrent_jobs: 3                     # a ChatGPT sign-in runs one Codex job at a time anyway
+  awaiting_human_max: 5
+
+# Codex reports tokens; these price them on an API key. On a ChatGPT plan
+# they're only used if you switch, but every Codex model needs one.
+pricing:
+  gpt-6.1-sol: {input_per_mtok: 2, cached_input_per_mtok: 0.10, output_per_mtok: 10}
+  gpt-6-luna:  {input_per_mtok: 0.10, cached_input_per_mtok: 0.01, output_per_mtok: 0.50}
+
+gates:
+  diff_guard:
+    max_changed_lines: 400
+    protected_paths: [".gitlab-ci.yml", ".gitlab/", "factory.yaml", "CODEOWNERS",
+                      ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json",
+                      "REVIEW.md", ".rubocop.yml", "eslint.config.js", ".eslintrc.cjs"]

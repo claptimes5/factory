@@ -153,6 +153,35 @@ Merging is yours at every level. To make GitHub enforce it, give the paths
 behind your high-risk features a CODEOWNERS entry and require code owner
 review on the base branch.
 
+## One vendor only
+
+A factory can run every step on Claude alone or on Codex alone (see
+[Claude-only review](configuration.md#claude-only-review) and
+[Codex-only](configuration.md#codex-only)). The reviewer and the verifier
+still never run on a model a builder can reach, and the security pass never
+on a reviewer's; what it gives up is the second vendor's blind spots.
+
+**To revisit after real use.** Judgment calls made before any real runs:
+- A Codex builder runs with `--sandbox danger-full-access` in its
+  container, as Claude's runs with `bypassPermissions`, since Codex's
+  `workspace-write` can't write the verdict outside the checkout or reach
+  the network the container allows. If Codex's sandbox learns to do both
+  inside Docker, it could come back as a second layer.
+- Codex models compare by exact name, so a `-codex` variant of a model
+  counts as a different model from it. That may be too loose.
+- With two Codex models, the security pass runs on the builder's model,
+  and with Claude it runs on a builder tier that didn't build the item
+  (Haiku for a Sonnet build). Neither has been measured against the
+  cross-vendor default.
+- The orchestrator reaches the daemon's MCP tools on Codex through
+  `-c mcp_servers.<name>.command/args` overrides; this hasn't run against a
+  real Codex yet, and a Codex that asks to approve MCP calls in `exec`
+  would stall it.
+- A workspace's builder runs in its first repo's image. Rails first works
+  for a Rails API and a Vite app, since the job image adds Node to a Ruby
+  base; a workspace whose first repo uses the default image would need its
+  image to carry every member's toolchain by hand.
+
 ## Risk from the diff
 
 After the gates pass and before review starts, the daemon rates the change

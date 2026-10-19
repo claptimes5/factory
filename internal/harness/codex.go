@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"regexp"
+	"sort"
 	"time"
 
 	"github.com/claptimes5/factory/internal/runner"
@@ -11,10 +13,15 @@ import (
 
 // NewCodex returns the Codex CLI adapter:
 //
-//	codex exec --json --model <m> --sandbox <read-only|workspace-write> [--output-schema f] -
+//	codex exec --json --model <m> --sandbox <read-only|danger-full-access> [--output-schema f] -
 //
-// The prompt is sent on stdin. Codex reports tokens, not dollars, so the
-// caller prices the usage (see config.CostOf).
+// The prompt is sent on stdin. Read-only stages run in Codex's read-only
+// sandbox. A builder runs without Codex's own sandbox, as Claude's runs
+// with bypassPermissions: the container is the sandbox, and Codex's
+// workspace-write would keep the builder from writing its verdict outside
+// the checkout and from reaching the network (installs, services) the
+// container allows. Codex reports tokens, not dollars, so the caller
+// prices the usage (see config.CostOf).
 func NewCodex(r runner.Runner) Harness {
 	return &cliHarness{name: "codex", a: codexAdapter{}, runner: r}
 }
@@ -34,11 +41,16 @@ func (a codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) 
 	if req.Model == "" {
 		return nil, fmt.Errorf("codex: model is required")
 	}
-	sandbox := "workspace-write"
+	sandbox := "danger-full-access"
 	if req.ReadOnly {
 		sandbox = "read-only"
 	}
 	args := []string{"codex", "exec", "--json", "--model", req.Model, "--sandbox", sandbox, "--skip-git-repo-check", "--cd", p.Work}
+	mcp, err := codexMCP(req.MCPConfig)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, mcp...)
 	if req.Schema != "" {
 		args = append(args, "--output-schema", path.Join(p.Out, "schema.json"))
 	}
@@ -60,6 +72,42 @@ func (a codexAdapter) command(req RunRequest, p runner.Paths) ([]string, error) 
 }
 
 const codexLimitsFile = "codex-limits.json"
+
+// codexMCP turns the MCP servers of a `claude --mcp-config` JSON (the
+// orchestrator's stdio bridge to the daemon) into Codex's -c overrides of
+// mcp_servers. Values are TOML: a JSON string or array of strings is one.
+func codexMCP(cfg string) ([]string, error) {
+	if cfg == "" {
+		return nil, nil
+	}
+	var c struct {
+		Servers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+		return nil, fmt.Errorf("codex: mcp config: %w", err)
+	}
+	names := make([]string, 0, len(c.Servers))
+	for n := range c.Servers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var args []string
+	for _, n := range names {
+		s := c.Servers[n]
+		if !mcpName.MatchString(n) || s.Command == "" {
+			return nil, fmt.Errorf("codex: mcp server %q: needs a plain name and a command", n)
+		}
+		cmd, _ := json.Marshal(s.Command)
+		list, _ := json.Marshal(append([]string{}, s.Args...))
+		args = append(args, "-c", "mcp_servers."+n+".command="+string(cmd), "-c", "mcp_servers."+n+".args="+string(list))
+	}
+	return args, nil
+}
+
+var mcpName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // limitsAfter reads the usage-limit windows the wrapper saved.
 func (codexAdapter) limitsAfter(outDir string, res *Result) {

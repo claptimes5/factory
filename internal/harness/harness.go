@@ -35,7 +35,7 @@ type RunRequest struct {
 	Timeout   time.Duration
 	Image     string
 	Mounts    []runner.Mount // extra mounts, e.g. the orchestrator's MCP socket
-	MCPConfig string         // JSON for `claude --mcp-config` (Claude only)
+	MCPConfig string         // JSON for `claude --mcp-config`; Codex gets its servers as mcp_servers overrides
 	Tools     []string       // extra allowed tools for read-only runs, e.g. mcp__factory
 	// SessionDir is a host directory that keeps the CLI's session files
 	// across jobs (Claude only), and Resume a session in it to continue.

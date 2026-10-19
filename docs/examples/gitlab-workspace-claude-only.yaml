@@ -1,0 +1,96 @@
+# A GitLab workspace of a Rails API and a React (Vite) app, every step on
+# Claude: a subscription token (`claude setup-token`) or an API key, and no
+# OpenAI account. See docs/configuration.md#claude-only-review for what
+# this gives up against cross-vendor review.
+#
+# Copy it to factory.yaml, change the repo names, and run ./factory setup.
+# Self-hosted GitLab: name the repos gitlab.example.com/group/project.
+
+repos:
+  - name: gitlab.com/acme/api            # Rails; merges first
+    image_from: ruby:3.4-bookworm        # the job image adds Node, so it builds web/ too
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: factory}
+        ready: pg_isready -U postgres
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:factory@postgres:5432/api_test
+    gates:
+      install: bundle install && bin/rails db:prepare
+      required: [lint, test]
+      commands: {lint: bundle exec rubocop, test: bundle exec rspec}
+      proves_fix: none                   # the proves-fix and coverage checks are Go-only for now
+      coverage: none
+  - name: gitlab.com/acme/web            # React + Vite; Node is in the default image
+    gates:
+      install: npm ci
+      required: [types, lint, test, build]
+      commands:
+        types: npx tsc --noEmit
+        lint: npm run lint
+        test: CI=true npm run test
+        build: npm run build
+      proves_fix: none
+      coverage: none
+
+# An issue in either repo is one change across both: one branch, a draft
+# merge request in each repo it touches, merged in this order. The builder
+# and reviewer run in the first repo's image, which has Ruby and Node.
+workspaces:
+  shop: [gitlab.com/acme/api, gitlab.com/acme/web]
+
+base_branch: main
+data_dir: ./data
+
+intake:
+  label: "factory:ready"
+  poll_interval: 60s
+
+runner:
+  kind: docker
+  image: factory-job:latest              # docker build -t factory-job:latest deploy/job-image
+  cpus: "2"
+  memory: 4g
+
+# The reviewer's model must differ from every model a builder can reach,
+# escalation included: Haiku and Sonnet build, Opus reviews.
+routing:
+  orchestrate:       {harness: claude, model: opus}
+  triage:            {harness: claude, model: haiku}
+  implement.XS:      {harness: claude, model: haiku}
+  implement.S:       {harness: claude, model: haiku}
+  implement.M:       {harness: claude, model: sonnet}
+  implement.L:       {harness: claude, model: sonnet}
+  review:            {harness: claude, model: opus}
+  review.high_risk:  {harness: claude, model: opus, effort: high}
+  # The verifier checks each blocking finding; never a builder's model.
+  verify:            {harness: claude, model: opus, effort: low}
+  # Left out, the security pass runs on a builder tier that didn't build
+  # the item (it is never the reviewer's model); the critic, plan check,
+  # hunt, learn and grooming steps default to Claude routes too.
+
+escalation:
+  implement: [haiku, sonnet]
+  max_attempts_per_tier: 2
+  max_review_rounds: 2
+
+orchestrator:
+  enabled: false                         # turn on once builds look right
+
+budgets:
+  per_job: {XS: 0.5, S: 2, M: 6, L: 15}
+  triage: 0.5
+  review: 3
+  verify: 0.5
+  daily_total: 60
+  concurrent_jobs: 3
+  awaiting_human_max: 5
+
+gates:
+  diff_guard:
+    max_changed_lines: 400
+    protected_paths: [".gitlab-ci.yml", ".gitlab/", "factory.yaml", "CODEOWNERS",
+                      ".claude/", "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".codex/", ".mcp.json",
+                      "REVIEW.md", ".rubocop.yml", "eslint.config.js", ".eslintrc.cjs"]
