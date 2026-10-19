@@ -136,7 +136,8 @@ The factory works them the same way: it picks up issues labeled
 - The token's owner needs the Developer role on each project, or
   Maintainer if Developers can't push to the base branch. GitLab checks
   both the token's permissions and its owner's role.
-- **A fine-grained personal token** (GitLab 18.10 and later) can be
+- **A fine-grained personal token** (beta in GitLab 18.10, generally
+  available in 19.2) can be
   limited to just the factory's projects. In your profile, go to Access >
   Personal access tokens, choose Generate token > Fine-grained token, pick
   the projects (or their group) under Group and project access, and give
@@ -154,7 +155,8 @@ The fine-grained permissions, from each call the factory makes:
 | Group and project | Repository | Read | Files and the tree on the base branch |
 | Group and project | Branch | Read | Branch heads |
 | Group and project | Commit | Read | Commits and their statuses |
-| Group and project | Pipeline | Read | CI results and job logs |
+| Group and project | Pipeline | Read | CI results |
+| Group and project | Job | Read | Failed jobs' logs |
 | Group and project | Work Item | Read, Create, Update | Issues, labels on them, and comments on issues and merge requests |
 | Group and project | Merge Request | Read, Create, Update, Merge | Draft merge requests; Merge only for auto-merge |
 | Group and project | Label | Read, Create | The factory's labels |
