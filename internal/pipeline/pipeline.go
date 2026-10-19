@@ -120,7 +120,10 @@ type Pipeline struct {
 	ClientsFor func(repo string) RepoClients
 	// Building names the job images being built right now (may be nil):
 	// jobs that run in one wait in the queue until it is built.
-	Building  func() []string
+	Building func() []string
+	// Busy says other work is running that a restart must not cut off,
+	// such as an image build (may be nil).
+	Busy      func() bool
 	GH        GitHub
 	Git       *Git
 	Runner    runner.Runner
@@ -434,7 +437,7 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 // when no job is left running.
 func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 	if p.restart.Load() {
-		if p.Running() == 0 {
+		if p.Running() == 0 && (p.Busy == nil || !p.Busy()) {
 			return ErrRestart
 		}
 		return nil

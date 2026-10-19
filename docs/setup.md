@@ -97,15 +97,22 @@ marked done, needing attention, or optional, with the next one open:
 5. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
    same choices as `factory setup`. For a ChatGPT plan, **Sign in** runs
    Codex's device-code sign-in on the factory's machine and shows the link
-   and code to enter. The page says when you're signed in.
+   and code to enter, with a Cancel button. The page says when you're
+   signed in. Only someone who may save settings sees the code.
 6. **Notifications** and **Sentry** (both optional), with a button that
    sends a test notification.
 7. **Job images:** which are built, and a Build button that builds the
    missing ones while you watch the log. A build `factory serve` started
    on its own shows here too, and the two never run at once.
-8. **Finish**, once the factory can reach every repo. If something won't
+8. **Finish**, once the factory can reach every repo, and not while an
+   image builds or a Codex sign-in runs. If something won't
    work yet (no model key, say), it says what. Finish restarts the factory
    with the new settings and the page opens the dashboard when it's up.
+
+The page reads the settings as the factory will run with them: a
+variable exported where the factory starts wins over the one saved in
+`factory.env`, as at startup, and the page names each saved key that one
+overrides.
 
 Saved keys and tokens never come back to the browser: the page shows only
 whether each is set and its first and last few characters. Answers go in

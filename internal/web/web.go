@@ -125,9 +125,11 @@ type Server struct {
 	Chat         Chatter
 	Orchestrator OrchestratorInfo
 	// Wizard runs the get-started page (nil for none). SetupMode serves
-	// that page alone, for a factory that can't start until it's done.
-	Wizard    Wizard
-	SetupMode bool
+	// that page alone, for a factory that can't start until it's done;
+	// SetupReason says why it can't.
+	Wizard      Wizard
+	SetupMode   bool
+	SetupReason string
 
 	ready      readinessRun
 	tmpl       *template.Template

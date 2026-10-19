@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // The get-started page walks through what `factory setup` asks in the
@@ -39,7 +40,7 @@ type Wizard interface {
 var WizardActions = []string{
 	"machine/check", "repos", "github/install-check", "github/existing-app", "github/token",
 	"access/check", "base-branch", "labels", "gitlab/token", "claude", "codex",
-	"codex/sign-in", "notify", "notify/test", "sentry", "images/build", "finish",
+	"codex/sign-in", "codex/sign-in/cancel", "notify", "notify/test", "sentry", "images/build", "finish",
 }
 
 // WizardInput is what an action takes; each uses only its own fields.
@@ -94,6 +95,11 @@ type APIWizard struct {
 	// started, so Finish restarts it to apply them.
 	Changed        bool `json:"changed"`
 	RestartPending bool `json:"restart_pending"`
+	// SetupReason is why the factory can't start, in setup mode; else "".
+	// StartedAt is when this process started, so the page can tell a
+	// restarted one from the one it asked to restart.
+	SetupReason string `json:"setup_reason"`
+	StartedAt   string `json:"started_at"`
 }
 
 // APIWizardStep is one card.
@@ -278,6 +284,15 @@ func (s *Server) wizardState(r *http.Request) APIWizard {
 		out.Mode = "setup"
 	}
 	out.Writable, out.Reason = s.settingsWritable(r)
+	// The sign-in's link and code would let a viewer sign the factory in
+	// to their own account: only those who may change settings see them.
+	if out.Codex != nil && !out.Writable {
+		out.Codex.SignIn.URL, out.Codex.SignIn.Code, out.Codex.SignIn.Log = "", "", ""
+	}
+	if s.SetupMode {
+		out.SetupReason = s.SetupReason
+	}
+	out.StartedAt = processStart
 	if s.Restarter != nil {
 		out.RestartPending = s.Restarter.RestartPending()
 	}
@@ -354,6 +369,9 @@ func requestOrigin(r *http.Request) string {
 	}
 	return scheme + "://" + r.Host
 }
+
+// processStart is when this process started.
+var processStart = time.Now().UTC().Format(time.RFC3339Nano)
 
 // errSetupMode is what every other endpoint answers until setup finishes.
 var errSetupMode = errors.New("the factory isn't set up yet: finish setup at " + getStarted)

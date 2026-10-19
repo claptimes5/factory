@@ -581,6 +581,8 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return err
 	}
 	srv.Wizard = wz
+	// A restart waits for an image build or a sign-in, as for a job.
+	p.Busy = func() bool { return wz.busy() != "" }
 	_, err = listenWeb(ctx, cfg, srv)
 	return err
 }
@@ -644,7 +646,7 @@ func serveSetup(ctx context.Context, cfgPath string, cfg *config.Config, envPath
 	if err != nil {
 		return fmt.Errorf("web.listen: %w", err)
 	}
-	srv := &web.Server{Wizard: wz, SetupMode: true, Listen: cfg.Web.Listen, Hosts: append([]string{host}, cfg.Web.Hosts...)}
+	srv := &web.Server{Wizard: wz, SetupMode: true, SetupReason: why.Error(), Listen: cfg.Web.Listen, Hosts: append([]string{host}, cfg.Web.Hosts...)}
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)
 	hs, err := listenWeb(ctx, cfg, srv)
 	if err != nil {

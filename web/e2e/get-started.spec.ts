@@ -77,6 +77,12 @@ test("a ChatGPT plan signs in from the page: it shows the link and code, then th
   if (phone(info)) await noSidewaysScroll(page);
   // Signing in changes the shared sample setup, so one project does it.
   if (phone(info)) return;
+  // A sign-in can be called off.
+  await signIn.click();
+  await expect(codex.getByTestId("device-code")).toHaveText("DEVS-12345");
+  await codex.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(codex.getByText("Sign-in cancelled.").first()).toBeVisible();
+  await expect(codex.getByTestId("device-code")).toHaveCount(0);
   await signIn.click();
   await expect(codex.getByTestId("device-code")).toHaveText("DEVS-12345");
   await expect(codex.getByRole("link", { name: /auth\.openai\.com\/codex\/device/ })).toHaveAttribute("href", "https://auth.openai.com/codex/device");
@@ -109,8 +115,8 @@ test("the GitHub app is made in the browser, then installed and checked", async 
   await expect(gh.getByRole("button", { name: "Create an app for me" })).toBeVisible();
   // The page posts the manifest to GitHub (the devserver's stand-in), which sends the browser back.
   await gh.getByRole("button", { name: "Create an app for me" }).click();
-  await expect(page).toHaveURL(/\/app\/get-started\?github=/);
   await expect(page.getByRole("status").first()).toContainText("Created the app factory-api-ab12");
+  await expect(page).toHaveURL(/\/app\/get-started$/);
   const install = gh.getByRole("region", { name: "Install the app" });
   await expect(install.getByRole("link", { name: /apps\/factory-api-ab12\/installations\/new/ })).toBeVisible();
   await expect(install).toContainText('Pick acme, choose "Only select repositories"');
@@ -134,8 +140,8 @@ test("the GitHub app is made in the browser, then installed and checked", async 
 
 test("a used or unknown app link says to start again", async ({ page }) => {
   await page.goto("/api/v1/setup/github/callback?code=x&state=not-a-state");
-  await expect(page).toHaveURL(/\/app\/get-started\?github_error=/);
   await expect(page.getByRole("alert").first()).toContainText("start again");
+  await expect(page).toHaveURL(/\/app\/get-started$/);
 });
 
 test("job images build in the background with the log in view", async ({ page }, info) => {
@@ -165,6 +171,33 @@ test("in setup mode every screen goes to get-started, with no dashboard around i
   await expect(page.getByRole("navigation", { name: "Tabs" })).toHaveCount(0);
   await expect(step(page, "finish")).toContainText("Finish");
   if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("after Finish, a factory that restarts but still can't start says why instead of waiting on", async ({ page }) => {
+  // The devserver runs in normal mode; this plays setup mode and a restart into it.
+  let finished = false;
+  await page.route(/\/api\/v1\/setup(\?.*)?$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const after = finished ? { started_at: "a new process", setup_reason: "no GitHub credentials" } : {};
+    await route.fulfill({ response: res, json: { ...body, mode: "setup", can_finish: true, ...after } });
+  });
+  await page.route(/\/api\/v1\/setup\/finish$/, async (route) => {
+    const res = await route.fetch({ url: page.url().replace(/\/app\/.*/, "/api/v1/setup") , method: "GET", headers: {} });
+    finished = true;
+    await route.fulfill({ json: { message: "Starting the factory. This page opens the dashboard when it's up.", wizard: { ...(await res.json()), mode: "setup", can_finish: true } } });
+  });
+  await page.route(/\/api\/v1\/overview$/, (route) => route.fulfill({ status: 503, json: { error: "the factory isn't set up yet" } }));
+  await page.goto("/app/get-started");
+  const finish = await openStep(page, "finish");
+  await finish.getByRole("button", { name: "Finish and start the factory" }).click();
+  await expect(finish.getByRole("alert")).toContainText("The factory restarted but still can't start: no GitHub credentials.", { timeout: 15_000 });
+});
+
+test("GitHub's answer shows once, then leaves the address", async ({ page }) => {
+  await page.goto("/app/get-started?github=" + encodeURIComponent("Created the app factory-x."));
+  await expect(page.getByRole("status").first()).toContainText("Created the app factory-x.");
+  await expect(page).toHaveURL(/\/app\/get-started$/);
 });
 
 test("settings and the setup screen link to get-started", async ({ page }) => {

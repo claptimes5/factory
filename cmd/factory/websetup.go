@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -61,6 +62,8 @@ type wizard struct {
 	pending   map[string]pendingApp
 	builder   *imageBuilder // shared with serve's own build of missing images
 	signIn    pageSignIn
+	// signInDone counts the running sign-in, so Cancel can wait for it.
+	signInDone sync.WaitGroup
 }
 
 // pageSignIn is the ChatGPT sign-in started from the page.
@@ -69,6 +72,15 @@ type pageSignIn struct {
 	log     *tailBuffer
 	result  string
 	failed  bool
+	cancel  context.CancelFunc // stops Codex
+}
+
+// runCmdContext runs a command that ctx can stop; tests replace it.
+var runCmdContext = func(ctx context.Context, out io.Writer, name string, args ...string) error {
+	c := exec.CommandContext(ctx, name, args...)
+	c.Stdout, c.Stderr = out, out
+	c.WaitDelay = 5 * time.Second
+	return c.Run()
 }
 
 // pendingApp is a new-app flow started from the page, by its state.
@@ -76,6 +88,9 @@ type pendingApp struct {
 	owner string
 	at    time.Time
 }
+
+// accessWait bounds one run of the access checks.
+var accessWait = 30 * time.Second
 
 // appFlowTTL is how long a started app flow can come back.
 const appFlowTTL = time.Hour
@@ -146,21 +161,38 @@ func (w *wizard) version() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// vals reads the saved settings as setup does: the settings file, and for
-// a key it leaves out, what the factory was started with. GITHUB_TOKEN is
-// never taken from there: exported for other tools, it is usually a broad
-// personal token.
+// vals reads the settings as the factory will run with them, as
+// loadEnvFile does: what the factory was started with wins when it is
+// set, else the settings file.
 func (w *wizard) vals() map[string]string {
 	vals, err := readEnvFile(w.envPath)
 	if err != nil {
 		vals = map[string]string{}
 	}
 	for _, k := range envKeys {
-		if _, ok := vals[k]; !ok && k != "GITHUB_TOKEN" {
-			vals[k] = w.exported[k]
+		if v, ok := w.exported[k]; ok {
+			vals[k] = v
 		}
 	}
 	return vals
+}
+
+// overridden are the keys saved in the settings file that an exported
+// variable overrides, so saving them here changes nothing.
+func (w *wizard) overridden() []string {
+	saved, err := readEnvFile(w.envPath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, k := range envKeys {
+		if v, ok := w.exported[k]; ok {
+			if s, in := saved[k]; in && s != v {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }
 
 // save sets keys in factory.env and comments out drop, as `factory
@@ -231,9 +263,7 @@ func (w *wizard) State(ctx context.Context, live bool) web.APIWizard {
 		stale := time.Since(w.checkedAt) > liveFor
 		w.mu.Unlock()
 		if stale {
-			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			w.checkAccess(cctx)
-			cancel()
+			w.checkAccess(ctx)
 		}
 		w.refresh.Unlock()
 	}
@@ -262,6 +292,10 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 	}
 	for _, l := range pipeline.Labels(cfg.Intake.Label) {
 		out.LabelNames = append(out.LabelNames, l.Name)
+	}
+	// Names only: the values are secrets.
+	for _, k := range w.overridden() {
+		out.Warnings = append(out.Warnings, k+" is set in the environment the factory starts with, so it overrides the one saved in "+filepath.Base(w.envPath)+". Unset it there for the saved one to apply.")
 	}
 	step := func(key, title, state, summary string) {
 		out.Steps = append(out.Steps, web.APIWizardStep{Key: key, Title: title, State: state, Summary: summary})
@@ -487,7 +521,8 @@ func (w *wizard) checkMachine(ctx context.Context) {
 	images := map[string]bool{}
 	if cfg.Runner.Kind == "docker" {
 		for _, im := range jobImages(cfg) {
-			images[im.tag] = runCmd(io.Discard, "docker", "image", "inspect", im.tag) == nil
+			_, err := runOutput(ctx, "docker", "image", "inspect", im.tag) // gives up on a hung Docker
+			images[im.tag] = err == nil
 		}
 	}
 	w.mu.Lock()
@@ -523,6 +558,10 @@ func (w *wizard) clients(cfg *config.Config, vals map[string]string) clientFor {
 // checkAccess checks each repo with the saved credentials, as setup
 // does, and reads its default branch.
 func (w *wizard) checkAccess(ctx context.Context) {
+	// A closed request mustn't leave "can't reach" on every repo: the
+	// check runs to the end on its own clock, and a cut-off one is dropped.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessWait)
+	defer cancel()
 	vals := w.vals()
 	w.mu.Lock()
 	cfg, gen := w.cfg, w.credGen
@@ -573,6 +612,9 @@ func (w *wizard) checkAccess(ctx context.Context) {
 			a.MissingLabels, a.LabelsError = missingLabels(ctx, gh, labels)
 		}
 		results[n] = a
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -675,6 +717,8 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return "Saved the Sentry token.", w.save(map[string]string{"SENTRY_AUTH_TOKEN": t})
 	case "codex/sign-in":
 		return w.startCodexSignIn(cfg)
+	case "codex/sign-in/cancel":
+		return w.cancelCodexSignIn()
 	case "images/build":
 		return w.buildImages(cfg)
 	case "finish":
@@ -866,8 +910,16 @@ func (w *wizard) useBranch(ctx context.Context, cfg *config.Config, repo, branch
 	if len(cfg.Repos) != 1 || !strings.EqualFold(cfg.Repos[0].Name, repo) {
 		return "", fmt.Errorf("with several repos, give each its own base_branch under repos: in %s", w.cfgPath)
 	}
-	if strings.TrimSpace(branch) == "" {
-		return "", errors.New("name the branch")
+	// Only the branch the access check found the repo's default, so the
+	// page can't write anything else into factory.yaml.
+	w.mu.Lock()
+	def := w.access[cfg.Repos[0].Name].DefaultBranch
+	w.mu.Unlock()
+	if def == "" {
+		return "", errors.New("check access first, so the factory knows the repo's default branch")
+	}
+	if branch != def {
+		return "", fmt.Errorf("only the repo's default branch, %s, can be picked here; set base_branch in %s for another", def, w.cfgPath)
 	}
 	if err := setYAML(w.cfgPath, "base_branch", branch); err != nil {
 		return "", fmt.Errorf("couldn't update it: %w. Set base_branch in %s yourself", err, w.cfgPath)
@@ -1027,10 +1079,11 @@ func (w *wizard) startCodexSignIn(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, args := "env", []string{"CODEX_HOME=" + tmp, "codex", "login", "--device-auth"}
+	name, args, container := "env", []string{"CODEX_HOME=" + tmp, "codex", "login", "--device-auth"}, ""
 	if cfg.Runner.Kind == "docker" {
-		name = "docker"
-		if args, err = dockerLoginArgs(cfg, tmp, false); err != nil {
+		// Named, so Cancel can stop the container and not only the client.
+		name, container = "docker", fmt.Sprintf("factory-codex-login-%d-%d", os.Getpid(), time.Now().UnixNano())
+		if args, err = dockerLoginArgs(cfg, tmp, false, container); err != nil {
 			os.RemoveAll(tmp)
 			return "", fmt.Errorf("%w; build it in the job images step first", err)
 		}
@@ -1041,22 +1094,71 @@ func (w *wizard) startCodexSignIn(cfg *config.Config) (string, error) {
 		os.RemoveAll(tmp)
 		return "", errors.New("a sign-in is already running: open the link and enter the code")
 	}
+	// The daemon's context, so it stops with the daemon too.
+	ctx, cancel := context.WithCancel(w.bg)
 	log := &tailBuffer{max: 8 << 10}
-	w.signIn = pageSignIn{running: true, log: log}
+	w.signIn = pageSignIn{running: true, log: log, cancel: cancel}
+	w.signInDone.Add(1)
 	w.mu.Unlock()
 	go func() {
+		defer w.signInDone.Done()
 		defer os.RemoveAll(tmp)
-		res, err := w.finishCodexSignIn(runCmd(log, name, args...), filepath.Join(tmp, "auth.json"), cfg)
+		defer cancel()
+		runErr := runCmdContext(ctx, log, name, args...)
+		stopped := ctx.Err() != nil
+		if stopped && container != "" {
+			_ = runCmd(io.Discard, "docker", "rm", "-f", container)
+		}
+		res, err := "", error(nil)
+		if !stopped {
+			res, err = w.finishCodexSignIn(runErr, filepath.Join(tmp, "auth.json"), cfg)
+		}
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		w.signIn.running = false
-		if err != nil {
+		w.signIn.running, w.signIn.cancel = false, nil
+		switch {
+		case stopped:
+			w.signIn.result = "Sign-in cancelled."
+		case err != nil:
 			w.signIn.result, w.signIn.failed = err.Error(), true
-		} else {
+		default:
 			w.signIn.result = res
 		}
 	}()
 	return "Started. Open the link and enter the code that appear here.", nil
+}
+
+// cancelCodexSignIn stops a running sign-in. Its folder is removed once
+// Codex has stopped.
+func (w *wizard) cancelCodexSignIn() (string, error) {
+	w.mu.Lock()
+	cancel := w.signIn.cancel
+	if !w.signIn.running || cancel == nil {
+		w.mu.Unlock()
+		return "", errors.New("no sign-in is running")
+	}
+	w.mu.Unlock()
+	cancel()
+	w.signInDone.Wait()
+	return "Sign-in cancelled.", nil
+}
+
+// signingIn says whether a sign-in from the page is running.
+func (w *wizard) signingIn() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.signIn.running
+}
+
+// busy says what a restart now would cut off, or "".
+func (w *wizard) busy() string {
+	if running, _, _, _ := w.builder.status(); running {
+		return "A job image is being built. Finish once it's done, so the restart doesn't cut it off."
+	}
+	if w.signingIn() {
+		return "A Codex sign-in is running. Finish it or cancel it first."
+	}
+	return ""
 }
 
 // finishCodexSignIn saves the sign-in Codex left in auth, as
@@ -1102,6 +1204,9 @@ func (w *wizard) signInState() web.APIWizardSignIn {
 // server, otherwise by restarting once running jobs finish, if anything
 // changed.
 func (w *wizard) finishSetup(ctx context.Context) (string, error) {
+	if why := w.busy(); why != "" {
+		return "", errors.New(why)
+	}
 	w.checkAccess(ctx)
 	vals := w.vals()
 	w.mu.Lock()
@@ -1110,6 +1215,7 @@ func (w *wizard) finishSetup(ctx context.Context) (string, error) {
 	if !st.CanFinish {
 		return "", errors.New("the factory can't reach every repo yet: " + strings.TrimSuffix(w.accessMessage(), "."))
 	}
+
 	if w.setupMode {
 		w.finish.Do(func() { close(w.done) })
 		return "Starting the factory. This page opens the dashboard when it's up.", nil

@@ -843,10 +843,10 @@ func parseRepoList(in string) ([]string, error) {
 		host, name := config.SplitRepo("", f)
 		path := strings.TrimPrefix(name, host+"/")
 		if host != "" {
-			if o, n, ok := strings.Cut(path, "/"); !ok || o == "" || n == "" || strings.Contains(path, "//") {
+			if !gitlabHostRE.MatchString(host) || !gitlabPathRE.MatchString(path) || !strings.Contains(path, "/") || dotSegment(path) {
 				return nil, fmt.Errorf("write %q as %s/group/project", f, host)
 			}
-		} else if o, n, ok := strings.Cut(name, "/"); !ok || o == "" || n == "" || strings.Contains(n, "/") {
+		} else if !githubRepoRE.MatchString(name) || dotSegment(name) {
 			return nil, fmt.Errorf("write %q as owner/name, for example octocat/hello-world", f)
 		}
 		f = name
@@ -859,6 +859,19 @@ func parseRepoList(in string) ([]string, error) {
 		return nil, errors.New("name at least one repository, as owner/name")
 	}
 	return names, nil
+}
+
+// The names a repo may have, checked before they go in factory.yaml: a
+// GitHub owner and repo, or a GitLab host and group/project path.
+var (
+	githubRepoRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
+	gitlabHostRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$`)
+	gitlabPathRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$`)
+)
+
+// dotSegment says whether a path has a "." or ".." part.
+func dotSegment(path string) bool {
+	return slices.ContainsFunc(strings.Split(path, "/"), func(p string) bool { return p == "." || p == ".." })
 }
 
 // setRepos changes which repos the config lists, keeping the settings
@@ -891,7 +904,14 @@ func writeRepos(path string, repos []config.Repo) error {
 	}
 	var block string
 	if bare, _ := repos[0].MarshalYAML(); len(repos) == 1 && bare == repos[0].Name {
-		block = "repo: " + repos[0].Name + "\n"
+		// Through YAML, so a name that needs quoting gets it.
+		one, err := yaml.Marshal(struct {
+			Repo string `yaml:"repo"`
+		}{repos[0].Name})
+		if err != nil {
+			return err
+		}
+		block = string(one)
 	} else {
 		var buf bytes.Buffer
 		enc := yaml.NewEncoder(&buf)

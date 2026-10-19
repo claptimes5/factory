@@ -97,3 +97,19 @@ test("plan usage shows as percentages, and dollar costs say they're API-price es
   await shot(page, info, "plan-usage");
   if (phone(info)) await noSidewaysScroll(page);
 });
+
+test("without leave to file, the setup screen names no buttons it doesn't show", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, can_check: false, can_file: false, check_note: "Checking from here needs a dashboard password." } });
+  });
+  await page.goto("/app/setup");
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  await api.getByText("Worth doing later (2)").click();
+  await expect(api).toContainText("No issue yet");
+  await expect(api).not.toContainText("File issues");
+  await expect(api).not.toContainText("File and start work");
+  await expect(api.getByRole("button", { name: /File/ })).toHaveCount(0);
+  await expect(api).toContainText("Checking from here needs a dashboard password.");
+});

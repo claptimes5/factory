@@ -670,7 +670,16 @@ paths:
         Runs `codex login --device-auth` (in the job image with the Docker
         runner). The link and code it prints show in codex.sign_in; once
         someone enters the code there, the sign-in is saved and Codex is set
-        to the ChatGPT plan. One at a time (400 while one runs).
+        to the ChatGPT plan. One at a time (400 while one runs). Finish is
+        refused while it runs, and a restart waits for it.
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/codex/sign-in/cancel:
+    post:
+      summary: Stop a running ChatGPT sign-in
+      description: Stops Codex (and its container) and removes the folder it would have saved to. 400 when none is running.
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -724,7 +733,7 @@ paths:
   /setup/finish:
     post:
       summary: Finish setup
-      description: Needs access to every repo. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
+      description: Needs access to every repo, and is refused while a job image builds or a Codex sign-in runs. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -1487,7 +1496,7 @@ components:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
     Wizard:
       type: object
-      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending]
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, setup_reason, started_at]
       properties:
         mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
         writable: { type: boolean, description: This request may save here }
@@ -1512,6 +1521,8 @@ components:
         warnings: { type: array, items: { type: string }, description: "What won't work yet if you finish now" }
         changed: { type: boolean, description: factory.yaml or factory.env changed since the factory started }
         restart_pending: { type: boolean }
+        setup_reason: { type: string, description: "Why the factory can't start, in setup mode; else empty" }
+        started_at: { type: string, description: "When this process started, so a page waiting on a restart can tell the new one from the old" }
     WizardStep:
       type: object
       required: [key, title, state, summary]
@@ -1614,9 +1625,9 @@ components:
       required: [running, url, code, log, result, failed]
       properties:
         running: { type: boolean }
-        url: { type: string, description: "The link to open, once Codex shows it" }
-        code: { type: string, description: "The code to enter there" }
-        log: { type: string, description: "The end of Codex's output" }
+        url: { type: string, description: "The link to open, once Codex shows it. Empty for a request that may not change settings" }
+        code: { type: string, description: "The code to enter there; empty like url" }
+        log: { type: string, description: "The end of Codex's output; empty like url" }
         result: { type: string, description: "How the last one ended; empty before one ran" }
         failed: { type: boolean }
     WizardImages:

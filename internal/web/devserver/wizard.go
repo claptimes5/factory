@@ -265,6 +265,12 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 			Log: "Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n\n2. Enter this one-time code (expires in 15 minutes)\n   DEVS-12345\n"}
 		go w.fakeSignIn()
 		return "Started. Open the link and enter the code that appear here.", nil
+	case "codex/sign-in/cancel":
+		if !w.signIn.Running {
+			return "", errors.New("no sign-in is running")
+		}
+		w.signIn = web.APIWizardSignIn{Result: "Sign-in cancelled."}
+		return "Sign-in cancelled.", nil
 	case "images/build":
 		if w.building {
 			return "", errors.New("a build is already running")
@@ -290,7 +296,9 @@ func (w *wizard) fakeSignIn() {
 	time.Sleep(2 * time.Second)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.signIn.Running, w.signIn.Result = false, "Signed in. Codex uses your ChatGPT plan."
+	if w.signIn.Running { // not cancelled
+		w.signIn.Running, w.signIn.Result = false, "Signed in. Codex uses your ChatGPT plan."
+	}
 }
 
 // fakeBuild writes a few lines of build output, then says it's built.

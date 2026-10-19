@@ -1193,6 +1193,13 @@ func TestRestartWaitsForRunningJobs(t *testing.T) {
 	e.p.mu.Lock()
 	e.p.running = 0
 	e.p.mu.Unlock()
+	// An image build or a sign-in holds it too.
+	busy := true
+	e.p.Busy = func() bool { return busy }
+	if err := e.p.Tick(ctx, true); err != nil {
+		t.Fatalf("tick while busy = %v", err)
+	}
+	busy = false
 	if err := e.p.Drain(ctx); !errors.Is(err, ErrRestart) {
 		t.Fatalf("idle tick = %v, want ErrRestart", err)
 	}

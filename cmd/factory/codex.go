@@ -202,7 +202,7 @@ func loginCmd(cfg *config.Config, dir string) error {
 	if cfg.Runner.Kind != "docker" {
 		return runTTY([]string{"CODEX_HOME=" + dir}, "codex", "login", "--device-auth")
 	}
-	args, err := dockerLoginArgs(cfg, dir, term.IsTerminal(int(os.Stdin.Fd())))
+	args, err := dockerLoginArgs(cfg, dir, term.IsTerminal(int(os.Stdin.Fd())), "")
 	if err != nil {
 		return fmt.Errorf("%w; build it with ./factory images", err)
 	}
@@ -210,9 +210,10 @@ func loginCmd(cfg *config.Config, dir string) error {
 }
 
 // dockerLoginArgs runs `codex login --device-auth` in the first repo's
-// job image, with its sign-in saved to dir. It needs no input: Codex
-// prints a link and a code, then waits for the sign-in.
-func dockerLoginArgs(cfg *config.Config, dir string, tty bool) ([]string, error) {
+// job image, with its sign-in saved to dir, in a container called name
+// ("" for any). It needs no input: Codex prints a link and a code, then
+// waits for the sign-in.
+func dockerLoginArgs(cfg *config.Config, dir string, tty bool, name string) ([]string, error) {
 	image := ""
 	if names := cfg.RepoNames(); len(names) > 0 {
 		r, _ := cfg.RepoConf(names[0])
@@ -224,6 +225,9 @@ func dockerLoginArgs(cfg *config.Config, dir string, tty bool) ([]string, error)
 	args := []string{"run", "--rm", "-i"}
 	if tty {
 		args = append(args, "-t")
+	}
+	if name != "" {
+		args = append(args, "--name", name)
 	}
 	return append(args, "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),

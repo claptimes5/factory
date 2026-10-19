@@ -91,14 +91,14 @@ const statusText: Record<string, { label: string; variant: "default" | "secondar
 };
 
 /** One blocker or gap, with its issue and the factory's work on it. */
-function Finding({ f, label, repo }: { f: FindingT; label: string; repo: RepoReadiness }) {
+function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean }) {
   const [open, setOpen] = useState(false);
   const s = statusText[f.status] ?? { label: f.status, variant: "secondary" as const };
   const hint =
     f.status === "none"
       ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
       : f.status === "not_filed"
-        ? repo.unfiled > 0 && "No issue yet: File issues opens one."
+        ? canFile && repo.unfiled > 0 && "No issue yet: File issues opens one."
         : f.status === "not_queued"
           ? `Add the ${label} label on the issue so the factory works on it.`
           : f.status === "done" && f.level === "blocker"
@@ -145,7 +145,7 @@ function StepIcon({ state }: { state: string }) {
   return <CircleDashed aria-label="Not checked yet" className="size-5 shrink-0 text-muted-foreground" />;
 }
 
-function StepRow({ step, n, label, repo }: { step: Step; n: number; label: string; repo: RepoReadiness }) {
+function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; label: string; repo: RepoReadiness; canFile: boolean }) {
   return (
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
@@ -159,7 +159,7 @@ function StepRow({ step, n, label, repo }: { step: Step; n: number; label: strin
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={repo} />
+              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} />
             ))}
           </ul>
         )}
@@ -255,7 +255,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.state === "not_ready" && (
         <p className="text-sm text-text-2">
           Every job would fail until these are fixed, so add real tasks once they are. The factory can fix most of them itself; this page follows its work.
-          {r.unfiled > 0 && " Some have no issue yet: File and start work files them and hands the blockers to the factory."}
+          {r.unfiled > 0 && data.can_file && " Some have no issue yet: File and start work files them and hands the blockers to the factory."}
         </p>
       )}
       {r.state === "incomplete" && (
@@ -309,7 +309,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.steps.length > 0 && (
         <ol aria-label="Setup steps" className="divide-y border-y">
           {r.steps.map((s, i) => (
-            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} />
+            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} />
           ))}
         </ol>
       )}
@@ -320,7 +320,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           <p className="mt-1 text-xs text-muted-foreground">Not needed to start. Each lets the factory verify more of what it changes.</p>
           <ul className="divide-y">
             {gaps.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} />
             ))}
           </ul>
         </details>

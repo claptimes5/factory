@@ -120,3 +120,34 @@ func TestParseRepoListGitLab(t *testing.T) {
 		t.Fatal("want an error")
 	}
 }
+
+// Names from the browser go into factory.yaml, so only real repo names
+// are taken.
+func TestParseRepoListRefusesOddNames(t *testing.T) {
+	for _, bad := range []string{
+		"o/r#x", "o/r:\n  evil: 1", "-o/r", "o/..", "o/r/x", "o_/r'", `o/"r"`, "o/r\t#",
+		"gitlab.com/g/../p", "gitlab.com/g/p?x=1", "git_lab.com/g/p", "gitlab.com/g//p", "gitlab.com/g/p#frag",
+	} {
+		if names, err := parseRepoList(bad); err == nil {
+			t.Errorf("%q was taken as %q", bad, names)
+		}
+	}
+	names, err := parseRepoList("my-org/my.repo_2, octo_user/x, gitlab.example.com:8443/team.a/sub/proj-1")
+	if err != nil || strings.Join(names, ",") != "my-org/my.repo_2,octo_user/x,gitlab.example.com:8443/team.a/sub/proj-1" {
+		t.Fatalf("%v %v", names, err)
+	}
+}
+
+// One repo is written as repo: name, quoted when YAML needs it.
+func TestWriteReposQuotesOneRepo(t *testing.T) {
+	path := testConfig(t, "o/r")
+	for _, name := range []string{"o/r", "o/yes", "gitlab.com/g/p"} {
+		if err := writeRepos(path, []config.Repo{{Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil || strings.Join(cfg.RepoNames(), ",") != name {
+			t.Fatalf("%s: %v %v", name, cfg.RepoNames(), err)
+		}
+	}
+}

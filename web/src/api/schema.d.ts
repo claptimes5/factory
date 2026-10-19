@@ -2189,7 +2189,41 @@ export interface paths {
          * @description Runs `codex login --device-auth` (in the job image with the Docker
          *     runner). The link and code it prints show in codex.sign_in; once
          *     someone enters the code there, the sign-in is saved and Codex is set
-         *     to the ChatGPT plan. One at a time (400 while one runs).
+         *     to the ChatGPT plan. One at a time (400 while one runs). Finish is
+         *     refused while it runs, and a restart waits for it.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/codex/sign-in/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a running ChatGPT sign-in
+         * @description Stops Codex (and its container) and removes the folder it would have saved to. 400 when none is running.
          */
         post: {
             parameters: {
@@ -2354,7 +2388,7 @@ export interface paths {
         put?: never;
         /**
          * Finish setup
-         * @description Needs access to every repo. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
+         * @description Needs access to every repo, and is refused while a job image builds or a Codex sign-in runs. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
          */
         post: {
             parameters: {
@@ -3210,6 +3244,10 @@ export interface components {
             /** @description factory.yaml or factory.env changed since the factory started */
             changed: boolean;
             restart_pending: boolean;
+            /** @description Why the factory can't start, in setup mode; else empty */
+            setup_reason: string;
+            /** @description When this process started, so a page waiting on a restart can tell the new one from the old */
+            started_at: string;
         };
         WizardStep: {
             /** @enum {string} */
@@ -3317,11 +3355,11 @@ export interface components {
         /** @description A ChatGPT sign-in with a device code, started with /setup/codex/sign-in */
         WizardSignIn: {
             running: boolean;
-            /** @description The link to open, once Codex shows it */
+            /** @description The link to open, once Codex shows it. Empty for a request that may not change settings */
             url: string;
-            /** @description The code to enter there */
+            /** @description The code to enter there; empty like url */
             code: string;
-            /** @description The end of Codex's output */
+            /** @description The end of Codex's output; empty like url */
             log: string;
             /** @description How the last one ended; empty before one ran */
             result: string;

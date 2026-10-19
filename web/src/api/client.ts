@@ -146,6 +146,14 @@ export const saveSettings = (changes: { path: string[]; value: SettingValue }[],
 /**
  * The get-started page. It polls while a check or an image build runs.
  */
+// When the page first saw the machine check still running, so it can stop
+// polling for it after a minute and say it didn't finish.
+let machineWaitSince: number | null = null;
+const machineWait = 60_000;
+
+/** The machine check has run longer than the page waits for it. */
+export const machineCheckStalled = () => machineWaitSince !== null && Date.now() - machineWaitSince > machineWait;
+
 export const useWizard = () =>
   useQuery({
     queryKey: ["wizard"],
@@ -154,7 +162,11 @@ export const useWizard = () =>
     queryFn: () => getJSON<Wizard>("/setup?live=1"),
     refetchInterval: (q) => {
       const w = q.state.data;
-      return w && (w.machine_checked_at === "" || w.images?.building || w.codex?.sign_in.running) ? 2_000 : 30_000;
+      if (!w) return 30_000;
+      if (w.machine_checked_at !== "") machineWaitSince = null;
+      else if (machineWaitSince === null) machineWaitSince = Date.now();
+      const checking = w.machine_checked_at === "" && !machineCheckStalled();
+      return checking || w.images?.building || w.codex?.sign_in.running ? 2_000 : 30_000;
     },
   });
 

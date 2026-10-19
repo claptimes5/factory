@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Circle, ExternalLink, Loader2, XCircle } from "lucide-react";
 import {
   getJSON,
+  machineCheckStalled,
   postJSON,
   useWizard,
   wizardDo,
@@ -195,7 +196,9 @@ function MachineStep({ w, ro }: { w: Wizard; ro: boolean }) {
   return (
     <>
       <p className="text-sm text-text-2">What the factory needs on this machine. Fix the red lines, then check again.</p>
-      {w.machine_checked_at === "" ? (
+      {w.machine_checked_at === "" && machineCheckStalled() ? (
+        <p role="alert" className="text-sm text-destructive">The machine check didn't finish. Docker may be hung; check again.</p>
+      ) : w.machine_checked_at === "" ? (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden /> Checking…
         </p>
@@ -694,12 +697,17 @@ function CodexSignIn({ c, ro }: { c: NonNullable<Wizard["codex"]>; ro: boolean }
       {!si.running && (
         <div>
           <Button size="sm" variant="outline" disabled={ro || !!busy} onClick={() => run("codex/sign-in")}>
-            {busy ? "Starting…" : c.signed_in ? "Sign in again" : "Sign in"}
+            {busy === "codex/sign-in" ? "Starting…" : c.signed_in ? "Sign in again" : "Sign in"}
           </Button>
         </div>
       )}
       <Message msg={msg} />
-      {si.running && (
+      {si.running && ro && (
+        <p role="status" className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" aria-hidden /> A sign-in is running on the factory's machine.
+        </p>
+      )}
+      {si.running && !ro && (
         <div role="status" className="flex flex-col gap-2 rounded-md border bg-muted/50 p-3">
           {si.url && si.code ? (
             <>
@@ -721,6 +729,11 @@ function CodexSignIn({ c, ro }: { c: NonNullable<Wizard["codex"]>; ro: boolean }
               <Loader2 className="size-4 animate-spin" aria-hidden /> Starting Codex…
             </p>
           )}
+          <div>
+            <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => run("codex/sign-in/cancel")}>
+              {busy === "codex/sign-in/cancel" ? "Cancelling…" : "Cancel"}
+            </Button>
+          </div>
         </div>
       )}
       {!si.running && si.result && (
@@ -847,21 +860,45 @@ function ImagesStep({ w, ro }: { w: Wizard; ro: boolean }) {
 }
 
 /** Once Finish starts the factory, waits for the dashboard to answer, then opens it. */
-function useWaitForFactory(on: boolean) {
+/** How long Finish waits for the factory to come back before saying so. */
+const restartWait = 120_000;
+
+/**
+ * Once Finish starts the factory, waits for the dashboard to answer, then
+ * opens it. It stops when a new process answers in setup mode again (the
+ * factory still can't start), or after restartWait, and says why.
+ */
+function useWaitForFactory(on: boolean, startedAt: string) {
+  const [failed, setFailed] = useState("");
   useEffect(() => {
     if (!on) {
       return;
     }
     let stop = false;
+    const since = Date.now();
     const poll = async () => {
       while (!stop) {
         await new Promise((r) => setTimeout(r, 1500));
+        if (stop) return;
         try {
           await getJSON("/overview");
           window.location.assign("/app/");
           return;
         } catch {
-          /* not up yet */
+          /* not up yet, or up in setup mode */
+        }
+        try {
+          const w = await getJSON<Wizard>("/setup");
+          if (w.mode === "setup" && w.started_at !== startedAt) {
+            setFailed(`The factory restarted but still can't start: ${w.setup_reason || "see its log"}.`);
+            return;
+          }
+        } catch {
+          /* between processes */
+        }
+        if (Date.now() - since > restartWait) {
+          setFailed("The factory didn't come back within 2 minutes. Check its log on the factory's machine, then reload this page.");
+          return;
         }
       }
     };
@@ -869,13 +906,14 @@ function useWaitForFactory(on: boolean) {
     return () => {
       stop = true;
     };
-  }, [on]);
+  }, [on, startedAt]);
+  return failed;
 }
 
 function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const { busy, msg, run } = useAction();
   const [started, setStarted] = useState(false);
-  useWaitForFactory(started);
+  const failed = useWaitForFactory(started, w.started_at);
   const setup = w.mode === "setup";
   const finish = async () => {
     const r = await run("finish");
@@ -912,9 +950,14 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
         <p className="text-xs text-muted-foreground">Saved changes apply when the factory restarts, once running jobs finish.</p>
       )}
       <Message msg={msg} />
-      {started && (
+      {started && !failed && (
         <p role="status" className="flex items-center gap-2 text-sm text-primary-soft">
           <Loader2 className="size-4 animate-spin" aria-hidden /> Waiting for the factory to start…
+        </p>
+      )}
+      {failed && (
+        <p role="alert" className="text-sm break-words text-destructive">
+          {failed}
         </p>
       )}
       {!setup && !started && (
@@ -941,9 +984,14 @@ const bodies: Record<string, (p: { w: Wizard; ro: boolean }) => ReactNode> = {
 
 export function GetStartedScreen() {
   const { data, error, isLoading } = useWizard();
-  const [params] = useSearchParams();
-  const back = params.get("github") ?? "";
-  const backErr = params.get("github_error") ?? "";
+  const [params, setParams] = useSearchParams();
+  // GitHub's answer shows once: kept here, and taken out of the address so
+  // a reload or a shared link doesn't show it again.
+  const [back] = useState(params.get("github") ?? "");
+  const [backErr] = useState(params.get("github_error") ?? "");
+  useEffect(() => {
+    if (params.has("github") || params.has("github_error")) setParams({}, { replace: true });
+  }, [params, setParams]);
   // null follows the first step that needs attention; a key is one the person opened.
   const [open, setOpen] = useState<string | null>(back || backErr ? "github" : null);
   if (isLoading) return <Loading what="Reading the setup" />;

@@ -31,7 +31,8 @@ func (f *fakeWizard) State(_ context.Context, live bool) APIWizard {
 	f.mu.Lock()
 	f.live = append(f.live, live)
 	f.mu.Unlock()
-	return APIWizard{Steps: []APIWizardStep{{Key: "machine", Title: "This machine", State: "done"}}, Notify: APIWizardSecret{Set: true, Masked: "http…abcd"}}
+	return APIWizard{Steps: []APIWizardStep{{Key: "machine", Title: "This machine", State: "done"}}, Notify: APIWizardSecret{Set: true, Masked: "http…abcd"},
+		Codex: &APIWizardCodex{Mode: "chatgpt", SignIn: APIWizardSignIn{Running: true, URL: "https://auth.openai.com/codex/device", Code: "ABCD-12345", Log: "enter ABCD-12345"}}}
 }
 
 func (f *fakeWizard) Do(_ context.Context, action string, in WizardInput) (string, error) {
@@ -148,6 +149,11 @@ func TestWizardNeedsThePasswordOrThisMachine(t *testing.T) {
 	if w.Writable || w.Reason == "" {
 		t.Fatalf("state = %+v", w)
 	}
+	// Whoever enters the code signs the factory in to their account, so
+	// a viewer sees only that a sign-in runs.
+	if si := w.Codex.SignIn; !si.Running || si.URL != "" || si.Code != "" || si.Log != "" {
+		t.Fatalf("a viewer sees the sign-in: %+v", si)
+	}
 	if code, _ := postJSON(t, base+"/api/v1/setup/notify", "", `{"url":""}`); code != 403 {
 		t.Fatalf("save = %d", code)
 	}
@@ -162,11 +168,15 @@ func TestWizardNeedsThePasswordOrThisMachine(t *testing.T) {
 func TestSetupModeServesOnlyTheWizard(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWizard{}
-	base := wizardServer(t, &Server{Wizard: fw, SetupMode: true, Listen: "127.0.0.1:8080"})
+	base := wizardServer(t, &Server{Wizard: fw, SetupMode: true, SetupReason: "no GitHub credentials", Listen: "127.0.0.1:8080"})
 	var w APIWizard
 	getJSON(t, base+"/api/v1/setup", &w)
-	if w.Mode != "setup" {
-		t.Fatalf("mode = %q", w.Mode)
+	if w.Mode != "setup" || w.SetupReason != "no GitHub credentials" || w.StartedAt == "" {
+		t.Fatalf("mode = %q, reason %q, started %q", w.Mode, w.SetupReason, w.StartedAt)
+	}
+	// Someone who may save sees the code to enter.
+	if w.Codex.SignIn.Code != "ABCD-12345" {
+		t.Fatalf("sign-in = %+v", w.Codex.SignIn)
 	}
 	for _, p := range []string{"/api/v1/overview", "/api/v1/board", "/api/v1/stream", "/board"} {
 		resp, err := http.Get(base + p)
