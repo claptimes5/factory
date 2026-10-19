@@ -256,74 +256,24 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		// The container runs this very binary as its MCP bridge.
 		return fail(agentRun{}, state.Failed, "the orchestrator needs a Linux host with Docker (the daemon's binary runs inside the job container)")
 	}
-	// One repo is checked out in the agent's directory; several each get a
-	// folder there named owner__name.
-	// A repo that can't be checked out is left out, so one bad repo doesn't
-	// stop the orchestrator for the rest.
-	names := p.Cfg.RepoNames()
-	var work string
-	var missing []string
-	for _, name := range names {
-		rc := p.repoConf(name)
-		sub := dir
-		if len(names) > 1 {
-			sub = filepath.Join(dir, "repos", strings.ReplaceAll(name, "/", "__"))
-		}
-		ws, err := p.git(name).Prepare(ctx, sub, rc.BaseBranch, "", false, false)
-		if err != nil {
-			p.log().Warn("orchestrator checkout", "repo", name, "err", err)
-			missing = append(missing, fmt.Sprintf("%s could not be checked out this run (%s); its code is not in your directory", name, truncate(err.Error(), 200)))
-			continue
-		}
-		work = ws.Repo
-		if len(names) > 1 {
-			// Move the clone up a level so the folder is the checkout itself.
-			if err := os.Rename(ws.Repo, sub+".tmp"); err != nil {
-				return fail(agentRun{}, state.Failed, err.Error())
-			}
-			if err := os.Remove(sub); err != nil {
-				return fail(agentRun{}, state.Failed, err.Error())
-			}
-			if err := os.Rename(sub+".tmp", sub); err != nil {
-				return fail(agentRun{}, state.Failed, err.Error())
-			}
-			work = filepath.Join(dir, "repos")
-		}
-	}
-	if work == "" {
-		return fail(agentRun{}, state.Failed, "no repo could be checked out: "+strings.Join(missing, "; "))
-	}
-	sockDir := filepath.Join(dir, "run")
-	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+	work, missing, err := p.checkoutAll(ctx, dir)
+	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
-	srv := &mcp.Server{Name: "factory", Tools: p.OrchestratorTools(j.ID)}
-	if _, err := srv.ListenUnix(sctx, filepath.Join(sockDir, "mcp.sock")); err != nil {
-		return fail(agentRun{}, state.Failed, err.Error())
-	}
-	bin, err := os.Executable()
+	x, err := p.withTools(sctx, dir, p.OrchestratorTools(j.ID))
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	sock, binPath := filepath.Join(sockDir, "mcp.sock"), bin
-	var mounts []runner.Mount
-	if p.Cfg.Runner.Kind == "docker" {
-		mounts = append(mounts, runner.Mount{Host: sockDir, Container: "/run/factory"}, runner.Mount{Host: bin, Container: "/opt/factory/factory", ReadOnly: true})
-		sock, binPath = "/run/factory/mcp.sock", "/opt/factory/factory"
-	}
-	mcpCfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"factory": map[string]any{"type": "stdio", "command": binPath, "args": []string{"mcp-bridge", sock}},
-	}})
-
+	names := p.Cfg.RepoNames()
 	snapshot, _ := p.statusText(ctx)
 	prompt, err := p.renderStep(j, "orchestrate", nil, PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	run := p.runAgentWith(ctx, j, work, out, prompt, `{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}`,
-		p.Cfg.Timeout("orchestrate"), agentExtras{mounts: mounts, mcpConfig: string(mcpCfg), tools: []string{"mcp__factory"}})
+		p.Cfg.Timeout("orchestrate"), x)
 	if p.stopIfCancelled(ctx, j, nil, run) {
 		return nil
 	}
@@ -343,6 +293,74 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		p.notify(ctx, "Daily summary\n\n"+v.Summary)
 	}
 	return nil
+}
+
+// checkoutAll checks out each repo's base branch read-only for an agent
+// that reads code across them (the orchestrator, a chat): one repo in dir,
+// several each in a folder there named owner__name. A repo that can't be
+// checked out is left out, and missing says so, so one bad repo doesn't
+// stop the rest.
+func (p *Pipeline) checkoutAll(ctx context.Context, dir string) (work string, missing []string, err error) {
+	names := p.Cfg.RepoNames()
+	for _, name := range names {
+		rc := p.repoConf(name)
+		sub := dir
+		if len(names) > 1 {
+			sub = filepath.Join(dir, "repos", strings.ReplaceAll(name, "/", "__"))
+		}
+		ws, err := p.git(name).Prepare(ctx, sub, rc.BaseBranch, "", false, false)
+		if err != nil {
+			p.log().Warn("read-only checkout", "repo", name, "err", err)
+			missing = append(missing, fmt.Sprintf("%s could not be checked out this run (%s); its code is not in your directory", name, truncate(err.Error(), 200)))
+			continue
+		}
+		work = ws.Repo
+		if len(names) > 1 {
+			// Move the clone up a level so the folder is the checkout itself.
+			if err := os.Rename(ws.Repo, sub+".tmp"); err != nil {
+				return "", nil, err
+			}
+			if err := os.Remove(sub); err != nil {
+				return "", nil, err
+			}
+			if err := os.Rename(sub+".tmp", sub); err != nil {
+				return "", nil, err
+			}
+			work = filepath.Join(dir, "repos")
+		}
+	}
+	if work == "" {
+		return "", nil, errors.New("no repo could be checked out: " + strings.Join(missing, "; "))
+	}
+	return work, missing, nil
+}
+
+// withTools serves tools to a read-only agent run over a socket in dir
+// until ctx ends, and returns the extras that give the run them and
+// nothing else.
+func (p *Pipeline) withTools(ctx context.Context, dir string, tools []mcp.Tool) (agentExtras, error) {
+	sockDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		return agentExtras{}, err
+	}
+	srv := &mcp.Server{Name: "factory", Tools: tools}
+	if _, err := srv.ListenUnix(ctx, filepath.Join(sockDir, "mcp.sock")); err != nil {
+		return agentExtras{}, err
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return agentExtras{}, err
+	}
+	sock, binPath := filepath.Join(sockDir, "mcp.sock"), bin
+	var mounts []runner.Mount
+	if p.Cfg.Runner.Kind == "docker" {
+		mounts = append(mounts, runner.Mount{Host: sockDir, Container: "/run/factory"}, runner.Mount{Host: bin, Container: "/opt/factory/factory", ReadOnly: true})
+		sock, binPath = "/run/factory/mcp.sock", "/opt/factory/factory"
+	}
+	mcpCfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		"factory": map[string]any{"type": "stdio", "command": binPath, "args": []string{"mcp-bridge", sock}},
+	}})
+	return agentExtras{mounts: mounts, mcpConfig: string(mcpCfg), tools: []string{"mcp__factory"}}, nil
 }
 
 func extractJSON(s string) string {
@@ -400,16 +418,21 @@ const MaxOrchestratorRetries = 2
 // Not available: merge, push, closing PRs, editing factory.yaml or prompts,
 // marking anything verified, unparking.
 func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
+	return p.toolsFor(jobID, "orchestrator")
+}
+
+// toolsFor is the orchestrator's tools, audited as actor's.
+func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 	// audit records a mutating call before it takes effect.
 	audit := func(ctx context.Context, tool string, itemID *int64, reason string, args json.RawMessage) error {
 		if strings.TrimSpace(reason) == "" {
 			return errors.New("reason is required")
 		}
-		return p.Store.AddEvent(ctx, store.Event{Actor: "orchestrator", JobID: &jobID, ItemID: itemID, Type: tool, Reason: reason, Data: string(args)})
+		return p.Store.AddEvent(ctx, store.Event{Actor: actor, JobID: &jobID, ItemID: itemID, Type: tool, Reason: reason, Data: string(args)})
 	}
 	// Reads are audited too, so the control room shows everything it looked at.
 	logRead := func(ctx context.Context, tool string, args json.RawMessage) {
-		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "orchestrator", JobID: &jobID, Type: "read", Reason: tool, Data: truncate(string(args), 500)}), "AddEvent")
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: actor, JobID: &jobID, Type: "read", Reason: tool, Data: truncate(string(args), 500)}), "AddEvent")
 	}
 	// mutating wraps a handler that changes state: it runs under p.act, so
 	// its checks and its effect are not interleaved with intake or a human.

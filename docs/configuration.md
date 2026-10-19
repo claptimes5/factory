@@ -714,7 +714,8 @@ values below are this repo's.
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
-build budget. `factory compare` arms split what's left of today's budget.
+build budget. Tuning runs and the dashboard [chat](using.md#chat-drafting-issues-with-the-orchestrator)'s
+replies (each up to `run_budget`) share that daily cap. `factory compare` arms split what's left of today's budget.
 
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
 five-hour and a weekly usage window, and so does Codex on a

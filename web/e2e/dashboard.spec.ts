@@ -247,7 +247,7 @@ test("a build that ran out of turns waits for you, and Continue picks it up with
 });
 
 test("orchestrator feed filters by item", async ({ page }, info) => {
-  await page.goto("/app/orchestrator");
+  await page.goto("/app/orchestrator?tab=decisions");
   const feed = page.getByTestId("feed");
   await expect(feed.locator("li")).toHaveCount(4);
   await page.getByLabel("Item id").fill("3");

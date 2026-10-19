@@ -116,6 +116,10 @@ type Server struct {
 	// percent of a window that holds their jobs.
 	Plans        []string
 	PauseAtUsage float64
+	// Chat is the chat with the orchestrator's model (nil for none), and
+	// Orchestrator what the dashboard says about the orchestrator.
+	Chat         Chatter
+	Orchestrator OrchestratorInfo
 
 	ready      readinessRun
 	tmpl       *template.Template
@@ -202,6 +206,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	s.routesAPI(mux)
 	s.routesReadiness(mux)
 	s.routesUsage(mux)
+	s.routesChat(mux)
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}

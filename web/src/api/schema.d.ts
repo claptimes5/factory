@@ -564,6 +564,204 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The chat with the orchestrator's model, whether it can reply now, and the chats so far
+         * @description Chat runs on the orchestrator's route and its daily budget, whether or not the orchestrator runs on its own schedule.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Chats"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Send a message and start the reply
+         * @description chat_id 0 starts a new chat. An empty text asks again for a reply to the
+         *     chat's last message, when it has none (after a failed reply). The reply
+         *     is written by a read-only run that may draft issues; it is never an
+         *     issue until a person creates the draft. One reply is written at a time
+         *     (409 while one is, or when chat can't reply now, with why).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        chat_id?: number;
+                        text?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SentChat"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One chat, with its messages, the issues it drafted, and the reply being written */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Chat"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/drafts/{id}/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a drafted issue for the factory to build, approved by the person creating it
+         * @description version is the draft's version as read; 409 when it changed since (a reply revised it), so what's filed is what the person saw. A title or body given replaces the draft's. 410 when the draft was already created or dismissed; 409 when the forge refused it, with why.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        version: string;
+                        title?: string;
+                        body?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Draft"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+                410: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/drafts/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set a drafted issue aside without opening it */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["Action"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{id}": {
         parameters: {
             query?: never;
@@ -1454,6 +1652,102 @@ export interface components {
             cool_off_hours: number;
             /** @description This request may reset it (tripped, and behind the password or on this machine) */
             can_reset: boolean;
+        };
+        Chats: {
+            /** @description A message sent now gets a reply */
+            available: boolean;
+            /** @description Why chat can't reply now; empty when it can */
+            unavailable: string;
+            /** @description The orchestrator's model, which chat runs on */
+            model: string;
+            harness: string;
+            /** @description The harness runs on a subscription plan */
+            plan: boolean;
+            /** @description The orchestrator also runs on its own schedule */
+            orchestrator_on: boolean;
+            /** @description How often it runs on its own, such as 1h0m0s */
+            orchestrator_every: string;
+            /** @description Dollars per orchestrator run or chat reply */
+            run_budget_usd: number;
+            /** @description Dollars per day across the orchestrator */
+            daily_budget_usd: number;
+            spent_today_usd: number;
+            /** @description The most recent first */
+            chats: components["schemas"]["ChatAt"][];
+        };
+        ChatAt: {
+            /** Format: int64 */
+            id: number;
+            title: string;
+            updated_at: string;
+        };
+        Chat: {
+            /** Format: int64 */
+            id: number;
+            title: string;
+            messages: components["schemas"]["ChatMessage"][];
+            drafts: components["schemas"]["Draft"][];
+            /** @description The run answering the last message, while it runs or when it failed; null once it answered */
+            reply: components["schemas"]["ChatReply"] | null;
+        };
+        ChatMessage: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            /** @description Markdown */
+            text: string;
+            at: string;
+            /**
+             * Format: int64
+             * @description The run that wrote a reply
+             */
+            job_id: number | null;
+        };
+        ChatReply: {
+            /**
+             * Format: int64
+             * @description 0 when no reply was started
+             */
+            job_id: number;
+            /** @description queued, running, failed, timed_out or cancelled */
+            state: string;
+            error: string;
+        };
+        SentChat: {
+            /** Format: int64 */
+            chat_id: number;
+            /** Format: int64 */
+            job_id: number;
+        };
+        Draft: {
+            /** Format: int64 */
+            id: number;
+            repo: string;
+            title: string;
+            /** @description Markdown */
+            body: string;
+            /** @description Labels besides the intake label */
+            labels: string[];
+            /** @description Items that must be done first */
+            depends_on: number[];
+            /**
+             * Format: int64
+             * @description The epic item it is part of
+             */
+            parent: number | null;
+            /** @enum {string} */
+            state: "draft" | "creating" | "created" | "dismissed";
+            issue_number: number | null;
+            /** @description The issue's page once created; else empty */
+            issue_url: string;
+            /** Format: int64 */
+            item_id: number | null;
+            /** @description Why creating it last failed; else empty */
+            error: string;
+            updated_at: string;
+            /** @description What a create sends back */
+            version: string;
         };
         PlanUsage: {
             plans: components["schemas"]["UsagePlan"][];

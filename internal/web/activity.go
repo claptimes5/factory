@@ -87,6 +87,9 @@ func (s *Server) apiActivity(w http.ResponseWriter, r *http.Request) {
 // describe says what an event means for the feed, or "" for the
 // bookkeeping no one watching needs.
 func describe(e store.Event, it *store.WorkItem, j *store.Job) (text, tone string) {
+	if e.Actor == "chat" || j != nil && j.Kind == store.KindChat {
+		return "", "" // a chat's replies are on its own tab
+	}
 	if e.Actor == "orchestrator" && e.Reason != "" {
 		return trim(e.Reason, 200), "info"
 	}

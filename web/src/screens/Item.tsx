@@ -147,7 +147,7 @@ export function ItemScreen() {
           <Card>
             <CardHeader>
               <CardTitle>Audit trail</CardTitle>
-              <Link to={`/orchestrator?item=${it.id}`} className="text-xs text-primary hover:underline">
+              <Link to={`/orchestrator?tab=decisions&item=${it.id}`} className="text-xs text-primary hover:underline">
                 Orchestrator decisions
               </Link>
             </CardHeader>

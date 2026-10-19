@@ -110,8 +110,8 @@ func Settings(src []byte) ([]SettingGroup, error) {
 		}},
 		{Name: "Orchestrator", Help: "The agent that files and orders work on its own schedule.", Settings: []Setting{
 			{Path: []string{"orchestrator", "enabled"}, Label: "On", Help: "It spends on its own schedule, so it's off unless you turn it on.", Kind: "bool", Default: false},
-			num("orchestrator.run_budget", "Per run", "Dollars for one orchestrator run.", 3),
-			num("orchestrator.daily_budget", "Daily cap", "Dollars a day for orchestration, apart from building.", 15),
+			num("orchestrator.run_budget", "Per run", "Dollars for one orchestrator run or chat reply.", 3),
+			num("orchestrator.daily_budget", "Daily cap", "Dollars a day for the orchestrator, tuning and chat, apart from building.", 15),
 			integer("orchestrator.daily_issue_cap", "Issues a day", "How many issues it may open a day.", 10),
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
 		}},

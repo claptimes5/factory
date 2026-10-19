@@ -487,18 +487,29 @@ func IsSubKind(kind string) bool {
 // runs inside holds the concurrency slot. Its input names that job.
 func (s *Store) StartSubJob(ctx context.Context, within int64, j Job) (*Job, error) {
 	j.Input = fmt.Sprintf(`{"within":%d}`, within)
+	j.Skillset, j.Fast = "", false // a sub-job runs as its route says, not as the parent's
+	return s.start(ctx, j, fmt.Sprintf(`{"kind":%q,"harness":%q,"model":%q,"within":%d}`, j.Kind, j.Harness, j.Model, within))
+}
+
+// StartJob records a job as running from the start, for a run that
+// doesn't wait in the queue (a chat's reply). After a restart it is
+// queued like any other.
+func (s *Store) StartJob(ctx context.Context, j Job) (*Job, error) {
+	return s.start(ctx, j, fmt.Sprintf(`{"kind":%q,"harness":%q,"model":%q}`, j.Kind, j.Harness, j.Model))
+}
+
+func (s *Store) start(ctx context.Context, j Job, data string) (*Job, error) {
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, started_at, base_sha, branch, input, route)
-			VALUES (?, ?, 'running', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		res, err := tx.Exec(`INSERT INTO jobs(item_id, kind, state, harness, model, effort, attempt, priority, budget_usd, queued_at, started_at, base_sha, branch, input, route, skillset, fast)
+			VALUES (?, ?, 'running', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			j.ItemID, j.Kind, j.Harness, j.Model, nullable(j.Effort), j.Priority, j.BudgetUSD, Now(), Now(),
-			nullable(j.BaseSHA), nullable(j.Branch), j.Input, nullable(j.Route))
+			nullable(j.BaseSHA), nullable(j.Branch), j.Input, nullable(j.Route), nullable(j.Skillset), j.Fast)
 		if err != nil {
 			return err
 		}
 		id, _ = res.LastInsertId()
-		return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &id, Type: "job_claimed",
-			Data: fmt.Sprintf(`{"kind":%q,"harness":%q,"model":%q,"within":%d}`, j.Kind, j.Harness, j.Model, within)})
+		return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &id, Type: "job_claimed", Data: data})
 	})
 	if err != nil {
 		return nil, err
@@ -1205,24 +1216,25 @@ func (s *Store) SetJobInput(ctx context.Context, id int64, input string) (bool, 
 }
 
 // Version is a cheap fingerprint of everything the dashboard shows: it
-// changes whenever an event is written or a job changes state, cost or
-// head. Clients poll it (over SSE) and refetch when it moves.
+// changes whenever an event is written, a job changes state, cost or
+// head, or a chat gets a message or a draft. Clients poll it (over SSE) and refetch when it moves.
 func (s *Store) Version(ctx context.Context) (string, error) {
 	var ev, jobs, finished int64
 	var cost float64
-	var live, items string
+	var live, items, chats string
 	err := s.read.QueryRowContext(ctx, `SELECT
 		(SELECT COALESCE(MAX(id),0) FROM events),
 		(SELECT COALESCE(MAX(id),0) FROM jobs),
 		(SELECT COUNT(*) FROM jobs WHERE finished_at IS NOT NULL),
 		(SELECT COALESCE(SUM(cost_usd),0) FROM jobs),
 		(SELECT COALESCE(GROUP_CONCAT(id || state || COALESCE(head_sha,''), ','),'') FROM jobs WHERE state IN ('queued','running')),
-		(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at),'') FROM work_items)`).
-		Scan(&ev, &jobs, &finished, &cost, &live, &items)
+		(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at),'') FROM work_items),
+		(SELECT COALESCE(MAX(id),0) FROM chat_messages) || '/' || (SELECT COALESCE(MAX(updated_at),'') FROM issue_drafts)`).
+		Scan(&ev, &jobs, &finished, &cost, &live, &items, &chats)
 	if err != nil {
 		return "", err
 	}
 	h := fnv.New64a()
-	fmt.Fprintf(h, "%d|%d|%d|%.6f|%s|%s", ev, jobs, finished, cost, live, items)
+	fmt.Fprintf(h, "%d|%d|%d|%.6f|%s|%s|%s", ev, jobs, finished, cost, live, items, chats)
 	return strconv.FormatUint(h.Sum64(), 36), nil
 }

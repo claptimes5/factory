@@ -344,7 +344,7 @@ A richer web app in the style of Agent Orchestrator's desktop UI replaces the ht
 - **Session view:** live terminal (xterm.js over WebSocket) attached to the job's container, beside the issue, spec, and agent transcript.
 - **PR panel:** CI checks, gate results, the Codex verdict with findings linked to diff lines, and approve, retry, or park buttons.
 - **Diff viewer:** side-by-side diff (diff2html or Monaco) with reviewer comments inline.
-- **Orchestrator feed:** every orchestrator decision with its reason, filterable by item.
+- **Orchestrator:** a chat with the orchestrator's model that drafts issues for a person to create (read-only, on the orchestrator's budget), and every orchestrator decision with its reason, filterable by item.
 - **Spend and metrics:** cost per merged PR, first-pass rate, and escalation rate over time.
 - **Notifications center:** needs-input, ready-for-review, and budget alerts, with browser push.
 - **Mobile layout:** board, approvals, and notifications usable on a phone.
