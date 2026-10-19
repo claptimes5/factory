@@ -288,38 +288,19 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	p.say("\n== 7. Claude (writes the code)")
-	p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
-	p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
-	for {
-		v := p.secret("Anthropic API key or subscription token", firstOf(vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"]))
-		vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"] = "", ""
-		switch {
-		case strings.HasPrefix(v, "sk-ant-oat"):
-			vals["CLAUDE_CODE_OAUTH_TOKEN"] = v
-		case strings.HasPrefix(v, "sk-ant-"):
-			vals["ANTHROPIC_API_KEY"] = v
-		case v == "":
-			p.say("Every job needs Claude, so the factory can't run without one.")
-			if p.yes("Skip it for now?", false) {
-				break
-			}
-			continue
-		default:
-			p.say("That doesn't look like an Anthropic key (they start with sk-ant-).")
-			if !p.yes("Use it anyway?", false) {
-				continue
-			}
-			vals["ANTHROPIC_API_KEY"] = v
-		}
-		break
+	// A Codex-only factory needs no Claude sign-in.
+	if usesHarness(cfg, "claude") {
+		p.say("\n== 7. Claude (writes the code)")
+		p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
+		p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
+		setupClaude(p, vals)
 	}
 	if err := save(); err != nil {
 		return err
 	}
 
 	if usesHarness(cfg, "codex") {
-		p.say("\n== 8. OpenAI (reviews the code)")
+		p.say("\n== 8. OpenAI (Codex)")
 		setupCodex(p, cfg, vals)
 		if err := save(); err != nil {
 			return err
@@ -359,10 +340,41 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	return nil
 }
 
+// setupClaude asks for an Anthropic API key or a subscription token.
+func setupClaude(p *prompter, vals map[string]string) {
+	for {
+		v := p.secret("Anthropic API key or subscription token", firstOf(vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"]))
+		vals["ANTHROPIC_API_KEY"], vals["CLAUDE_CODE_OAUTH_TOKEN"] = "", ""
+		switch {
+		case strings.HasPrefix(v, "sk-ant-oat"):
+			vals["CLAUDE_CODE_OAUTH_TOKEN"] = v
+		case strings.HasPrefix(v, "sk-ant-"):
+			vals["ANTHROPIC_API_KEY"] = v
+		case v == "":
+			p.say("factory.yaml routes jobs to Claude, so they can't run without one.")
+			if p.yes("Skip it for now?", false) {
+				break
+			}
+			continue
+		default:
+			p.say("That doesn't look like an Anthropic key (they start with sk-ant-).")
+			if !p.yes("Use it anyway?", false) {
+				continue
+			}
+			vals["ANTHROPIC_API_KEY"] = v
+		}
+		break
+	}
+}
+
 // setupCodex asks how Codex signs in: an API key, a ChatGPT plan, or a
 // Business or Enterprise access token.
 func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
-	p.say("factory.yaml has Codex review Claude's work. Codex can sign in with:")
+	if usesHarness(cfg, "claude") {
+		p.say("factory.yaml has Codex review Claude's work. Codex can sign in with:")
+	} else {
+		p.say("factory.yaml runs every job on Codex. Codex can sign in with:")
+	}
 	p.say("  1. An OpenAI API key, billed per use. OpenAI recommends this for automation.")
 	p.say("  2. A ChatGPT plan (Plus, Pro, Business or Enterprise), using the plan's limits.")
 	p.say("  3. A Codex access token from a ChatGPT Business or Enterprise workspace.")

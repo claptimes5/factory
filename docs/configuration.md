@@ -28,6 +28,7 @@ change something by hand.
 - [PR previews](#pr-previews)
 - [PR descriptions](#pr-descriptions)
 - [Claude-only review](#claude-only-review)
+- [Codex-only](#codex-only)
 - [How review checks itself](#how-review-checks-itself)
 - [The security pass](#the-security-pass)
 
@@ -95,9 +96,21 @@ workspaces:
   and is done when every PR is merged. A PR closed without merging parks it.
 
 The builder and reviewer run in the first repo's image with its `env`, so
-that image needs every member's toolchain (Ruby and Node, say). Services
+that image needs every member's toolchain (Ruby and Node, say). For a Rails
+API and a Vite app, list the API first: its image is built on a Ruby base,
+and `deploy/job-image/Dockerfile` adds Node to any base that lacks it, so
+that one image builds and checks both. Services
 of all the members start together; where two name a service the same, the
 first repo's wins. Triage reads only the issue's own repo.
+
+A workspace's PRs never merge themselves: `auto_merge` covers one repo's
+changes only. On GitLab each repo gets a draft merge request, linked by
+GitLab references (`group/api!12`), and the last to merge closes the issue
+with `Closes group/api#7`; GitLab closes an issue in another project this
+way only when the factory's token can also see that project, and the merge
+request targets its project's default branch.
+[`docs/examples`](examples/) has a complete GitLab workspace of a Rails
+API and a Vite app, on Claude alone and on Codex alone.
 
 ## GitLab repos
 
@@ -374,6 +387,12 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 
 The daemon refuses a config where a reviewer, or the verifier, could run
 the same harness and model as the builder it reviews.
+
+The escalation tiers are model names on the implement route's own harness,
+so a Codex builder escalates through Codex models: the daemon refuses a
+Codex route whose tiers lack a `pricing` entry, such as the Claude tiers
+above. Left out, `routing.orchestrate` is Opus on Claude, or, when no route
+names Claude, `implement.L`'s harness and model; `tune` follows it.
 
 **Fast mode.** `fast: true` on a Claude route runs Claude Code's fast mode,
 which answers up to 2.5 times faster at a higher price per token:
@@ -1122,18 +1141,29 @@ Change these entries in `factory.yaml` and leave the rest:
 
 ```yaml
 routing:
+  triage:            {harness: claude, model: haiku}
+  implement.XS:      {harness: claude, model: haiku}
   implement.S:       {harness: claude, model: haiku}
   implement.M:       {harness: claude, model: sonnet}
   implement.L:       {harness: claude, model: sonnet}
   review:            {harness: claude, model: opus}
-  # drop review.high_risk, or point it at opus (or fable) too
-  # drop security (it then runs on implement.L), or point it at a model
-  # the reviewer doesn't use
+  review.high_risk:  {harness: claude, model: opus, effort: high}   # or fable
+  verify:            {harness: claude, model: opus, effort: low}    # never a builder's model
+  # drop security: it runs on a builder tier that didn't build the item,
+  # never on the reviewer's model
 escalation:
   implement: [haiku, sonnet]
 ```
 
-No OpenAI key is needed once no route names `codex`.
+No OpenAI key is needed once no route names `codex`, and `factory setup`
+doesn't ask for one.
+
+Every other step defaults to a route this allows: the verifier to the
+reviewer's model when triage's builds, the critic and the plan check to
+`implement.L`, the old-bug hunt to `review`, the orchestrator to Opus. The
+security pass must not use a reviewer's model, so with Opus reviewing it
+runs on Sonnet for an item Haiku built and on Haiku for one Sonnet built;
+give it Fable (`routing.security`) if your account has it.
 
 This is weaker than cross-vendor review: two models from one family tend
 to share blind spots. The rule covers the reviewer, whose approval is
@@ -1141,6 +1171,71 @@ needed before any PR opens. The critic that also reads high-risk diffs
 runs only after the reviewer approves and can only add a block. So it uses
 `routing.critic` (default: `implement.L`) even when that is the builder's
 model.
+
+## Codex-only
+
+Every step can run on Codex instead, with no Claude credential: on an
+OpenAI API key, or on a ChatGPT plan (`FACTORY_CODEX_AUTH=chatgpt`, signed
+in with `./factory codex-login`). The same rule holds: the reviewer's and
+the verifier's model must differ from every model a builder can reach. Codex
+models compare by their exact name, so `gpt-6.1-sol` and `gpt-6-luna` are
+two models. With two, one builds and the other reviews. The names below are
+placeholders, as in this repo's own `factory.yaml`: use the ones your sign-in
+offers (`/model` in the `codex` app, signed in the same way, lists them; so
+does OpenAI's Codex models page). Each needs a `pricing` entry, and
+`escalation.implement` must list the builder's models:
+
+```yaml
+routing:
+  orchestrate:       {harness: codex, model: gpt-6.1-sol}
+  triage:            {harness: codex, model: gpt-6-luna}
+  implement.XS:      {harness: codex, model: gpt-6.1-sol, effort: low}
+  implement.S:       {harness: codex, model: gpt-6.1-sol, effort: medium}
+  implement.M:       {harness: codex, model: gpt-6.1-sol, effort: high}
+  implement.L:       {harness: codex, model: gpt-6.1-sol, effort: high}
+  review:            {harness: codex, model: gpt-6-luna, effort: medium}
+  review.high_risk:  {harness: codex, model: gpt-6-luna, effort: high}
+  verify:            {harness: codex, model: gpt-6-luna}
+  security:          {harness: codex, model: gpt-6.1-sol, effort: high}
+escalation:
+  implement: [gpt-6.1-sol]      # Codex models: a retry stays on the builder's
+pricing:                        # every Codex model needs one, even on a plan
+  gpt-6.1-sol: {input_per_mtok: 2, cached_input_per_mtok: 0.10, output_per_mtok: 10}
+  gpt-6-luna:  {input_per_mtok: 0.10, cached_input_per_mtok: 0.01, output_per_mtok: 0.50}
+```
+
+Use the models your plan offers. If it has a third, review with it and let
+the builder escalate through the other two.
+
+- **The builder.** With the docker runner a Codex builder runs with
+  `--sandbox danger-full-access`, as a Claude builder runs with
+  `bypassPermissions`. It installs dependencies, reaches the job's services
+  (a database over the services network) and writes its verdict outside the
+  checkout, and the boundary is the job's container and the egress
+  allowlist (see [Isolation](security.md#isolation)). With the local runner
+  it keeps Codex's `workspace-write` sandbox, with the out directory added
+  for the verdict and no network, so a check that installs or reaches a
+  service fails there. Read-only steps keep Codex's read-only sandbox.
+- **The orchestrator** gets the daemon's MCP tools as Codex `mcp_servers`,
+  with their calls approved up front (`codex exec` can't ask, and refuses
+  a call that needs approval). Each tool checks its own call, as for
+  Claude. A tool call Codex couldn't make fails the run.
+- **No session resume.** A fix round on Codex starts a fresh session; only
+  Claude continues the last one.
+- **Lessons** go to `AGENTS.md`, which Codex reads, and the readiness check
+  stops asking for a `CLAUDE.md` that loads it.
+- **On a ChatGPT plan** Codex runs one job at a time (two runs can't share
+  one sign-in), so with every step on Codex the factory builds, reviews
+  and triages one job after another; `budgets.concurrent_jobs` doesn't
+  raise that. Jobs cost $0 here, so the dollar budgets, the cost estimate
+  and `confirm_over` never hold anything back; the plan's 5-hour and weekly
+  limits do (`budgets.pause_at_usage`). Codex has no per-run dollar cap,
+  so on an API key a run stops at its timeout, not at its budget, and the
+  budget counts after it ends.
+
+This gives up what Claude-only does: two models of one vendor share more
+blind spots than two vendors' do. And with two models the security pass
+runs on the builder's, reading the change with its own prompt.
 
 ## How review checks itself
 

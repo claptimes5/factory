@@ -121,8 +121,9 @@ type fakeGitHub struct {
 	report   *readiness.Report // what the readiness check finds; ready if nil
 	issues   []string          // path, title and labels of issues created
 	bodies   []string
-	filed    []map[string]any // issues the check filed before, if set
-	labeled  []string         // path and labels added to issues
+	filed    []map[string]any    // issues the check filed before, if set
+	labeled  []string            // path and labels added to issues
+	yaml     func(string) string // edits factory.yaml before setup reads it
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +424,25 @@ func TestRemoteIs(t *testing.T) {
 	}
 }
 
+func TestRemoteIsGitLab(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://gitlab.com/acme/web.git":        true,
+		"git@gitlab.com:acme/web.git":            true,
+		"ssh://git@gitlab.com/acme/web":          true,
+		"https://oauth2@gitlab.com/acme/web":     true,
+		"ssh://git@gitlab.com:2222/acme/web.git": true,
+		"https://gitlab.com:8443/acme/web":       true,
+		"ssh://git@gitlab.com:2222/x/acme/web":   false,
+		"git@gitlab.example.com:acme/web.git":    false,
+		"https://gitlab.com/other/acme/web.git":  false,
+		"https://gitlab.com/acme/web-old.git":    false,
+	} {
+		if remoteIs(url, "gitlab.com/acme/web") != want {
+			t.Errorf("remoteIs(%s) = %v", url, !want)
+		}
+	}
+}
+
 func TestParseIssue(t *testing.T) {
 	one, _ := config.Load(testConfig(t, "o/r"))
 	if repo, n, err := parseIssue(one, "#12"); err != nil || repo != "o/r" || n != 12 {
@@ -482,6 +502,10 @@ func runSetup(t *testing.T, f *fakeGitHub, answers ...string) (cfgPath, envPath,
 		t.Setenv(k, "")
 	}
 	cfgPath = testConfig(t, "x/y")
+	if f.yaml != nil {
+		b, _ := os.ReadFile(cfgPath)
+		os.WriteFile(cfgPath, []byte(f.yaml(string(b))), 0o644)
+	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -591,6 +615,35 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 	}
 	if len(f.created) != 0 {
 		t.Fatal("labels created without permission")
+	}
+}
+
+// With every route on Codex, setup doesn't ask for a Claude credential.
+func TestSetupCodexOnlySkipsClaude(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, yaml: func(y string) string {
+		y = regexp.MustCompile(`harness: claude, model: [a-z]+`).ReplaceAllString(y, "harness: codex, model: gpt-6.1-sol")
+		y = strings.Replace(y, "review:            {harness: codex,  model: gpt-6.1-sol}", "review: {harness: codex, model: gpt-6-luna}", 1)
+		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}", "", 1)
+		y = strings.Replace(y, "verify:            {harness: codex,  model: gpt-6-luna}", "", 1)
+		y = strings.Replace(y, "security:          {harness: codex, model: gpt-6.1-sol}", "", 1)
+		return strings.Replace(y, "implement: [haiku, sonnet, opus]", "implement: [gpt-6.1-sol]", 1)
+	}}
+	_, envPath, out := runSetup(t, f,
+		"o/r",
+		"3", "ghp_token123", // personal token
+		"n",           // don't create labels
+		"n",           // skip the readiness check
+		"1", "sk-xyz", // Codex on an API key
+		"", // no notifications
+	)
+	if strings.Contains(out, "Anthropic") || strings.Contains(out, "== 7. Claude") {
+		t.Fatalf("setup asked for Claude:\n%s", out)
+	}
+	if !strings.Contains(out, "runs every job on Codex") {
+		t.Fatalf("no Codex-only wording:\n%s", out)
+	}
+	if vals, _ := readEnvFile(envPath); vals["OPENAI_API_KEY"] != "sk-xyz" {
+		t.Fatalf("codex key: %v\n%s", vals, out)
 	}
 }
 

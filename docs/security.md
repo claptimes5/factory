@@ -60,6 +60,17 @@ Nothing the builder writes is trusted:
   may add files there (dependencies, build output). But a check that edits
   or deletes the commit's own files fails, so it can't get around the diff
   guard by rewriting a lint config or removing a test at run time.
+- **What sandboxes the builder.** With the docker runner, Claude builds
+  with `bypassPermissions` and Codex with `--sandbox danger-full-access`:
+  either may run any command in the job's container, which sees only its
+  checkout, its out directory and its services. The network boundary is
+  the egress allowlist; with `runner.egress.mode: open` there is none, and
+  a builder reaches the whole internet. With the local runner (for
+  development) there is no container: Claude still runs with
+  `bypassPermissions`, as you on your own machine, and Codex keeps its
+  `workspace-write` sandbox with the out directory added (`--add-dir`), so
+  it writes only there and in the checkout and has no network. Read-only
+  steps keep each CLI's own read-only mode either way.
 - **Reviewers only count their final message.** A verdict file anywhere is
   ignored, and Claude's read-only runs ignore the checkout's settings,
   hooks and MCP servers.

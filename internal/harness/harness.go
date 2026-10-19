@@ -28,6 +28,10 @@ type RunRequest struct {
 	OutDir    string // host path; verdict.json is written here
 	SkillsDir string // host path of the skill set, mounted read-only ("" for none)
 	ReadOnly  bool
+	// Contained says the run is in a container of its own (the docker
+	// runner), which is then a builder's sandbox; on the host the CLI
+	// keeps its own.
+	Contained bool
 	Schema    string // JSON schema for the final verdict
 	BudgetUSD float64
 	MaxTurns  int
@@ -35,7 +39,7 @@ type RunRequest struct {
 	Timeout   time.Duration
 	Image     string
 	Mounts    []runner.Mount // extra mounts, e.g. the orchestrator's MCP socket
-	MCPConfig string         // JSON for `claude --mcp-config` (Claude only)
+	MCPConfig string         // JSON for `claude --mcp-config`; Codex gets its servers as mcp_servers overrides
 	Tools     []string       // extra allowed tools for read-only runs, e.g. mcp__factory
 	// SessionDir is a host directory that keeps the CLI's session files
 	// across jobs (Claude only), and Resume a session in it to continue.

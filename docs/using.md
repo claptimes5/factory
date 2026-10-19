@@ -206,7 +206,7 @@ under `data/compare/` and shown in the control room under Compare.
 
 ## The orchestrator
 
-The orchestrator is a short, read-only Claude run that plans and steers
+The orchestrator is a short, read-only Claude (or Codex) run that plans and steers
 work through the daemon's MCP tools. Its prompt is `prompts/orchestrate.md`.
 Turn it on with `orchestrator.enabled: true`. It is off by default in code,
 and on in this repo's `factory.yaml`, since it spends on its own schedule.
