@@ -583,3 +583,35 @@ func TestUninstallShowsACappedCount(t *testing.T) {
 		t.Fatalf("out:\n%s", out.String())
 	}
 }
+
+// A restart keeps the pid, so a lock with our pid that this process
+// didn't take was left by the one before: not live, and swept at start.
+func TestOwnPidLockFromBeforeARestartIsStale(t *testing.T) {
+	data := t.TempDir()
+	left := filepath.Join(data, "readiness-1")
+	os.MkdirAll(left, 0o755)
+	os.WriteFile(filepath.Join(left, runFile), []byte(itoa(int64(os.Getpid()))), 0o644)
+	if runs := liveRuns(data); len(runs) != 0 {
+		t.Fatalf("a lock from before the restart counted: %q", runs)
+	}
+	// One this process holds counts until released.
+	held := filepath.Join(data, "readiness-2")
+	unlock, err := runLock(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs := liveRuns(data); len(runs) != 1 {
+		t.Fatalf("runs = %q", runs)
+	}
+	sweepReadiness(data)
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatal("left folder kept")
+	}
+	if _, err := os.Stat(held); err != nil {
+		t.Fatal("swept a running check's folder")
+	}
+	unlock()
+	if runs := liveRuns(data); len(runs) != 0 {
+		t.Fatalf("runs = %q", runs)
+	}
+}

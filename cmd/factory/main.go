@@ -526,6 +526,8 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	// The setup screen reads the readiness check's reports, and can run it
 	// again: on the daemon's context, so it stops when the daemon does.
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
+	// A check a crash or restart cut off left its folder behind.
+	sweepReadiness(cfg.Path(cfg.DataDir))
 	// Readiness runs count as busy for removing the factory, and none
 	// starts while it is removed.
 	var readinessRuns atomic.Int32
@@ -612,8 +614,17 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return err
 	}
 	srv.Wizard = wz
-	// A restart waits for an image build or a sign-in, as for a job.
-	p.Busy = wz.waitingOn
+	// A restart waits for an image build, a sign-in or a readiness
+	// check, as for a job.
+	p.Busy = func() string {
+		if w := wz.waitingOn(); w != "" {
+			return w
+		}
+		if readinessRuns.Load() > 0 {
+			return "the readiness check"
+		}
+		return ""
+	}
 	// Settings' "Remove the factory" waits for jobs, readiness checks and
 	// compare runs (in any process, by their run locks) and that work too,
 	// and holds off new work while it removes.
