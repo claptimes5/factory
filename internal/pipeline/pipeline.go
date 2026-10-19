@@ -403,6 +403,10 @@ func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
 
 // RestartWaitsFor names the work besides jobs a restart waits for, or "".
 func (p *Pipeline) RestartWaitsFor() string {
+	// A restart mid-removal would cut it short.
+	if p.held.Load() > 0 {
+		return "removing the factory"
+	}
 	if p.Busy == nil {
 		return ""
 	}

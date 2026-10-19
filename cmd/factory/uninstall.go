@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -41,6 +42,8 @@ type uninstaller struct {
 	// serving: the factory runs in this process, so its database and
 	// sign-ins stay and only the job data goes.
 	serving bool
+	// active refuses a second Remove while one runs.
+	active atomic.Bool
 }
 
 func newUninstaller(cfg *config.Config, cfgPath, envPath string, serving bool, busy func(context.Context) string) *uninstaller {
@@ -62,7 +65,7 @@ var servingData = []string{"jobs", "readiness", "compare", "sessions", "cache"}
 // dataPrefixes the starts of the names it makes there.
 var (
 	dataNames    = []string{"jobs", "readiness", "compare", "sessions", "cache", "sync", "codex", "backups", "web.secret"}
-	dataPrefixes = []string{"factory.db", "todos-", "eval-", "capture-", "factory-askpass-"}
+	dataPrefixes = []string{"factory.db", "todos-", "eval-", "capture-", "factory-askpass-", "readiness-"}
 )
 
 // Plan is what removing the factory would remove. It changes nothing.
@@ -303,6 +306,9 @@ func (u *uninstaller) dataRemovable(dir string) error {
 	}
 	for _, e := range entries {
 		n := e.Name()
+		if strings.HasPrefix(n, ".") {
+			continue // .DS_Store and the like
+		}
 		if !slices.Contains(dataNames, n) && !slices.ContainsFunc(dataPrefixes, func(p string) bool { return strings.HasPrefix(n, p) }) {
 			return not("it holds " + n + ", which the factory didn't make")
 		}
@@ -369,6 +375,10 @@ func (u *uninstaller) manual() []web.APIUninstallStep {
 // New work is held off throughout, and running work is looked for again
 // before each step that a job could be using.
 func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallResult, error) {
+	if !u.active.CompareAndSwap(false, true) {
+		return web.APIUninstallResult{}, errors.New("already removing the factory: wait for it to finish")
+	}
+	defer u.active.Store(false)
 	if u.hold != nil {
 		release := u.hold()
 		defer release()
@@ -381,6 +391,15 @@ func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallRe
 	}
 	if why := busy(); why != "" {
 		return web.APIUninstallResult{}, errors.New(why)
+	}
+	// Data asked for that can't go refuses the lot, before anything is.
+	dir := u.dataDir()
+	_, statErr := os.Stat(dir)
+	data = data && statErr == nil
+	if data {
+		if err := u.dataRemovable(dir); err != nil {
+			return web.APIUninstallResult{}, fmt.Errorf("nothing was removed: %w", err)
+		}
 	}
 	res := web.APIUninstallResult{Done: []web.APIUninstallDone{}, Manual: u.manual()}
 	add := func(what string, err error) {
@@ -421,8 +440,7 @@ func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallRe
 		}
 		add("image "+im.Ref, err)
 	}
-	dir := u.dataDir()
-	if _, err := os.Stat(dir); !data || err != nil {
+	if !data {
 		return res, nil
 	}
 	if why := busy(); why != "" {
@@ -518,6 +536,9 @@ func uninstall(ctx context.Context, out io.Writer, in io.Reader, cfgPath string,
 		return fmt.Errorf("something is listening on %s, the dashboard's address: stop the factory first if it's running, or remove it from the dashboard (Settings, Remove the factory)", cfg.Web.Listen)
 	}
 	busy := func(ctx context.Context) string {
+		if runs := liveRuns(cfg.Path(cfg.DataDir)); len(runs) > 0 {
+			return "Not now: " + joinAnd(runs) + " is running. Wait for it to finish, then try again."
+		}
 		db := filepath.Join(cfg.Path(cfg.DataDir), "factory.db")
 		if _, err := os.Stat(db); err != nil {
 			return ""
@@ -535,6 +556,9 @@ func uninstall(ctx context.Context, out io.Writer, in io.Reader, cfgPath string,
 	printPlan(out, p, data)
 	if p.Refused != "" {
 		return errors.New(p.Refused)
+	}
+	if data && p.Data.Blocked != "" {
+		return fmt.Errorf("nothing was removed: %s", p.Data.Blocked)
 	}
 	if dry {
 		fmt.Fprintln(out, "\nNothing was removed (--dry-run).")

@@ -342,7 +342,10 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
 `./factory uninstall` lists what the factory made, then removes it once
 you type `remove` (or, with one repo, its name). `--dry-run` only lists.
 It refuses while something listens on the dashboard's address (stop the
-factory first, or use the dashboard) and while jobs are marked running.
+factory first, or use the dashboard), while jobs are marked running,
+and while a `factory compare` or a readiness check runs anywhere on
+this machine. With `--data`, a data folder that can't go (below) stops
+it before anything is removed.
 
 - **Labels**: each label the factory defines that a repo has, with how
   many open issues and PRs carry it (counting stops at 1000, shown as
@@ -359,15 +362,17 @@ factory first, or use the dashboard) and while jobs are marked running.
 - **Data**, only with `--data`: the whole data folder, with the
   database, job logs, kept checkouts, readiness reports and the Codex
   sign-in. It goes only when it is plainly the factory's: it holds
-  `factory.db`, nothing at its top the factory didn't make, and it is
+  `factory.db`, nothing at its top the factory didn't make (dotfiles
+  such as `.DS_Store` aside), and it is
   neither your home folder nor holds `factory.yaml` or `factory.env`.
   Otherwise the list says why it stays.
 
 In the dashboard, Settings, **Remove the factory** shows the same list
 and removes it after you confirm. It needs the same access as saving
-settings. It waits while jobs (a compare run's included), a readiness
-check, an image build or a Codex sign-in run, starts no new work while
-it removes, and looks again before the images and the data. The factory
+settings. It waits while jobs, a readiness check, a compare run, an
+image build or a Codex sign-in run, starts no new work while it removes
+(a restart asked for meanwhile waits for it too), takes one removal at
+a time, and looks again before the images and the data. The factory
 is still running then, so its database and sign-ins stay: the data
 choice removes only job logs, kept checkouts, readiness reports and repo
 caches, after the same check. Stop the factory afterwards, or it puts

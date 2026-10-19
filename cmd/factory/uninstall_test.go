@@ -219,7 +219,7 @@ func TestUninstallKeepsADataDirWithTheConfig(t *testing.T) {
 	cfg.DataDir = "."
 	var out bytes.Buffer
 	err := uninstall(context.Background(), &out, strings.NewReader("remove\n"), cfgPath, cfg, envPath, []string{"--data"})
-	if err == nil || !strings.Contains(out.String(), "isn't removed: it holds factory.yaml") {
+	if err == nil || !strings.Contains(err.Error(), "nothing was removed") || !strings.Contains(out.String(), "isn't removed: it holds factory.yaml") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
 	if _, err := os.Stat(cfgPath); err != nil {
@@ -464,15 +464,84 @@ func TestUninstallDataMustBeTheFactorys(t *testing.T) {
 	if p := u.Plan(context.Background()); !strings.Contains(p.Data.Blocked, "no factory.db") {
 		t.Fatalf("data = %+v", p.Data)
 	}
-	res, err := u.Remove(context.Background(), true)
-	if err != nil {
-		t.Fatal(err)
+	// Asked for and blocked, it refuses the lot before any label goes.
+	h := newLabelHost()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	u.forgeFor = func(repo string) (forge, error) {
+		return &github.Client{Repo: repo, BaseURL: srv.URL, Tokens: github.StaticToken("t")}, nil
+	}
+	if _, err := u.Remove(context.Background(), true); err == nil || !strings.Contains(err.Error(), "nothing was removed") || !strings.Contains(err.Error(), "no factory.db") {
+		t.Fatalf("err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "jobs")); err != nil {
 		t.Fatal("removed job data from a folder that may not be the factory's")
 	}
-	if last := res.Done[len(res.Done)-1]; last.OK || !strings.Contains(last.Error, "no factory.db") {
-		t.Fatalf("result = %+v", res.Done)
+	if len(h.deleted) != 0 {
+		t.Fatalf("deleted %q before refusing", h.deleted)
+	}
+	// Without the data, the rest still goes.
+	if _, err := u.Remove(context.Background(), false); err != nil || len(h.deleted) != 2 {
+		t.Fatalf("err = %v, deleted %q", err, h.deleted)
+	}
+}
+
+// What the factory leaves in its folder, dotfiles and old readiness
+// clones included, keeps it the factory's.
+func TestUninstallDataAllowsTheFactorysLeftovers(t *testing.T) {
+	cfg, cfgPath, envPath, _ := uninstallSetup(t, newLabelHost())
+	u := newUninstaller(cfg, cfgPath, envPath, false, nil)
+	data := u.dataDir()
+	os.WriteFile(filepath.Join(data, ".DS_Store"), nil, 0o644)
+	os.MkdirAll(filepath.Join(data, "readiness-123"), 0o755)
+	os.WriteFile(filepath.Join(data, "factory.db.bak-v3-20260101T000000"), nil, 0o644)
+	if err := u.dataRemovable(data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A compare run or readiness check in any process holds a removal off,
+// and a lock left by a process that's gone doesn't.
+func TestUninstallWaitsForRunsElsewhere(t *testing.T) {
+	h := newLabelHost()
+	cfg, cfgPath, envPath, _ := uninstallSetup(t, h)
+	data := cfg.Path(cfg.DataDir)
+	stale := filepath.Join(data, "readiness-9", runFile)
+	os.MkdirAll(filepath.Dir(stale), 0o755)
+	os.WriteFile(stale, []byte("999999999"), 0o644)
+	if runs := liveRuns(data); len(runs) != 0 {
+		t.Fatalf("stale lock counted: %q", runs)
+	}
+	unlock, err := runLock(filepath.Join(data, "compare", "12-x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = uninstall(context.Background(), &out, strings.NewReader("remove\n"), cfgPath, cfg, envPath, nil)
+	if err == nil || !strings.Contains(err.Error(), "a compare run (12-x) is running") || len(h.deleted) != 0 {
+		t.Fatalf("err = %v, deleted %q", err, h.deleted)
+	}
+	unlock()
+	if runs := liveRuns(data); len(runs) != 0 {
+		t.Fatalf("released lock counted: %q", runs)
+	}
+}
+
+// A second Remove while one runs is refused.
+func TestUninstallOneRemoveAtATime(t *testing.T) {
+	cfg, cfgPath, envPath, _ := uninstallSetup(t, newLabelHost())
+	in, out := make(chan struct{}), make(chan struct{})
+	u := newUninstaller(cfg, cfgPath, envPath, true, nil)
+	u.hold = func() func() { in <- struct{}{}; <-out; return func() {} }
+	done := make(chan error, 1)
+	go func() { _, err := u.Remove(context.Background(), false); done <- err }()
+	<-in
+	if _, err := u.Remove(context.Background(), false); err == nil || !strings.Contains(err.Error(), "already removing") {
+		t.Fatalf("second Remove = %v", err)
+	}
+	close(out)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

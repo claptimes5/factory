@@ -614,10 +614,13 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Wizard = wz
 	// A restart waits for an image build or a sign-in, as for a job.
 	p.Busy = wz.waitingOn
-	// Settings' "Remove the factory" waits for jobs (a compare run's
-	// included, from the database), readiness runs and that work too, and
-	// holds off new work while it removes.
+	// Settings' "Remove the factory" waits for jobs, readiness checks and
+	// compare runs (in any process, by their run locks) and that work too,
+	// and holds off new work while it removes.
 	un := newUninstaller(cfg, cfgPath, envPath, true, func(ctx context.Context) string {
+		if runs := liveRuns(cfg.Path(cfg.DataDir)); len(runs) > 0 {
+			return "Not now: " + joinAnd(runs) + " is running. Wait for it to finish, then try again."
+		}
 		n := p.Running()
 		if m, err := st.CountJobs(ctx, state.Running, ""); err == nil && m > n {
 			n = m
@@ -1387,6 +1390,13 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 		id = strings.ReplaceAll(repo, "/", "__") + "-" + id
 	}
 	dir := filepath.Join(cfg.Path(cfg.DataDir), "compare", id)
+	// Removing the factory waits while this runs: it uses a database of
+	// its own, which the main one never sees.
+	unlock, err := runLock(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	rep, err := compare.Run(ctx, compare.Options{
 		Cfg: cfg, Repo: repo, Harnesses: p.Harnesses, Runner: p.Runner, Secrets: p.Secrets, GH: p.GitHubFor(repo), Git: p.GitFor(repo),
 		Dir: dir, Push: !*noPush, Budget: max(left, 0),

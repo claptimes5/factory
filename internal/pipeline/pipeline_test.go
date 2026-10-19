@@ -1245,3 +1245,22 @@ func TestHoldStartsNothing(t *testing.T) {
 		t.Fatalf("claim after release = %v, %v", j, err)
 	}
 }
+
+// A restart asked for while held waits for the release.
+func TestRestartWaitsForAHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	release := e.p.Hold()
+	e.p.RequestRestart(ctx)
+	if err := e.p.Tick(ctx, true); err != nil {
+		t.Fatalf("tick while held = %v, want nil", err)
+	}
+	if w := e.p.RestartWaitsFor(); w != "removing the factory" {
+		t.Fatalf("waits for %q", w)
+	}
+	release()
+	if err := e.p.Tick(ctx, true); !errors.Is(err, ErrRestart) {
+		t.Fatalf("tick after release = %v, want ErrRestart", err)
+	}
+}
