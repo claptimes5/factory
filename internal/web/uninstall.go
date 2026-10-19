@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Uninstaller lists what the factory made on its repos and this machine,
@@ -24,6 +25,10 @@ type APIUninstall struct {
 	Labels []APIUninstallLabel `json:"labels"`
 	// Repos are those whose labels couldn't be read, with why.
 	Repos []APIUninstallRepo `json:"repos"`
+	// Kept are what looks like the factory's but stays, with why: a
+	// GitLab group's label, an intake label you made, a runner image
+	// not marked as the factory's.
+	Kept []APIUninstallKept `json:"kept"`
 	// Images are the job images the factory built, old copies included.
 	Images []APIUninstallImage `json:"images"`
 	// ImagesNote says why no images could be listed, or "".
@@ -49,6 +54,14 @@ type APIUninstallLabel struct {
 	// Open counts the open issues and PRs with it; -1 when it couldn't
 	// be counted.
 	Open int `json:"open"`
+	// OpenCapped: counting stopped at Open, so there are at least that many.
+	OpenCapped bool `json:"open_capped"`
+}
+
+// APIUninstallKept is something left alone, and why.
+type APIUninstallKept struct {
+	What string `json:"what"`
+	Why  string `json:"why"`
 }
 
 // APIUninstallRepo is a repo whose labels couldn't be read.
@@ -73,6 +86,9 @@ type APIUninstallData struct {
 	// What says what removing it here removes; Note what stays and why.
 	What string `json:"what"`
 	Note string `json:"note"`
+	// Blocked says why it can't be removed (it may not be the factory's
+	// alone), or "".
+	Blocked string `json:"blocked"`
 }
 
 // APIUninstallStep is something to do by hand, with a link if it has one.
@@ -134,7 +150,11 @@ func (s *Server) apiUninstall(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, `send "confirm": "remove" to remove the factory`)
 		return
 	}
-	res, err := s.Uninstaller.Remove(r.Context(), in.Data)
+	// It runs to the end even if the page goes away: half a removal
+	// helps no one.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+	defer cancel()
+	res, err := s.Uninstaller.Remove(ctx, in.Data)
 	if err != nil {
 		apiErr(w, http.StatusConflict, err.Error())
 		return

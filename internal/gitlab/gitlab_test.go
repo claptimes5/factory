@@ -395,3 +395,19 @@ func TestCountOpenLabeled(t *testing.T) {
 		t.Fatalf("count = %d %v", n, err)
 	}
 }
+
+// A group's label is marked, so uninstall leaves it to the group.
+func TestLabelsInfoMarksGroupLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("include_ancestor_groups") != "true" {
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+		}
+		w.Write([]byte(`[{"name":"factory:ready","description":"Factory: pick this up","is_project_label":false},{"name":"factory:parked","is_project_label":true},{"name":"old"}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Project: "team/web", BaseURL: srv.URL, Tokens: github.StaticToken("tok")}
+	ls, err := c.LabelsInfo(context.Background())
+	if err != nil || len(ls) != 3 || !ls[0].Group || ls[0].Description != "Factory: pick this up" || ls[1].Group || ls[2].Group {
+		t.Fatalf("labels = %+v %v", ls, err)
+	}
+}

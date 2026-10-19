@@ -284,7 +284,8 @@ test("a stopped item says what happened, job by job, and Split it asks chat for 
   await happened.getByRole("button", { name: "Split it" }).click();
   await expect(page).toHaveURL(/\/orchestrator\?chat=\d+/);
   const you = page.getByTestId("you").first();
-  await expect(you).toContainText(/Split item #\d+ \(acme\/api#115: Paginate the audit log API\) into smaller issues\./);
+  await expect(you).toContainText(/Split item #\d+ \(acme\/api#115\) into smaller issues\. Its title:/);
+  await expect(you).toContainText("Paginate the audit log API");
   await expect(you).toContainText(/Its build stopped: The build failed.*log \(job #\d+\)/);
   await expect(you).toContainText(/each with parent \d+/);
 });

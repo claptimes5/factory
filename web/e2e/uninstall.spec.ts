@@ -20,6 +20,8 @@ test("Remove the factory lists what goes first, and removes it only once confirm
   // The dry run: labels with their open issues and PRs, images, data, and what's left to you.
   await expect(region).toContainText("Deleting a label takes it off every issue and PR that has it.");
   await expect(region.getByTestId("uninstall-labels").first()).toContainText("factory:parked 3 open");
+  await expect(region.getByTestId("uninstall-labels").first()).toContainText("factory:ready 1000+ open");
+  await expect(region.getByTestId("uninstall-kept")).toContainText("label ready on acme/web: your intake label, which the factory didn't make: yours to delete by hand");
   await expect(region.getByTestId("uninstall-images")).toContainText("factory-job:latest 2.31GB");
   await expect(region.getByTestId("uninstall-images")).toContainText("(an old copy)");
   const data = region.getByRole("checkbox", { name: /Also remove the job data/ });
@@ -34,7 +36,7 @@ test("Remove the factory lists what goes first, and removes it only once confirm
   await region.getByRole("button", { name: "Remove…" }).click();
   const dialog = page.getByRole("dialog", { name: "Remove the factory?" });
   await expect(dialog).toContainText("Delete 5 labels from acme/api, acme/web");
-  await expect(dialog).toContainText("Each comes off every issue and PR that has it (10 open now)");
+  await expect(dialog).toContainText("Each comes off every issue and PR that has it (1006+ open now)");
   await expect(dialog).toContainText("Remove 2 job images");
   await expect(dialog).not.toContainText("Remove the job data");
   await dialog.getByRole("button", { name: "Cancel" }).click();

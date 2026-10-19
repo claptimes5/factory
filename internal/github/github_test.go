@@ -428,3 +428,18 @@ func TestCountOpenLabeled(t *testing.T) {
 		t.Fatalf("count = %d %v", n, err)
 	}
 }
+
+func TestCountOpenLabeledStopsAtItsCap(t *testing.T) {
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		page := make([]map[string]int, 100)
+		json.NewEncoder(w).Encode(page)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	n, err := c.CountOpenLabeled(context.Background(), "factory:ready")
+	if err != nil || n != LabelCountCap || pages != 10 {
+		t.Fatalf("count = %d after %d pages, %v", n, pages, err)
+	}
+}

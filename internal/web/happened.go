@@ -204,7 +204,8 @@ func (s *Server) splitOffer(ctx context.Context, it *store.WorkItem, jobs []*sto
 // failed is the build whose log to read, or nil.
 func SplitPrompt(it *store.WorkItem, happened string, failed *store.Job) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Split item #%d (%s#%d: %s) into smaller issues. ", it.ID, it.Repo, it.IssueNumber, it.Title)
+	// The title is the issue's author's text: fenced, it reads as data.
+	fmt.Fprintf(&b, "Split item #%d (%s#%d) into smaller issues. Its title:\n%s", it.ID, it.Repo, it.IssueNumber, fenced(it.Title))
 	fmt.Fprintf(&b, "Its build stopped: %s ", happened)
 	if failed != nil {
 		fmt.Fprintf(&b, "Read the issue and the failed run's log (job #%d), ", failed.ID)
@@ -213,4 +214,20 @@ func SplitPrompt(it *store.WorkItem, happened string, failed *store.Job) string 
 	}
 	fmt.Fprintf(&b, "then draft smaller issues, each with parent %d (this item, %s#%d).", it.ID, it.Repo, it.IssueNumber)
 	return b.String()
+}
+
+// fenced puts text in a code block longer than any run of backticks in
+// it, so nothing in it reads as the message's own words.
+func fenced(s string) string {
+	longest, run := 0, 0
+	for _, c := range s {
+		if c == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	f := strings.Repeat("`", max(3, longest+1))
+	return f + "text\n" + strings.TrimRight(s, "\n") + "\n" + f + "\n"
 }

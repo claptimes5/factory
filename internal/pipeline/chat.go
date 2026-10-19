@@ -152,6 +152,8 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string) (int64, 
 
 // errChatClosed refuses a chat before the daemon has recovered from its
 // last stop, or once it is stopping.
+var errHeld = errors.New("the factory is being removed, so nothing new starts")
+
 var errChatClosed = errors.New("the factory is starting or stopping: send your message again in a moment")
 
 // openChat lets chat replies start, on the jobs' context; closeChat stops
@@ -176,6 +178,9 @@ func (p *Pipeline) holdChatSlot() (context.Context, func(), error) {
 	defer p.mu.Unlock()
 	if p.chatCtx == nil {
 		return nil, nil, errChatClosed
+	}
+	if p.held.Load() > 0 {
+		return nil, nil, errHeld
 	}
 	p.chats++
 	p.wg.Add(1)

@@ -66,10 +66,13 @@ type uninstaller struct{}
 func (uninstaller) Plan(context.Context) web.APIUninstall {
 	return web.APIUninstall{
 		Labels: []web.APIUninstallLabel{
-			{Repo: "acme/api", Name: "factory:ready", Open: 4}, {Repo: "acme/api", Name: "factory:parked", Open: 3}, {Repo: "acme/api", Name: "factory:risk-low", Open: 0},
+			{Repo: "acme/api", Name: "factory:ready", Open: 1000, OpenCapped: true}, {Repo: "acme/api", Name: "factory:parked", Open: 3}, {Repo: "acme/api", Name: "factory:risk-low", Open: 0},
 			{Repo: "acme/web", Name: "factory:ready", Open: 1}, {Repo: "acme/web", Name: "factory:awaiting-you", Open: 2},
 		},
 		Repos: []web.APIUninstallRepo{},
+		Kept: []web.APIUninstallKept{
+			{What: "label ready on acme/web", Why: "your intake label, which the factory didn't make: yours to delete by hand"},
+		},
 		Images: []web.APIUninstallImage{
 			{Ref: "factory-job:latest", ID: "3f2a9c1d8e7b", Size: "2.31GB"},
 			{Ref: "a1b2c3d4e5f6", ID: "a1b2c3d4e5f6", Size: "2.29GB", Dangling: true},

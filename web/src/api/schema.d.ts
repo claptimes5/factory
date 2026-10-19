@@ -2955,6 +2955,8 @@ export interface components {
             unavailable: string;
         };
         Uninstall: {
+            /** @description What looks like the factory's but stays, with why: a GitLab group's label, an intake label you made, a runner image not marked as the factory's */
+            kept: components["schemas"]["UninstallKept"][];
             /** @description The factory's labels on each repo. Deleting one takes it off every issue and PR that has it */
             labels: components["schemas"]["UninstallLabel"][];
             /** @description Repos whose labels couldn't be read */
@@ -2977,6 +2979,12 @@ export interface components {
             name: string;
             /** @description Open issues and PRs with it; -1 when it couldn't be counted */
             open: number;
+            /** @description Counting stopped at open, so there are at least that many */
+            open_capped: boolean;
+        };
+        UninstallKept: {
+            what: string;
+            why: string;
         };
         UninstallRepo: {
             repo: string;
@@ -2997,6 +3005,8 @@ export interface components {
             what: string;
             /** @description What stays and why, or empty */
             note: string;
+            /** @description Why it can't be removed (it may not be the factory's alone), or empty */
+            blocked: string;
         };
         UninstallStep: {
             text: string;

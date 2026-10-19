@@ -52,12 +52,13 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
     if (confirming && !d.open) d.showModal?.();
     else if (!confirming && d.open) d.close();
   }, [confirming]);
-  const nothing = p.labels.length === 0 && p.images.length === 0 && !(data && p.data.exists);
+  const withData = data && p.data.exists && !p.data.blocked;
+  const nothing = p.labels.length === 0 && p.images.length === 0 && !withData;
   const remove = async () => {
     setBusy(true);
     setErr("");
     try {
-      const r = await postJSON<UninstallResult>("/settings/uninstall", { confirm: "remove", data });
+      const r = await postJSON<UninstallResult>("/settings/uninstall", { confirm: "remove", data: withData });
       setConfirming(false);
       onDone(r);
       void qc.invalidateQueries({ queryKey: ["uninstall"] });
@@ -82,7 +83,7 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
                 .filter((l) => l.repo === r)
                 .map((l) => (
                   <li key={l.name} className="rounded border px-1.5 py-0.5 font-mono text-xs">
-                    {l.name} <span className="text-muted-foreground">{l.open < 0 ? "?" : l.open} open</span>
+                    {l.name} <span className="text-muted-foreground">{openCount(l)} open</span>
                   </li>
                 ))}
             </ul>
@@ -111,9 +112,25 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
           </ul>
         )}
       </section>
+      {p.kept.length > 0 && (
+        <section aria-label="Left alone">
+          <h3 className="font-medium">Left alone</h3>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="uninstall-kept">
+            {p.kept.map((k) => (
+              <li key={k.what}>
+                <span className="font-mono text-xs">{k.what}</span>: {k.why}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section aria-label="Data">
         <h3 className="font-medium">Data on this machine</h3>
-        {p.data.exists ? (
+        {p.data.exists && p.data.blocked ? (
+          <p className="text-muted-foreground" data-testid="uninstall-data-blocked">
+            {p.data.blocked}
+          </p>
+        ) : p.data.exists ? (
           <label className="mt-1 flex items-start gap-2">
             <input type="checkbox" className="mt-1" checked={data} onChange={(e) => setData(e.target.checked)} />
             <span>
@@ -164,7 +181,8 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
                 </span>
               ))}
               . Each comes off every issue and PR that has it (
-              {p.labels.reduce((n, l) => n + Math.max(0, l.open), 0)} open now).
+              {p.labels.reduce((n, l) => n + Math.max(0, l.open), 0)}
+              {p.labels.some((l) => l.open_capped) ? "+" : ""} open now).
             </p>
           )}
           {p.images.length > 0 && (
@@ -173,7 +191,7 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
               <span className="font-mono text-xs">{p.images.map((im) => im.ref).join(", ")}</span>.
             </p>
           )}
-          {data && p.data.exists && <p>Remove the job data: {p.data.what}</p>}
+          {withData && <p>Remove the job data: {p.data.what}</p>}
           <p className="text-muted-foreground">
             The GitHub App, your tokens, factory.yaml and factory.env stay; the result says where to remove them. This can't be undone.
           </p>
@@ -242,3 +260,5 @@ function Manual({ steps }: { steps: Uninstall["manual"] }) {
     </section>
   );
 }
+
+const openCount = (l: Uninstall["labels"][number]) => (l.open < 0 ? "?" : l.open_capped ? `${l.open}+` : String(l.open));

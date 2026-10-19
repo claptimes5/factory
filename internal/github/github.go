@@ -326,6 +326,38 @@ func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// LabelInfo is one label as uninstall reads it.
+type LabelInfo struct {
+	Name, Description string
+	// Group is set for a GitLab label defined in a group above the
+	// project, which the project can't delete.
+	Group bool
+}
+
+// LabelsInfo returns the repo's labels with their descriptions.
+func (c *Client) LabelsInfo(ctx context.Context) ([]LabelInfo, error) {
+	var out []LabelInfo
+	for page := 1; page <= 10; page++ {
+		var raw []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/labels?per_page=100&page=%d", c.Repo, page), nil, &raw); err != nil {
+			return nil, err
+		}
+		for _, l := range raw {
+			out = append(out, LabelInfo{Name: l.Name, Description: l.Description})
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+// LabelCountCap is where CountOpenLabeled stops counting.
+const LabelCountCap = 1000
+
 // DeleteLabel deletes a label from the repo, which takes it off every
 // issue and PR that has it. A label already gone is not an error.
 func (c *Client) DeleteLabel(ctx context.Context, name string) error {
@@ -336,7 +368,8 @@ func (c *Client) DeleteLabel(ctx context.Context, name string) error {
 	return err
 }
 
-// CountOpenLabeled counts the open issues and PRs with a label, up to 1000.
+// CountOpenLabeled counts the open issues and PRs with a label, up to
+// LabelCountCap.
 func (c *Client) CountOpenLabeled(ctx context.Context, label string) (int, error) {
 	n := 0
 	for page := 1; page <= 10; page++ {
@@ -348,6 +381,9 @@ func (c *Client) CountOpenLabeled(ctx context.Context, label string) (int, error
 			return 0, err
 		}
 		n += len(raw)
+		if n >= LabelCountCap {
+			return LabelCountCap, nil
+		}
 		if len(raw) < 100 {
 			break
 		}

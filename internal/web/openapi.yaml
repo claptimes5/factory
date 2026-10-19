@@ -1216,8 +1216,9 @@ components:
         unavailable: { type: string, description: "Why chat can't take it now, or empty" }
     Uninstall:
       type: object
-      required: [labels, repos, images, images_note, data, manual, refused, writable, reason]
+      required: [labels, repos, kept, images, images_note, data, manual, refused, writable, reason]
       properties:
+        kept: { type: array, items: { $ref: "#/components/schemas/UninstallKept" }, description: "What looks like the factory's but stays, with why: a GitLab group's label, an intake label you made, a runner image not marked as the factory's" }
         labels: { type: array, items: { $ref: "#/components/schemas/UninstallLabel" }, description: "The factory's labels on each repo. Deleting one takes it off every issue and PR that has it" }
         repos: { type: array, items: { $ref: "#/components/schemas/UninstallRepo" }, description: Repos whose labels couldn't be read }
         images: { type: array, items: { $ref: "#/components/schemas/UninstallImage" }, description: "The job images the factory built, old copies included" }
@@ -1229,11 +1230,18 @@ components:
         reason: { type: string, description: "Why this request may not remove anything, or empty" }
     UninstallLabel:
       type: object
-      required: [repo, name, open]
+      required: [repo, name, open, open_capped]
       properties:
         repo: { type: string }
         name: { type: string }
         open: { type: integer, description: "Open issues and PRs with it; -1 when it couldn't be counted" }
+        open_capped: { type: boolean, description: "Counting stopped at open, so there are at least that many" }
+    UninstallKept:
+      type: object
+      required: [what, why]
+      properties:
+        what: { type: string }
+        why: { type: string }
     UninstallRepo:
       type: object
       required: [repo, error]
@@ -1250,13 +1258,14 @@ components:
         dangling: { type: boolean }
     UninstallData:
       type: object
-      required: [path, exists, size, what, note]
+      required: [path, exists, size, what, note, blocked]
       properties:
         path: { type: string }
         exists: { type: boolean }
         size: { type: string }
         what: { type: string, description: What removing it here removes }
         note: { type: string, description: "What stays and why, or empty" }
+        blocked: { type: string, description: "Why it can't be removed (it may not be the factory's alone), or empty" }
     UninstallStep:
       type: object
       required: [text, url]

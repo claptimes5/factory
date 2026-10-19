@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -525,8 +526,33 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	// The setup screen reads the readiness check's reports, and can run it
 	// again: on the daemon's context, so it stops when the daemon does.
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
-	srv.CheckReadiness = func(_ context.Context, repo string) error { return recheckReadiness(ctx, cfg, p, repo) }
+	// Readiness runs count as busy for removing the factory, and none
+	// starts while it is removed.
+	var readinessRuns atomic.Int32
+	var removing atomic.Bool
+	readinessRun := func() (func(), error) {
+		// Counted first, so a removal that starts now sees it.
+		readinessRuns.Add(1)
+		if removing.Load() {
+			readinessRuns.Add(-1)
+			return nil, errors.New("the factory is being removed")
+		}
+		return func() { readinessRuns.Add(-1) }, nil
+	}
+	srv.CheckReadiness = func(_ context.Context, repo string) error {
+		done, err := readinessRun()
+		if err != nil {
+			return err
+		}
+		defer done()
+		return recheckReadiness(ctx, cfg, p, repo)
+	}
 	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		done, err := readinessRun()
+		if err != nil {
+			return "", err
+		}
+		defer done()
 		return fileReadiness(ctx, cfg, p, repo, queue)
 	}
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
@@ -588,16 +614,31 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Wizard = wz
 	// A restart waits for an image build or a sign-in, as for a job.
 	p.Busy = wz.waitingOn
-	// Settings' "Remove the factory" waits for jobs and that work too.
-	srv.Uninstaller = newUninstaller(cfg, cfgPath, envPath, true, func(context.Context) string {
-		if n := p.Running(); n > 0 {
+	// Settings' "Remove the factory" waits for jobs (a compare run's
+	// included, from the database), readiness runs and that work too, and
+	// holds off new work while it removes.
+	un := newUninstaller(cfg, cfgPath, envPath, true, func(ctx context.Context) string {
+		n := p.Running()
+		if m, err := st.CountJobs(ctx, state.Running, ""); err == nil && m > n {
+			n = m
+		}
+		if n > 0 {
 			return fmt.Sprintf("Not now: %d job(s) are running. Wait for them to finish, or cancel them, then try again.", n)
+		}
+		if readinessRuns.Load() > 0 {
+			return "Not now: a readiness check is running. Wait for it to finish, then try again."
 		}
 		if w := wz.waitingOn(); w != "" {
 			return "Not now: " + w + " is running. Wait for it to finish, then try again."
 		}
 		return ""
 	})
+	un.hold = func() func() {
+		release := p.Hold()
+		removing.Store(true)
+		return func() { removing.Store(false); release() }
+	}
+	srv.Uninstaller = un
 	_, err = listenWeb(ctx, cfg, srv)
 	return err
 }

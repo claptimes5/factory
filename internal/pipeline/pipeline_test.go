@@ -1216,3 +1216,32 @@ func TestRestartWaitsForRunningJobs(t *testing.T) {
 		t.Fatal("no intake while a restart waits")
 	}
 }
+
+// While held, nothing is claimed and no chat starts; release lets it go.
+func TestHoldStartsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	if _, err := e.p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: "claude", Model: "opus", BudgetUSD: 1}); err != nil {
+		t.Fatal(err)
+	}
+	release := e.p.Hold()
+	if err := e.p.Tick(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := e.p.claimNext(ctx); j != nil || err != nil {
+		t.Fatalf("claimed %v, %v while held", j, err)
+	}
+	e.p.chatCtx = ctx
+	if _, _, err := e.p.holdChatSlot(); !errors.Is(err, errHeld) {
+		t.Fatalf("chat slot while held: %v", err)
+	}
+	release()
+	release() // a second release is harmless
+	if e.p.held.Load() != 0 {
+		t.Fatalf("held = %d", e.p.held.Load())
+	}
+	if j, err := e.p.claimNext(ctx); j == nil || err != nil {
+		t.Fatalf("claim after release = %v, %v", j, err)
+	}
+}

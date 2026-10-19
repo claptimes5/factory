@@ -55,7 +55,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Chats": APIChats{}, "ChatAt": APIChatAt{}, "Chat": APIChat{}, "ChatMessage": APIChatMessage{}, "ChatReply": APIChatReply{},
 		"SentChat": APISentChat{}, "Draft": APIDraft{},
 		"Happened": APIHappened{}, "HappenedStep": APIHappenedStep{}, "Split": APISplit{},
-		"Uninstall": APIUninstall{}, "UninstallLabel": APIUninstallLabel{}, "UninstallRepo": APIUninstallRepo{}, "UninstallImage": APIUninstallImage{},
+		"Uninstall": APIUninstall{}, "UninstallLabel": APIUninstallLabel{}, "UninstallKept": APIUninstallKept{}, "UninstallRepo": APIUninstallRepo{}, "UninstallImage": APIUninstallImage{},
 		"UninstallData": APIUninstallData{}, "UninstallStep": APIUninstallStep{}, "UninstallResult": APIUninstallResult{}, "UninstallDone": APIUninstallDone{},
 		"Wizard": APIWizard{}, "WizardStep": APIWizardStep{}, "WizardFinding": APIWizardFinding{}, "WizardSecret": APIWizardSecret{},
 		"WizardAccess": APIWizardAccess{}, "WizardLabel": APIWizardLabel{}, "WizardOwner": APIWizardOwner{}, "WizardGitHub": APIWizardGitHub{},

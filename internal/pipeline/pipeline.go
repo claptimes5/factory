@@ -219,7 +219,8 @@ type Pipeline struct {
 	sourceBusy sync.Map             // source -> true while it reads
 	retryWait  time.Duration        // between retries of a source's read; 0 for 2s
 
-	restart atomic.Bool // a restart was asked for: claim nothing more
+	restart atomic.Bool  // a restart was asked for: claim nothing more
+	held    atomic.Int32 // Hold calls not yet released: start nothing
 
 	previewMu sync.Mutex // a build's post and a sweep's removal, one at a time
 }
@@ -385,6 +386,18 @@ func (p *Pipeline) CancelRestart(ctx context.Context) bool {
 	return true
 }
 
+// Hold stops new work from starting until release is called: Tick polls
+// and claims nothing, and no chat reply starts. Removing the factory holds
+// it, so nothing starts between its check for running work and its end.
+// A claim already under way finishes before Hold returns.
+func (p *Pipeline) Hold() (release func()) {
+	p.held.Add(1)
+	p.claimMu.Lock()
+	p.claimMu.Unlock() //nolint:staticcheck // waits out a claim in progress
+	var once sync.Once
+	return func() { once.Do(func() { p.held.Add(-1) }) }
+}
+
 // RestartPending says whether a restart is waiting on running jobs.
 func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
 
@@ -465,6 +478,9 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 		}
 		return nil
 	}
+	if p.held.Load() > 0 {
+		return nil
+	}
 	if time.Since(p.lastPoll) >= p.Cfg.Intake.PollInterval.Duration {
 		p.lastPoll = time.Now()
 		if err := p.Intake(ctx); err != nil {
@@ -525,7 +541,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	p.mu.Lock()
 	running := p.running
 	p.mu.Unlock()
-	if running >= p.Cfg.Budgets.ConcurrentJobs || p.restart.Load() {
+	if running >= p.Cfg.Budgets.ConcurrentJobs || p.restart.Load() || p.held.Load() > 0 {
 		return nil, nil
 	}
 	// One orchestrator at a time: its tools act on the whole queue. One

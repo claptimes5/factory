@@ -271,6 +271,30 @@ func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// LabelsInfo returns the labels the project can use, its groups'
+// included and marked, with their descriptions.
+func (c *Client) LabelsInfo(ctx context.Context) ([]github.LabelInfo, error) {
+	var out []github.LabelInfo
+	for page := 1; page <= 10; page++ {
+		var raw []struct {
+			Name           string `json:"name"`
+			Description    string `json:"description"`
+			IsProjectLabel *bool  `json:"is_project_label"`
+		}
+		if err := c.do(ctx, "GET", fmt.Sprintf("%s/labels?include_ancestor_groups=true&per_page=100&page=%d", c.project(), page), nil, &raw); err != nil {
+			return nil, err
+		}
+		for _, l := range raw {
+			// Older GitLab leaves the field out; its labels are the project's.
+			out = append(out, github.LabelInfo{Name: l.Name, Description: l.Description, Group: l.IsProjectLabel != nil && !*l.IsProjectLabel})
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
 // DeleteLabel deletes a project label, which takes it off every issue
 // and merge request that has it. A label already gone is not an error; a
 // group's label can only be deleted in the group.
@@ -283,7 +307,7 @@ func (c *Client) DeleteLabel(ctx context.Context, name string) error {
 }
 
 // CountOpenLabeled counts the open issues and merge requests with a
-// label, up to 1000 of each.
+// label, up to github.LabelCountCap in all.
 func (c *Client) CountOpenLabeled(ctx context.Context, label string) (int, error) {
 	n := 0
 	for _, kind := range []string{"issues", "merge_requests"} {
@@ -296,6 +320,9 @@ func (c *Client) CountOpenLabeled(ctx context.Context, label string) (int, error
 				return 0, err
 			}
 			n += len(raw)
+			if n >= github.LabelCountCap {
+				return github.LabelCountCap, nil
+			}
 			if len(raw) < 100 {
 				break
 			}

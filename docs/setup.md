@@ -341,27 +341,37 @@ the migration failed). It uses `factory last-job`, `factory wait-job` and
 
 `./factory uninstall` lists what the factory made, then removes it once
 you type `remove` (or, with one repo, its name). `--dry-run` only lists.
-It refuses while the factory is running (stop it first, or use the
-dashboard) and while jobs are marked running.
+It refuses while something listens on the dashboard's address (stop the
+factory first, or use the dashboard) and while jobs are marked running.
 
 - **Labels**: each label the factory defines that a repo has, with how
-  many open issues and PRs carry it. Deleting a label takes it off every
-  issue and PR that has it.
-- **Job images**: the images the factory built (labelled
-  `io.factory.built=1`), old untagged copies included, and the job image
-  tags it builds, since images built before that label lack it.
+  many open issues and PRs carry it (counting stops at 1000, shown as
+  1000+). Deleting a label takes it off every issue and PR that has it.
+  A label goes only if its name starts with `factory:` or its
+  description with the `Factory:` setup writes, so an intake label you
+  made yourself is listed as yours to delete by hand. A GitLab label
+  defined in a group stays too: delete it in the group.
+- **Job images**: the job image tags the factory builds, and old
+  untagged copies marked `io.factory.built=1`. A repo's own image (one
+  with `image:` and no `image_from:`) is never removed, and the runner
+  image only when it carries that mark; otherwise it is listed as not
+  marked as built by the factory.
 - **Data**, only with `--data`: the whole data folder, with the
   database, job logs, kept checkouts, readiness reports and the Codex
-  sign-in. A `data_dir` that also holds `factory.yaml`, `factory.env`
-  or a git checkout is not removed.
+  sign-in. It goes only when it is plainly the factory's: it holds
+  `factory.db`, nothing at its top the factory didn't make, and it is
+  neither your home folder nor holds `factory.yaml` or `factory.env`.
+  Otherwise the list says why it stays.
 
 In the dashboard, Settings, **Remove the factory** shows the same list
 and removes it after you confirm. It needs the same access as saving
-settings, and waits while jobs, an image build or a Codex sign-in run.
-The factory is still running then, so its database and sign-ins stay:
-the data choice removes only job logs, kept checkouts, readiness reports
-and repo caches. Stop the factory afterwards, or it puts labels back as
-it works.
+settings. It waits while jobs (a compare run's included), a readiness
+check, an image build or a Codex sign-in run, starts no new work while
+it removes, and looks again before the images and the data. The factory
+is still running then, so its database and sign-ins stay: the data
+choice removes only job logs, kept checkouts, readiness reports and repo
+caches, after the same check. Stop the factory afterwards, or it puts
+labels back as it works.
 
 Neither deletes what only you can:
 
