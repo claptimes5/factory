@@ -160,6 +160,32 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
+  /readiness/file:
+    post:
+      summary: Check a repo again, then file an issue for each gap that has none, in the background
+      description: |
+        Runs the readiness check as /readiness/check does, then files an issue
+        for each blocker and gap that has none. With queue they get the intake
+        label (only the blockers while the repo has any), and once it is ready
+        the issues filed earlier get it too, so the factory starts on them. A
+        check that couldn't finish files nothing. Shares the one-at-a-time
+        slot with /readiness/check (409 while a run is going). Needs the
+        password, or a request from this machine (403 otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties:
+                repo: { type: string, description: "owner/name" }
+                queue: { type: boolean, description: "Give the issues the intake label, so the factory works on them" }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
   /chats:
     get:
       summary: The chat with the orchestrator's model, whether it can reply now, and the chats so far
@@ -446,6 +472,263 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /setup:
+    get:
+      summary: The get-started page, where each setup step stands
+      parameters:
+        - name: live
+          in: query
+          required: false
+          description: "1 checks the forges again first (access, the app's installations, each repo's labels), unless that was done in the last 30 seconds"
+          schema: { type: string, enum: ["1"] }
+      description: |
+        Mirrors `factory setup`. Saved secrets never come back: only whether
+        each is set, and a masked hint. While the factory can't start for want
+        of forge access, `factory serve` serves only this page and these
+        endpoints (mode "setup"); every other endpoint answers 503 until
+        Finish. Every POST under /setup needs the password, or a request from
+        this machine (403 otherwise), and answers 400 with the reason when it
+        refuses the input.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wizard" } } } }
+  /setup/github/app:
+    post:
+      summary: Start making a GitHub App with GitHub's manifest flow
+      description: |
+        The page posts `manifest` as a form field named manifest to `url`.
+        GitHub asks the person to confirm, then sends the browser to
+        /setup/github/callback with a code and the state, once.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WizardManifest" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/github/callback:
+    get:
+      summary: Where GitHub sends the browser back once the app is made
+      description: |
+        Exchanges the code for the app if state is one /setup/github/app handed
+        out and not yet used, saves its key next to factory.env and its ID in
+        it, then redirects to /app/get-started with `github` (what happened) or
+        `github_error` (why it failed) in the query.
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "303": { description: Back to the get-started page }
+  /setup/machine/check:
+    post:
+      summary: Run the checks of this machine again
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/repos:
+    post:
+      summary: Change which repos the factory works on, in factory.yaml
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repos]
+              properties:
+                repos: { type: string, description: "owner/name for GitHub, the project URL for GitLab, separated by commas" }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/github/install-check:
+    post:
+      summary: Check where the GitHub App is installed; once it is on every account, save the installation and check access
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/github/existing-app:
+    post:
+      summary: Use a GitHub App made before
+      description: GitHub must accept the ID and key; the installation is saved once the app is on every account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [app_id, key_path]
+              properties:
+                app_id: { type: string }
+                key_path: { type: string, description: "The private key (.pem) on the factory's machine" }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/github/token:
+    post:
+      summary: Use a personal access token for GitHub (for a quick try)
+      description: Clears the GitHub App settings, then checks access.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/access/check:
+    post:
+      summary: Check the factory can reach each repo with what is saved
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/base-branch:
+    post:
+      summary: Set the one repo's base_branch in factory.yaml
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, branch]
+              properties:
+                repo: { type: string }
+                branch: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/labels:
+    post:
+      summary: Create the labels the factory uses on each repo, leaving existing ones as they are
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/gitlab/token:
+    post:
+      summary: Save the GitLab token, then check access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/claude:
+    post:
+      summary: Save Claude's API key or subscription token
+      description: sk-ant-oat... is a subscription token, other sk-ant-... an API key; anything else is refused unless anyway is true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string }
+                anyway: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/codex:
+    post:
+      summary: Choose how Codex signs in, clearing the keys Codex would use instead
+      description: An empty key keeps the saved one. A ChatGPT plan then signs in with /setup/codex/sign-in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [api-key, chatgpt, access-token] }
+                key: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/codex/sign-in:
+    post:
+      summary: Sign Codex in to a ChatGPT plan with a device code, in the background
+      description: |
+        Runs `codex login --device-auth` (in the job image with the Docker
+        runner). The link and code it prints show in codex.sign_in; once
+        someone enters the code there, the sign-in is saved and Codex is set
+        to the ChatGPT plan. One at a time (400 while one runs).
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/notify:
+    post:
+      summary: Save the notification address (ntfy, Slack or Discord); empty turns notifications off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/notify/test:
+    post:
+      summary: Send a test notification to the saved address
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/sentry:
+    post:
+      summary: Save the Sentry token; empty removes it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/images/build:
+    post:
+      summary: Build the missing job images in the background, one build at a time
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/finish:
+    post:
+      summary: Finish setup
+      description: Needs access to every repo. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID: { name: id, in: path, required: true, schema: { type: integer } }
@@ -456,6 +739,9 @@ components:
     Action:
       description: Whether the daemon accepted the action, and why not
       content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } }
+    WizardResult:
+      description: What the action did, and the page after it
+      content: { application/json: { schema: { $ref: "#/components/schemas/WizardResult" } } }
   schemas:
     Error:
       type: object
@@ -597,7 +883,7 @@ components:
         pause_at: { type: number, description: "Percent of a five-hour or weekly window at which its jobs wait for the reset" }
     Readiness:
       type: object
-      required: [repos, banner, intake_label, can_check, check_note]
+      required: [repos, banner, intake_label, can_check, check_note, can_file]
       properties:
         repos: { type: array, items: { $ref: "#/components/schemas/RepoReadiness" } }
         banner:
@@ -607,9 +893,10 @@ components:
         intake_label: { type: string, description: The label that hands an issue to the factory }
         can_check: { type: boolean, description: "This request may run the check here (behind the password or on this machine, with a daemon that can)" }
         check_note: { type: string, description: "Why it can't, or empty" }
+        can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, command, queue_command, checking, checking_since, check_error]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -625,11 +912,13 @@ components:
           description: "Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps"
           items: { $ref: "#/components/schemas/ReadinessFinding" }
         unqueued: { type: integer, description: Issues filed without the intake label }
-        command: { type: string, description: Runs the check in a terminal }
-        queue_command: { type: string, description: "Files and labels what still needs it; empty when nothing does" }
-        checking: { type: boolean, description: A check started from the dashboard is running }
+        unfiled: { type: integer, description: "Findings that need an issue and have none" }
+        can_queue: { type: boolean, description: "Filing with the intake label would do something: file what isn't filed, or label what waited for the blockers" }
+        checking: { type: boolean, description: A run started from the dashboard is going }
         checking_since: { type: string }
-        check_error: { type: string, description: "Why the last check started here failed, or empty" }
+        action: { type: string, enum: ["", check, file, queue], description: "What that run does: check, file issues, or file and start work" }
+        check_error: { type: string, description: "Why the last run started here failed, or empty" }
+        result: { type: string, description: "What the last run started here did, when it filed; else empty" }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]
@@ -1196,3 +1485,166 @@ components:
       properties:
         proposal:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
+    Wizard:
+      type: object
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending]
+      properties:
+        mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
+        writable: { type: boolean, description: This request may save here }
+        reason: { type: string, description: "Why not, when it can't" }
+        config_path: { type: string }
+        env_path: { type: string }
+        steps: { type: array, items: { $ref: "#/components/schemas/WizardStep" }, description: The cards in order }
+        machine: { type: array, items: { $ref: "#/components/schemas/WizardFinding" } }
+        machine_checked_at: { type: string, description: "Empty while the first check runs" }
+        repos: { type: array, items: { type: string } }
+        access: { type: array, items: { $ref: "#/components/schemas/WizardAccess" }, description: Each repo's last access check }
+        labels: { type: array, items: { $ref: "#/components/schemas/WizardLabel" }, description: What the last label creation did }
+        label_names: { type: array, items: { type: string } }
+        github: { oneOf: [{ $ref: "#/components/schemas/WizardGitHub" }, { type: "null" }], description: Null without GitHub repos }
+        gitlab: { oneOf: [{ $ref: "#/components/schemas/WizardGitLab" }, { type: "null" }], description: Null without GitLab repos }
+        claude: { oneOf: [{ $ref: "#/components/schemas/WizardClaude" }, { type: "null" }], description: Null when no job runs on Claude }
+        codex: { oneOf: [{ $ref: "#/components/schemas/WizardCodex" }, { type: "null" }], description: Null when no job runs on Codex }
+        notify: { $ref: "#/components/schemas/WizardSecret" }
+        sentry: { oneOf: [{ $ref: "#/components/schemas/WizardSecret" }, { type: "null" }], description: Null unless sources.sentry is on }
+        images: { oneOf: [{ $ref: "#/components/schemas/WizardImages" }, { type: "null" }], description: Null unless jobs run in Docker }
+        can_finish: { type: boolean, description: The factory can reach every repo }
+        warnings: { type: array, items: { type: string }, description: "What won't work yet if you finish now" }
+        changed: { type: boolean, description: factory.yaml or factory.env changed since the factory started }
+        restart_pending: { type: boolean }
+    WizardStep:
+      type: object
+      required: [key, title, state, summary]
+      properties:
+        key: { type: string, enum: [machine, repos, github, gitlab, claude, codex, notify, sentry, images, finish] }
+        title: { type: string }
+        state: { type: string, enum: [done, attention, optional] }
+        summary: { type: string }
+    WizardFinding:
+      type: object
+      required: [status, what, fix, action]
+      properties:
+        status: { type: string, enum: [pass, warn, fail] }
+        what: { type: string }
+        fix: { type: string, description: "A command to run or a doc to read; may be several lines. Empty when action fixes it" }
+        action: { type: string, enum: ["", build_images], description: "A button on the page that fixes it: build_images posts /setup/images/build" }
+    WizardSecret:
+      type: object
+      required: [set, masked]
+      properties:
+        set: { type: boolean }
+        masked: { type: string, description: "The first and last few characters, or just \"value\" for a short one; empty when unset" }
+    WizardAccess:
+      type: object
+      required: [repo, host, state, error, hints, base_branch, default_branch, can_use_default, missing_labels, labels_error]
+      properties:
+        repo: { type: string }
+        host: { type: string, enum: [github, gitlab] }
+        state: { type: string, enum: [unchecked, ok, failed] }
+        error: { type: string }
+        hints: { type: array, items: { type: string } }
+        base_branch: { type: string, description: The branch factory.yaml uses }
+        default_branch: { type: string, description: "The repo's default branch when it differs, else empty" }
+        can_use_default: { type: boolean, description: "One repo, so its base_branch can be set here" }
+        missing_labels: { type: array, items: { type: string }, description: "The factory's labels the repo lacks, from the last check" }
+        labels_error: { type: string, description: "Why its labels couldn't be listed" }
+    WizardLabel:
+      type: object
+      required: [repo, name, result, error]
+      properties:
+        repo: { type: string }
+        name: { type: string }
+        result: { type: string, enum: [created, exists, failed] }
+        error: { type: string }
+    WizardOwner:
+      type: object
+      required: [owner, repos]
+      properties:
+        owner: { type: string }
+        repos: { type: array, items: { type: string } }
+    WizardGitHub:
+      type: object
+      required: [method, app_id, app_slug, key_path, installation_id, install_url, missing, install_steps, install_error, token, token_url, app_owner]
+      properties:
+        method: { type: string, enum: [app, token, none] }
+        app_id: { type: string }
+        app_slug: { type: string }
+        key_path: { type: string }
+        installation_id: { type: string }
+        install_url: { type: string, description: "Installs the app; empty when its slug isn't known" }
+        missing: { type: array, items: { $ref: "#/components/schemas/WizardOwner" }, description: "Accounts the app isn't installed on, from the last check" }
+        install_steps: { type: array, items: { type: string } }
+        install_error: { type: string }
+        token: { $ref: "#/components/schemas/WizardSecret" }
+        token_url: { type: string, description: Where to make a personal access token }
+        app_owner: { type: string, description: The account a new app belongs to }
+    WizardGitLab:
+      type: object
+      required: [token, hosts, fine_grained]
+      properties:
+        token: { $ref: "#/components/schemas/WizardSecret" }
+        hosts: { type: array, items: { $ref: "#/components/schemas/WizardHost" } }
+        fine_grained: { type: array, items: { type: string }, description: The permissions a fine-grained token needs on each project }
+    WizardHost:
+      type: object
+      required: [host, legacy_url, tokens_url]
+      properties:
+        host: { type: string }
+        legacy_url: { type: string, description: "Opens the form for a legacy token with its scopes ticked" }
+        tokens_url: { type: string, description: The page fine-grained tokens are made on }
+    WizardClaude:
+      type: object
+      required: [kind, key]
+      properties:
+        kind: { type: string, enum: [api_key, subscription, ""] }
+        key: { $ref: "#/components/schemas/WizardSecret" }
+    WizardCodex:
+      type: object
+      required: [mode, api_key, access_token, signed_in, sign_in, review_only]
+      properties:
+        mode: { type: string, enum: [api-key, chatgpt, access-token] }
+        api_key: { $ref: "#/components/schemas/WizardSecret" }
+        access_token: { $ref: "#/components/schemas/WizardSecret" }
+        signed_in: { type: boolean, description: The ChatGPT sign-in is saved }
+        sign_in: { $ref: "#/components/schemas/WizardSignIn" }
+        review_only: { type: boolean, description: Claude writes the code and Codex reviews it }
+    WizardSignIn:
+      type: object
+      description: A ChatGPT sign-in with a device code, started with /setup/codex/sign-in
+      required: [running, url, code, log, result, failed]
+      properties:
+        running: { type: boolean }
+        url: { type: string, description: "The link to open, once Codex shows it" }
+        code: { type: string, description: "The code to enter there" }
+        log: { type: string, description: "The end of Codex's output" }
+        result: { type: string, description: "How the last one ended; empty before one ran" }
+        failed: { type: boolean }
+    WizardImages:
+      type: object
+      required: [images, building, log, result, failed]
+      properties:
+        images: { type: array, items: { $ref: "#/components/schemas/WizardImage" } }
+        building: { type: boolean }
+        log: { type: string, description: "The end of the running or last build's output" }
+        result: { type: string, description: "How the last build ended; empty before one ran" }
+        failed: { type: boolean }
+    WizardImage:
+      type: object
+      required: [tag, for, built]
+      properties:
+        tag: { type: string }
+        for: { type: string, description: The repos (or other jobs) that run in it }
+        built: { type: boolean }
+    WizardManifest:
+      type: object
+      required: [url, state, manifest]
+      properties:
+        url: { type: string, description: "GitHub's new-app form, with the state" }
+        state: { type: string }
+        manifest: { type: string, description: JSON to post as the form field manifest }
+    WizardResult:
+      type: object
+      required: [message, wizard]
+      properties:
+        message: { type: string }
+        wizard: { $ref: "#/components/schemas/Wizard" }

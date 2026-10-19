@@ -57,15 +57,18 @@ and admin rights on the repo you want the factory to work on.
 
    Or build it yourself: `CGO_ENABLED=0 go build -o factory ./cmd/factory`.
 
-3. **Run `./factory setup`.** It asks for your repos, checks Docker, creates
-   a GitHub App for you, and saves your keys in `factory.env`. It checks
-   each answer before moving on, and you can run it again any time.
-   [What setup does](docs/setup.md#what-setup-asks-for).
+3. **Run `./factory serve`, then open http://127.0.0.1:8080/app/get-started.**
+   The page walks you through the rest: your repos, Docker, a GitHub App it
+   creates for you, and your keys, checking each as you go and saving them
+   in `factory.env`. Finish starts the factory. On a server or in a script,
+   `./factory setup` asks the same in the terminal.
+   [Setting up in the browser](docs/setup.md#setting-up-in-the-browser).
 
-4. **Run `./factory serve`.** This is the daemon. To keep it running across
-   reboots, [run it as a service](docs/setup.md#running-it-as-a-service).
+4. **Keep it running.** `./factory serve` is the daemon. To keep it running
+   across reboots, [run it as a service](docs/setup.md#running-it-as-a-service).
    Something not working? `./factory doctor` checks your whole setup and
-   says how to fix each problem ([Checking your setup](docs/setup.md#checking-your-setup)).
+   says how to fix each problem ([Checking your setup](docs/setup.md#checking-your-setup)),
+   and the get-started page shows whether setup is still complete.
 
 5. **Protect your repo's default branch.** This is the one thing setup
    can't do for you. In the repo's settings, require a pull request with

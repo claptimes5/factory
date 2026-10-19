@@ -86,7 +86,7 @@ func TestDockerExplainsAContainerThatDidntStart(t *testing.T) {
 	}
 	s := Spec{Name: "j", Image: "factory-job-x:latest", Workdir: t.TempDir(), OutDir: t.TempDir(), Cmd: []string{"true"}}
 	code, err := (&Docker{Bin: bin}).Run(context.Background(), s, io.Discard)
-	if code != 125 || err == nil || !strings.Contains(err.Error(), "pull access denied") || !strings.Contains(err.Error(), "./factory images") {
+	if code != 125 || err == nil || !strings.Contains(err.Error(), "pull access denied") || !strings.Contains(err.Error(), "Get started page") {
 		t.Fatalf("code %d, %v", code, err)
 	}
 }

@@ -165,16 +165,12 @@ func signInCodex(p *prompter, cfg *config.Config) bool {
 			return true
 		}
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(dst), "login-")
+	tmp, err := codexLoginDir(cfg)
 	if err != nil {
 		p.say("%v", err)
 		return false
 	}
 	defer os.RemoveAll(tmp)
-	if err := os.WriteFile(filepath.Join(tmp, "config.toml"), []byte("cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n"), 0o600); err != nil {
-		p.say("%v", err)
-		return false
-	}
 	p.say("Signing in with a device code: open the link Codex shows, sign in to ChatGPT,")
 	p.say("and enter the code. Turn on device code sign-in in ChatGPT's security settings")
 	p.say("(or your workspace's) if Codex says it's off.")
@@ -206,20 +202,48 @@ func loginCmd(cfg *config.Config, dir string) error {
 	if cfg.Runner.Kind != "docker" {
 		return runTTY([]string{"CODEX_HOME=" + dir}, "codex", "login", "--device-auth")
 	}
+	args, err := dockerLoginArgs(cfg, dir, term.IsTerminal(int(os.Stdin.Fd())))
+	if err != nil {
+		return fmt.Errorf("%w; build it with ./factory images", err)
+	}
+	return runTTY(nil, "docker", args...)
+}
+
+// dockerLoginArgs runs `codex login --device-auth` in the first repo's
+// job image, with its sign-in saved to dir. It needs no input: Codex
+// prints a link and a code, then waits for the sign-in.
+func dockerLoginArgs(cfg *config.Config, dir string, tty bool) ([]string, error) {
 	image := ""
 	if names := cfg.RepoNames(); len(names) > 0 {
 		r, _ := cfg.RepoConf(names[0])
 		image = r.Image
 	}
 	if image == "" || runCmd(io.Discard, "docker", "image", "inspect", image) != nil {
-		return fmt.Errorf("the job image %s isn't built; build it with ./factory images", image)
+		return nil, fmt.Errorf("the job image %s isn't built", image)
 	}
 	args := []string{"run", "--rm", "-i"}
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+	if tty {
 		args = append(args, "-t")
 	}
-	args = append(args, "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
+	return append(args, "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-e", "HOME=/tmp", "-e", "CODEX_HOME=/codex", "-v", dir+":/codex", image, "codex", "login", "--device-auth")
-	return runTTY(nil, "docker", args...)
+		"-e", "HOME=/tmp", "-e", "CODEX_HOME=/codex", "-v", dir+":/codex", image, "codex", "login", "--device-auth"), nil
+}
+
+// codexLoginDir makes the folder a sign-in is saved to before it is
+// copied to the factory's own, set to sign in with ChatGPT into a file.
+func codexLoginDir(cfg *config.Config) (string, error) {
+	dst := codexAuthFile(cfg)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return "", err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), "login-")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "config.toml"), []byte("cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n"), 0o600); err != nil {
+		os.RemoveAll(tmp)
+		return "", err
+	}
+	return tmp, nil
 }

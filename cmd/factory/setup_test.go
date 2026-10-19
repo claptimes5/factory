@@ -124,6 +124,7 @@ type fakeGitHub struct {
 	filed    []map[string]any    // issues the check filed before, if set
 	labeled  []string            // path and labels added to issues
 	yaml     func(string) string // edits factory.yaml before setup reads it
+	gone     bool                // the app was uninstalled
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +178,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		der := x509.MarshalPKCS1PrivateKey(f.key)
 		j(map[string]any{"id": 42, "slug": "factory-r-ab12", "html_url": "https://github.com/apps/factory-r-ab12", "owner": map[string]string{"login": "o"},
 			"pem": string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}))})
+	case f.gone && (r.URL.Path == "/app/installations" || r.URL.Path == "/repos/o/r/installation"):
+		if r.URL.Path == "/app/installations" {
+			j([]any{})
+		} else {
+			w.WriteHeader(404)
+		}
 	case r.URL.Path == "/app/installations":
 		j([]map[string]any{{"id": 77, "account": map[string]string{"login": "someone-else"}}, {"id": 55, "account": map[string]string{"login": "O"}}})
 	case r.URL.Path == "/repos/o/r/installation":
@@ -194,6 +201,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		j(map[string]string{"name": name})
+	case r.URL.Path == "/repos/o/r/labels" && r.Method == "GET":
+		var names []map[string]string
+		for n, ok := range f.labels {
+			if ok {
+				names = append(names, map[string]string{"name": n})
+			}
+		}
+		for _, n := range f.created {
+			names = append(names, map[string]string{"name": n})
+		}
+		j(names)
 	case r.URL.Path == "/repos/o/r/labels" && r.Method == "POST":
 		var l struct{ Name string }
 		json.NewDecoder(r.Body).Decode(&l)
@@ -344,7 +362,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 	if web.Image != cfg.Runner.Image || strings.Join(web.Gates.Required, ",") != "test,build" || web.Gates.DiffGuard.MaxChangedLines == 0 {
 		t.Fatalf("o/web = %+v %+v", web, web.Gates)
 	}
-	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --build-arg BASE=ruby:3.3.6-bookworm ") {
+	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --label io.factory.built=1 --build-arg BASE=ruby:3.3.6-bookworm ") {
 		t.Fatalf("built %q", built)
 	}
 	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o__api:latest") {

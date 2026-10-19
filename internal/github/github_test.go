@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -344,5 +345,28 @@ func TestPrivate(t *testing.T) {
 	c.Repo = "o/gone"
 	if got, err := c.Private(context.Background()); got || err == nil {
 		t.Fatalf("missing repo: %v %v", got, err)
+	}
+}
+
+func TestListLabelsPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/labels" {
+			t.Errorf("unexpected %s", r.URL)
+		}
+		var page []map[string]string
+		if r.URL.Query().Get("page") == "1" {
+			for i := 0; i < 100; i++ {
+				page = append(page, map[string]string{"name": fmt.Sprintf("l%d", i)})
+			}
+		} else {
+			page = append(page, map[string]string{"name": "factory:ready"})
+		}
+		json.NewEncoder(w).Encode(page)
+	}))
+	defer srv.Close()
+	c := &Client{Repo: "o/r", BaseURL: srv.URL, Tokens: StaticToken("tok")}
+	names, err := c.ListLabels(context.Background())
+	if err != nil || len(names) != 101 || names[100] != "factory:ready" {
+		t.Fatalf("labels = %d %v", len(names), err)
 	}
 }

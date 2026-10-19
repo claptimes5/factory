@@ -17,6 +17,7 @@ type forge interface {
 	pipeline.GitHub
 	ListIssuesIn(ctx context.Context, label, state string) ([]github.Issue, error)
 	EnsureLabel(ctx context.Context, name, color, description string) (bool, error)
+	ListLabels(ctx context.Context) ([]string, error)
 	BranchSHA(ctx context.Context, branch string) (string, error)
 	DefaultBranch(ctx context.Context) (string, error)
 	ListDir(ctx context.Context, dir string) ([]string, error)

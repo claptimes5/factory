@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -28,9 +29,10 @@ type APIReadiness struct {
 	IntakeLabel string `json:"intake_label"`
 	// CanCheck says whether this request may start a check here (the
 	// password, or a request from this machine, and a daemon that can run
-	// one); CheckNote says why not.
+	// one); CheckNote says why not. CanFile says it may also file issues.
 	CanCheck  bool   `json:"can_check"`
 	CheckNote string `json:"check_note"`
+	CanFile   bool   `json:"can_file"`
 }
 
 // APIRepoReadiness is one repo's latest readiness report.
@@ -48,17 +50,22 @@ type APIRepoReadiness struct {
 	Total  int                   `json:"total"`
 	Steps  []APIReadinessStep    `json:"steps"`
 	Extras []APIReadinessFinding `json:"extras"`
-	// Unqueued counts issues filed but not labeled for the factory.
+	// Unqueued counts issues filed but not labeled for the factory, and
+	// Unfiled the findings that need an issue and have none.
 	Unqueued int `json:"unqueued"`
-	// Command runs the check in a terminal; QueueCommand files and labels
-	// what still needs it, or is "" when nothing does.
-	Command      string `json:"command"`
-	QueueCommand string `json:"queue_command"`
-	// Checking: a check started here is running, since CheckingSince.
+	Unfiled  int `json:"unfiled"`
+	// CanQueue says filing with the intake label would do something: file
+	// what isn't filed, or label what waited for the blockers.
+	CanQueue bool `json:"can_queue"`
+	// Checking: a run started here is going, since CheckingSince. Action
+	// is what it does: check, file, or queue (file and start work).
 	Checking      bool   `json:"checking"`
 	CheckingSince string `json:"checking_since"`
-	// CheckError is why the last check started here failed, or "".
+	Action        string `json:"action"`
+	// CheckError is why the last run started here failed, or "", and
+	// Result what it did when it worked.
 	CheckError string `json:"check_error"`
+	Result     string `json:"result"`
 }
 
 // APIReadinessStep is one setup step.
@@ -88,18 +95,22 @@ type APIReadinessFinding struct {
 	ItemStage string `json:"item_stage"`
 }
 
-// readinessRun is the check started from the dashboard, one at a time:
-// each clones a repo and runs its install and checks.
+// readinessRun is the check (or check and file) started from the
+// dashboard, one at a time: each clones a repo and runs its install and
+// checks.
 type readinessRun struct {
-	mu    sync.Mutex
-	repo  string
-	since time.Time
-	errs  map[string]string // repo -> why its last check failed
+	mu      sync.Mutex
+	repo    string
+	action  string
+	since   time.Time
+	errs    map[string]string // repo -> why its last run failed
+	results map[string]string // repo -> what its last run did
 }
 
 func (s *Server) routesReadiness(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/readiness", s.apiReadiness)
 	mux.HandleFunc("POST /api/v1/readiness/check", s.apiCheckReadiness)
+	mux.HandleFunc("POST /api/v1/readiness/file", s.apiFileReadiness)
 }
 
 func (s *Server) apiReadiness(w http.ResponseWriter, r *http.Request) {
@@ -113,19 +124,18 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		out.IntakeLabel = "factory:ready"
 	}
 	out.CanCheck, out.CheckNote = s.canCheckReadiness(r)
+	out.CanFile = out.CanCheck && s.FileReadiness != nil
 	s.ready.mu.Lock()
-	running, since, errs := s.ready.repo, s.ready.since, map[string]string{}
-	for k, v := range s.ready.errs {
-		errs[k] = v
-	}
+	running, action, since := s.ready.repo, s.ready.action, s.ready.since
+	errs, results := maps.Clone(s.ready.errs), maps.Clone(s.ready.results)
 	s.ready.mu.Unlock()
 	linked := map[int64]bool{}
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
 		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Extras: []APIReadinessFinding{},
-			Command: "./factory readiness " + repo, CheckError: errs[repo]}
+			CheckError: errs[repo], Result: results[repo]}
 		if strings.EqualFold(running, repo) {
-			rr.Checking, rr.CheckingSince = true, since.UTC().Format(store.TimeFormat)
+			rr.Checking, rr.CheckingSince, rr.Action = true, since.UTC().Format(store.TimeFormat), action
 		}
 		rep, err := readiness.Load(s.ReadinessDir, repo)
 		if err != nil && rr.CheckError == "" {
@@ -152,10 +162,11 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			}
 		}
 		rr.Done, rr.Total = rep.Progress()
-		unfiled := false
 		find := func(f readiness.Finding) APIReadinessFinding {
 			a := s.readinessFinding(ctx, repo, f, linked)
-			unfiled = unfiled || a.Status == "not_filed"
+			if a.Status == "not_filed" {
+				rr.Unfiled++
+			}
 			if a.Status == "not_queued" {
 				rr.Unqueued++
 			}
@@ -171,11 +182,12 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		for _, f := range rep.Extras() {
 			rr.Extras = append(rr.Extras, find(f))
 		}
-		// -queue files what isn't filed, and once the repo is ready labels
+		// Queueing files what isn't filed, and once the repo is ready labels
 		// what was filed for later. An incomplete check files nothing.
-		if !rep.Incomplete && (unfiled || rep.Ready && rr.Unqueued > 0) {
-			rr.QueueCommand = "./factory readiness -queue " + repo
+		if rep.Incomplete {
+			rr.Unfiled = 0
 		}
+		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0)
 		out.Repos = append(out.Repos, rr)
 	}
 	switch {
@@ -236,10 +248,10 @@ func (s *Server) workedBeyondSetup(ctx context.Context, linked map[int64]bool) b
 
 func (s *Server) canCheckReadiness(r *http.Request) (bool, string) {
 	if ok, _ := s.settingsWritable(r); !ok {
-		return false, "Checking from here needs a dashboard password: set FACTORY_WEB_PASSWORD (see docs/security.md), or run the command in a terminal."
+		return false, "Checking from here needs a dashboard password: set FACTORY_WEB_PASSWORD (see docs/security.md)."
 	}
 	if s.CheckReadiness == nil || s.ReadinessDir == "" {
-		return false, "This dashboard can't run the check. Run the command in a terminal."
+		return false, "This dashboard can't run the check."
 	}
 	return true, ""
 }
@@ -249,6 +261,25 @@ func (s *Server) canCheckReadiness(r *http.Request) (bool, string) {
 // do, and files nothing. It takes the daemon's time, so like settings it
 // needs the password, or a request from this machine.
 func (s *Server) apiCheckReadiness(w http.ResponseWriter, r *http.Request) {
+	s.startReadiness(w, r, false, func(ctx context.Context, repo string, _ bool) (string, error) {
+		return "", s.CheckReadiness(ctx, repo)
+	})
+}
+
+// apiFileReadiness checks a repo again, then files an issue for each gap
+// that has none. With queue they get the intake label (only the blockers
+// while it has any), and once it is ready the issues filed earlier get it
+// too, so the factory starts on them.
+func (s *Server) apiFileReadiness(w http.ResponseWriter, r *http.Request) {
+	if s.FileReadiness == nil {
+		apiErr(w, http.StatusForbidden, "This dashboard can't file issues.")
+		return
+	}
+	s.startReadiness(w, r, true, s.FileReadiness)
+}
+
+// startReadiness starts run on the repo in the request, one run at a time.
+func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, files bool, run func(ctx context.Context, repo string, queue bool) (string, error)) {
 	if !jsonOnly(w, r) {
 		return
 	}
@@ -257,7 +288,8 @@ func (s *Server) apiCheckReadiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Repo string `json:"repo"`
+		Repo  string `json:"repo"`
+		Queue bool   `json:"queue"`
 	}
 	if err := s.readBody(r, &in); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
@@ -269,6 +301,13 @@ func (s *Server) apiCheckReadiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := s.Repos[i]
+	action, msg := "check", "Checking "+repo+". It takes a few minutes, and this page updates when it's done."
+	if files {
+		action, msg = "file", "Checking "+repo+" again, then filing its issues. It takes a few minutes, and this page updates when it's done."
+		if in.Queue {
+			action = "queue"
+		}
+	}
 	s.ready.mu.Lock()
 	if s.ready.repo != "" {
 		busy := s.ready.repo
@@ -276,20 +315,23 @@ func (s *Server) apiCheckReadiness(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
 		return
 	}
-	s.ready.repo, s.ready.since = repo, time.Now()
+	s.ready.repo, s.ready.action, s.ready.since = repo, action, time.Now()
 	if s.ready.errs == nil {
-		s.ready.errs = map[string]string{}
+		s.ready.errs, s.ready.results = map[string]string{}, map[string]string{}
 	}
 	delete(s.ready.errs, repo)
+	delete(s.ready.results, repo)
 	s.ready.mu.Unlock()
 	go func() {
-		err := s.CheckReadiness(context.WithoutCancel(r.Context()), repo)
+		res, err := run(context.WithoutCancel(r.Context()), repo, in.Queue)
 		s.ready.mu.Lock()
 		defer s.ready.mu.Unlock()
-		s.ready.repo = ""
+		s.ready.repo, s.ready.action = "", ""
 		if err != nil {
 			s.ready.errs[repo] = err.Error()
+		} else if res != "" {
+			s.ready.results[repo] = res
 		}
 	}()
-	s.act(w, nil, "Checking "+repo+". It takes a few minutes, and this page updates when it's done.")
+	s.act(w, nil, msg)
 }

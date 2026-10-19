@@ -43,17 +43,6 @@ var appPermissions = map[string]string{
 // and GitHub sends back a code this exchanges for the app's ID and key.
 // It returns the app's ID, slug and the path the key was saved to.
 func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir string) (id, slug, keyPath string, err error) {
-	// The app belongs to the first GitHub repo's owner.
-	first := githubRepos(cfg)[0]
-	owner, name, _ := strings.Cut(first, "/")
-	org, err := github.IsOrg(ctx, githubAPI, owner)
-	if err != nil {
-		return "", "", "", fmt.Errorf("looking up %s on GitHub: %w", owner, err)
-	}
-	newURL := githubWeb + "/settings/apps/new"
-	if org {
-		newURL = githubWeb + "/organizations/" + url.PathEscape(owner) + "/settings/apps/new"
-	}
 	// Loopback only: whoever can load the page can finish the flow, so it
 	// must not be reachable from the network.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -63,25 +52,11 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	defer func() { _ = ln.Close() }()
 	base := "http://" + ln.Addr().String()
 	state := randHex(16)
-	// GitHub caps app names at 34 characters.
-	short := strings.ToLower(name)
-	if len(short) > 21 {
-		short = strings.TrimRight(short[:21], "-_.")
+	m, err := appManifest(ctx, cfg, base+"/callback")
+	if err != nil {
+		return "", "", "", err
 	}
-	manifest, _ := json.Marshal(map[string]any{
-		"name":         "factory-" + short + "-" + randHex(2),
-		"url":          githubWeb + "/" + first,
-		"redirect_url": base + "/callback",
-		// A private app installs only on its owner's account. Repos under
-		// other accounts need it public: anyone could install it, but only
-		// on their own repos, and its key stays with you.
-		"public":              len(owners(cfg)) > 1,
-		"default_permissions": appPermissions,
-		"default_events":      []string{},
-		// The factory polls GitHub, so the webhook stays off.
-		"hook_attributes": map[string]any{"url": githubWeb + "/" + first, "active": false},
-	})
-
+	newURL, owner, manifest := m.newURL, m.owner, m.manifest
 	var (
 		mu  sync.Mutex
 		got *github.CreatedApp
@@ -91,11 +66,7 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 		if st != state {
 			return nil, errors.New("that address is from a different setup run")
 		}
-		app, err := github.ConvertManifest(ctx, githubAPI, code)
-		if err == nil && !strings.EqualFold(app.Owner.Login, owner) {
-			return nil, fmt.Errorf("GitHub made the app under %s, not %s; delete it from its settings page and try again", app.Owner.Login, owner)
-		}
-		return app, err
+		return convertApp(ctx, code, owner)
 	}
 	// Refuse requests that didn't come to the loopback address itself, so a
 	// web page can't reach this server through DNS rebinding.
@@ -160,8 +131,7 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 			}
 		}
 		if app != nil {
-			keyPath = filepath.Join(keyDir, "github-app-"+app.Slug+".pem")
-			if err := writePrivate(keyPath, app.PEM); err != nil {
+			if keyPath, err = saveAppKey(keyDir, app); err != nil {
 				return "", "", "", err
 			}
 			p.say("Created %s. Its private key is saved in %s.", app.HTMLURL, keyPath)
@@ -178,6 +148,86 @@ func createApp(ctx context.Context, p *prompter, cfg *config.Config, keyDir stri
 	}
 }
 
+// newApp is a GitHub App manifest ready to post to GitHub.
+type newApp struct {
+	newURL   string // GitHub's new-app form, for the owner's account
+	owner    string // the account the app belongs to
+	manifest []byte
+}
+
+// appManifest prepares the manifest for a new app that GitHub sends the
+// browser back from to redirect.
+func appManifest(ctx context.Context, cfg *config.Config, redirect string) (newApp, error) {
+	// The app belongs to the first GitHub repo's owner.
+	first := githubRepos(cfg)[0]
+	owner, name, _ := strings.Cut(first, "/")
+	org, err := github.IsOrg(ctx, githubAPI, owner)
+	if err != nil {
+		return newApp{}, fmt.Errorf("looking up %s on GitHub: %w", owner, err)
+	}
+	newURL := githubWeb + "/settings/apps/new"
+	if org {
+		newURL = githubWeb + "/organizations/" + url.PathEscape(owner) + "/settings/apps/new"
+	}
+	// GitHub caps app names at 34 characters.
+	short := strings.ToLower(name)
+	if len(short) > 21 {
+		short = strings.TrimRight(short[:21], "-_.")
+	}
+	manifest, _ := json.Marshal(map[string]any{
+		"name":         "factory-" + short + "-" + randHex(2),
+		"url":          githubWeb + "/" + first,
+		"redirect_url": redirect,
+		// A private app installs only on its owner's account. Repos under
+		// other accounts need it public: anyone could install it, but only
+		// on their own repos, and its key stays with you.
+		"public":              len(owners(cfg)) > 1,
+		"default_permissions": appPermissions,
+		"default_events":      []string{},
+		// The factory polls GitHub, so the webhook stays off.
+		"hook_attributes": map[string]any{"url": githubWeb + "/" + first, "active": false},
+	})
+	return newApp{newURL: newURL, owner: owner, manifest: manifest}, nil
+}
+
+// convertApp exchanges the code GitHub sent back for the new app, which
+// must belong to owner.
+func convertApp(ctx context.Context, code, owner string) (*github.CreatedApp, error) {
+	app, err := github.ConvertManifest(ctx, githubAPI, code)
+	if err == nil && !strings.EqualFold(app.Owner.Login, owner) {
+		return nil, fmt.Errorf("GitHub made the app under %s, not %s; delete it from its settings page and try again", app.Owner.Login, owner)
+	}
+	return app, err
+}
+
+// saveAppKey saves a new app's private key in keyDir, readable only by
+// you, and returns its path.
+func saveAppKey(keyDir string, app *github.CreatedApp) (string, error) {
+	path := filepath.Join(keyDir, "github-app-"+app.Slug+".pem")
+	return path, writePrivate(path, app.PEM)
+}
+
+// installURL is where you install the app with this slug.
+func installURL(slug string) string {
+	return githubWeb + "/apps/" + slug + "/installations/new"
+}
+
+// installSteps says how to install the app on each account in missing.
+func installSteps(cfg *config.Config, missing []string) []string {
+	byOwner := owners(cfg)
+	var out []string
+	for _, o := range missing {
+		out = append(out, fmt.Sprintf("Pick %s, choose \"Only select repositories\", select %s, and click Install.", o, strings.Join(byOwner[strings.ToLower(o)], " and ")))
+	}
+	if len(missing) > 1 {
+		out = append(out, "Then open the same link again for the next account.")
+	}
+	if appOwner, _, _ := strings.Cut(githubRepos(cfg)[0], "/"); slices.ContainsFunc(missing, func(o string) bool { return !strings.EqualFold(o, appOwner) }) {
+		out = append(out, fmt.Sprintf("If GitHub doesn't offer an account other than %s, the app is private. Make it public first: open the app's settings, go to Advanced, and click \"Make public\".", appOwner))
+	}
+	return out
+}
+
 // installApp waits for you to install the app on each repo's owner and
 // returns the installation ID on the first repo's owner.
 func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slug, keyPath string) (string, error) {
@@ -186,7 +236,6 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 		return "", err
 	}
 	app := &github.AppTokens{AppID: appID, Key: key, BaseURL: githubAPI}
-	byOwner := owners(cfg)
 	for i := 0; ; i++ {
 		first, missing, err := installations(ctx, app, githubRepos(cfg))
 		if err == nil && len(missing) == 0 {
@@ -197,16 +246,9 @@ func installApp(ctx context.Context, p *prompter, cfg *config.Config, appID, slu
 			p.say("Couldn't check: %v", err)
 		case i == 0:
 			p.say("Now install the app. Open:")
-			p.say("\n    %s/apps/%s/installations/new\n", githubWeb, slug)
-			for _, o := range missing {
-				p.say("Pick %s, choose \"Only select repositories\", select %s, and click Install.", o, strings.Join(byOwner[strings.ToLower(o)], " and "))
-			}
-			if len(missing) > 1 {
-				p.say("Then open the same link again for the next account.")
-			}
-			if appOwner, _, _ := strings.Cut(githubRepos(cfg)[0], "/"); slices.ContainsFunc(missing, func(o string) bool { return !strings.EqualFold(o, appOwner) }) {
-				p.say("If GitHub doesn't offer an account other than %s, the app is private. Make it", appOwner)
-				p.say("public first: open the app's settings, go to Advanced, and click \"Make public\".")
+			p.say("\n    %s\n", installURL(slug))
+			for _, l := range installSteps(cfg, missing) {
+				p.say("%s", l)
 			}
 			p.ask("Press Enter here once it's installed", "")
 			continue

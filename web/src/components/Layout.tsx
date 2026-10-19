@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router";
+import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { act, useLiveUpdates, useNotifications, useOverview, type Overview } from "@/api/client";
+import { act, useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
 import { PlanUsageMeter } from "@/components/PlanUsage";
@@ -74,17 +74,21 @@ const tabs = [
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
+/**
+ * Until the factory is set up, the dashboard serves only the get-started
+ * page, so every route goes there. The wizard says which mode this is.
+ */
 export function Layout() {
-  useLiveUpdates();
-  const { data: o } = useOverview();
-  const { data: n } = useNotifications();
-  useBrowserNotifications(n?.notifications);
+  // A dashboard without the page answers 404: normal mode.
+  const { data, isPending } = useWizardMode();
+  if (isPending) return null;
+  if (data?.mode === "setup") return <SetupShell />;
+  return <FullLayout />;
+}
+
+function ThemeButton() {
   const [dark, setDark] = useTheme();
-  const [palette, setPalette] = usePalette();
-  const inbox = n?.notifications.length ?? 0;
-  const repos = o?.repos ?? [];
-  const repo = useRepo(repos);
-  const theme = (
+  return (
     <button
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-card text-foreground hover:bg-accent md:size-9"
@@ -93,6 +97,37 @@ export function Layout() {
       {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
     </button>
   );
+}
+
+function SetupShell() {
+  const here = useLocation().pathname === "/get-started";
+  return (
+    <div className="flex min-h-full flex-col">
+      <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-[1680px] items-center gap-4 px-4 md:px-6">
+          <span className="flex items-center gap-2.5">
+            <Logo className="size-6 md:size-7" />
+            <span className="font-display text-lg font-bold tracking-tight">Factory</span>
+          </span>
+          <span className="ml-auto" />
+          <ThemeButton />
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 pb-12 md:px-6">{here ? <Outlet /> : <Navigate to="/get-started" replace />}</main>
+    </div>
+  );
+}
+
+function FullLayout() {
+  useLiveUpdates();
+  const { data: o } = useOverview();
+  const { data: n } = useNotifications();
+  useBrowserNotifications(n?.notifications);
+  const [palette, setPalette] = usePalette();
+  const inbox = n?.notifications.length ?? 0;
+  const repos = o?.repos ?? [];
+  const repo = useRepo(repos);
+  const theme = <ThemeButton />;
   return (
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur">
@@ -349,7 +384,7 @@ function AutoMergeBreaker({ o }: { o: Overview }) {
               </Button>
             ) : (
               <span className="text-xs text-muted-foreground">
-                Reset it with <span className="font-mono">factory automerge reset {b.repo}</span>, or here behind a dashboard password.
+                Resetting it here needs a dashboard password: set FACTORY_WEB_PASSWORD.
               </span>
             )}
           </li>

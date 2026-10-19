@@ -48,15 +48,33 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
     }
   };
   const shown = choices.filter((c) => c.available || c.action === "continue");
+  // The help explains the buttons shown, and lists apart the choices that
+  // aren't offered with why, so it never reads as more buttons than there are.
+  const hidden = choices.filter((c) => !shown.includes(c));
   const help = (
-    <ul className="space-y-1.5 text-xs text-muted-foreground" data-testid="choice-help">
-      {choices.map((c) => (
-        <li key={c.action}>
-          <span className="font-medium text-foreground">{c.label}</span>
-          {c.model && <span className="font-mono"> ({c.model})</span>}: {c.available ? c.explain : c.why || c.explain}
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-1.5 text-xs text-muted-foreground" data-testid="choice-help">
+      <ul className="space-y-1.5">
+        {shown.map((c) => (
+          <li key={c.action}>
+            <span className="font-medium text-foreground">{c.label}</span>
+            {c.model && <span className="font-mono"> ({c.model})</span>}: {c.available ? c.explain : c.why || c.explain}
+          </li>
+        ))}
+      </ul>
+      {hidden.length > 0 && (
+        <div data-testid="choice-unavailable">
+          <p>Not offered now:</p>
+          <ul className="mt-1 space-y-1 pl-3">
+            {hidden.map((c) => (
+              <li key={c.action}>
+                {c.label}
+                {c.why && <>: {c.why}</>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
   return (
     <div className="flex flex-col gap-2" data-testid="choices">

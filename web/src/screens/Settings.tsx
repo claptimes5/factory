@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, Lock, RotateCw, Save, Sparkles, X } from "lucide-react";
 import {
@@ -103,6 +104,13 @@ function SettingsForm({ s }: { s: Settings }) {
   return (
     <div className="max-w-4xl space-y-4" data-testid="settings">
       <PageTitle aside={<span className="font-mono text-xs break-all text-muted-foreground">{s.path}</span>}>Settings</PageTitle>
+      <p className="-mt-2 text-sm text-text-2">
+        Repos, GitHub or GitLab access, model keys and notifications are on the{" "}
+        <Link to="/get-started" className="text-primary hover:underline">
+          get-started page
+        </Link>
+        .
+      </p>
 
       {ro && (
         <div role="note" className="flex gap-2 rounded-md border border-warning-border bg-warning-bg p-3 text-sm text-warning">

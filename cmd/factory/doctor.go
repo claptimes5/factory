@@ -70,7 +70,8 @@ type doctor struct {
 	disks    func(ctx context.Context) ([]runner.Disk, error)
 	listen   func(addr string) error
 	plat     platform
-	serving  bool // at serve's start: the port is ours and the pipeline watches the disk
+	serving  bool            // at serve's start: the port is ours and the pipeline watches the disk
+	building func() []string // images being built now; nil when none are
 
 	dockerChecked bool
 	dockerUp      bool
@@ -198,9 +199,10 @@ func runDoctor(ctx context.Context, w io.Writer, cfgPath string, cfg *config.Con
 // healthCheck runs the doctor's checks as serve starts, so a missing
 // image, credential or too old a Docker is logged and sent to your phone
 // before a job fails on it. Serve starts either way.
-func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) {
+func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline, b *imageBuilder) {
 	d := newDoctor(cfg)
 	d.serving = true
+	d.building = b.Building
 	reportHealth(ctx, d, p.Notify)
 }
 
@@ -300,6 +302,9 @@ func usesServices(cfg *config.Config) bool {
 	return len(cfg.Services) > 0 || slices.ContainsFunc(cfg.Repos, func(r config.Repo) bool { return len(r.Services) > 0 })
 }
 
+// fixBuildImages is the fix for a missing image the factory builds.
+const fixBuildImages = "./factory images"
+
 // images checks every repo's job image is built, since without it every
 // job fails.
 func (d *doctor) images(ctx context.Context) []finding {
@@ -313,6 +318,10 @@ func (d *doctor) images(ctx context.Context) []finding {
 	var out []finding
 	var built []string
 	seen := map[string]bool{}
+	var building []string
+	if d.building != nil {
+		building = d.building()
+	}
 	check := func(image, n string) {
 		if seen[image] {
 			return
@@ -322,7 +331,12 @@ func (d *doctor) images(ctx context.Context) []finding {
 			built = append(built, image)
 			return
 		}
-		fix := "./factory images"
+		if slices.Contains(building, image) {
+			// Jobs that need it wait for the build, so nothing fails yet.
+			out = append(out, finding{warn, fmt.Sprintf("Job image %s (for %s) is being built", image, n), ""})
+			return
+		}
+		fix := fixBuildImages
 		if !ours[image] {
 			fix = "build it yourself: " + n + "'s image names one the factory doesn't build\n(docs/configuration.md#each-repos-toolchain-and-checks)"
 		}

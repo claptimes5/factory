@@ -838,7 +838,7 @@ func (s *Server) apiResetAutoMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok, _ := s.settingsWritable(r); !ok {
-		apiErr(w, http.StatusForbidden, "Resetting auto-merge here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md), or run `factory automerge reset <repo>`.")
+		apiErr(w, http.StatusForbidden, "Resetting auto-merge here needs a password: set FACTORY_WEB_PASSWORD (see docs/security.md).")
 		return
 	}
 	var in struct {

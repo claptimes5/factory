@@ -564,6 +564,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/readiness/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a repo again, then file an issue for each gap that has none, in the background
+         * @description Runs the readiness check as /readiness/check does, then files an issue
+         *     for each blocker and gap that has none. With queue they get the intake
+         *     label (only the blockers while the repo has any), and once it is ready
+         *     the issues filed earlier get it too, so the factory starts on them. A
+         *     check that couldn't finish files nothing. Shares the one-at-a-time
+         *     slot with /readiness/check (409 while a run is going). Needs the
+         *     password, or a request from this machine (403 otherwise).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name */
+                        repo: string;
+                        /** @description Give the issues the intake label, so the factory works on them */
+                        queue?: boolean;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats": {
         parameters: {
             query?: never;
@@ -1601,6 +1650,732 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The get-started page, where each setup step stands
+         * @description Mirrors `factory setup`. Saved secrets never come back: only whether
+         *     each is set, and a masked hint. While the factory can't start for want
+         *     of forge access, `factory serve` serves only this page and these
+         *     endpoints (mode "setup"); every other endpoint answers 503 until
+         *     Finish. Every POST under /setup needs the password, or a request from
+         *     this machine (403 otherwise), and answers 400 with the reason when it
+         *     refuses the input.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description 1 checks the forges again first (access, the app's installations, each repo's labels), unless that was done in the last 30 seconds */
+                    live?: "1";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Wizard"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start making a GitHub App with GitHub's manifest flow
+         * @description The page posts `manifest` as a form field named manifest to `url`.
+         *     GitHub asks the person to confirm, then sends the browser to
+         *     /setup/github/callback with a code and the state, once.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WizardManifest"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where GitHub sends the browser back once the app is made
+         * @description Exchanges the code for the app if state is one /setup/github/app handed
+         *     out and not yet used, saves its key next to factory.env and its ID in
+         *     it, then redirects to /app/get-started with `github` (what happened) or
+         *     `github_error` (why it failed) in the query.
+         */
+        get: {
+            parameters: {
+                query: {
+                    code: string;
+                    state: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Back to the get-started page */
+                303: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/machine/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run the checks of this machine again */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change which repos the factory works on, in factory.yaml */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name for GitHub, the project URL for GitLab, separated by commas */
+                        repos: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/install-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check where the GitHub App is installed; once it is on every account, save the installation and check access */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/existing-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Use a GitHub App made before
+         * @description GitHub must accept the ID and key; the installation is saved once the app is on every account.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        app_id: string;
+                        /** @description The private key (.pem) on the factory's machine */
+                        key_path: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Use a personal access token for GitHub (for a quick try)
+         * @description Clears the GitHub App settings, then checks access.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/access/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the factory can reach each repo with what is saved */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/base-branch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set the one repo's base_branch in factory.yaml */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        branch: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the labels the factory uses on each repo, leaving existing ones as they are */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/gitlab/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save the GitLab token, then check access */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/claude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Claude's API key or subscription token
+         * @description sk-ant-oat... is a subscription token, other sk-ant-... an API key; anything else is refused unless anyway is true.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        key: string;
+                        anyway?: boolean;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/codex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose how Codex signs in, clearing the keys Codex would use instead
+         * @description An empty key keeps the saved one. A ChatGPT plan then signs in with /setup/codex/sign-in.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        mode: "api-key" | "chatgpt" | "access-token";
+                        key?: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/codex/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign Codex in to a ChatGPT plan with a device code, in the background
+         * @description Runs `codex login --device-auth` (in the job image with the Docker
+         *     runner). The link and code it prints show in codex.sign_in; once
+         *     someone enters the code there, the sign-in is saved and Codex is set
+         *     to the ChatGPT plan. One at a time (400 while one runs).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/notify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save the notification address (ntfy, Slack or Discord); empty turns notifications off */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        url: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/notify/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a test notification to the saved address */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/sentry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save the Sentry token; empty removes it */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/images/build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build the missing job images in the background, one build at a time */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish setup
+         * @description Needs access to every repo. In setup mode it starts the factory; otherwise it restarts it once running jobs finish, if factory.yaml or factory.env changed.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1779,6 +2554,8 @@ export interface components {
             can_check: boolean;
             /** @description Why it can't, or empty */
             check_note: string;
+            /** @description This request may also file issues from here */
+            can_file: boolean;
         };
         RepoReadiness: {
             repo: string;
@@ -1799,15 +2576,22 @@ export interface components {
             extras: components["schemas"]["ReadinessFinding"][];
             /** @description Issues filed without the intake label */
             unqueued: number;
-            /** @description Runs the check in a terminal */
-            command: string;
-            /** @description Files and labels what still needs it; empty when nothing does */
-            queue_command: string;
-            /** @description A check started from the dashboard is running */
+            /** @description Findings that need an issue and have none */
+            unfiled: number;
+            /** @description Filing with the intake label would do something: file what isn't filed, or label what waited for the blockers */
+            can_queue: boolean;
+            /** @description A run started from the dashboard is going */
             checking: boolean;
             checking_since: string;
-            /** @description Why the last check started here failed, or empty */
+            /**
+             * @description What that run does: check, file issues, or file and start work
+             * @enum {string}
+             */
+            action: "" | "check" | "file" | "queue";
+            /** @description Why the last run started here failed, or empty */
             check_error: string;
+            /** @description What the last run started here did, when it filed; else empty */
+            result: string;
         };
         ReadinessStep: {
             /** @enum {string} */
@@ -2383,6 +3167,192 @@ export interface components {
         Tuning: {
             proposal: components["schemas"]["TuningProposal"] | null;
         };
+        Wizard: {
+            /**
+             * @description setup while the dashboard serves only this page, until Finish starts the factory
+             * @enum {string}
+             */
+            mode: "setup" | "normal";
+            /** @description This request may save here */
+            writable: boolean;
+            /** @description Why not, when it can't */
+            reason: string;
+            config_path: string;
+            env_path: string;
+            /** @description The cards in order */
+            steps: components["schemas"]["WizardStep"][];
+            machine: components["schemas"]["WizardFinding"][];
+            /** @description Empty while the first check runs */
+            machine_checked_at: string;
+            repos: string[];
+            /** @description Each repo's last access check */
+            access: components["schemas"]["WizardAccess"][];
+            /** @description What the last label creation did */
+            labels: components["schemas"]["WizardLabel"][];
+            label_names: string[];
+            /** @description Null without GitHub repos */
+            github: components["schemas"]["WizardGitHub"] | null;
+            /** @description Null without GitLab repos */
+            gitlab: components["schemas"]["WizardGitLab"] | null;
+            /** @description Null when no job runs on Claude */
+            claude: components["schemas"]["WizardClaude"] | null;
+            /** @description Null when no job runs on Codex */
+            codex: components["schemas"]["WizardCodex"] | null;
+            notify: components["schemas"]["WizardSecret"];
+            /** @description Null unless sources.sentry is on */
+            sentry: components["schemas"]["WizardSecret"] | null;
+            /** @description Null unless jobs run in Docker */
+            images: components["schemas"]["WizardImages"] | null;
+            /** @description The factory can reach every repo */
+            can_finish: boolean;
+            /** @description What won't work yet if you finish now */
+            warnings: string[];
+            /** @description factory.yaml or factory.env changed since the factory started */
+            changed: boolean;
+            restart_pending: boolean;
+        };
+        WizardStep: {
+            /** @enum {string} */
+            key: "machine" | "repos" | "github" | "gitlab" | "claude" | "codex" | "notify" | "sentry" | "images" | "finish";
+            title: string;
+            /** @enum {string} */
+            state: "done" | "attention" | "optional";
+            summary: string;
+        };
+        WizardFinding: {
+            /** @enum {string} */
+            status: "pass" | "warn" | "fail";
+            what: string;
+            /** @description A command to run or a doc to read; may be several lines. Empty when action fixes it */
+            fix: string;
+            /**
+             * @description A button on the page that fixes it: build_images posts /setup/images/build
+             * @enum {string}
+             */
+            action: "" | "build_images";
+        };
+        WizardSecret: {
+            set: boolean;
+            /** @description The first and last few characters, or just "value" for a short one; empty when unset */
+            masked: string;
+        };
+        WizardAccess: {
+            repo: string;
+            /** @enum {string} */
+            host: "github" | "gitlab";
+            /** @enum {string} */
+            state: "unchecked" | "ok" | "failed";
+            error: string;
+            hints: string[];
+            /** @description The branch factory.yaml uses */
+            base_branch: string;
+            /** @description The repo's default branch when it differs, else empty */
+            default_branch: string;
+            /** @description One repo, so its base_branch can be set here */
+            can_use_default: boolean;
+            /** @description The factory's labels the repo lacks, from the last check */
+            missing_labels: string[];
+            /** @description Why its labels couldn't be listed */
+            labels_error: string;
+        };
+        WizardLabel: {
+            repo: string;
+            name: string;
+            /** @enum {string} */
+            result: "created" | "exists" | "failed";
+            error: string;
+        };
+        WizardOwner: {
+            owner: string;
+            repos: string[];
+        };
+        WizardGitHub: {
+            /** @enum {string} */
+            method: "app" | "token" | "none";
+            app_id: string;
+            app_slug: string;
+            key_path: string;
+            installation_id: string;
+            /** @description Installs the app; empty when its slug isn't known */
+            install_url: string;
+            /** @description Accounts the app isn't installed on, from the last check */
+            missing: components["schemas"]["WizardOwner"][];
+            install_steps: string[];
+            install_error: string;
+            token: components["schemas"]["WizardSecret"];
+            /** @description Where to make a personal access token */
+            token_url: string;
+            /** @description The account a new app belongs to */
+            app_owner: string;
+        };
+        WizardGitLab: {
+            token: components["schemas"]["WizardSecret"];
+            hosts: components["schemas"]["WizardHost"][];
+            /** @description The permissions a fine-grained token needs on each project */
+            fine_grained: string[];
+        };
+        WizardHost: {
+            host: string;
+            /** @description Opens the form for a legacy token with its scopes ticked */
+            legacy_url: string;
+            /** @description The page fine-grained tokens are made on */
+            tokens_url: string;
+        };
+        WizardClaude: {
+            /** @enum {string} */
+            kind: "api_key" | "subscription" | "";
+            key: components["schemas"]["WizardSecret"];
+        };
+        WizardCodex: {
+            /** @enum {string} */
+            mode: "api-key" | "chatgpt" | "access-token";
+            api_key: components["schemas"]["WizardSecret"];
+            access_token: components["schemas"]["WizardSecret"];
+            /** @description The ChatGPT sign-in is saved */
+            signed_in: boolean;
+            sign_in: components["schemas"]["WizardSignIn"];
+            /** @description Claude writes the code and Codex reviews it */
+            review_only: boolean;
+        };
+        /** @description A ChatGPT sign-in with a device code, started with /setup/codex/sign-in */
+        WizardSignIn: {
+            running: boolean;
+            /** @description The link to open, once Codex shows it */
+            url: string;
+            /** @description The code to enter there */
+            code: string;
+            /** @description The end of Codex's output */
+            log: string;
+            /** @description How the last one ended; empty before one ran */
+            result: string;
+            failed: boolean;
+        };
+        WizardImages: {
+            images: components["schemas"]["WizardImage"][];
+            building: boolean;
+            /** @description The end of the running or last build's output */
+            log: string;
+            /** @description How the last build ended; empty before one ran */
+            result: string;
+            failed: boolean;
+        };
+        WizardImage: {
+            tag: string;
+            /** @description The repos (or other jobs) that run in it */
+            for: string;
+            built: boolean;
+        };
+        WizardManifest: {
+            /** @description GitHub's new-app form, with the state */
+            url: string;
+            state: string;
+            /** @description JSON to post as the form field manifest */
+            manifest: string;
+        };
+        WizardResult: {
+            message: string;
+            wizard: components["schemas"]["Wizard"];
+        };
     };
     responses: {
         /** @description Error */
@@ -2401,6 +3371,15 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ActionResult"];
+            };
+        };
+        /** @description What the action did, and the page after it */
+        WizardResult: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["WizardResult"];
             };
         };
     };

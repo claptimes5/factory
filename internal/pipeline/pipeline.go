@@ -118,10 +118,13 @@ type Pipeline struct {
 	// ClientsFor makes a repo's clients, once per repo. Without it GH and
 	// Git serve every repo, which is how tests run one.
 	ClientsFor func(repo string) RepoClients
-	GH         GitHub
-	Git        *Git
-	Runner     runner.Runner
-	Harnesses  map[string]harness.Harness
+	// Building names the job images being built right now (may be nil):
+	// jobs that run in one wait in the queue until it is built.
+	Building  func() []string
+	GH        GitHub
+	Git       *Git
+	Runner    runner.Runner
+	Harnesses map[string]harness.Harness
 	// Secrets maps a harness name to the env vars injected into its jobs.
 	Secrets map[string]map[string]string
 	Log     *slog.Logger
@@ -524,7 +527,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos()); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -542,7 +545,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobSkipping(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx))
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos())
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -551,7 +554,40 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobSkipping(ctx, except, p.heldHarnesses(ctx))
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos())
+}
+
+// heldRepos are the repos whose job image is being built, with the repos
+// that share a workspace with one; "" when the image of jobs for no repo
+// (the orchestrator's, tuning's) is.
+func (p *Pipeline) heldRepos() []string {
+	if p.Building == nil {
+		return nil
+	}
+	building := p.Building()
+	if len(building) == 0 {
+		return nil
+	}
+	var out []string
+	add := func(r string) {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	if slices.Contains(building, p.Cfg.Runner.Image) {
+		add("")
+	}
+	for _, r := range p.Cfg.RepoNames() {
+		if !slices.Contains(building, p.repoConf(r).Image) {
+			continue
+		}
+		add(r)
+		_, members := p.Cfg.Workspace(r)
+		for _, m := range members {
+			add(m)
+		}
+	}
+	return out
 }
 
 // pausedHarnesses are the harnesses whose subscription window is used up

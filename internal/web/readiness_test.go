@@ -80,11 +80,11 @@ func TestReadinessLinksBlockersToTheirWork(t *testing.T) {
 	base, _, _ := readinessServer(t)
 	var got APIReadiness
 	getJSON(t, base+"/api/v1/readiness", &got)
-	if got.Banner != "not_ready" || got.CanCheck || !strings.Contains(got.CheckNote, "terminal") || len(got.Repos) != 2 {
+	if got.Banner != "not_ready" || got.CanCheck || got.CanFile || !strings.Contains(got.CheckNote, "FACTORY_WEB_PASSWORD") || len(got.Repos) != 2 {
 		t.Fatalf("readiness = %+v", got)
 	}
 	r, s := got.Repos[0], got.Repos[1]
-	if s.State != "unchecked" || s.Command != "./factory readiness o/s" || len(s.Steps) != 0 {
+	if s.State != "unchecked" || s.CanQueue || len(s.Steps) != 0 {
 		t.Fatalf("o/s = %+v", s)
 	}
 	// Install passed; the checks and the tests fail.
@@ -115,8 +115,8 @@ func TestReadinessLinksBlockersToTheirWork(t *testing.T) {
 	if len(r.Extras) != 3 || status["No feature map"] != "not_filed" || status["No end-to-end tests"] != "closed" || status["CI runs on the repo"] != "none" {
 		t.Fatalf("extras = %+v", r.Extras)
 	}
-	if r.Unqueued != 1 || r.QueueCommand != "./factory readiness -queue o/r" {
-		t.Fatalf("unqueued %d, queue %q", r.Unqueued, r.QueueCommand)
+	if r.Unqueued != 1 || r.Unfiled != 1 || !r.CanQueue {
+		t.Fatalf("unqueued %d, unfiled %d, can queue %v", r.Unqueued, r.Unfiled, r.CanQueue)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestReadinessCheckAgain(t *testing.T) {
 		t.Fatalf("check = %d %s", code, body)
 	}
 	s.Listen = "127.0.0.1:8080"
-	// A daemon that can't run it says to use the terminal.
+	// A daemon that can't run it says so.
 	if code, _ := postJSON(t, base+"/api/v1/readiness/check", "", `{"repo":"o/r"}`); code != http.StatusForbidden {
 		t.Fatalf("check without a checker = %d", code)
 	}
@@ -204,5 +204,56 @@ func TestReadinessCheckAgain(t *testing.T) {
 	getJSON(t, base+"/api/v1/readiness", &got)
 	if got.Banner != "" {
 		t.Fatalf("banner after real work = %q", got.Banner)
+	}
+}
+
+func TestReadinessFileFromThePage(t *testing.T) {
+	t.Parallel()
+	base, _, s := readinessServer(t)
+	if code, body := postJSON(t, base+"/api/v1/readiness/file", "", `{"repo":"o/r"}`); code != http.StatusForbidden {
+		t.Fatalf("file without a filer = %d %s", code, body)
+	}
+	release := make(chan struct{})
+	var queued []bool
+	s.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		<-release
+		queued = append(queued, queue)
+		return "Opened 1 issue(s) on " + repo + ".", nil
+	}
+	// Without a password, only from this machine, as the check.
+	if code, body := postJSON(t, base+"/api/v1/readiness/file", "", `{"repo":"o/r"}`); code != http.StatusForbidden || !strings.Contains(body, "FACTORY_WEB_PASSWORD") {
+		t.Fatalf("file = %d %s", code, body)
+	}
+	s.Listen = "127.0.0.1:8080"
+	s.CheckReadiness = func(context.Context, string) error { return nil }
+	if code, body := postJSON(t, base+"/api/v1/readiness/file", "", `{"repo":"o/r","queue":true}`); code != http.StatusOK || !strings.Contains(body, "then filing") {
+		t.Fatalf("file = %d %s", code, body)
+	}
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if !got.CanFile || !got.Repos[0].Checking || got.Repos[0].Action != "queue" {
+		t.Fatalf("while filing = %+v", got.Repos[0])
+	}
+	// One run at a time, so nothing is filed twice.
+	if code, _ := postJSON(t, base+"/api/v1/readiness/file", "", `{"repo":"o/r"}`); code != http.StatusConflict {
+		t.Fatalf("second file = %d", code)
+	}
+	if code, _ := postJSON(t, base+"/api/v1/readiness/check", "", `{"repo":"o/r"}`); code != http.StatusConflict {
+		t.Fatalf("check while filing = %d", code)
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		got = APIReadiness{}
+		getJSON(t, base+"/api/v1/readiness", &got)
+		if !got.Repos[0].Checking {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("filing never finished")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r := got.Repos[0]; r.Result != "Opened 1 issue(s) on o/r." || r.CheckError != "" || len(queued) != 1 || !queued[0] {
+		t.Fatalf("after = %+v, queued %v", r, queued)
 	}
 }

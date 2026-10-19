@@ -219,6 +219,10 @@ func run(args []string) error {
 		return groom(ctx, os.Stdout, cfg, st, fs.Arg(1))
 	case "serve", "run-once":
 		p, err := build(cfg, st)
+		if ns := (needsSetup{}); cmd == "serve" && errors.As(err, &ns) {
+			// Not an error to stop on: the dashboard can finish setup.
+			return serveSetup(ctx, *cfgPath, cfg, *envPath, ns.err)
+		}
 		if err != nil {
 			return err
 		}
@@ -236,10 +240,18 @@ func run(args []string) error {
 			return err
 		}
 		if cmd == "serve" {
-			if err := serveWeb(ctx, *cfgPath, cfg, st, p); err != nil {
+			// Missing job images build in the background; jobs that need
+			// one wait for it rather than fail.
+			builder := &imageBuilder{}
+			p.Building = builder.Building
+			if err := serveWeb(ctx, *cfgPath, *envPath, cfg, st, p, builder); err != nil {
 				return err
 			}
-			healthCheck(ctx, cfg, p)
+			autoBuild(ctx, cfg, builder, p.Notify)
+			if cfg.Runner.Kind == "docker" {
+				go pruneLoop(ctx, cfg)
+			}
+			healthCheck(ctx, cfg, p, builder)
 			slog.Info("factory serving", "repos", strings.Join(cfg.RepoNames(), ","), "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
 			return p.Serve(ctx)
 		}
@@ -351,6 +363,13 @@ func daemonOwner(cfg *config.Config) string {
 	return "daemon-" + hex.EncodeToString(h[:8])
 }
 
+// needsSetup is why the factory can't start: the forge credentials setup
+// saves are missing or don't load. serve opens the get-started page then.
+type needsSetup struct{ err error }
+
+func (e needsSetup) Error() string { return e.err.Error() }
+func (e needsSetup) Unwrap() error { return e.err }
+
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	// Fail at start, not on the first job, when credentials are missing.
 	for _, repos := range [][]string{githubRepos(cfg), gitlabRepos(cfg)} {
@@ -358,7 +377,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 			continue
 		}
 		if _, err := tokens(cfg, repos[0]); err != nil {
-			return nil, err
+			return nil, needsSetup{err}
 		}
 	}
 	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
@@ -489,7 +508,7 @@ func notifier() func(ctx context.Context, msg string) {
 	}
 }
 
-func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store.Store, p *pipeline.Pipeline) error {
+func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, st *store.Store, p *pipeline.Pipeline, builder *imageBuilder) error {
 	host, _, err := net.SplitHostPort(cfg.Web.Listen)
 	if err != nil {
 		return fmt.Errorf("web.listen: %w", err)
@@ -502,6 +521,9 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 	// again: on the daemon's context, so it stops when the daemon does.
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
 	srv.CheckReadiness = func(_ context.Context, repo string) error { return recheckReadiness(ctx, cfg, p, repo) }
+	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		return fileReadiness(ctx, cfg, p, repo, queue)
+	}
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
@@ -552,25 +574,50 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 		srv.Attach = web.TTYDAttach(st, host)
 		srv.Exec = web.DockerExec(st)
 	}
+	// The get-started page, for changing what setup saved; Finish
+	// restarts the factory to apply it.
+	wz, err := newWizard(ctx, cfgPath, envPath, false, p.RequestRestart, builder)
+	if err != nil {
+		return err
+	}
+	srv.Wizard = wz
+	_, err = listenWeb(ctx, cfg, srv)
+	return err
+}
+
+// webLogin is the control room's password, if FACTORY_WEB_PASSWORD sets
+// one. Without one it may only listen on this machine or a tailnet.
+func webLogin(cfg *config.Config) (*web.Login, error) {
 	if pw := os.Getenv("FACTORY_WEB_PASSWORD"); pw != "" {
 		if len(pw) < web.MinPassword {
-			return fmt.Errorf("FACTORY_WEB_PASSWORD is %d characters; use at least %d", len(pw), web.MinPassword)
+			return nil, fmt.Errorf("FACTORY_WEB_PASSWORD is %d characters; use at least %d", len(pw), web.MinPassword)
 		}
 		secret, err := web.LoadSecret(filepath.Join(cfg.Path(cfg.DataDir), "web.secret"))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		srv.Login = &web.Login{Password: pw, Secret: secret}
+		return &web.Login{Password: pw, Secret: secret}, nil
 	} else if web.NeedsLogin(cfg.Web.Listen) {
-		return fmt.Errorf("web.listen %s reaches beyond this machine and a tailnet: set FACTORY_WEB_PASSWORD in factory.env so the control room asks for it", cfg.Web.Listen)
+		return nil, fmt.Errorf("web.listen %s reaches beyond this machine and a tailnet: set FACTORY_WEB_PASSWORD in factory.env so the control room asks for it", cfg.Web.Listen)
 	}
+	return nil, nil
+}
+
+// listenWeb serves srv on web.listen, behind its password if one is set,
+// until ctx ends.
+func listenWeb(ctx context.Context, cfg *config.Config, srv *web.Server) (*http.Server, error) {
+	login, err := webLogin(cfg)
+	if err != nil {
+		return nil, err
+	}
+	srv.Login = login
 	h, err := srv.Handler()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	l, err := net.Listen("tcp", cfg.Web.Listen)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	hs := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -582,7 +629,40 @@ func serveWeb(ctx context.Context, cfgPath string, cfg *config.Config, st *store
 			slog.Error("control room", "err", err)
 		}
 	}()
-	return nil
+	return hs, nil
+}
+
+// serveSetup runs the dashboard with only its get-started page, for a
+// factory that can't start yet (why). Finish there restarts the factory,
+// which reads the new settings.
+func serveSetup(ctx context.Context, cfgPath string, cfg *config.Config, envPath string, why error) error {
+	wz, err := newWizard(ctx, cfgPath, envPath, true, nil, nil)
+	if err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(cfg.Web.Listen)
+	if err != nil {
+		return fmt.Errorf("web.listen: %w", err)
+	}
+	srv := &web.Server{Wizard: wz, SetupMode: true, Listen: cfg.Web.Listen, Hosts: append([]string{host}, cfg.Web.Hosts...)}
+	srv.ConfigPath, _ = filepath.Abs(cfgPath)
+	hs, err := listenWeb(ctx, cfg, srv)
+	if err != nil {
+		return err
+	}
+	slog.Warn("the factory isn't set up yet", "why", why)
+	fmt.Printf("\nThe factory isn't set up yet: %v\nOpen http://%s/app/get-started to finish setup.\n\n", why, cfg.Web.Listen)
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-wz.done:
+	}
+	// Let the Finish press get its answer before the process is replaced.
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = hs.Shutdown(sctx)
+	slog.Info("setup finished; starting the factory")
+	return pipeline.ErrRestart
 }
 
 func status(ctx context.Context, st *store.Store, cfg *config.Config) error {

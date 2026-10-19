@@ -306,6 +306,26 @@ func (c *Client) EnsureLabel(ctx context.Context, name, color, description strin
 	return err == nil, err
 }
 
+// ListLabels returns the names of the repo's labels.
+func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
+	var out []string
+	for page := 1; page <= 10; page++ {
+		var raw []struct {
+			Name string `json:"name"`
+		}
+		if err := c.do(ctx, "GET", fmt.Sprintf("/repos/%s/labels?per_page=100&page=%d", c.Repo, page), nil, &raw); err != nil {
+			return nil, err
+		}
+		for _, l := range raw {
+			out = append(out, l.Name)
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
 // BranchSHA returns a branch's head commit, or "" if it does not exist.
 func (c *Client) BranchSHA(ctx context.Context, branch string) (string, error) {
 	var r struct {

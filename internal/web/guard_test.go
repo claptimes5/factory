@@ -22,7 +22,7 @@ func TestAPIAutoMergeBreaker(t *testing.T) {
 	if len(o.AutoMerge) != 1 || !o.AutoMerge[0].Tripped || o.AutoMerge[0].CanReset {
 		t.Fatalf("overview = %+v", o.AutoMerge)
 	}
-	if code, body := postJSON(t, base+"/api/v1/auto-merge/reset", "", `{"repo":"o/r"}`); code != http.StatusForbidden || !strings.Contains(body, "factory automerge reset") {
+	if code, body := postJSON(t, base+"/api/v1/auto-merge/reset", "", `{"repo":"o/r"}`); code != http.StatusForbidden || !strings.Contains(body, "FACTORY_WEB_PASSWORD") {
 		t.Fatalf("reset = %d %s", code, body)
 	}
 	if len(fa.calls) != 0 {

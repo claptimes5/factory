@@ -39,6 +39,12 @@ export type TuningChange = S["TuningChange"];
 export type Choice = S["Choice"];
 export type Stop = S["Stop"];
 export type TranscriptEntry = S["TranscriptEntry"];
+export type Wizard = S["Wizard"];
+export type WizardStep = S["WizardStep"];
+export type WizardAccess = S["WizardAccess"];
+export type WizardSecret = S["WizardSecret"];
+export type WizardResult = S["WizardResult"];
+export type WizardManifest = S["WizardManifest"];
 
 export class APIError extends Error {
   constructor(
@@ -136,6 +142,28 @@ export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () 
 /** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
   postJSON<Settings>("/settings", { changes, version });
+
+/**
+ * The get-started page. It polls while a check or an image build runs.
+ */
+export const useWizard = () =>
+  useQuery({
+    queryKey: ["wizard"],
+    // live: the server checks the forges again (at most every 30s), so a
+    // revoked token, an uninstalled app or a deleted label shows here.
+    queryFn: () => getJSON<Wizard>("/setup?live=1"),
+    refetchInterval: (q) => {
+      const w = q.state.data;
+      return w && (w.machine_checked_at === "" || w.images?.building || w.codex?.sign_in.running) ? 2_000 : 30_000;
+    },
+  });
+
+/** Which mode the dashboard runs in, without asking any forge. */
+export const useWizardMode = () =>
+  useQuery({ queryKey: ["wizard-mode"], queryFn: () => getJSON<Wizard>("/setup"), retry: false, refetchInterval: false, staleTime: 60_000 });
+
+/** Runs one of the get-started page's actions; a refusal throws with the reason. */
+export const wizardDo = (action: string, body: Record<string, unknown> = {}) => postJSON<WizardResult>(`/setup/${action}`, body);
 
 export const useTuning = () => useQuery({ queryKey: ["tuning"], queryFn: () => getJSON<Tuning>("/settings/tuning") });
 
