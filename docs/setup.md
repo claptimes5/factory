@@ -13,6 +13,8 @@ it.
 
 ## Dependencies
 
+`sh scripts/install.sh` checks these for you (see [Install and run](#install-and-run)).
+
 | What | Version | Why |
 | --- | --- | --- |
 | Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
@@ -34,9 +36,19 @@ and for [services](configuration.md#services-databases-and-the-like).
 
 ```sh
 git clone https://github.com/claptimes5/factory && cd factory
-CGO_ENABLED=0 go build -o factory ./cmd/factory
+sh scripts/install.sh
 ./factory setup
 ./factory serve
+```
+
+`scripts/install.sh` checks Go, git and Docker (and Node with `--web`), and
+for anything missing or too old prints the command that fixes it on your
+system: apt, dnf, pacman, Docker Desktop's WSL integration, or brew. It
+installs nothing and never uses sudo itself. When Go and git are there it
+builds `./factory`. To build by hand instead:
+
+```sh
+CGO_ENABLED=0 go build -o factory ./cmd/factory
 ```
 
 Then open the dashboard at http://127.0.0.1:8080/app/ and label an issue
@@ -47,6 +59,43 @@ settings, require a pull request with your review and the `test` and `web`
 checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
 `factory.yaml`, `prompts/` and the lint config.
 
+## Checking your setup
+
+`./factory doctor` checks everything the factory needs, any time
+something seems off: Docker works for you and is new enough for what
+`factory.yaml` uses, the job images are built, there's disk to spare, the
+Claude, Codex and GitHub credentials your config needs are in
+`factory.env`, and the dashboard's port is free. It sends nothing to
+GitHub or the model providers. Each problem comes with its fix:
+
+```
+$ ./factory doctor
+Checking this machine, factory.yaml and factory.env:
+  ✓ git 2.43.0
+  ✓ Docker 27.5.1
+  ✗ Docker 27.5.1 is too old for the egress allowlist, which needs 28 or later
+      upgrade Docker: curl -fsSL https://get.docker.com | sh   (Docker's own packages; a distro's may be older than 28)
+      or set runner.egress.mode: open in factory.yaml, which lets jobs reach the whole internet
+      (docs/security.md#network-the-egress-allowlist)
+  ✗ Job image factory-job:latest (for you/app) isn't built
+      ./factory images
+  ✓ Disk space: 112 GB free in the data directory (/home/you/factory/data), 112 GB free in Docker's storage (/var/lib/docker)
+  ✓ Claude: subscription token
+  ✓ Codex: OpenAI API key
+  ✓ GitHub: app 123456, key /home/you/factory/factory-app.pem
+  ! ttyd isn't installed (optional: browser terminals into running jobs)
+      sudo apt install ttyd
+  ✓ Dashboard port 127.0.0.1:8080 is free
+
+Fix the ✗ lines and run ./factory doctor again. More in docs/setup.md#checking-your-setup.
+```
+
+It exits non-zero while a ✗ line remains. `factory setup` starts with the
+same checks of the machine, and `factory serve` runs them as it starts
+(all but the disk, which it watches while running, and the port, which it
+then holds): each failure is logged and sent to your phone, and the
+daemon starts anyway.
+
 ## What setup asks for
 
 `factory setup` walks you through everything else and checks each answer
@@ -55,7 +104,8 @@ before moving on:
 1. **Repositories:** which repos the factory works on, one or several. It
    updates `factory.yaml`. For each repo it suggests checks and a job image
    for its stack (see [Each repo's toolchain and checks](configuration.md#each-repos-toolchain-and-checks)).
-2. **Docker:** checks that Docker works for you, and offers to build the job
+2. **Docker:** checks that Docker works for you and is new enough for
+   `factory.yaml` (printing the fix if not), and offers to build the job
    image the first time. This takes a few minutes.
 3. **GitHub:** creates a GitHub App for the factory. It gives you a link
    that opens GitHub with the app already filled in, with only the

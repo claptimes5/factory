@@ -185,6 +185,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	p.say("Factory setup. Your answers are saved to %s, readable only by you.", envPath)
 	p.say("Press Enter to keep a value shown in [brackets]. Each section is saved")
 	p.say("as you finish it; Ctrl-C stops, and running setup again starts from your answers.")
+	checkMachine(ctx, p, cfg)
 
 	p.say("\n== 1. Repositories")
 	p.say("The factory can work on several repos, each on its own. List them separated by commas:")
@@ -211,7 +212,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 
 	if cfg.Runner.Kind == "docker" {
 		p.say("\n== 2. Docker")
-		if err := checkDocker(p, cfg); err != nil {
+		if err := checkDocker(ctx, p, cfg); err != nil {
 			return err
 		}
 	}
@@ -654,22 +655,6 @@ func appClients(vals map[string]string) clientFor {
 		ts := &github.AppTokens{AppID: vals["FACTORY_GITHUB_APP_ID"], Key: key, Repo: repo, BaseURL: githubAPI}
 		return &github.Client{Repo: repo, BaseURL: githubAPI, Tokens: ts}, ts, nil
 	}
-}
-
-// checkDocker makes sure Docker works for this user and the job image
-// exists, offering to build it.
-func checkDocker(p *prompter, cfg *config.Config) error {
-	for runCmd(io.Discard, "docker", "info") != nil {
-		p.say("Docker isn't reachable. Start it, and if it says permission denied, run")
-		p.say("    sudo usermod -aG docker $USER")
-		p.say("then log out and back in (on WSL, close and reopen the terminal).")
-		if !p.yes("Check again?", true) {
-			p.say("Skipping; jobs can't run until Docker works.")
-			return nil
-		}
-	}
-	p.say("Docker works.")
-	return nil
 }
 
 // setupImages builds the job images that aren't built yet. It reports

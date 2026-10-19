@@ -1,6 +1,7 @@
 // Command factory turns labeled GitHub issues into reviewed draft PRs.
 //
 //	factory setup      ask for keys and settings, save them, create labels
+//	factory doctor     check what the factory needs is installed and set up
 //	factory serve      run the daemon
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
@@ -76,7 +77,7 @@ func restart() error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -126,6 +127,9 @@ func run(args []string) error {
 		return err
 	}
 	takeSentryToken() // and the one factory.env sets
+	if fs.Arg(0) == "doctor" {
+		return runDoctor(context.Background(), os.Stdout, *cfgPath, cfg, *envPath)
+	}
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
@@ -446,28 +450,6 @@ func notifier() func(ctx context.Context, msg string) {
 	return func(ctx context.Context, msg string) {
 		if err := rl.Send(ctx, "Factory", msg); err != nil {
 			slog.Warn("notify", "err", err)
-		}
-	}
-}
-
-// healthCheck warns when the job image is missing, since every job would fail.
-func healthCheck(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) {
-	if cfg.Runner.Kind != "docker" {
-		return
-	}
-	seen := map[string]bool{}
-	for _, n := range cfg.RepoNames() {
-		r, _ := cfg.RepoConf(n)
-		if seen[r.Image] {
-			continue
-		}
-		seen[r.Image] = true
-		if err := exec.CommandContext(ctx, "docker", "image", "inspect", r.Image).Run(); err != nil {
-			msg := fmt.Sprintf("Job image %s (for %s) is missing or Docker is down: %v. Build it with ./factory images", r.Image, n, err)
-			slog.Error(msg)
-			if p.Notify != nil {
-				p.Notify(ctx, msg)
-			}
 		}
 	}
 }
