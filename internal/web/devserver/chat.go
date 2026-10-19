@@ -61,13 +61,16 @@ func chatTitle(text string) string {
 	return text
 }
 
-func (c *chatter) CreateDraft(ctx context.Context, id int64, title, body string) (*store.IssueDraft, error) {
+func (c *chatter) CreateDraft(ctx context.Context, id int64, version, title, body string) (*store.IssueDraft, error) {
 	d, err := c.st.GetDraft(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("no draft %d", id)
 	}
 	if d.State != store.DraftOpen {
 		return nil, store.ErrDraftTaken
+	}
+	if version != d.Version() {
+		return nil, errors.New("the draft changed since you read it: look it over again, then create it")
 	}
 	if strings.Contains(title+d.Title, "refuse") {
 		return nil, errors.New("devserver: GitHub refused the issue: label factory:ready doesn't exist")

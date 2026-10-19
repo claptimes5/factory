@@ -340,7 +340,10 @@ if you like, or **Dismiss** it. A created issue gets the intake label and
 any of `orchestrator.labels` the draft asked for, is approved as created by
 you, and goes to triage like an issue you labeled. It doesn't count against
 the orchestrator's daily issue cap. Ask the chat to change a draft and it
-revises the same card.
+revises the same card. While a reply is being written, Create waits for it,
+and a create files only the text you saw: a card that changed since is
+refused until you look again. A draft the factory stopped in the middle of
+creating goes back to a draft with a note to check the repo for its issue.
 
 A reply doesn't wait for a free job slot, since it only reads, but one is
 written at a time. Each costs up to `orchestrator.run_budget`, and chat

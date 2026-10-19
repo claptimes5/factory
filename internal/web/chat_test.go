@@ -37,7 +37,10 @@ func (f *fakeChatter) OrchestrationSpend(context.Context) (float64, error) { ret
 func (f *fakeChatter) DismissDraft(ctx context.Context, id int64) error {
 	return f.st.MoveDraft(ctx, id, store.DraftOpen, store.DraftDismissed, store.IssueDraft{})
 }
-func (f *fakeChatter) CreateDraft(ctx context.Context, id int64, title, body string) (*store.IssueDraft, error) {
+func (f *fakeChatter) CreateDraft(ctx context.Context, id int64, version, title, body string) (*store.IssueDraft, error) {
+	if d, _ := f.st.GetDraft(ctx, id); d != nil && d.State == store.DraftOpen && d.Version() != version {
+		return nil, errors.New("the draft changed")
+	}
 	if err := f.st.MoveDraft(ctx, id, store.DraftOpen, store.DraftCreated, store.IssueDraft{Title: title, Body: body, IssueNumber: 7, ItemID: 3}); err != nil {
 		return nil, err
 	}
@@ -90,20 +93,33 @@ func TestChatAPI(t *testing.T) {
 		t.Fatalf("answered chat = %+v", c)
 	}
 
-	if code, body := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{"title":"CSV export"}`); code != 200 || !strings.Contains(body, `"issue_url":"https://github.com/o/r/issues/7"`) || !strings.Contains(body, `"title":"CSV export"`) {
+	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{"title":"CSV export"}`); code != http.StatusBadRequest {
+		t.Errorf("a create that doesn't say which version it read = %d", code)
+	}
+	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{"version":"old"}`); code != http.StatusConflict {
+		t.Errorf("a create of a version since changed = %d", code)
+	}
+	if code, body := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{"title":"CSV export","version":"`+c.Drafts[0].Version+`"}`); code != 200 || !strings.Contains(body, `"issue_url":"https://github.com/o/r/issues/7"`) || !strings.Contains(body, `"title":"CSV export"`) {
 		t.Fatalf("create = %d %s", code, body)
 	}
-	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{}`); code != http.StatusGone {
+	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "", `{"version":"x"}`); code != http.StatusGone {
 		t.Errorf("creating twice = %d", code)
 	}
 	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/dismiss", base, id), "", `{}`); code != http.StatusConflict {
 		t.Errorf("dismissing a created draft = %d", code)
 	}
-	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "https://evil.example", `{}`); code != http.StatusForbidden {
+	if code, _ := postJSON(t, fmt.Sprintf("%s/api/v1/drafts/%d/create", base, id), "https://evil.example", `{"version":"x"}`); code != http.StatusForbidden {
 		t.Errorf("a cross-origin create = %d", code)
 	}
 	if len(fc.created) != 1 {
 		t.Errorf("created = %v", fc.created)
+	}
+
+	// A message whose reply never started can be tried again.
+	st.AddChatMessage(ctx, store.ChatMessage{ChatID: sent.ChatID, Role: "user", Text: "And PDF?"})
+	getJSON(t, fmt.Sprintf("%s/api/v1/chats/%d", base, sent.ChatID), &c)
+	if c.Reply == nil || c.Reply.State != "failed" || c.Reply.JobID != 0 || c.Reply.Error == "" {
+		t.Fatalf("a message with no reply started = %+v", c.Reply)
 	}
 
 	fc.refuse = "Today's orchestration budget is spent."

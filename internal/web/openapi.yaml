@@ -197,18 +197,22 @@ paths:
   /drafts/{id}/create:
     post:
       summary: Open a drafted issue for the factory to build, approved by the person creating it
-      description: A title or body given replaces the draft's. 410 when the draft was already created or dismissed; 409 when the forge refused it, with why.
+      description: version is the draft's version as read; 409 when it changed since (a reply revised it), so what's filed is what the person saw. A title or body given replaces the draft's. 410 when the draft was already created or dismissed; 409 when the forge refused it, with why.
       parameters: [{ $ref: "#/components/parameters/ID" }]
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
+              required: [version]
               properties:
+                version: { type: string }
                 title: { type: string }
                 body: { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Draft" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/Error" }
   /drafts/{id}/dismiss:
@@ -546,7 +550,7 @@ components:
       type: object
       required: [job_id, state, error]
       properties:
-        job_id: { type: integer, format: int64 }
+        job_id: { type: integer, format: int64, description: "0 when no reply was started" }
         state: { type: string, description: "queued, running, failed, timed_out or cancelled" }
         error: { type: string }
     SentChat:
@@ -557,7 +561,7 @@ components:
         job_id: { type: integer, format: int64 }
     Draft:
       type: object
-      required: [id, repo, title, body, labels, depends_on, parent, state, issue_number, issue_url, item_id, error, updated_at]
+      required: [id, repo, title, body, labels, depends_on, parent, state, issue_number, issue_url, item_id, error, updated_at, version]
       properties:
         id: { type: integer, format: int64 }
         repo: { type: string }
@@ -572,6 +576,7 @@ components:
         item_id: { type: [integer, "null"], format: int64 }
         error: { type: string, description: "Why creating it last failed; else empty" }
         updated_at: { type: string }
+        version: { type: string, description: What a create sends back, so it files the text that was read }
     PlanUsage:
       type: object
       required: [plans]

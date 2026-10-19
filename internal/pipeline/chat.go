@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/claptimes5/factory/internal/mcp"
@@ -79,11 +80,23 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string) (int64, 
 	if len(text) > maxChatMessage {
 		return 0, 0, fmt.Errorf("that message is too long (%d bytes; the most is %d)", len(text), maxChatMessage)
 	}
+	// Checked and started under the scheduler's lock, so no job claims a
+	// one-at-a-time harness between the check and the start.
+	ctx, unlock := p.lockClaims(ctx)
+	defer unlock()
 	if why := p.ChatUnavailable(ctx); why != "" {
 		return 0, 0, errors.New(why)
 	}
-	p.act.Lock()
-	defer p.act.Unlock()
+	jctx, release, err := p.holdChatSlot()
+	if err != nil {
+		return 0, 0, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			release()
+		}
+	}()
 	for _, st := range []state.JobState{state.Queued, state.Running} {
 		if n, err := p.Store.CountJobs(ctx, st, store.KindChat); err != nil {
 			return 0, 0, err
@@ -129,16 +142,52 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string) (int64, 
 		return 0, 0, err
 	}
 	p.warn(p.Store.SetChatMessageJob(ctx, msgID, j.ID), "SetChatMessageJob")
-	jctx := p.jobCtx
-	if jctx == nil {
-		jctx = context.WithoutCancel(ctx)
-	}
-	p.wg.Add(1)
+	started = true
 	go func() {
-		defer p.wg.Done()
+		defer release()
 		p.runJob(jctx, j)
 	}()
 	return chatID, j.ID, nil
+}
+
+// errChatClosed refuses a chat before the daemon has recovered from its
+// last stop, or once it is stopping.
+var errChatClosed = errors.New("the factory is starting or stopping: send your message again in a moment")
+
+// openChat lets chat replies start, on the jobs' context; closeChat stops
+// them before the daemon waits for running work.
+func (p *Pipeline) openChat(ctx context.Context) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.chatCtx = ctx
+}
+
+func (p *Pipeline) closeChat() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.chatCtx = nil
+}
+
+// holdChatSlot counts a chat reply as a running job, which Serve waits
+// for, and returns the context it runs on and the release for when it's
+// done.
+func (p *Pipeline) holdChatSlot() (context.Context, func(), error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.chatCtx == nil {
+		return nil, nil, errChatClosed
+	}
+	p.running++
+	p.wg.Add(1)
+	var once sync.Once
+	return p.chatCtx, func() {
+		once.Do(func() {
+			p.mu.Lock()
+			p.running--
+			p.mu.Unlock()
+			p.wg.Done()
+		})
+	}, nil
 }
 
 // chatTitle names a chat after its first message.
@@ -361,10 +410,17 @@ func (p *Pipeline) checkDraft(ctx context.Context, d store.IssueDraft) (store.Is
 	return d, dropped, nil
 }
 
+// ErrDraftChanged refuses to create a draft that changed since the
+// person read it: they approve the text they saw.
+var ErrDraftChanged = errors.New("the draft changed since you read it: look it over again, then create it")
+
 // CreateDraft opens draft id as an issue the factory builds, approved by
-// the person who created it on the dashboard. A title or body given
-// replaces the draft's.
-func (p *Pipeline) CreateDraft(ctx context.Context, id int64, title, body string) (*store.IssueDraft, error) {
+// the person who created it on the dashboard. seen is the draft's
+// version they read; a title or body given replaces the draft's.
+func (p *Pipeline) CreateDraft(ctx context.Context, id int64, seen, title, body string) (*store.IssueDraft, error) {
+	// Once started it finishes, whoever closes the page: an issue the
+	// forge opened must get its item, its approval and its draft's state.
+	ctx = context.WithoutCancel(ctx)
 	p.act.Lock()
 	defer p.act.Unlock()
 	d, err := p.Store.GetDraft(ctx, id)
@@ -373,6 +429,9 @@ func (p *Pipeline) CreateDraft(ctx context.Context, id int64, title, body string
 	}
 	if d.State != store.DraftOpen {
 		return nil, store.ErrDraftTaken
+	}
+	if seen != d.Version() {
+		return nil, ErrDraftChanged
 	}
 	if strings.TrimSpace(title) != "" {
 		d.Title = title

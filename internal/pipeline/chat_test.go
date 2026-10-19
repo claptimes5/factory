@@ -21,6 +21,7 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	ctx := context.Background()
 	e := setup(t)
 	e.p.Cfg.Orchestrator.Labels = []string{"math"}
+	e.p.openChat(ctx)
 	calls := 0
 	e.claude.chat = func(req harness.RunRequest) (string, error) {
 		calls++
@@ -91,7 +92,10 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	}
 	e.p.wg.Wait()
 
-	d, err := e.p.CreateDraft(ctx, drafts[0].ID, "", "")
+	if _, err := e.p.CreateDraft(ctx, drafts[0].ID, "stale", "", ""); !errors.Is(err, ErrDraftChanged) {
+		t.Errorf("creating a version since changed = %v", err)
+	}
+	d, err := e.p.CreateDraft(ctx, drafts[0].ID, drafts[0].Version(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +113,7 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	if jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "triage"}); len(jobs) != 1 {
 		t.Errorf("triage jobs = %d", len(jobs))
 	}
-	if _, err := e.p.CreateDraft(ctx, d.ID, "", ""); !errors.Is(err, store.ErrDraftTaken) {
+	if _, err := e.p.CreateDraft(ctx, d.ID, d.Version(), "", ""); !errors.Is(err, store.ErrDraftTaken) {
 		t.Errorf("creating it twice = %v", err)
 	}
 	if err := e.p.DismissDraft(ctx, d.ID); !errors.Is(err, store.ErrDraftTaken) {
@@ -123,6 +127,10 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
+	if _, _, err := e.p.Chat(ctx, 0, "Before the daemon is up"); !errors.Is(err, errChatClosed) {
+		t.Errorf("a chat before the daemon recovered = %v", err)
+	}
+	e.p.openChat(ctx)
 	fail := true
 	e.claude.chat = func(harness.RunRequest) (string, error) {
 		if fail {
@@ -188,10 +196,11 @@ func TestCreateDraftRefusedStaysOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.p.GH = refusingGH{e.gh}
-	if _, err := e.p.CreateDraft(ctx, id, "", ""); err == nil {
+	d, _ := e.p.Store.GetDraft(ctx, id)
+	if _, err := e.p.CreateDraft(ctx, id, d.Version(), "", ""); err == nil {
 		t.Fatal("created through a refusing forge")
 	}
-	d, _ := e.p.Store.GetDraft(ctx, id)
+	d, _ = e.p.Store.GetDraft(ctx, id)
 	if d.State != store.DraftOpen || !strings.Contains(d.Error, "label missing") {
 		t.Fatalf("draft = %+v", d)
 	}
@@ -207,4 +216,45 @@ type refusingGH struct{ *fakeGH }
 
 func (refusingGH) CreateIssue(context.Context, string, string, []string) (int, error) {
 	return 0, errors.New("label missing")
+}
+
+// A draft the daemon stopped while creating goes back to open, saying the
+// forge may have its issue; a running reply counts as a running job.
+func TestChatSurvivesAStop(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	chat, _ := e.p.Store.NewChat(ctx, "c")
+	id, _ := e.p.Store.SaveDraft(ctx, store.IssueDraft{ChatID: chat, Repo: "o/r", Title: "t", Body: "b"})
+	if err := e.p.Store.MoveDraft(ctx, id, store.DraftOpen, store.DraftCreating, store.IssueDraft{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := e.p.Store.GetDraft(ctx, id); d.State != store.DraftOpen || !strings.Contains(d.Error, "Check the repo") {
+		t.Fatalf("draft after a restart = %+v", d)
+	}
+
+	e.p.openChat(ctx)
+	hold := make(chan struct{})
+	e.claude.chat = func(harness.RunRequest) (string, error) {
+		<-hold
+		return `{"reply":"ok"}`, nil
+	}
+	if _, _, err := e.p.Chat(ctx, chat, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.p.Running(); n != 1 {
+		t.Errorf("running = %d while a reply is written", n)
+	}
+	e.p.closeChat()
+	if _, _, err := e.p.Chat(ctx, chat, "again"); !errors.Is(err, errChatClosed) {
+		t.Errorf("a chat while stopping = %v", err)
+	}
+	close(hold)
+	e.p.wg.Wait()
+	if n := e.p.Running(); n != 0 {
+		t.Errorf("running = %d after the reply", n)
+	}
 }

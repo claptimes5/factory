@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 )
 
 // KindChat is a dashboard chat's reply: a read-only run that may draft
@@ -56,6 +58,15 @@ type IssueDraft struct {
 	Error       string
 	CreatedAt   string
 	UpdatedAt   string
+}
+
+// Version fingerprints what creating the draft would file, so a create
+// can say which text the person read.
+func (d IssueDraft) Version() string {
+	h := fnv.New64a()
+	b, _ := json.Marshal([]any{d.Repo, d.Title, d.Body, d.Labels, d.DependsOn, d.Parent})
+	h.Write(b)
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // NewChat starts a chat with a person's first message.
@@ -241,4 +252,19 @@ func (s *Store) MoveDraft(ctx context.Context, id int64, from, to string, set Is
 		}
 		return nil
 	})
+}
+
+// ReopenCreating puts back to open each draft the daemon stopped in the
+// middle of creating, saying why: the forge may have opened its issue.
+func (s *Store) ReopenCreating(ctx context.Context, why string) (int, error) {
+	var n int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE issue_drafts SET state = 'draft', error = ?, updated_at = ? WHERE state = 'creating'`, why, Now())
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
+	return int(n), err
 }

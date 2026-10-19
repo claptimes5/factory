@@ -690,7 +690,7 @@ export interface paths {
         put?: never;
         /**
          * Open a drafted issue for the factory to build, approved by the person creating it
-         * @description A title or body given replaces the draft's. 410 when the draft was already created or dismissed; 409 when the forge refused it, with why.
+         * @description version is the draft's version as read; 409 when it changed since (a reply revised it), so what's filed is what the person saw. A title or body given replaces the draft's. 410 when the draft was already created or dismissed; 409 when the forge refused it, with why.
          */
         post: {
             parameters: {
@@ -701,9 +701,10 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
                     "application/json": {
+                        version: string;
                         title?: string;
                         body?: string;
                     };
@@ -719,6 +720,7 @@ export interface paths {
                         "application/json": components["schemas"]["Draft"];
                     };
                 };
+                400: components["responses"]["Error"];
                 409: components["responses"]["Error"];
                 410: components["responses"]["Error"];
             };
@@ -1703,7 +1705,10 @@ export interface components {
             job_id: number | null;
         };
         ChatReply: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description 0 when no reply was started
+             */
             job_id: number;
             /** @description queued, running, failed, timed_out or cancelled */
             state: string;
@@ -1741,6 +1746,8 @@ export interface components {
             /** @description Why creating it last failed; else empty */
             error: string;
             updated_at: string;
+            /** @description What a create sends back */
+            version: string;
         };
         PlanUsage: {
             plans: components["schemas"]["UsagePlan"][];

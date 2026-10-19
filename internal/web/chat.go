@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
 
@@ -17,9 +18,10 @@ type Chatter interface {
 	Chat(ctx context.Context, chatID int64, text string) (chat, job int64, err error)
 	// ChatUnavailable says why a chat can't reply now, or "".
 	ChatUnavailable(ctx context.Context) string
-	// CreateDraft opens a draft as an issue the factory builds; a title
-	// or body given replaces the draft's.
-	CreateDraft(ctx context.Context, id int64, title, body string) (*store.IssueDraft, error)
+	// CreateDraft opens a draft as an issue the factory builds, if it is
+	// still the version the person read; a title or body given replaces
+	// the draft's.
+	CreateDraft(ctx context.Context, id int64, version, title, body string) (*store.IssueDraft, error)
 	DismissDraft(ctx context.Context, id int64) error
 	// OrchestrationSpend is today's spend against orchestrator.daily_budget.
 	OrchestrationSpend(ctx context.Context) (float64, error)
@@ -101,6 +103,8 @@ type APIDraft struct {
 	ItemID      *int64   `json:"item_id"`
 	Error       string   `json:"error"` // why creating it last failed
 	UpdatedAt   string   `json:"updated_at"`
+	// Version is what a create sends back, so it files the text read.
+	Version string `json:"version"`
 }
 
 // APISentChat is what sending a message started.
@@ -176,35 +180,41 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	for _, d := range drafts {
 		out.Drafts = append(out.Drafts, s.apiDraft(d))
 	}
-	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "user" {
-		if j := s.lastChatJob(ctx, id); j != nil {
+	if last := len(msgs) - 1; last >= 0 && msgs[last].Role == "user" {
+		j, msg := s.lastChatJob(ctx, id)
+		switch {
+		case j != nil && (msg == msgs[last].ID || !j.State.Terminal()):
 			out.Reply = &APIChatReply{JobID: j.ID, State: string(j.State), Error: j.Error}
+		default:
+			// Its reply never started: Try again starts one.
+			out.Reply = &APIChatReply{State: string(state.Failed), Error: "no reply was started for this message"}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// lastChatJob is the latest reply run of a chat, or nil. A reply queued
-// again (after a restart, or for a sign-in) is a job of its own, so the
-// message's job may not be the latest.
-func (s *Server) lastChatJob(ctx context.Context, chatID int64) *store.Job {
+// lastChatJob is the latest reply run of a chat and the message it
+// answers, or nil. A reply queued again (for a sign-in) is a job of its
+// own, so the message's job may not be the latest.
+func (s *Server) lastChatJob(ctx context.Context, chatID int64) (*store.Job, int64) {
 	jobs, err := s.Store.ListJobs(ctx, store.JobFilter{Kind: store.KindChat, Limit: 200})
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	for _, j := range jobs {
 		var in struct {
-			Chat int64 `json:"chat"`
+			Chat    int64 `json:"chat"`
+			Message int64 `json:"message"`
 		}
 		if json.Unmarshal([]byte(j.Input), &in) == nil && in.Chat == chatID {
-			return j
+			return j, in.Message
 		}
 	}
-	return nil
+	return nil, 0
 }
 
 func (s *Server) apiDraft(d store.IssueDraft) APIDraft {
-	out := APIDraft{ID: d.ID, Repo: d.Repo, Title: d.Title, Body: d.Body, Labels: d.Labels, DependsOn: d.DependsOn, State: d.State, Error: d.Error, UpdatedAt: d.UpdatedAt}
+	out := APIDraft{ID: d.ID, Repo: d.Repo, Title: d.Title, Body: d.Body, Labels: d.Labels, DependsOn: d.DependsOn, State: d.State, Error: d.Error, UpdatedAt: d.UpdatedAt, Version: d.Version()}
 	if out.Labels == nil {
 		out.Labels = []string{}
 	}
@@ -263,14 +273,19 @@ func (s *Server) apiCreateDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
+		Version string `json:"version"`
+		Title   string `json:"title"`
+		Body    string `json:"body"`
 	}
 	if err := s.readBody(r, &in); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	d, err := s.Chat.CreateDraft(r.Context(), id, in.Title, in.Body)
+	if in.Version == "" {
+		apiErr(w, http.StatusBadRequest, "send the draft's version, so it files the text you read")
+		return
+	}
+	d, err := s.Chat.CreateDraft(r.Context(), id, in.Version, in.Title, in.Body)
 	if err != nil {
 		code := http.StatusConflict
 		if errors.Is(err, store.ErrDraftTaken) {

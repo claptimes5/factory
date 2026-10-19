@@ -185,9 +185,11 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
               <p>
                 {reply.state === "cancelled" ? "The reply was stopped" : "The reply failed"}
                 {reply.error && <>: {reply.error}</>}.{" "}
-                <Link to={`/jobs/${reply.job_id}`} className="text-primary hover:underline">
-                  See what happened
-                </Link>
+                {reply.job_id > 0 && (
+                  <Link to={`/jobs/${reply.job_id}`} className="text-primary hover:underline">
+                    See what happened
+                  </Link>
+                )}
               </p>
               <Button size="sm" variant="outline" disabled={sending || !info.available} onClick={() => void send(true)}>
                 Try again
@@ -201,7 +203,7 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
         <section className="space-y-2" aria-label="Drafted issues">
           <h2 className="text-sm font-medium">Drafted issues</h2>
           {drafts.map((d) => (
-            <DraftCard key={d.id} d={d} chatId={chatId} />
+            <DraftCard key={d.id} d={d} chatId={chatId} replying={busy} />
           ))}
         </section>
       )}
@@ -242,7 +244,8 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
   );
 }
 
-function DraftCard({ d, chatId }: { d: Draft; chatId: number }) {
+/** A drafted issue. While a reply is written it may still change, so it can't be created until the reply is done. */
+function DraftCard({ d, chatId, replying }: { d: Draft; chatId: number; replying: boolean }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(d.title);
@@ -254,7 +257,7 @@ function DraftCard({ d, chatId }: { d: Draft; chatId: number }) {
     setBusy(true);
     setMsg("");
     try {
-      await postJSON<Draft>(`/drafts/${d.id}/create`, editing ? { title, body } : {});
+      await postJSON<Draft>(`/drafts/${d.id}/create`, editing ? { version: d.version, title, body } : { version: d.version });
       setEditing(false);
     } catch (e) {
       setMsg(e instanceof APIError ? e.message : String(e));
@@ -362,7 +365,12 @@ function DraftCard({ d, chatId }: { d: Draft; chatId: number }) {
         ) : (
           d.state === "draft" && (
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" disabled={busy || (editing && (!title.trim() || !body.trim()))} onClick={() => void create()}>
+              <Button
+                size="sm"
+                disabled={busy || replying || (editing && (!title.trim() || !body.trim()))}
+                title={replying ? "Wait for the reply: it may still change this draft" : undefined}
+                onClick={() => void create()}
+              >
                 {busy && <Loader2 className="animate-spin" />} Create issue
               </Button>
               {!editing && (

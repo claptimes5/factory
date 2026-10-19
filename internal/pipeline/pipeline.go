@@ -151,6 +151,7 @@ type Pipeline struct {
 	clientsMu  sync.Mutex
 	clientsBy  map[string]RepoClients
 	running    int
+	chatCtx    context.Context // what chat replies run on; nil while they can't start
 	lastPoll   time.Time
 	budgetHalt string            // day the daily cap halted dequeuing, to notify once
 	limitHalt  map[string]string // harness -> the window that paused it, to notify once
@@ -318,6 +319,9 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
 	}
 	p.recoverSignIns()
+	if _, err := p.Store.ReopenCreating(ctx, "Creating it was interrupted when the factory stopped. Check the repo for an issue with this title before you create it again."); err != nil {
+		return err
+	}
 	n, err := p.Store.RequeueRunning(ctx, func(j *store.Job) bool { return false })
 	if n > 0 {
 		p.log().Info("requeued interrupted jobs", "count", n)
@@ -386,11 +390,14 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelJobs()
 	p.jobCtx = jobCtx
+	p.openChat(jobCtx)
+	defer p.closeChat()
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
 		err := p.Tick(ctx, true)
 		if errors.Is(err, ErrRestart) {
+			p.closeChat()
 			p.wg.Wait() // nothing runs, but a job may be finishing up
 			return err
 		}
@@ -401,6 +408,7 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 		case <-ctx.Done():
 			// Stop claiming; give running jobs a grace period, then kill them.
 			// Killed jobs are requeued on the next start.
+			p.closeChat()
 			done := make(chan struct{})
 			go func() { p.wg.Wait(); close(done) }()
 			p.log().Info("shutting down", "grace", ShutdownGrace)
