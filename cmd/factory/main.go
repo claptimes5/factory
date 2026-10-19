@@ -557,6 +557,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		defer done()
 		return fileReadiness(ctx, cfg, p, repo, queue)
 	}
+	go relinkSaved(ctx, cfg, p)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
