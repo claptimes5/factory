@@ -477,12 +477,19 @@ func setupGitLab(ctx context.Context, p *prompter, cfg *config.Config, vals map[
 		rc, _ := cfg.RepoConf(r)
 		hosts[rc.Host] = true
 	}
-	p.say("The factory acts on GitLab with an access token. A project access token")
-	p.say("limits it to one project; with several, a group access token or a personal")
-	p.say("token for a bot account does. Give it the api and write_repository scopes and")
-	p.say("the Developer role (Maintainer if the base branch is protected from Developers).")
+	p.say("The factory acts on GitLab with an access token. Its owner needs the Developer")
+	p.say("role on each project (Maintainer if the base branch is protected from Developers).")
+	p.say("Either kind of token works:")
+	p.say("  - A fine-grained personal token (GitLab 18.10 and later), limited to these")
+	p.say("    projects. Give each project: Code: Download, Push; Project, Repository,")
+	p.say("    Branch, Commit, Pipeline, Member: Read; Work Item: Read, Create, Update;")
+	p.say("    Merge Request: Read, Create, Update, Merge; Label: Read, Create; Markdown")
+	p.say("    Upload: Create, Delete. Plus User: Read and, under Global, Metadata: Read.")
+	p.say("  - A legacy token with the api and write_repository scopes: a project access")
+	p.say("    token for one project, or a group token or a bot account's personal token.")
 	for h := range hosts {
-		p.say("  On %s: the project's Settings > Access tokens, or https://%s/-/user_settings/personal_access_tokens", h, h)
+		p.say("  On %s: https://%s/-/user_settings/personal_access_tokens (Generate token >", h, h)
+		p.say("  Fine-grained token), or the project's Settings > Access tokens.")
 	}
 	client := clientFor(func(repo string) (forge, github.TokenSource, error) {
 		ts := github.StaticToken(vals["GITLAB_TOKEN"])

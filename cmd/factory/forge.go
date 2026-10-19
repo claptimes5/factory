@@ -61,7 +61,7 @@ func gitlabToken() (github.TokenSource, error) {
 	if t := os.Getenv("GITLAB_TOKEN"); t != "" {
 		return github.StaticToken(t), nil
 	}
-	return nil, fmt.Errorf("no GitLab token: run `factory setup`, or set GITLAB_TOKEN to a token with the api and write_repository scopes")
+	return nil, fmt.Errorf("no GitLab token: run `factory setup`, or set GITLAB_TOKEN (see docs/configuration.md#gitlab-repos for the permissions)")
 }
 
 // repoGit is how the factory reaches a repo with git.
