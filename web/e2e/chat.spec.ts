@@ -16,7 +16,7 @@ test.afterEach(async ({ page }, info) => {
   if (info.status === info.expectedStatus) return;
   const id = new URL(page.url()).searchParams.get("chat") ?? "1";
   const api = await page.request.get(`/api/v1/chats/${id}`);
-  console.log(`page ${page.url()}:\n${await page.locator("main").innerText().catch((e) => String(e))}`);
+  console.log(`page ${page.url()}:\n${await page.locator("main").innerText({ timeout: 1000 }).catch((e) => String(e))}`);
   console.log(`GET /api/v1/chats/${id} = ${api.status()} ${(await api.text()).slice(0, 2000)}`);
 });
 

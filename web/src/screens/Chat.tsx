@@ -120,7 +120,11 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
   const [msg, setMsg] = useState("");
   const end = useRef<HTMLDivElement>(null);
   const turns = data?.messages.length ?? 0;
-  useEffect(() => end.current?.scrollIntoView?.({ block: "nearest" }), [turns]);
+  // Braced: newer browsers' scrollIntoView returns a promise, which React
+  // would take for the effect's cleanup.
+  useEffect(() => {
+    end.current?.scrollIntoView?.({ block: "nearest" });
+  }, [turns]);
   const reply = data?.reply;
   const busy = writing(reply?.state);
   const send = async (again = false) => {
