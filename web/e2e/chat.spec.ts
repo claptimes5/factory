@@ -11,6 +11,15 @@ async function noSidewaysScroll(page: Page) {
   expect(over).toBeLessThanOrEqual(0);
 }
 
+// When a check fails, say what the page and the API showed.
+test.afterEach(async ({ page }, info) => {
+  if (info.status === info.expectedStatus) return;
+  const id = new URL(page.url()).searchParams.get("chat") ?? "1";
+  const api = await page.request.get(`/api/v1/chats/${id}`);
+  console.log(`page ${page.url()}:\n${await page.locator("main").innerText().catch((e) => String(e))}`);
+  console.log(`GET /api/v1/chats/${id} = ${api.status()} ${(await api.text()).slice(0, 2000)}`);
+});
+
 test("the orchestrator tab opens on a chat that explains itself and shows what it drafted", async ({ page }, info) => {
   await page.goto("/app/orchestrator");
   await expect(page.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");

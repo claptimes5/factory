@@ -219,7 +219,7 @@ func (refusingGH) CreateIssue(context.Context, string, string, []string) (int, e
 }
 
 // A draft the daemon stopped while creating goes back to open, saying the
-// forge may have its issue; a running reply counts as a running job.
+// forge may have its issue; a running reply counts as running, in no job slot.
 func TestChatSurvivesAStop(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -248,6 +248,10 @@ func TestChatSurvivesAStop(t *testing.T) {
 	if n := e.p.Running(); n != 1 {
 		t.Errorf("running = %d while a reply is written", n)
 	}
+	if e.p.mu.Lock(); e.p.running != 0 {
+		t.Errorf("a reply holds a job slot")
+	}
+	e.p.mu.Unlock()
 	e.p.closeChat()
 	if _, _, err := e.p.Chat(ctx, chat, "again"); !errors.Is(err, errChatClosed) {
 		t.Errorf("a chat while stopping = %v", err)

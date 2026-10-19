@@ -168,8 +168,8 @@ func (p *Pipeline) closeChat() {
 	p.chatCtx = nil
 }
 
-// holdChatSlot counts a chat reply as a running job, which Serve waits
-// for, and returns the context it runs on and the release for when it's
+// holdChatSlot counts a chat reply as running, which Serve and a restart
+// wait for, though it takes no job slot; it returns the context it runs on and the release for when it's
 // done.
 func (p *Pipeline) holdChatSlot() (context.Context, func(), error) {
 	p.mu.Lock()
@@ -177,13 +177,13 @@ func (p *Pipeline) holdChatSlot() (context.Context, func(), error) {
 	if p.chatCtx == nil {
 		return nil, nil, errChatClosed
 	}
-	p.running++
+	p.chats++
 	p.wg.Add(1)
 	var once sync.Once
 	return p.chatCtx, func() {
 		once.Do(func() {
 			p.mu.Lock()
-			p.running--
+			p.chats--
 			p.mu.Unlock()
 			p.wg.Done()
 		})
@@ -361,7 +361,11 @@ func (p *Pipeline) ChatTools(jobID, chatID int64) []mcp.Tool {
 			if err != nil {
 				return "", err
 			}
+			// Under act, so a revision can't land between a create's
+			// version check and its claim.
+			p.act.Lock()
 			id, err := p.Store.SaveDraft(ctx, d)
+			p.act.Unlock()
 			if err != nil {
 				return "", err
 			}

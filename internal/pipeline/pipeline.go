@@ -151,6 +151,7 @@ type Pipeline struct {
 	clientsMu  sync.Mutex
 	clientsBy  map[string]RepoClients
 	running    int
+	chats      int             // chat replies being written; they hold no job slot
 	chatCtx    context.Context // what chat replies run on; nil while they can't start
 	lastPoll   time.Time
 	budgetHalt string            // day the daily cap halted dequeuing, to notify once
@@ -366,11 +367,11 @@ func (p *Pipeline) CancelRestart(ctx context.Context) bool {
 // RestartPending says whether a restart is waiting on running jobs.
 func (p *Pipeline) RestartPending() bool { return p.restart.Load() }
 
-// Running is how many jobs this daemon is running.
+// Running is how many jobs this daemon is running, chat replies included.
 func (p *Pipeline) Running() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.running
+	return p.running + p.chats
 }
 
 func plural(n int, one, many string) string {

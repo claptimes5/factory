@@ -345,8 +345,8 @@ and a create files only the text you saw: a card that changed since is
 refused until you look again. A draft the factory stopped in the middle of
 creating goes back to a draft with a note to check the repo for its issue.
 
-A reply doesn't wait for a free job slot, since it only reads, but one is
-written at a time. Each costs up to `orchestrator.run_budget`, and chat
+A reply doesn't take or wait for a job slot, since it only reads, but one is
+written at a time, and a restart waits for it. Each costs up to `orchestrator.run_budget`, and chat
 shares `orchestrator.daily_budget` with the orchestrator and tuning. A reply
 that fails says why, with **Try again**; **How it got there** on a reply opens
 its run. Issue text no one approved is withheld from it, as from the
