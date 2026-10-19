@@ -92,7 +92,20 @@ type Server struct {
 	Restarter Restarter
 	// Breakers reads each repo's auto-merge breaker (may be nil).
 	Breakers func(ctx context.Context) []APIBreaker
+	// ReadinessDir holds the readiness check's latest report on each repo
+	// ("" for none), and CheckReadiness runs it again on one, saving the
+	// report there (nil when the dashboard can't). IntakeLabel is the
+	// label that hands an issue to the factory.
+	ReadinessDir   string
+	CheckReadiness func(ctx context.Context, repo string) error
+	IntakeLabel    string
+	// Plans are the harnesses in use that run on a subscription plan,
+	// whose usage windows matter more than dollars, and PauseAtUsage the
+	// percent of a window that holds their jobs.
+	Plans        []string
+	PauseAtUsage float64
 
+	ready      readinessRun
 	tmpl       *template.Template
 	pollPeriod time.Duration
 	settingsMu sync.Mutex
@@ -175,6 +188,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /compare/{id}", s.compareView)
 	mux.HandleFunc("GET /metrics.json", s.metricsJSON)
 	s.routesAPI(mux)
+	s.routesReadiness(mux)
+	s.routesUsage(mux)
 	if err := s.routesApp(mux); err != nil {
 		return nil, err
 	}

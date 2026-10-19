@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { useItem, useJob } from "@/api/client";
 import { Actions, Empty, ErrorBox, GateList, JobStateBadge, Loading } from "@/components/common";
+import { PlanCostNote } from "@/components/PlanUsage";
 import { Terminal } from "@/components/Terminal";
 import { Transcript } from "@/components/Transcript";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,6 +45,7 @@ export function SessionScreen() {
           {j.started_at && ` · ${duration(j.started_at, j.finished_at || undefined)}`}
           {j.skillset && ` · skills: ${j.skillset}`}
         </p>
+        <PlanCostNote harnesses={[j.harness]} className="mt-1" />
         {j.error && <p className="mt-1 text-sm text-destructive">{j.error}</p>}
         <div className="mt-2">
           <Actions jobId={j.id} itemId={itemId || undefined} running={running} />

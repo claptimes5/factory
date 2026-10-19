@@ -442,6 +442,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How much of each subscription plan's usage windows the factory's harnesses have used
+         * @description Only harnesses in use that run on a plan (Claude with a subscription token, Codex on a ChatGPT plan). On a plan, dollar figures are what the work would cost at API prices; the windows are what limit it.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlanUsage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How ready each repo is for the factory, from the readiness check's latest report
+         * @description Each blocker and gap comes with the issue filed for it and the factory's item for that issue.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Readiness"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readiness/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run the readiness check on a repo again, in the background
+         * @description Clones the repo's base branch and runs its install and checks, as a
+         *     build's gates do, then saves the report. It files and labels nothing.
+         *     One check runs at a time (409 while one does). Needs the password, or
+         *     a request from this machine, and a daemon that can run it (403 otherwise).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name */
+                        repo: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{id}": {
         parameters: {
             query?: never;
@@ -1169,6 +1291,97 @@ export interface components {
             cool_off_hours: number;
             /** @description This request may reset it (tripped, and behind the password or on this machine) */
             can_reset: boolean;
+        };
+        PlanUsage: {
+            plans: components["schemas"]["UsagePlan"][];
+        };
+        UsagePlan: {
+            /** @description claude or codex */
+            harness: string;
+            /** @description Claude, Codex */
+            name: string;
+            /** @description Claude subscription, ChatGPT plan */
+            plan: string;
+            /** @description Its latest readings, five-hour first, then weekly; empty until one arrives */
+            windows: components["schemas"]["Usage"][];
+            /** @description When a reading will come, while there is none; else empty */
+            no_reading: string;
+            /** @description Percent of a five-hour or weekly window at which its jobs wait for the reset */
+            pause_at: number;
+        };
+        Readiness: {
+            repos: components["schemas"]["RepoReadiness"][];
+            /**
+             * @description not_ready while a checked repo has blockers or its check couldn't finish; ready once every checked repo is ready and the factory has worked on nothing but their setup
+             * @enum {string}
+             */
+            banner: "" | "not_ready" | "ready";
+            /** @description The label that hands an issue to the factory */
+            intake_label: string;
+            /** @description This request may run the check here (behind the password or on this machine, with a daemon that can) */
+            can_check: boolean;
+            /** @description Why it can't, or empty */
+            check_note: string;
+        };
+        RepoReadiness: {
+            repo: string;
+            /** @enum {string} */
+            state: "unchecked" | "incomplete" | "not_ready" | "ready";
+            /** @description When the latest report's check started; empty when unchecked */
+            checked_at: string;
+            branch: string;
+            sha: string;
+            /** @description 0 to 100 */
+            score: number;
+            /** @description Setup steps that pass */
+            done: number;
+            /** @description Setup steps in all */
+            total: number;
+            steps: components["schemas"]["ReadinessStep"][];
+            /** @description Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps */
+            extras: components["schemas"]["ReadinessFinding"][];
+            /** @description Issues filed without the intake label */
+            unqueued: number;
+            /** @description Runs the check in a terminal */
+            command: string;
+            /** @description Files and labels what still needs it; empty when nothing does */
+            queue_command: string;
+            /** @description A check started from the dashboard is running */
+            checking: boolean;
+            checking_since: string;
+            /** @description Why the last check started here failed, or empty */
+            check_error: string;
+        };
+        ReadinessStep: {
+            /** @enum {string} */
+            key: "install" | "checks" | "tests";
+            title: string;
+            /** @description What the factory needs it for */
+            why: string;
+            /** @enum {string} */
+            state: "done" | "failing" | "unchecked";
+            /** @description What the check saw when it's done, or empty */
+            passed: string;
+            blockers: components["schemas"]["ReadinessFinding"][];
+        };
+        ReadinessFinding: {
+            /** @enum {string} */
+            level: "blocker" | "gap" | "tip" | "good";
+            area: string;
+            /** @description Markdown: code spans in backticks */
+            title: string;
+            /** @description Markdown, with command output in fenced blocks */
+            detail: string;
+            /** @description 0 when none is filed */
+            issue: number;
+            issue_url: string;
+            /**
+             * @description The work on it: none when there's nothing to file (yours to fix, or in place)
+             * @enum {string}
+             */
+            status: "none" | "not_filed" | "not_queued" | "closed" | "waiting" | "building" | "needs_you" | "done";
+            item_id: number | null;
+            item_stage: string;
         };
         MainHealth: {
             repo: string;

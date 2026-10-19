@@ -127,6 +127,39 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
+  /usage:
+    get:
+      summary: How much of each subscription plan's usage windows the factory's harnesses have used
+      description: Only harnesses in use that run on a plan (Claude with a subscription token, Codex on a ChatGPT plan). On a plan, dollar figures are what the work would cost at API prices; the windows are what limit it.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PlanUsage" } } } }
+  /readiness:
+    get:
+      summary: How ready each repo is for the factory, from the readiness check's latest report
+      description: Each blocker and gap comes with the issue filed for it and the factory's item for that issue.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
+  /readiness/check:
+    post:
+      summary: Run the readiness check on a repo again, in the background
+      description: |
+        Clones the repo's base branch and runs its install and checks, as a
+        build's gates do, then saves the report. It files and labels nothing.
+        One check runs at a time (409 while one does). Needs the password, or
+        a request from this machine, and a daemon that can run it (403 otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties: { repo: { type: string, description: "owner/name" } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
   /jobs/{id}:
     get:
       summary: One job with its gate results
@@ -359,6 +392,85 @@ components:
         window_hours: { type: integer }
         cool_off_hours: { type: integer, description: "0 when only a human resets it" }
         can_reset: { type: boolean, description: "This request may reset it (tripped, and behind the password or on this machine)" }
+    PlanUsage:
+      type: object
+      required: [plans]
+      properties:
+        plans: { type: array, items: { $ref: "#/components/schemas/UsagePlan" } }
+    UsagePlan:
+      type: object
+      required: [harness, name, plan, windows, no_reading, pause_at]
+      properties:
+        harness: { type: string, description: "claude or codex" }
+        name: { type: string, description: "Claude, Codex" }
+        plan: { type: string, description: "Claude subscription, ChatGPT plan" }
+        windows:
+          type: array
+          description: Its latest readings, five-hour first, then weekly; empty until one arrives
+          items: { $ref: "#/components/schemas/Usage" }
+        no_reading: { type: string, description: "When a reading will come, while there is none; else empty" }
+        pause_at: { type: number, description: "Percent of a five-hour or weekly window at which its jobs wait for the reset" }
+    Readiness:
+      type: object
+      required: [repos, banner, intake_label, can_check, check_note]
+      properties:
+        repos: { type: array, items: { $ref: "#/components/schemas/RepoReadiness" } }
+        banner:
+          type: string
+          enum: ["", not_ready, ready]
+          description: "not_ready while a checked repo has blockers or its check couldn't finish; ready once every checked repo is ready and the factory has worked on nothing but their setup"
+        intake_label: { type: string, description: The label that hands an issue to the factory }
+        can_check: { type: boolean, description: "This request may run the check here (behind the password or on this machine, with a daemon that can)" }
+        check_note: { type: string, description: "Why it can't, or empty" }
+    RepoReadiness:
+      type: object
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, command, queue_command, checking, checking_since, check_error]
+      properties:
+        repo: { type: string }
+        state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
+        checked_at: { type: string, description: "When the latest report's check started; empty when unchecked" }
+        branch: { type: string }
+        sha: { type: string }
+        score: { type: integer, description: 0 to 100 }
+        done: { type: integer, description: Setup steps that pass }
+        total: { type: integer, description: Setup steps in all }
+        steps: { type: array, items: { $ref: "#/components/schemas/ReadinessStep" } }
+        extras:
+          type: array
+          description: "Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps"
+          items: { $ref: "#/components/schemas/ReadinessFinding" }
+        unqueued: { type: integer, description: Issues filed without the intake label }
+        command: { type: string, description: Runs the check in a terminal }
+        queue_command: { type: string, description: "Files and labels what still needs it; empty when nothing does" }
+        checking: { type: boolean, description: A check started from the dashboard is running }
+        checking_since: { type: string }
+        check_error: { type: string, description: "Why the last check started here failed, or empty" }
+    ReadinessStep:
+      type: object
+      required: [key, title, why, state, passed, blockers]
+      properties:
+        key: { type: string, enum: [install, checks, tests] }
+        title: { type: string }
+        why: { type: string, description: What the factory needs it for }
+        state: { type: string, enum: [done, failing, unchecked] }
+        passed: { type: string, description: "What the check saw when it's done, or empty" }
+        blockers: { type: array, items: { $ref: "#/components/schemas/ReadinessFinding" } }
+    ReadinessFinding:
+      type: object
+      required: [level, area, title, detail, issue, issue_url, status, item_id, item_stage]
+      properties:
+        level: { type: string, enum: [blocker, gap, tip, good] }
+        area: { type: string }
+        title: { type: string, description: "Markdown: code spans in backticks" }
+        detail: { type: string, description: "Markdown, with command output in fenced blocks" }
+        issue: { type: integer, description: 0 when none is filed }
+        issue_url: { type: string }
+        status:
+          type: string
+          enum: [none, not_filed, not_queued, closed, waiting, building, needs_you, done]
+          description: "The work on it: none when there's nothing to file (yours to fix, or in place)"
+        item_id: { type: ["integer", "null"] }
+        item_stage: { type: string }
     MainHealth:
       type: object
       required: [repo, branch, state, sha, detail, checks]

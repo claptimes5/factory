@@ -616,7 +616,28 @@ closed.)
 
 If the check itself can't run (no Docker, a missing job image, a command
 that isn't installed, a timeout), it stops there and files nothing. The
-report is saved to `data/readiness/<owner>__<name>.json`.
+report is saved to `data/readiness/<owner>__<name>.json`, with the number of
+the issue filed for each gap.
+
+**Following it on the dashboard.** The dashboard's **Setup** screen shows
+each repo's latest report as setup steps: dependencies install, every
+required check passes on the base branch, and there are tests that pass
+every time. Each step says whether it passes and why the factory needs it,
+and lists its blockers, each linked to its issue and to the factory's item
+for it: waiting its turn, being built, needs you or done. A blocker with
+no issue yet, or one only you can fix (a missing service in `factory.yaml`),
+says so. Gaps are listed apart as worth doing later. While a repo has
+blockers, a line above every screen links there; once every repo is
+ready, it says to add the `factory:ready` label to issues to start.
+`factory status` prints the same summary.
+
+A blocker the factory fixed stays on the report until the check runs
+again, since only a fresh run proves it. **Check again** on that screen
+runs it in the background on the base branch as it is now, so a fix made
+outside the factory counts too. It runs the repo's install and checks the
+way a build's gates do and files nothing, one repo at a time. Like
+Settings, it needs the dashboard password or a browser on the factory's
+own machine; otherwise the screen shows the command to run.
 
 For what a new repo needs to pass, see [new-project.md](new-project.md).
 

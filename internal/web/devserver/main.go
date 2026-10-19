@@ -27,6 +27,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/preview"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -115,9 +116,18 @@ func main() {
 	if err := seedHealth(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	reports := filepath.Join(dir, "readiness")
+	if err := seedReadiness(reports); err != nil {
+		log.Fatal(err)
+	}
+	if err := seedUsage(context.Background(), st); err != nil {
+		log.Fatal(err)
+	}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: &restarter{}, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
+		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports),
+		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
 				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},
@@ -193,8 +203,9 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/web", 107, "Export metrics in OpenMetrics format", state.Done, "M"},
 		{"acme/api", 108, "Move the cache to Redis 7", state.Blocked, "M"},
 		{"acme/web", 109, "Show order totals on the checkout page", state.AwaitingHuman, "M"},
-		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"},         // over the cost limit
-		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"}, // its plan waits
+		{"acme/api", 110, "Rewrite the job scheduler", state.Blocked, "L"},             // over the cost limit
+		{"acme/api", 111, "Split billing out of the monolith", state.Blocked, "L"},     // its plan waits
+		{"acme/api", 112, "Make the lint check pass on main", state.Implementing, "S"}, // from the readiness check
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -507,4 +518,73 @@ func seedPreview(dir string) error {
 		}
 	}
 	return m.Save(dir)
+}
+
+// seedReadiness saves readiness reports: acme/api isn't ready (its lint
+// fix is being built, its flaky test waits its turn), and acme/web is.
+func seedReadiness(dir string) error {
+	at := time.Now().Add(-2 * time.Hour).UTC()
+	api := &readiness.Report{Repo: "acme/api", Branch: "main", SHA: "9f2c1e04b7a3", Started: at, Score: 34, Filed: []int{112, 113},
+		Findings: []readiness.Finding{
+			{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on main",
+				Detail: "Every change would fail this check, whatever it does.\n\n```\ninternal/cache/cache.go:41:2: ineffectual assignment to err (ineffassign)\n```\n",
+				Issue:  &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on main", Number: 112, State: "open"}},
+			{Level: readiness.Blocker, Area: "tests", Title: "Tests are flaky",
+				Detail: "They passed, then failed on the same commit.\n\n```\n--- FAIL: TestCacheEviction (0.02s)\n```\n",
+				Issue:  &readiness.Issue{Key: "flaky", Title: "Fix flaky tests", Number: 106, State: "open"}},
+			{Level: readiness.Gap, Area: "feature map", Title: "No feature map",
+				Detail: "A feature map lists what the product does, where each feature lives and which tests prove it.",
+				Issue:  &readiness.Issue{Key: "feature-map", Title: "Start a feature map", Number: 113, State: "open"}},
+			{Level: readiness.Gap, Area: "e2e", Title: "No end-to-end tests",
+				Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests for the main user flows"}},
+			{Level: readiness.Good, Area: "install", Title: "Installs from a clean checkout"},
+			{Level: readiness.Good, Area: "ci", Title: "CI runs on the repo"},
+		}}
+	web := &readiness.Report{Repo: "acme/web", Branch: "main", SHA: "41ab7d2c9e10", Started: at, Score: 92, Ready: true, Filed: []int{114},
+		Findings: []readiness.Finding{
+			{Level: readiness.Gap, Area: "feature map", Title: "No feature map",
+				Issue: &readiness.Issue{Key: "feature-map", Title: "Start a feature map", Number: 114, State: "open"}},
+			{Level: readiness.Good, Area: "install", Title: "Installs from a clean checkout"},
+			{Level: readiness.Good, Area: "checks", Title: "Every required check passes on main: lint, test, build"},
+			{Level: readiness.Good, Area: "tests", Title: "48 test files, passing twice in a row"},
+			{Level: readiness.Good, Area: "e2e", Title: "Has end-to-end tests"},
+		}}
+	for _, r := range []*readiness.Report{api, web} {
+		if _, err := readiness.Save(dir, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recheck pretends to check a repo again: it takes a moment and finds
+// it as it was.
+func recheck(dir string) func(context.Context, string) error {
+	return func(ctx context.Context, repo string) error {
+		select {
+		case <-time.After(1500 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r, err := readiness.Load(dir, repo)
+		if err != nil || r == nil {
+			return fmt.Errorf("devserver: no report for %s", repo)
+		}
+		r.Started = time.Now().UTC()
+		_, err = readiness.Save(dir, r)
+		return err
+	}
+}
+
+// seedUsage records Claude's plan windows; Codex has none yet.
+func seedUsage(ctx context.Context, st *store.Store) error {
+	for _, l := range []store.Limit{
+		{Harness: "claude", Window: "5h", UsedPercent: 42, ResetsAt: time.Now().Add(3 * time.Hour).UTC().Format(store.TimeFormat)},
+		{Harness: "claude", Window: "weekly", UsedPercent: 18, ResetsAt: time.Now().Add(4 * 24 * time.Hour).UTC().Format(store.TimeFormat)},
+	} {
+		if err := st.SetLimit(ctx, l); err != nil {
+			return err
+		}
+	}
+	return nil
 }

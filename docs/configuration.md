@@ -715,9 +715,9 @@ build budget. `factory compare` arms split what's left of today's budget.
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
 five-hour and a weekly usage window, and so does Codex on a
 [ChatGPT plan](setup.md#codex-on-a-chatgpt-plan). The factory records the latest
-reading each run reports, and `factory status`, the dashboard's
-**Spend** page and the orchestrator show how much is used and when it
-resets. When the five-hour or weekly window reaches `pause_at_usage`, that
+reading each run reports, and `factory status`, a line under the
+dashboard's header, its **Spend** page and the orchestrator show how much
+is used and when it resets. When the five-hour or weekly window reaches `pause_at_usage`, that
 harness's jobs wait in the queue until it resets, instead of failing and
 using up retries. The other harness keeps working, and you're notified
 when it pauses and resumes. A window that only one model has, such as a
