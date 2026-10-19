@@ -41,10 +41,10 @@ const maxPlanRounds = 2
 
 // Plan events, each on the plan job it's about.
 const (
-	evPlanWaiting   = "plan_waiting"
-	evPlanAnnounced = "plan_announced"
-	evPlanApproved  = "plan_approved"
-	evPlanReplan    = "plan_replan"
+	evPlanWaiting   = store.EvPlanWaiting
+	evPlanAnnounced = store.EvPlanAnnounced
+	evPlanApproved  = store.EvPlanApproved
+	evPlanReplan    = store.EvPlanReplan
 )
 
 // PlanInput is carried to plan jobs.
@@ -72,18 +72,11 @@ type planState struct {
 
 // currentPlan is the item's plan since its last triage, or nil.
 func (p *Pipeline) currentPlan(ctx context.Context, itemID int64) (*planState, error) {
-	js, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID, Kind: "plan", Limit: 1})
-	if err != nil || len(js) == 0 {
+	ps, err := p.Store.CurrentPlan(ctx, itemID)
+	if err != nil || ps == nil {
 		return nil, err
 	}
-	tr, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID, Kind: "triage", Limit: 1})
-	if err != nil {
-		return nil, err
-	}
-	if len(tr) > 0 && tr[0].ID > js[0].ID {
-		return nil, nil // an earlier cycle's: a factory:retry plans again
-	}
-	s := &planState{job: js[0]}
+	s := &planState{job: ps.Job, waiting: ps.Waiting, announced: ps.Announced, approved: ps.Approved, by: ps.By}
 	_ = json.Unmarshal([]byte(s.job.Input), &s.in)
 	if s.job.State == state.Succeeded {
 		var v verdict.Plan
@@ -91,27 +84,6 @@ func (p *Pipeline) currentPlan(ctx context.Context, itemID int64) (*planState, e
 			s.plan = &v
 		}
 	}
-	evs, err := p.Store.Events(ctx, itemID)
-	if err != nil {
-		return nil, err
-	}
-	replanned := false
-	for _, e := range evs {
-		if e.JobID == nil || *e.JobID != s.job.ID {
-			continue
-		}
-		switch e.Type {
-		case evPlanWaiting:
-			s.waiting = true
-		case evPlanAnnounced:
-			s.announced = true
-		case evPlanApproved:
-			s.approved, s.by = true, e.Reason
-		case evPlanReplan:
-			replanned = true
-		}
-	}
-	s.waiting = s.waiting && !s.approved && !replanned
 	return s, nil
 }
 
@@ -358,7 +330,26 @@ func (p *Pipeline) afterPlan(ctx context.Context, it *store.WorkItem, j *store.J
 	return p.proceed(ctx, it)
 }
 
-const planWaitingReason = "Waiting for your OK on the plan, on the issue. Add " + LabelGo + " to build it, or comment and add " + LabelReplan + " for another plan."
+// planWaitingReason is why the item is blocked, where the dashboard and
+// the inbox show it.
+const planWaitingReason = "Waiting for your OK on the plan. Read it on this item's page or on the issue, then: " +
+	"1. To build it, press Build it, or add the " + LabelGo + " label on the issue. " +
+	"2. For another plan, use Ask for another plan, or comment what to change on the issue and then add the " + LabelReplan + " label."
+
+// planSteps is what the comment asking for the plan's OK says to do, with
+// the cost estimate's OK in the same step when both wait.
+func planSteps(withCost bool) string {
+	build := ""
+	if withCost {
+		build = " This approves the cost and the plan at once."
+	}
+	return fmt.Sprintf("**To build it**, either:\n\n"+
+		"1. add the `%s` label to this issue (someone with write access), or\n"+
+		"2. press **Build it** on this item's page in the factory dashboard.%s\n\n"+
+		"**To get another plan**, either:\n\n"+
+		"1. comment on this issue what to change, then add the `%s` label: the builder plans once more with your comment, or\n"+
+		"2. press **Ask for another plan** on this item's page in the factory dashboard and say what to change there.", LabelGo, build, LabelReplan)
+}
 
 // approvePlan records the plan's approval and goes on to the build.
 func (p *Pipeline) approvePlan(ctx context.Context, it *store.WorkItem, planJob int64, actor, by string) error {
@@ -531,33 +522,71 @@ func (p *Pipeline) intakeReplan(ctx context.Context, repo string) error {
 			p.warn(err, "RemoveLabel")
 			continue
 		}
-		p.warn(p.replan(ctx, it, s, who), "replan")
+		p.warn(p.replan(ctx, it, s, "@"+who, p.lastCommentBy(ctx, it.Repo, it.IssueNumber, who)), "replan")
 	}
 	return nil
 }
 
-// replan sends a waiting plan back to the builder with who's comment, or
-// parks the item when its plan was already sent back once.
-func (p *Pipeline) replan(ctx context.Context, it *store.WorkItem, s *planState, who string) error {
-	if err := p.planEvent(ctx, it, s.job.ID, "human", evPlanReplan, "@"+who+" asked for changes"); err != nil {
+// fromDashboard is who asked, in the factory's words, when it was asked
+// on the dashboard.
+const fromDashboard = "someone on the dashboard"
+
+// Replan is the dashboard's ask for another plan, with what to change: what
+// a comment and factory:replan on the issue do.
+func (p *Pipeline) Replan(ctx context.Context, itemID int64, ask string) error {
+	p.act.Lock()
+	defer p.act.Unlock()
+	ask = strings.TrimSpace(ask)
+	if ask == "" {
+		return errors.New("say what to change about the plan")
+	}
+	it, err := p.Store.GetItem(ctx, itemID)
+	if err != nil {
 		return err
 	}
+	s, err := p.currentPlan(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if it.Stage != state.Blocked || s == nil || !s.waiting {
+		return fmt.Errorf("item %d's plan isn't waiting for an OK", itemID)
+	}
+	return p.replan(ctx, it, s, fromDashboard, ask)
+}
+
+// replan sends a waiting plan back to the builder with what from ("@x",
+// or fromDashboard) asked to change, or parks the item when its plan was
+// already sent back once. p.act is held.
+func (p *Pipeline) replan(ctx context.Context, it *store.WorkItem, s *planState, from, ask string) error {
+	dashboard := from == fromDashboard
+	if err := p.planEvent(ctx, it, s.job.ID, "human", evPlanReplan, from+" asked for changes"); err != nil {
+		return err
+	}
+	who := from
+	if dashboard {
+		who = capitalize(from)
+	}
 	if s.in.Round >= maxPlanRounds {
-		return p.park(ctx, it, fmt.Sprintf("@%s asked for changes to the plan again. The factory plans again only once, so it stopped here rather than guess. "+
+		return p.park(ctx, it, fmt.Sprintf("%s asked for changes to the plan again. The factory plans again only once, so it stopped here rather than guess. "+
 			"Edit the issue to say what you want built, then add `%s` to triage and plan it from the start.", who, LabelRetry))
 	}
-	ask := p.lastCommentBy(ctx, it.Repo, it.IssueNumber, who)
 	if ask == "" {
 		ask = "(No comment from them was found: they asked for another plan without saying what to change.)"
 	}
 	gh := p.gh(it.Repo)
 	p.warn(gh.RemoveLabel(ctx, it.IssueNumber, LabelAwaitingYou), "RemoveLabel")
-	p.warn(gh.Comment(ctx, it.IssueNumber, "**Factory:** @"+who+" asked for changes to the plan; the builder is writing a new one with their last comment."), "Comment")
-	if err := p.Store.SetStage(ctx, it.ID, state.Ready, "human", "@"+who+" asked for a new plan"); err != nil {
+	said, comment := "their last comment.", from+"'s comment"
+	if dashboard {
+		// The ask isn't on the issue yet: it goes there, fenced, so it's on
+		// the record and its words can't mention or close anything.
+		said, comment = "what they asked:\n\n"+fenced(truncate(ask, 4000)), "What they asked to change, on the dashboard"
+	}
+	p.warn(gh.Comment(ctx, it.IssueNumber, "**Factory:** "+from+" asked for changes to the plan; the builder is writing a new one with "+said), "Comment")
+	if err := p.Store.SetStage(ctx, it.ID, state.Ready, "human", from+" asked for a new plan"); err != nil {
 		return err
 	}
-	return p.enqueuePlan(ctx, it, PlanInput{Round: maxPlanRounds, From: "@" + who,
-		Feedback: "Your earlier plan:\n\n" + fenced(planText(s.plan)) + "\n@" + who + "'s comment:\n\n" + fenced(truncate(ask, 4000))}, 1)
+	return p.enqueuePlan(ctx, it, PlanInput{Round: maxPlanRounds, From: from,
+		Feedback: "Your earlier plan:\n\n" + fenced(planText(s.plan)) + "\n" + comment + ":\n\n" + fenced(truncate(ask, 4000))}, 1)
 }
 
 // lastCommentBy is who's latest comment on the issue, or "" when there

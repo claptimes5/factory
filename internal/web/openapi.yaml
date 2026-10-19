@@ -75,11 +75,29 @@ paths:
         "409": { $ref: "#/components/responses/Action" }
   /items/{id}/approve-estimate:
     post:
-      summary: Approve an item whose cost estimate waits for a human's OK
-      description: Needs the password, or a request from this machine (403 otherwise), as settings do.
+      summary: Approve an item whose cost estimate or plan waits for a human's OK
+      description: One OK covers both when both wait, as factory:go does. Needs the password, or a request from this machine (403 otherwise), as settings do.
       parameters: [{ $ref: "#/components/parameters/ID" }]
       responses:
         "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
+  /items/{id}/replan:
+    post:
+      summary: Ask for another plan, saying what to change, for an item whose plan waits for a human's OK
+      description: What a comment and factory:replan on the issue do; the ask goes on the issue too. A plan that was already asked again parks the item. Needs the password, or a request from this machine (403 otherwise), as settings do.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ask]
+              properties: { ask: { type: string, description: What to change about the plan } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
   /auto-merge/reset:
@@ -353,7 +371,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting, plan_waiting]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -379,6 +397,7 @@ components:
         blocked_note: { type: string, description: Why it is parked or blocked }
         estimate: { type: string, description: "Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty" }
         estimate_waiting: { type: boolean, description: It waits for your OK on its cost estimate }
+        plan_waiting: { type: boolean, description: It waits for your OK on its plan }
     LinkedPR:
       type: object
       required: [repo, number, ref, url]
@@ -462,7 +481,7 @@ components:
         data: { type: string, description: JSON }
     ItemDetail:
       type: object
-      required: [item, jobs, events, depends_on, issue_body, spec, estimate, risk_reasons, needs_person]
+      required: [item, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person]
       properties:
         item: { $ref: "#/components/schemas/Item" }
         jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
@@ -482,6 +501,24 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Estimate"
             - type: "null"
+        plan:
+          description: The plan of the item's current triage cycle; null when there is none or it isn't written yet
+          oneOf:
+            - $ref: "#/components/schemas/Plan"
+            - type: "null"
+    Plan:
+      type: object
+      required: [job_id, approach, files, risks, tests, waiting, approved_by, replan_of, can_approve]
+      properties:
+        job_id: { type: integer, description: The plan job }
+        approach: { type: string }
+        files: { type: array, items: { type: string }, description: The files it expects to touch }
+        risks: { type: array, items: { type: string } }
+        tests: { type: string }
+        waiting: { type: boolean, description: It waits for your OK }
+        approved_by: { type: string, description: "How it was approved (by @x, from the dashboard, by the critic), or empty" }
+        replan_of: { type: string, description: "Who asked for this plan in place of an earlier one (@x, the critic), or empty for a first plan. The factory plans again only once, so asking for changes to this one parks the item" }
+        can_approve: { type: boolean, description: "It waits, and this request may approve it or ask for another plan here (the password, or a request from this machine); else the factory:go and factory:replan labels it is" }
     Estimate:
       type: object
       required: [range, detail, status, size, median_usd, p75_usd, total_median_usd, total_p75_usd, threshold_usd, basis, samples, approved_by, created_at, actual_usd, finished, can_approve]

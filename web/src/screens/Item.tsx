@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { act, useItem, type Estimate, type Event } from "@/api/client";
+import { act, useItem, type Estimate, type Event, type Item, type Plan } from "@/api/client";
 import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
 import { PRPanel } from "@/components/PRPanel";
 import { Screenshots } from "@/components/Screenshots";
@@ -15,7 +15,7 @@ export function ItemScreen() {
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, risk_reasons, needs_person } = data!;
+  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person } = data!;
   const live = jobs.find((j) => j.state === "running");
   return (
     <div className="space-y-4">
@@ -41,7 +41,8 @@ export function ItemScreen() {
       </div>
       <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
         <div className="min-w-0 space-y-4">
-          {estimate && <EstimateCard itemId={it.id} e={estimate} waiting={it.estimate_waiting} />}
+          {plan && <PlanCard item={it} plan={plan} estimate={it.estimate_waiting ? estimate : null} />}
+          {estimate && <EstimateCard itemId={it.id} e={estimate} waiting={it.estimate_waiting} planWaiting={it.plan_waiting} />}
           <Card>
             <CardHeader>
               <CardTitle>Issue</CardTitle>
@@ -150,7 +151,7 @@ const statusText: Record<string, string> = {
 };
 
 /** Triage's cost estimate, what it's based on, and the OK when it waits for one. */
-function EstimateCard({ itemId, e, waiting }: { itemId: number; e: Estimate; waiting: boolean }) {
+function EstimateCard({ itemId, e, waiting, planWaiting }: { itemId: number; e: Estimate; waiting: boolean; planWaiting: boolean }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -177,7 +178,8 @@ function EstimateCard({ itemId, e, waiting }: { itemId: number; e: Estimate; wai
             It cost {money(e.actual_usd)} to build, against a median of {money(e.total_median_usd)} and a p75 of {money(e.total_p75_usd)}.
           </p>
         )}
-        {waiting && (
+        {waiting && planWaiting && <p className="text-xs text-muted-foreground">Build it, on the plan above, approves the cost and the plan at once.</p>}
+        {waiting && !planWaiting && (
           <div className="flex flex-col gap-2">
             {e.can_approve ? (
               <>
@@ -193,6 +195,135 @@ function EstimateCard({ itemId, e, waiting }: { itemId: number; e: Estimate; wai
                 To approve, add the factory:go label on the issue. Approving here needs a dashboard password (FACTORY_WEB_PASSWORD), or opening the
                 dashboard on this machine.
               </p>
+            )}
+          </div>
+        )}
+        {msg && (
+          <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>
+            {msg.text}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The plan the builder wrote before a big build, and what to do while it waits for an OK. */
+function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; estimate: Estimate | null | undefined }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [ask, setAsk] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const run = async (path: string, body: unknown = {}) => {
+    setBusy(true);
+    const r = await act(path, body);
+    setBusy(false);
+    setMsg({ ok: r.ok, text: r.message });
+    if (r.ok) setAsking(false);
+    void qc.invalidateQueries();
+  };
+  const issue = (
+    <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+      the issue {it.ref} <ExternalLink className="size-3" />
+    </a>
+  );
+  return (
+    <Card data-testid="plan" className={cn(p.waiting && "border-warning/60")}>
+      <CardHeader>
+        <CardTitle>{p.waiting ? "Plan: waiting for your OK" : "Plan"}</CardTitle>
+        {p.replan_of && <span className="text-xs text-muted-foreground">the new plan {p.replan_of} asked for</span>}
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="whitespace-pre-wrap">{p.approach}</p>
+        {p.files.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Files</div>
+            <ul className="list-disc space-y-0.5 pl-4 font-mono text-xs">
+              {p.files.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {p.risks.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Risks</div>
+            <ul className="list-disc space-y-0.5 pl-4">
+              {p.risks.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div>
+          <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Tests</div>
+          <p className="whitespace-pre-wrap">{p.tests}</p>
+        </div>
+        {!p.waiting && p.approved_by && <p className="text-muted-foreground">Approved {p.approved_by}.</p>}
+        {p.waiting && (
+          <div className="space-y-3 rounded-md bg-warning/10 p-3">
+            <p className="font-medium">Nothing is built until someone approves this plan.</p>
+            {estimate && (
+              <p>
+                Its cost estimate, <span className="font-mono">{estimate.range}</span>, is over the {money(estimate.threshold_usd)} limit too. Build it approves
+                both.
+              </p>
+            )}
+            {p.replan_of && (
+              <p className="text-xs text-muted-foreground">
+                The factory plans again only once. Asking for changes to this plan stops the item; to start over, edit the issue and add the factory:retry label.
+              </p>
+            )}
+            {p.can_approve ? (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={busy} onClick={() => run(`/items/${it.id}/approve-estimate`)}>
+                    Build it
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={busy} aria-expanded={asking} onClick={() => setAsking(!asking)}>
+                    Ask for another plan
+                  </Button>
+                </div>
+                {asking && (
+                  <form
+                    className="space-y-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void run(`/items/${it.id}/replan`, { ask });
+                    }}
+                  >
+                    <label htmlFor="plan-ask" className="block text-xs font-medium">
+                      What should change? The builder writes a new plan with this, and it goes on the issue too.
+                    </label>
+                    <textarea
+                      id="plan-ask"
+                      value={ask}
+                      onChange={(e) => setAsk(e.target.value)}
+                      rows={4}
+                      className="w-full min-w-0 rounded-md border bg-card p-2.5 text-base text-foreground placeholder:text-muted-foreground/70 md:text-sm"
+                      placeholder="For example: keep the database tables in the monolith, and add a feature flag for the switch-over."
+                    />
+                    <Button size="sm" type="submit" disabled={busy || ask.trim() === ""}>
+                      Send and plan again
+                    </Button>
+                  </form>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Or on {issue}: add the factory:go label to build it, or comment what to change and then add the factory:replan label.
+                </p>
+              </>
+            ) : (
+              <>
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>Open {issue}.</li>
+                  <li>To build it, add the factory:go label.</li>
+                  <li>For another plan, comment what to change, then add the factory:replan label.</li>
+                </ol>
+                <p className="text-xs text-muted-foreground">
+                  Doing this here needs a dashboard password (FACTORY_WEB_PASSWORD), or opening the dashboard on this machine.
+                </p>
+              </>
             )}
           </div>
         )}

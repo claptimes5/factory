@@ -557,6 +557,9 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, issueRef(cfg, it.Repo, it.IssueNumber), it.Stage, dash(it.Complexity), dash(it.Risk), estimateCell(ctx, st, it.ID), pr, it.Title)
 	}
 	fmt.Fprintln(w)
+	for _, l := range waitingLines(ctx, st, cfg, items) {
+		fmt.Fprintln(w, l)
+	}
 	for _, s := range []state.JobState{state.Queued, state.Running} {
 		n, _ := st.CountJobs(ctx, s, "")
 		fmt.Fprintf(w, "jobs %s:\t%d\n", s, n)
@@ -634,6 +637,48 @@ func estimateCell(ctx context.Context, st *store.Store, itemID int64) string {
 		return e.Range() + " (approved)"
 	}
 	return e.Range()
+}
+
+// waitingLines are status's lines on each item that waits for your OK on
+// its plan or its cost: what to do, and where.
+func waitingLines(ctx context.Context, st *store.Store, cfg *config.Config, items []*store.WorkItem) []string {
+	var out []string
+	for _, it := range items {
+		if it.Stage != state.Blocked {
+			continue
+		}
+		e, _ := st.ItemEstimate(ctx, it.ID)
+		cost := e != nil && e.Status == store.EstimateWaiting
+		plan := st.PlanWaiting(ctx, it)
+		if !cost && !plan {
+			continue
+		}
+		rc, ok := cfg.RepoConf(it.Repo)
+		if !ok {
+			h, n := config.SplitRepo("", it.Repo)
+			rc = config.Repo{Name: n, Host: h}
+		}
+		issue := rc.IssueURL(it.IssueNumber)
+		page := fmt.Sprintf("/app/items/%d", it.ID)
+		ref := issueRef(cfg, it.Repo, it.IssueNumber)
+		var line string
+		switch {
+		case plan:
+			what := "the plan"
+			if cost {
+				what = fmt.Sprintf("the plan and the cost (est. %s, over the $%.2f limit)", e.Range(), e.ThresholdUSD)
+			}
+			line = fmt.Sprintf("%s needs your OK on %s.\t1. Read the plan on the issue, %s, or on its dashboard page, %s. "+
+				"2. To build it, press Build it on that page, or add the %s label on the issue. "+
+				"3. For another plan, press Ask for another plan on that page, or comment on the issue what to change, then add the %s label.",
+				ref, what, issue, page, pipeline.LabelGo, pipeline.LabelReplan)
+		default:
+			line = fmt.Sprintf("%s needs your OK on the cost (est. %s, over the $%.2f limit).\tTo build it, press Approve estimate on its dashboard page, %s, or add the %s label on the issue, %s.",
+				ref, e.Range(), e.ThresholdUSD, page, pipeline.LabelGo, issue)
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // mainHealthLines are status's lines on each repo's base branch CI, as

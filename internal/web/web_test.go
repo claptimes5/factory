@@ -36,6 +36,10 @@ func (f *fakeActions) ApproveEstimate(_ context.Context, id int64) error {
 	f.calls = append(f.calls, "approve-estimate")
 	return nil
 }
+func (f *fakeActions) Replan(_ context.Context, id int64, ask string) error {
+	f.calls = append(f.calls, "replan:"+ask)
+	return nil
+}
 func (f *fakeActions) ResetAutoMerge(_ context.Context, repo, by string) error {
 	f.calls = append(f.calls, "reset-auto-merge:"+repo+":"+by)
 	return nil

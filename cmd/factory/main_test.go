@@ -128,3 +128,35 @@ func TestEstimateCellAndPlanBilled(t *testing.T) {
 		}
 	}
 }
+
+// status says what to do about each item that waits for your OK, with
+// the issue's link.
+func TestWaitingLines(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	cfg := &config.Config{Repos: []config.Repo{{Name: "o/r"}}}
+	plan, _, _ := st.UpsertItem(ctx, "o/r", 1, "big")
+	pj, _ := st.EnqueueJob(ctx, store.Job{ItemID: &plan.ID, Kind: "plan"})
+	st.SetStage(ctx, plan.ID, state.Ready, "daemon", "triaged")
+	st.SetStage(ctx, plan.ID, state.Blocked, "daemon", "waits")
+	st.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &plan.ID, JobID: &pj, Type: store.EvPlanWaiting})
+	cost, _, _ := st.UpsertItem(ctx, "o/r", 2, "costly")
+	st.SetStage(ctx, cost.ID, state.Ready, "daemon", "triaged")
+	st.SetStage(ctx, cost.ID, state.Blocked, "daemon", "waits")
+	st.SetEstimate(ctx, store.Estimate{ItemID: cost.ID, Size: "M", MedianUSD: 8, P75USD: 14, TotalMedianUSD: 8, TotalP75USD: 14, ThresholdUSD: 5, Basis: "repo", Detail: "d", Status: store.EstimateWaiting})
+	other, _, _ := st.UpsertItem(ctx, "o/r", 3, "deps")
+	st.SetStage(ctx, other.ID, state.Ready, "daemon", "triaged")
+	st.SetStage(ctx, other.ID, state.Blocked, "daemon", "waiting on dependencies")
+	items, _ := st.ListItems(ctx)
+	got := waitingLines(ctx, st, cfg, items)
+	if len(got) != 2 {
+		t.Fatalf("lines:\n%s", strings.Join(got, "\n"))
+	}
+	all := strings.Join(got, "\n")
+	for _, want := range []string{"#1 needs your OK on the plan.", "https://github.com/o/r/issues/1", "/app/items/1", "press Build it", "factory:go", "factory:replan",
+		"#2 needs your OK on the cost (est. $8.00–$14.00, over the $5.00 limit)", "press Approve estimate", "https://github.com/o/r/issues/2"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("lines lack %q:\n%s", want, all)
+		}
+	}
+}

@@ -75,10 +75,10 @@ func TestPlanForBigItemWaitsForGo(t *testing.T) {
 	planned(t, e)
 	c := e.gh.comments[1]
 	if len(c) != 1 || !strings.Contains(c[0], "waiting for your OK on the plan") || !strings.Contains(c[0], "```text\nApproach: Add Add in add.go with a slice loop.") ||
-		!strings.Contains(c[0], "- add_test.go") || !strings.Contains(c[0], "`factory:replan`") {
+		!strings.Contains(c[0], "- add_test.go") || !strings.Contains(c[0], "`factory:replan`") || !strings.Contains(c[0], "press **Build it**") {
 		t.Fatalf("comments %q", c)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "waits for your OK on its plan") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "waits for your OK on its plan") || !strings.Contains(notes[0], "/issues/1)") {
 		t.Fatalf("notes %q", notes)
 	}
 	// A poll alone frees nothing, nor does the orchestrator.
@@ -206,6 +206,49 @@ func TestPlanChangeRequestReplansOnceThenParks(t *testing.T) {
 	}
 	if est, _ := e.p.Store.ItemEstimate(ctx, it.ID); est.Status != store.EstimateParked {
 		t.Fatalf("estimate %+v", est)
+	}
+}
+
+// The dashboard's ask for another plan does what a comment and
+// factory:replan do: the ask goes on the issue, fenced, and to the
+// builder; a second ask parks the item.
+func TestDashboardReplan(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.claude.plans = []string{planOne, planTwo}
+	it := planned(t, e)
+	if err := e.p.Replan(ctx, it.ID, "  "); err == nil || !strings.Contains(err.Error(), "what to change") {
+		t.Fatalf("empty ask: %v", err)
+	}
+	if err := e.p.Replan(ctx, it.ID, "Use a map, @someone."); err != nil {
+		t.Fatal(err)
+	}
+	c := e.gh.comments[1]
+	if len(c) != 2 || !strings.Contains(c[1], "someone on the dashboard asked for changes to the plan") || !strings.Contains(c[1], "```text\nUse a map, @someone.") {
+		t.Fatalf("comments %q", c)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.claude.calls["plan"] != 2 || e.claude.calls["implement"] != 0 {
+		t.Fatalf("%d plans, %d builds", e.claude.calls["plan"], e.claude.calls["implement"])
+	}
+	if pr := e.claude.prompts["plan"][1]; !strings.Contains(pr, "Use a map, @someone.") || !strings.Contains(pr, "what someone on the dashboard asked") {
+		t.Fatalf("re-plan prompt:\n%s", pr)
+	}
+	if it = e.item(t, 1); it.Stage != state.Blocked || !strings.Contains(latestComment(e, 1), "the new plan someone on the dashboard asked for") {
+		t.Fatalf("stage %s, comment %q", it.Stage, latestComment(e, 1))
+	}
+	if err := e.p.Replan(ctx, it.ID, "Still not right."); err != nil {
+		t.Fatal(err)
+	}
+	if it = e.item(t, 1); it.Stage != state.Parked || !strings.Contains(latestComment(e, 1), "Someone on the dashboard asked for changes to the plan again") {
+		t.Fatalf("stage %s, comment %q", it.Stage, latestComment(e, 1))
+	}
+	// Nothing waits now: asking again is refused.
+	if err := e.p.Replan(ctx, it.ID, "And again."); err == nil {
+		t.Fatal("replanned a parked item")
 	}
 }
 

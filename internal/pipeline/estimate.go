@@ -316,27 +316,28 @@ func (p *Pipeline) announceWait(ctx context.Context, it *store.WorkItem, est *st
 			note = fmt.Sprintf("\n\nThe `%s` label that was already on was taken off: it has to be added after this comment, for this plan.", LabelGo)
 		}
 	}
+	link := p.repoConf(it.Repo).IssueURL(it.IssueNumber)
 	var body, msg string
 	switch {
 	case pl == nil:
 		body = fmt.Sprintf("**Factory: waiting for your OK on the cost.**\n\n"+
 			"Triage rated this %s. Estimated cost: **%s** (%s). That's over the %s limit (`confirm_over`), so nothing is built until someone approves.\n\n"+
-			"To go ahead, someone with write access adds the `%s` label, or presses **Approve estimate** on the item in the dashboard.%s",
+			"**To build it**, either:\n\n1. add the `%s` label to this issue (someone with write access), or\n2. press **Approve estimate** on this item's page in the factory dashboard.%s",
 			it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), LabelGo, note)
-		msg = fmt.Sprintf("%s waits for your OK: estimated %s, over the %s limit. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo)
+		msg = fmt.Sprintf("%s waits for your OK: estimated %s, over the %s limit. To build it, add the %s label on the issue (%s), or press Approve estimate on the item's page in the dashboard.",
+			p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo, link)
 	case est == nil:
 		body = fmt.Sprintf("**Factory: waiting for your OK on the plan.**\n\n"+
 			"Triage rated this %s, so the builder planned it first. Nothing is built until someone approves the plan: a plan is cheaper to correct than a finished PR.\n\n%s\n"+
-			"To build it, someone with write access adds the `%s` label. To change the plan, comment what to change, then add `%s`: the builder plans once more with your comment.%s",
-			it.Complexity, planSection(pl), LabelGo, LabelReplan, note)
-		msg = fmt.Sprintf("%s waits for your OK on its plan. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), LabelGo)
+			"%s%s", it.Complexity, planSection(pl), planSteps(false), note)
+		msg = fmt.Sprintf("%s waits for your OK on its plan. Read it on the issue (%s) or on the item's page in the dashboard, then press Build it there, or add the %s label on the issue. For another plan, use Ask for another plan on the dashboard, or comment what to change on the issue and add %s.",
+			p.ref(it.Repo, it.IssueNumber), link, LabelGo, LabelReplan)
 	default:
 		body = fmt.Sprintf("**Factory: waiting for your OK on the cost and the plan.**\n\n"+
 			"Triage rated this %s. Estimated cost: **%s** (%s). That's over the %s limit (`confirm_over`), and the builder planned it first, so nothing is built until someone approves both.\n\n%s\n"+
-			"To build it, someone with write access adds the `%s` label, which approves the cost and the plan at once, or presses **Approve estimate** on the item in the dashboard. "+
-			"To change the plan, comment what to change, then add `%s`: the builder plans once more with your comment.%s",
-			it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), planSection(pl), LabelGo, LabelReplan, note)
-		msg = fmt.Sprintf("%s waits for your OK on its plan and its cost: estimated %s, over the %s limit. Add %s to build it.", p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), LabelGo)
+			"%s%s", it.Complexity, est.Range(), est.Detail, usd(est.ThresholdUSD), planSection(pl), planSteps(true), note)
+		msg = fmt.Sprintf("%s waits for your OK on its plan and its cost: estimated %s, over the %s limit. Read the plan on the issue (%s) or on the item's page in the dashboard, then press Build it there, or add the %s label on the issue. For another plan, use Ask for another plan on the dashboard, or comment what to change on the issue and add %s.",
+			p.ref(it.Repo, it.IssueNumber), est.Range(), usd(est.ThresholdUSD), link, LabelGo, LabelReplan)
 	}
 	if err := gh.Comment(ctx, it.IssueNumber, body); err != nil {
 		p.warn(err, "Comment")
@@ -352,7 +353,7 @@ func (p *Pipeline) announceWait(ctx context.Context, it *store.WorkItem, est *st
 }
 
 func (p *Pipeline) waitingReason(e *store.Estimate) string {
-	return fmt.Sprintf("Waiting for your OK on the cost: estimated %s, over the %s limit. Add %s or approve it here.", e.Range(), usd(e.ThresholdUSD), LabelGo)
+	return fmt.Sprintf("Waiting for your OK on the cost: estimated %s, over the %s limit. To build it, press Approve estimate on this item's page, or add the %s label on the issue.", e.Range(), usd(e.ThresholdUSD), LabelGo)
 }
 
 // errEstimateWaiting refuses to build an item whose estimate needs an OK.
@@ -393,7 +394,7 @@ func (p *Pipeline) approveEstimate(ctx context.Context, itemID int64, by string)
 	}
 	planWait := pl != nil && pl.waiting
 	if it.Stage != state.Blocked || !estWait && !planWait {
-		return fmt.Errorf("item %d isn't waiting for an OK on its estimate", itemID)
+		return fmt.Errorf("item %d isn't waiting for an OK on its estimate or its plan", itemID)
 	}
 	if estWait {
 		if ok, err := p.Store.ApproveEstimate(ctx, itemID, by); err != nil || !ok {

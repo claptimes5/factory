@@ -408,8 +408,9 @@ default, because it's two more runs on every M item. See
   read-only run.
 - A change request is the labeler's latest comment on the issue; one
   written before the plan, with nothing newer, would be taken as one.
-- The dashboard's **Approve estimate** button shows only when the
-  estimate waits; a plan waiting alone is approved with the label.
+- A plan is approved, or sent back with what to change, from the item's
+  page or with the labels; the page's buttons need the password or a
+  browser on the factory's machine, as approving an estimate does.
 
 ## Security pass
 
