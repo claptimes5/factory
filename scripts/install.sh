@@ -1,0 +1,175 @@
+#!/bin/sh
+# Checks what the factory needs on this machine, then builds ./factory.
+#
+#   sh scripts/install.sh          check Go, git and Docker, then build
+#   sh scripts/install.sh --web    also check Node, to rebuild the dashboard
+#
+# It installs nothing and never uses sudo: for anything missing it prints
+# the command to run. Once built, ./factory doctor checks the rest.
+# shellcheck disable=SC2016 # fix lines print $PATH and $USER as typed
+set -u
+
+web=0
+for a in "$@"; do
+	case $a in
+	--web) web=1 ;;
+	-h | --help) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 0 ;;
+	*) echo "install.sh: unknown option $a (try --help)" >&2; exit 2 ;;
+	esac
+done
+cd "$(dirname "$0")/.." || exit 1
+
+failed=0  # any ✗
+nobuild=0 # a ✗ that stops the build
+pass() { printf '  ✓ %s\n' "$1"; }
+warn() { printf '  ! %s\n' "$1"; shift; fixes "$@"; }
+bad() { printf '  ✗ %s\n' "$1"; shift; fixes "$@"; failed=1; }
+fixes() { for l in "$@"; do printf '      %s\n' "$l"; done; }
+
+# The version number in a tool's output: 27.5.1 in
+# "Docker version 27.5.1, build 9f9e405", 1.26.3 in "go1.26.3".
+ver() { printf '%s\n' "$1" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1; }
+
+# at_least VERSION MAJOR MINOR
+at_least() {
+	maj=${1%%.*}
+	rest=${1#*.}
+	min=${rest%%.*}
+	[ "$maj" -gt "$2" ] || { [ "$maj" -eq "$2" ] && [ "$min" -ge "$3" ]; }
+}
+
+# Where we are, for the fix commands.
+family=
+wsl=0
+if [ "$(uname -s)" = Darwin ]; then
+	family=mac
+elif [ -r /etc/os-release ]; then
+	# shellcheck disable=SC1091
+	ids=$(. /etc/os-release && echo " ${ID:-} ${ID_LIKE:-} ")
+	case $ids in
+	*" debian "* | *" ubuntu "*) family=debian ;;
+	*" fedora "* | *" rhel "* | *" centos "*) family=fedora ;;
+	*" arch "*) family=arch ;;
+	esac
+fi
+grep -qi microsoft /proc/version 2>/dev/null && wsl=1
+
+pkg() {
+	case $family in
+	debian) echo "sudo apt install $1" ;;
+	fedora) echo "sudo dnf install $1" ;;
+	arch) echo "sudo pacman -S $1" ;;
+	mac) echo "brew install $1" ;;
+	*) echo "install $1 with your system's package manager" ;;
+	esac
+}
+getdocker='curl -fsSL https://get.docker.com | sh   (Docker'"'"'s own packages; a distro'"'"'s may be older than 28)'
+
+echo "Checking what the factory needs:"
+if [ "$family" = mac ]; then
+	warn "macOS: this builds the binary, but jobs need a Linux host or WSL2 (docs/setup.md#dependencies)"
+fi
+
+# Go: go.mod asks for the version on its go line, and Go 1.21 or later
+# fetches the one on its toolchain line by itself, which needs internet
+# the first time.
+want=$(sed -n 's/^go \([0-9.]*\).*/\1/p' go.mod)
+tool=$(sed -n 's/^toolchain go\([0-9.]*\).*/\1/p' go.mod)
+tool=${tool:-$want}
+case $(uname -m) in x86_64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; *) arch=$(uname -m) ;; esac
+case $family in
+arch | mac) gofix=$(pkg go) gofix2= ;;
+*)
+	gofix="curl -fsSL https://go.dev/dl/go$tool.linux-$arch.tar.gz | sudo tar -C /usr/local -xz"
+	gofix2='export PATH=$PATH:/usr/local/go/bin   (add it to ~/.profile too; more at https://go.dev/doc/install)' ;;
+esac
+if ! command -v go >/dev/null 2>&1; then
+	if [ -x /usr/local/go/bin/go ]; then
+		bad "Go is in /usr/local/go but not on your PATH" 'export PATH=$PATH:/usr/local/go/bin   (and add it to ~/.profile)'
+	else
+		bad "Go isn't installed (the factory needs $want or later)" "$gofix" ${gofix2:+"$gofix2"}
+	fi
+	nobuild=1
+else
+	mine=$(ver "$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null)")
+	if [ -z "$mine" ] || ! at_least "$mine" 1 21; then
+		bad "Go ${mine:-?} is too old: the factory needs $want or later" "$gofix" ${gofix2:+"$gofix2"}
+		nobuild=1
+	elif ! out=$(go env GOVERSION 2>&1); then
+		bad "Go $mine couldn't fetch Go $tool, which this build uses (offline?): $(printf '%s\n' "$out" | head -n 1)" "$gofix" ${gofix2:+"$gofix2"}
+		nobuild=1
+	elif [ "$(ver "$out")" != "$mine" ]; then
+		pass "Go $(ver "$out") (fetched by your Go $mine)"
+	else
+		pass "Go $mine"
+	fi
+fi
+
+if command -v git >/dev/null 2>&1; then
+	pass "git $(ver "$(git --version)")"
+else
+	bad "git isn't installed" "$(pkg git)"
+	nobuild=1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+	if [ $wsl = 1 ]; then
+		bad "Docker isn't installed" "install Docker Desktop for Windows and turn on Settings > Resources > WSL integration for this distro," "or install Docker inside WSL: $getdocker" "(docs/setup.md#windows-wsl2)"
+	elif [ "$family" = mac ]; then
+		bad "Docker isn't installed" "brew install --cask docker"
+	elif [ "$family" = arch ]; then
+		bad "Docker isn't installed" "sudo pacman -S docker && sudo systemctl enable --now docker"
+	else
+		bad "Docker isn't installed" "$getdocker" "then: sudo systemctl enable --now docker"
+	fi
+elif ! out=$(docker version --format '{{.Server.Version}}' 2>&1); then
+	case $out in
+	*[Pp]"ermission denied"*)
+		bad "Docker refuses you: permission denied on its socket" 'sudo usermod -aG docker $USER && newgrp docker' "(or log out and back in; on WSL, close and reopen the terminal)" ;;
+	*)
+		if [ $wsl = 1 ]; then
+			bad "Docker isn't running" "start Docker Desktop, with WSL integration on for this distro (docs/setup.md#windows-wsl2)," "or, for Docker installed inside WSL: sudo service docker start"
+		elif [ "$family" = mac ]; then
+			bad "Docker isn't running" "open -a Docker"
+		else
+			bad "Docker isn't running" "sudo systemctl start docker"
+		fi ;;
+	esac
+else
+	v=$(ver "$out")
+	if [ -n "$v" ] && ! at_least "$v" 28 0; then
+		warn "Docker $v: the egress allowlist and services need 28 or later" "upgrade: $getdocker" "or, without services, set runner.egress.mode: open in factory.yaml (jobs then reach the whole internet)"
+	else
+		pass "Docker ${v:-works}"
+	fi
+fi
+
+if [ $web = 1 ]; then
+	if ! command -v node >/dev/null 2>&1; then
+		nodefix="nvm install 22   (https://github.com/nvm-sh/nvm; apt's nodejs is too old)"
+		[ "$family" = debian ] || nodefix="$(pkg nodejs)   (or: nvm install 22)"
+		bad "Node isn't installed (the dashboard needs 22.12 or later)" "$nodefix"
+	elif v=$(ver "$(node --version)") && at_least "$v" 22 12; then
+		pass "Node $v (rebuild the dashboard with: cd web && npm ci && npm run build)"
+	else
+		bad "Node $v is too old: the dashboard needs 22.12 or later" "nvm install 22   (https://github.com/nvm-sh/nvm), or https://nodejs.org/en/download"
+	fi
+fi
+
+echo
+if [ $nobuild = 1 ]; then
+	echo "Fix the ✗ lines above, then run sh scripts/install.sh again."
+	exit 1
+fi
+echo "Building ./factory ..."
+CGO_ENABLED=0 go build -o factory ./cmd/factory || exit 1
+if [ $failed = 1 ]; then
+	echo "Built ./factory, but fix the ✗ lines above first."
+	echo "Then ./factory doctor checks your whole setup, and ./factory setup starts it."
+	exit 1
+fi
+echo "Built ./factory. Next:"
+echo
+echo "    ./factory setup"
+echo
+echo "Something not working later? ./factory doctor checks your whole setup."

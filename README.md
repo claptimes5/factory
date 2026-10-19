@@ -46,12 +46,16 @@ and admin rights on the repo you want the factory to work on.
    You don't install Claude Code, Codex or Playwright: setup builds them
    into the job image. See [Setup](docs/setup.md#dependencies) for details.
 
-2. **Build the binary.**
+2. **Check and build.** `scripts/install.sh` checks Go, git and Docker,
+   prints the command that fixes anything missing on your system, and
+   builds the binary. It installs nothing itself.
 
    ```sh
    git clone https://github.com/claptimes5/factory && cd factory
-   CGO_ENABLED=0 go build -o factory ./cmd/factory
+   sh scripts/install.sh
    ```
+
+   Or build it yourself: `CGO_ENABLED=0 go build -o factory ./cmd/factory`.
 
 3. **Run `./factory setup`.** It asks for your repos, checks Docker, creates
    a GitHub App for you, and saves your keys in `factory.env`. It checks
@@ -60,6 +64,8 @@ and admin rights on the repo you want the factory to work on.
 
 4. **Run `./factory serve`.** This is the daemon. To keep it running across
    reboots, [run it as a service](docs/setup.md#running-it-as-a-service).
+   Something not working? `./factory doctor` checks your whole setup and
+   says how to fix each problem ([Checking your setup](docs/setup.md#checking-your-setup)).
 
 5. **Protect your repo's default branch.** This is the one thing setup
    can't do for you. In the repo's settings, require a pull request with
