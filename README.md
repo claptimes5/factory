@@ -123,3 +123,14 @@ file issues and you choose which ones to build. See
 | [Security](docs/security.md) | Who can start work, how jobs are isolated, sources' tokens and untrusted text, grooming's untrusted issue text, running a preview, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |
 | [Status](docs/status.md) | What's built, and where this differs from [SPEC.md](SPEC.md) |
+
+## License
+
+Factory is source-available under the [Functional Source License, Version
+1.1, ALv2 Future License](LICENSE.md) (FSL-1.1-ALv2), copyright Avi Leavitt.
+You can use, change and share it for anything except offering a product or
+service that competes with Factory. Two years after each version is
+released, that version is also available under the Apache License 2.0.
+
+Contributions need a signed [Contributor License Agreement](CLA.md); see
+[CONTRIBUTING.md](CONTRIBUTING.md).
