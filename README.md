@@ -128,8 +128,8 @@ file issues and you choose which ones to build. See
 
 Factory is source-available under the [Functional Source License, Version
 1.1, ALv2 Future License](LICENSE.md) (FSL-1.1-ALv2), copyright Avi Leavitt.
-You can use, change and share it for anything except offering a product or
-service that competes with Factory. Two years after each version is
+You can use, change and share it for anything except offering a commercial
+product or service that competes with Factory. Two years after each version is
 released, that version is also available under the Apache License 2.0.
 
 Contributions need a signed [Contributor License Agreement](CLA.md); see

@@ -5,19 +5,23 @@ on:
   # pull_request_target so the check can comment and record signatures on
   # pull requests from forks. It never checks out the pull request's code.
   pull_request_target:
-    types: [opened, closed, synchronize]
+    types: [opened, reopened, closed, synchronize]
 permissions:
   actions: write
   contents: write
   pull-requests: write
-  statuses: write
+# One run at a time, so two signatures don't race to update the same file
+# or to create the signatures branch.
+concurrency:
+  group: cla
+  cancel-in-progress: false
 jobs:
   cla:
     if: >-
       github.event_name == 'pull_request_target' ||
       (github.event.issue.pull_request &&
        (github.event.comment.body == 'recheck' ||
-        github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+        contains(github.event.comment.body, 'I hereby sign the CLA')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -41,5 +45,6 @@ jobs:
           # needs a push to main.
           branch: cla-signatures
           path-to-signatures: signatures/cla.json
-          # Bots (the factory's own GitHub App included) don't sign.
-          allowlist: claptimes5,*[bot]
+          # The owner and known bots (the factory's own commits are
+          # factory[bot]) don't sign.
+          allowlist: claptimes5,factory[bot],dependabot[bot],github-actions[bot]

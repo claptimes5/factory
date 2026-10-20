@@ -1,5 +1,7 @@
 # Factory Individual Contributor License Agreement
 
+Version 1
+
 This agreement is adapted from the Apache Software Foundation's Individual
 Contributor License Agreement, version 2.2.
 
@@ -11,13 +13,13 @@ as the Licensor and the project's users. It does not change your rights to
 use your own Contributions for any other purpose.
 
 You sign this agreement by commenting on your pull request as the CLA
-Assistant bot asks. That records your GitHub account, the date and this
-agreement's version.
+Assistant bot asks. That records your GitHub account and the date. If
+these terms ever change, they get a new version number and contributors
+sign again; your signature covers version 1.
 
 You accept and agree to the following terms and conditions for Your
 present and future Contributions submitted to the Licensor. Except for the
-license granted herein to the Licensor and recipients of software
-distributed by the Licensor, You reserve all right, title, and interest in
+license granted herein to the Licensor, You reserve all right, title, and interest in
 and to Your Contributions.
 
 1. Definitions.
@@ -47,23 +49,24 @@ and to Your Contributions.
    designated in writing by You as "Not a Contribution."
 
 2. Grant of Copyright License. Subject to the terms and conditions of this
-   Agreement, You hereby grant to the Licensor and to recipients of
-   software distributed by the Licensor a perpetual, worldwide,
+   Agreement, You hereby grant to the Licensor a perpetual, worldwide,
    non-exclusive, no-charge, royalty-free, irrevocable copyright license to
    reproduce, prepare derivative works of, publicly display, publicly
    perform, sublicense, and distribute Your Contributions and such
    derivative works. This includes the right of the Licensor to distribute
-   Your Contributions under the license the Work is offered under at the
-   time, under any later version of it, or under any other license,
-   including the Apache License, Version 2.0 that the Work's current
-   license grants on its second anniversary.
+   Your Contributions, as part of the Work or on their own, under the
+   license the Work is offered under at the time, under any later version
+   of it, or under any other license of the Licensor's choosing, including
+   the Apache License, Version 2.0 that the Work's current license grants
+   on its second anniversary. Others receive Your Contributions from the
+   Licensor, under the license the Licensor distributes them with.
 
 3. Grant of Patent License. Subject to the terms and conditions of this
-   Agreement, You hereby grant to the Licensor and to recipients of
-   software distributed by the Licensor a perpetual, worldwide,
+   Agreement, You hereby grant to the Licensor a perpetual, worldwide,
    non-exclusive, no-charge, royalty-free, irrevocable (except as stated in
-   this section) patent license to make, have made, use, offer to sell,
-   sell, import, and otherwise transfer the Work, where such license
+   this section) patent license, with the right to sublicense it to those
+   who receive the Work from the Licensor, to make, have made, use, offer
+   to sell, sell, import, and otherwise transfer the Work, where such license
    applies only to those patent claims licensable by You that are
    necessarily infringed by Your Contribution(s) alone or by combination of
    Your Contribution(s) with the Work to which such Contribution(s) was
