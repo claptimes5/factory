@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
-import { ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
+import { Ago, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ago, cn, repoName, shortSha } from "@/lib/utils";
@@ -200,7 +200,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           {r.checking ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
               <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "check" ? "Checking now" : r.action === "baseline" ? "Making the lint baseline" : "Checking, then filing issues"}, started{" "}
-              {ago(r.checking_since)}
+              <Ago ts={r.checking_since} />
             </span>
           ) : data.can_check ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={check}>
@@ -379,11 +379,36 @@ export function SetupScreen() {
   );
 }
 
+const actionText: Record<string, string> = {
+  check: "Checking",
+  file: "Checking, then filing issues for",
+  queue: "Checking, then filing and starting work on",
+  baseline: "Making the lint baseline for",
+};
+
 /** A line above every screen while a repo isn't ready, or once all are and nothing else has started. */
 export function SetupBanner() {
   const { data } = useReadiness();
   const here = useLocation().pathname === "/setup";
-  if (!data || !data.banner || here) return null;
+  if (!data || here) return null;
+  // Setup's own runs aren't jobs, so the Floor doesn't show them: say so here.
+  const running = data.repos.find((r) => r.checking);
+  const doing = running && (
+    <span className="flex items-center gap-2">
+      <Loader2 className="size-3.5 animate-spin text-primary-soft" aria-hidden />
+      {actionText[running.action] ?? "Checking"} {repoName(running.repo) || running.repo}, started <Ago ts={running.checking_since} />.
+      <Link to="/setup" className="underline underline-offset-2">
+        Watch it
+      </Link>
+    </span>
+  );
+  if (!data.banner) {
+    return doing ? (
+      <section aria-label="Setup" className="border-b px-4 py-2 text-sm md:px-6">
+        <div className="mx-auto max-w-[1680px]">{doing}</div>
+      </section>
+    ) : null;
+  }
   if (data.banner === "ready") {
     return (
       <section aria-label="Setup" className="border-b border-success/30 bg-success/10 px-4 py-2.5 text-sm md:px-6">
@@ -414,6 +439,7 @@ export function SetupBanner() {
         <Link to="/setup" className="font-medium underline underline-offset-2">
           See what's missing
         </Link>
+        {doing}
       </div>
     </section>
   );

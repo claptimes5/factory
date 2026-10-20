@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
@@ -6,7 +6,7 @@ import { act, useJob, type Gate } from "@/api/client";
 import { Choices } from "@/components/Choices";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn, stageName } from "@/lib/utils";
+import { ago, cn, stageName } from "@/lib/utils";
 
 export function Loading({ what = "Loading" }: { what?: string }) {
   return (
@@ -202,4 +202,14 @@ export function Inline({ text }: { text: string }) {
       )}
     </>
   );
+}
+
+/** "2m ago" that keeps counting: the page's data doesn't change while something runs, so this redraws itself each second. */
+export function Ago({ ts }: { ts: string }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{ago(ts)}</>;
 }
