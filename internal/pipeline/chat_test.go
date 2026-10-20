@@ -247,3 +247,20 @@ func TestChatSurvivesAStop(t *testing.T) {
 		t.Errorf("running = %d after the reply", n)
 	}
 }
+
+// Plans and chat replies are written to be acted on, unless concise_asks
+// is off; the file's attribution stays out of the prompt.
+func TestConciseAsks(t *testing.T) {
+	t.Parallel()
+	e := setup(t)
+	j := &store.Job{Kind: store.KindChat, Route: "orchestrate"}
+	got, err := e.p.renderStep(j, "chat", nil, ChatPrompt{Message: "hi"})
+	if err != nil || !strings.Contains(got, "Lead with what the reader decides") || strings.Contains(got, "MIT License") {
+		t.Fatalf("on: %v\n%s", err, got)
+	}
+	off := false
+	e.p.Cfg.ConciseAsks = &off
+	if got, _ := e.p.renderStep(j, "chat", nil, ChatPrompt{Message: "hi"}); strings.Contains(got, "Lead with what the reader decides") {
+		t.Fatal("concise_asks off still adds the rules")
+	}
+}

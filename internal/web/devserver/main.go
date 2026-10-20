@@ -503,7 +503,7 @@ new file mode 100644
 	if _, err := job(111, "triage", "haiku", state.Succeeded, 0.05, `{"decision":"ready","complexity":"L","risk":"low","question":"","summary":"Move billing into its own service behind the existing API."}`); err != nil {
 		return err
 	}
-	plan, err := job(111, "plan", "opus", state.Succeeded, 0.88, `{"approach":"Move billing/ into a new service and call it over the existing internal API, keeping the database tables where they are for now.",`+
+	plan, err := job(111, "plan", "opus", state.Succeeded, 0.88, `{"ask":"Keep the billing tables in the main database for now (recommended: the switch-over stays reversible), or move them with the service in this change?","approach":"Move billing/ into a new service and call it over the existing internal API, keeping the database tables where they are for now.",`+
 		`"files":["billing/service.go","api/billing_client.go","deploy/billing.yaml"],"risks":["Invoices issued during the switch-over could be counted twice."],"tests":"Contract tests between the API and the new service, and the existing billing suite."}`)
 	if err != nil {
 		return err

@@ -800,37 +800,17 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := state.CheckStage(it.Stage, state.Epic); err != nil {
 					return "", fmt.Errorf("refused: item %d is %s; only a parked or untriaged item can be split", a.Item, it.Stage)
 				}
-				all, err := p.Store.ListItems(ctx)
+				kids, err := p.childItems(ctx, it.ID)
 				if err != nil {
 					return "", err
 				}
-				var refs []string
-				for _, c := range all {
-					if c.ParentID != nil && *c.ParentID == it.ID {
-						refs = append(refs, p.ref(c.Repo, c.IssueNumber))
-					}
-				}
-				if len(refs) == 0 {
+				if len(kids) == 0 {
 					return "", fmt.Errorf("refused: item %d has no child issues; open them with create_issue and parent %d first", a.Item, a.Item)
 				}
 				if err := audit(ctx, "close_split", &a.Item, a.Reason, raw); err != nil {
 					return "", err
 				}
-				gh := p.gh(it.Repo)
-				closeIt := func(context.Context, int) error { return errors.New("its client can't close issues") }
-				if c, ok := gh.(issueCloser); ok {
-					closeIt = c.CloseIssue
-				}
-				// Not planned, where the host says so: the readiness check
-				// files again an issue closed as done.
-				if c, ok := gh.(notPlannedCloser); ok {
-					closeIt = c.CloseNotPlanned
-				}
-				p.warn(gh.Comment(ctx, it.IssueNumber, fmt.Sprintf("**Factory:** split into %s, which replace this issue. %s", strings.Join(refs, ", "), a.Reason)), "Comment")
-				if err := closeIt(ctx, it.IssueNumber); err != nil {
-					return "", err
-				}
-				return "ok", p.Store.SetStage(ctx, it.ID, state.Epic, actor, "split into "+strings.Join(refs, ", "))
+				return "ok", p.closeSplit(ctx, it, kids, actor, a.Reason)
 			})},
 		{Name: "park", Description: "Park an item for a human, with the reason they will read.",
 			InputSchema: schema(`"item":{"type":"integer"},`+reasonProp, "item", "reason"),
@@ -1133,7 +1113,83 @@ func (p *Pipeline) pickRepo(name string) (string, error) {
 	return r.Name, nil
 }
 
+// childItems are the items an item was split into.
+func (p *Pipeline) childItems(ctx context.Context, id int64) ([]*store.WorkItem, error) {
+	all, err := p.Store.ListItems(ctx)
+	var out []*store.WorkItem
+	for _, it := range all {
+		if it.ParentID != nil && *it.ParentID == id {
+			out = append(out, it)
+		}
+	}
+	return out, err
+}
+
+// closeSplit closes a parked or untriaged item's issue in favor of the
+// issues it was split into, saying so on it, and makes it their epic.
+func (p *Pipeline) closeSplit(ctx context.Context, it *store.WorkItem, kids []*store.WorkItem, actor, reason string) error {
+	refs := make([]string, len(kids))
+	for i, c := range kids {
+		refs[i] = p.ref(c.Repo, c.IssueNumber)
+	}
+	gh := p.gh(it.Repo)
+	closeIt := func(context.Context, int) error { return errors.New("its client can't close issues") }
+	if c, ok := gh.(issueCloser); ok {
+		closeIt = c.CloseIssue
+	}
+	// Not planned, where the host says so: the readiness check files
+	// again an issue closed as done.
+	if c, ok := gh.(notPlannedCloser); ok {
+		closeIt = c.CloseNotPlanned
+	}
+	// Closed first, so a close that keeps failing doesn't comment on
+	// every sweep.
+	if err := closeIt(ctx, it.IssueNumber); err != nil {
+		return err
+	}
+	p.warn(gh.Comment(ctx, it.IssueNumber, strings.TrimSpace(fmt.Sprintf("**Factory:** split into %s, which replace this issue. %s", strings.Join(refs, ", "), reason))), "Comment")
+	return p.Store.SetStage(ctx, it.ID, state.Epic, actor, "split into "+strings.Join(refs, ", "))
+}
+
+// splitSettle is how long a parked item's newest sub-issue must be
+// before the daemon closes it in favor of them: chat or a person may
+// still be opening the rest.
+// ponytail: a fixed wait, not a signal that the split is finished; a
+// sub-issue opened after it is still built, just not named on the issue.
+const splitSettle = 10 * time.Minute
+
+// settleSplits closes each parked item that has sub-issues in favor of
+// them, once they have stopped coming, when nobody called close_split:
+// a split chat that didn't, or drafts created one by one.
+func (p *Pipeline) settleSplits(ctx context.Context) error {
+	parked, err := p.Store.ListItems(ctx, state.Parked)
+	if err != nil {
+		return err
+	}
+	for _, it := range parked {
+		kids, err := p.childItems(ctx, it.ID)
+		if err != nil {
+			return err
+		}
+		if len(kids) == 0 {
+			continue
+		}
+		newest := ""
+		for _, c := range kids {
+			newest = max(newest, c.CreatedAt)
+		}
+		if t, err := time.Parse(store.TimeFormat, newest); err == nil && time.Since(t) < splitSettle {
+			continue
+		}
+		p.warn(p.closeSplit(ctx, it, kids, "daemon", ""), "closeSplit")
+	}
+	return nil
+}
+
 func (p *Pipeline) finishEpics(ctx context.Context) error {
+	if err := p.settleSplits(ctx); err != nil {
+		return err
+	}
 	epics, err := p.Store.ListItems(ctx, state.Epic)
 	if err != nil || len(epics) == 0 {
 		return err

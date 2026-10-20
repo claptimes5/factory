@@ -91,7 +91,10 @@ type APIStop struct {
 
 // APIPlan is the plan the builder wrote before building a big item.
 type APIPlan struct {
-	JobID    int64    `json:"job_id"`
+	JobID int64 `json:"job_id"`
+	// Ask is the call the plan needs from the person, with its
+	// recommendation; "" on plans from before it was asked.
+	Ask      string   `json:"ask"`
 	Approach string   `json:"approach"`
 	Files    []string `json:"files"`
 	Risks    []string `json:"risks"`
@@ -535,9 +538,9 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.NeedsYou = true
 		// Said here, not as recorded: the page and the card show the plan
 		// and the buttons, and the issue's link, beside it.
-		a.BlockedNote = "Waiting for your OK on the plan. Read it, then build it or ask for another plan."
+		a.BlockedNote = "Waiting for your OK on the plan before a big build: build it or ask for another plan. The plan says what to check."
 		if a.EstimateWaiting {
-			a.BlockedNote = "Waiting for your OK on the plan and the cost (est. " + e.Range() + "). Read the plan, then build it, which approves both, or ask for another plan."
+			a.BlockedNote = "Waiting for your OK on the plan and the cost (est. " + e.Range() + ") before a big build: build it, which approves both, or ask for another plan. The plan says what to check."
 		}
 	}
 	return a
@@ -558,7 +561,7 @@ func (s *Server) apiPlan(r *http.Request, it *store.WorkItem) *APIPlan {
 		From  string `json:"from"`
 	}
 	_ = json.Unmarshal([]byte(ps.Job.Input), &in)
-	a := &APIPlan{JobID: ps.Job.ID, Approach: v.Approach, Files: v.Files, Risks: v.Risks, Tests: v.Tests,
+	a := &APIPlan{JobID: ps.Job.ID, Ask: v.Ask, Approach: v.Approach, Files: v.Files, Risks: v.Risks, Tests: v.Tests,
 		Waiting: ps.Waiting && it.Stage == state.Blocked}
 	if a.Files == nil {
 		a.Files = []string{}

@@ -376,6 +376,9 @@ type Config struct {
 	Security Security `yaml:"security"`
 	// Plan is the plan check for big items before the build. See Plan.
 	Plan Plan `yaml:"plan"`
+	// ConciseAsks shapes what the factory writes for a person to act on
+	// (plans and chat replies) with prompts/concise.md. On unless false.
+	ConciseAsks *bool `yaml:"concise_asks,omitempty"`
 	// NoGuard turns off auto-merge's guard rails' polling and breaker: the
 	// revert watch and the strikes that trip it. eval and compare set it,
 	// since the base branch they'd read is the real repo's, not the run's.

@@ -1,6 +1,7 @@
 You are the builder in a software factory, and this is the planning step before the build. Read the issue below and the repository in the current directory, then write a short plan for the change. Do not change any files: this checkout is read-only, and the build comes later, after someone approves the plan.
 
-The plan is for a person to read on the issue in a minute or two, so keep it under about 400 words in all. Give:
+The plan is for a person to read on the issue in a minute or two, so keep it under about 400 words in all. They approve it, or ask for another plan, and the build goes ahead on it. Give:
+- `ask`: the one call you need from them before the build, as a question they can answer from this plan alone, with your recommendation and what each answer means for the build. Pick the choice that matters most: a scope or approach the issue leaves open, an assumption you had to make, or a trade-off they may weigh differently. One or two sentences. If nothing is open, say in one sentence what approving it commits to.
 - `approach`: how you will make the change, in a few sentences: the design, and where it fits in the code that is there.
 - `files`: the files you expect to add or change, each as a path, with a few words on what changes in it if that isn't obvious.
 - `risks`: what could go wrong, what the issue leaves unclear and what you will assume about it, and anything that could break for users. `[]` if there is nothing worth saying.

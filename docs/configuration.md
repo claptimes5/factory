@@ -832,6 +832,19 @@ for its `factory:go`, or `factory:retry` to start over.
 `factory eval` and `compare` turn plans off: nobody is there to approve
 one.
 
+### Concise asks
+
+```yaml
+concise_asks: true   # the default; false writes plans and chat replies as before
+```
+
+Plans and chat replies are what you read and act on, so while
+`concise_asks` is on their prompts end with `prompts/concise.md`: lead
+with what you decide, short numbered steps, at most five items a list, no
+preamble or recap. It's adapted from the MIT-licensed
+[i-have-adhd](https://github.com/ayghri/i-have-adhd) skill; edit the file
+to change the rules. It's under Settings > Asks too.
+
 ## Tuning
 
 The [tuning loop](using.md#tuning) proposes changes to the settings from

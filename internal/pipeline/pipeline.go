@@ -1495,6 +1495,20 @@ func (p *Pipeline) renderStep(j *store.Job, stage string, repos []string, d any)
 	if err != nil {
 		return "", err
 	}
+	// What a person reads and acts on is shaped to be acted on quickly.
+	if p.Cfg.Concise() && (stage == "plan" || stage == "chat") {
+		b, err := os.ReadFile(filepath.Join(p.Cfg.Path(p.Cfg.PromptsDir), "concise.md"))
+		if err == nil {
+			// The attribution comment is for people editing the file.
+			s := string(b)
+			if i := strings.Index(s, "-->"); strings.HasPrefix(s, "<!--") && i >= 0 {
+				s = s[i+3:]
+			}
+			prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimSpace(s) + "\n"
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
 	extra, err := p.Cfg.StepInstructions(j.Route, j.Kind, repos...)
 	if err != nil || extra == "" {
 		return prompt, err
