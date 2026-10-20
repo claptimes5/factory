@@ -2,7 +2,8 @@ name: release
 # Run by hand (Actions > release > Run workflow). The version comes from
 # the pull requests merged since the last tag: the biggest of their
 # semver:major and semver:minor labels, else a patch. The first release
-# is v0.1.0. With dry_run it only says what it would release.
+# is v0.1.0; until v1.0.0 a breaking change bumps the minor version. With
+# dry_run it only says what it would release.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +11,10 @@ on:
         description: Only print the next version and its pull requests
         type: boolean
         default: true
+      version:
+        description: "Release this version instead, such as v1.0.0 (empty: from the labels)"
+        type: string
+        default: ""
 permissions:
   contents: write
   pull-requests: read
@@ -31,6 +36,8 @@ jobs:
           fetch-depth: 0
       - name: next version
         id: next
+        env:
+          FORCE: ${{ inputs.version }}
         run: |
           sha=$(git rev-parse HEAD)
           last=$(git tag --list 'v*' --sort=-v:refname | head -n1)
@@ -54,11 +61,26 @@ jobs:
               echo "#$n: $(echo $labels | tr ' ' ',')"
             done
             IFS=. read -r major minor patch <<<"${last#v}"
+            # Before 1.0 a breaking change bumps the minor version: 1.0.0
+            # is a release made on purpose, not by a label.
+            if [ "$bump" = major ] && [ "$major" = 0 ]; then bump=minor; fi
             case $bump in
               major) next="v$((major + 1)).0.0" ;;
               minor) next="v$major.$((minor + 1)).0" ;;
               patch) next="v$major.$minor.$((patch + 1))" ;;
             esac
+          fi
+          if [ -n "$FORCE" ]; then
+            if ! echo "$FORCE" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version must look like v1.2.3, not $FORCE."
+              exit 1
+            fi
+            if [ -n "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$FORCE" | sort -V | tail -n1)" != "$FORCE" ] || [ "$FORCE" = "$last" ]; then
+              echo "::error::$FORCE isn't after $last."
+              exit 1
+            fi
+            echo "From the labels: $next. Releasing $FORCE as asked."
+            next=$FORCE
           fi
           echo "Last: ${last:-none}. Next: $next."
           echo "## $next" >> "$GITHUB_STEP_SUMMARY"

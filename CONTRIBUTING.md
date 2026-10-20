@@ -34,7 +34,10 @@ macOS (amd64 and arm64), and publishes a GitHub release with notes from
 those pull requests. Leave **dry_run** checked to see the version and its
 pull requests first; uncheck it to release. It only releases a commit whose
 CI passed on `main`. The first release is v0.1.0. While the version is
-0.x, the config and API may still change between minor versions.
+0.x, `semver:major` bumps the minor version (v0.4.2 → v0.5.0), so the
+config and API may change between minor versions. To release v1.0.0,
+type it in the workflow's **version** box; after it the labels apply as
+above.
 
 ## Contributor License Agreement
 
