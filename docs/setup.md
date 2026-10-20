@@ -41,6 +41,12 @@ sh scripts/install.sh
 ./factory serve
 ```
 
+The first run makes `factory.yaml` from `factory.example.yaml`. It's
+yours: git ignores it, so `git pull` never conflicts with your settings.
+(A checkout from before this tracked `factory.yaml`; to update one, keep
+yours aside first: `cp factory.yaml factory.yaml.mine && git checkout --
+factory.yaml && git pull && mv factory.yaml.mine factory.yaml`.)
+
 Then open http://127.0.0.1:8080/app/get-started and follow the steps (see
 [Setting up in the browser](#setting-up-in-the-browser)). On a server, or
 in a script, run `./factory setup` in a terminal instead: it asks the same

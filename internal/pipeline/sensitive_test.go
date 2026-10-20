@@ -16,7 +16,7 @@ import (
 // pass and the guard, but not the person.
 func TestSensitiveCodeIsTreatedAlike(t *testing.T) {
 	t.Parallel()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

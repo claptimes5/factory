@@ -8,7 +8,7 @@ import (
 
 func TestPlanFor(t *testing.T) {
 	t.Parallel()
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	parse := func(plan string) (*Config, error) { return Parse(append(append([]byte{}, b...), []byte("\n"+plan)...)) }
 	c, err := parse("")
 	if err != nil {

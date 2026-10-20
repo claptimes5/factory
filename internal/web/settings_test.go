@@ -49,7 +49,7 @@ func (f *fakeRestarter) Running() int         { return 2 }
 func settingsSetup(t *testing.T, listen string) (string, string, *Server, *fakeRestarter) {
 	t.Helper()
 	_, _, _, s := apiSetup(t)
-	src, err := os.ReadFile("../../factory.yaml")
+	src, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

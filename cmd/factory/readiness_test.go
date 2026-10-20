@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -280,5 +281,30 @@ func TestCloseFixedClosesTheIssueAndItsSplit(t *testing.T) {
 	closeFixed(ctx, f, st, &readiness.Report{Repo: "o/r", Incomplete: true, Runs: []readiness.Run{{Gate: "test", Passed: true}}}, filed)
 	if len(f.closed) != 0 {
 		t.Fatalf("closed %v from an incomplete check", f.closed)
+	}
+}
+
+// The first run makes factory.yaml from the example beside it, and never
+// touches one that's there.
+func TestFirstConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "factory.yaml")
+	if err := firstConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("made a config with no example to make it from")
+	}
+	os.WriteFile(filepath.Join(dir, "factory.example.yaml"), []byte("repo: you/app\n"), 0o644)
+	if err := firstConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "repo: you/app\n" {
+		t.Fatalf("factory.yaml = %q", b)
+	}
+	os.WriteFile(path, []byte("repo: me/mine\n"), 0o644)
+	firstConfig(path)
+	if b, _ := os.ReadFile(path); string(b) != "repo: me/mine\n" {
+		t.Fatalf("an existing config was overwritten: %q", b)
 	}
 }

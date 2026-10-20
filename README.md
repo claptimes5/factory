@@ -63,7 +63,9 @@ and admin rights on the repo you want the factory to work on.
 3. **Run `./factory serve`, then open http://127.0.0.1:8080/app/get-started.**
    The page walks you through the rest: your repos, Docker, a GitHub App it
    creates for you, and your keys, checking each as you go and saving them
-   in `factory.env`. Finish starts the factory. On a server or in a script,
+   in `factory.yaml` and `factory.env`. The first run makes `factory.yaml`
+   from `factory.example.yaml`; both are yours, and git ignores them, so
+   pulling a new version never touches your settings. Finish starts the factory. On a server or in a script,
    `./factory setup` asks the same in the terminal.
    [Setting up in the browser](docs/setup.md#setting-up-in-the-browser).
 
