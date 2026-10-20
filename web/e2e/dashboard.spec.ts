@@ -275,7 +275,7 @@ test("a stopped item says what happened, job by job, and Split it asks chat for 
   await needs.getByTestId("card").filter({ hasText: "Paginate the audit log API" }).filter({ visible: true }).getByRole("link", { name: /Paginate/ }).click();
   const happened = page.getByTestId("happened");
   // The header says only "parked"; this says the build failed first.
-  await expect(happened).toContainText(/The build failed: gates failed: test \(TestAuditPage: want 50 rows, got 49\) \(job #\d+\), then its retry was cancelled by you \(job #\d+\)\./);
+  await expect(happened).toContainText(/The build failed: gates failed: diff_guard \(changes 912 lines, max 400; split the task\) \(job #\d+\), then its retry was cancelled by you \(job #\d+\)\./);
   await expect(happened.getByRole("link", { name: /job #/ })).toHaveCount(2);
   await shot(page, info, "what-happened");
   if (phone(info)) await noSidewaysScroll(page);

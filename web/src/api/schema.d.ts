@@ -2954,6 +2954,8 @@ export interface components {
             summary: string;
             /** @description Its parts in order */
             steps: components["schemas"]["HappenedStep"][];
+            /** @description What to do when the last build failed a check that fails on the base branch too, as the setup check found; empty otherwise */
+            note: string;
         };
         HappenedStep: {
             text: string;

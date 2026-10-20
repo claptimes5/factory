@@ -186,3 +186,20 @@ export function WaitsFor({ items, plan, className }: { items: { id: number; ref:
     </p>
   );
 }
+
+/** "`lint` fails on main" with the command in code. */
+export function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(`[^`]+`)/).map((part, i) =>
+        part.startsWith("`") && part.endsWith("`") && part.length > 1 ? (
+          <code key={i} className="rounded bg-muted px-1 font-mono text-[0.9em]">
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}

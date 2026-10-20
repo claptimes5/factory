@@ -331,3 +331,27 @@ func TestReviewGuide(t *testing.T) {
 		t.Fatalf("report (%d, was %d):\n%s", r.Score, without, r.Text())
 	}
 }
+
+// A test command that passes without running a test, like RSpec on a
+// Minitest suite, is a blocker for the factory's config, with no issue.
+func TestTestsThatRanNothing(t *testing.T) {
+	dir := tree(t, "Gemfile", "test/test_helper.rb", "test/models/user_test.rb")
+	exec := func(_ context.Context, _ string, cmd string, _ bool) (int, string, error) {
+		if cmd == "run test" {
+			return 0, "Finished in 0.0003 seconds (files took 0.4 seconds to load)\n0 examples, 0 failures\n", nil
+		}
+		return 0, "", nil
+	}
+	r := Assess(context.Background(), Input{Repo: repo("", "test"), Dir: dir, Exec: exec})
+	if r.Ready || titles(r, Blocker) != "`test` passes without running any tests" || strings.Contains(titles(r, Good), "passing twice") {
+		t.Fatalf("report:\n%s", r.Text())
+	}
+	for _, is := range r.Issues() {
+		if strings.Contains(is.Title, "test") && !strings.Contains(is.Title, "end-to-end") {
+			t.Fatalf("an issue was planned for the factory's own config: %+v", is)
+		}
+	}
+	if !ranNoTests.MatchString("Run options: --seed 1\n\n0 runs, 0 assertions, 0 failures, 0 errors, 0 skips\n") || ranNoTests.MatchString("12 examples, 0 failures") {
+		t.Fatal("ranNoTests: Minitest's empty run, or a real RSpec run")
+	}
+}

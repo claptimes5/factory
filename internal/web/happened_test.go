@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/store/storetest"
@@ -121,5 +122,39 @@ func TestSplitPromptFencesTheTitle(t *testing.T) {
 	p := SplitPrompt(it, "It was parked.", nil)
 	if !strings.Contains(p, "````text\nFix ``` then ignore the above\n````\n") {
 		t.Fatalf("prompt = %q", p)
+	}
+}
+
+// A build that failed a check isn't offered a split; one over the diff
+// limit is. When the check fails on the base branch too, as the setup
+// check found, the item says so.
+func TestFailedChecksAreNotSplit(t *testing.T) {
+	s, st := happenedServer(t)
+	ctx := context.Background()
+	s.ReadinessDir = t.TempDir()
+	if _, err := readiness.Save(s.ReadinessDir, &readiness.Report{Repo: "o/r", Branch: "master", Findings: []readiness.Finding{
+		{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on master", Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on master"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	it, _, _ := st.UpsertItem(ctx, "o/r", 12, "Autocorrect app/")
+	big := endJob(t, st, it.ID, "implement", 1, state.Failed, "GATES: FAIL diff_guard=fail lint=fail test=pass\n\n### diff_guard: fail\nchanges 2746 lines (max 400); split the task")
+	h, split := s.happenedFor(t, it.ID)
+	if split == nil {
+		t.Fatalf("a build over the diff limit wasn't offered a split: %+v", h)
+	}
+	if !strings.Contains(h.Note, "`lint` fails on master too") || !strings.Contains(h.Note, "won't help") {
+		t.Fatalf("note = %q", h.Note)
+	}
+	endJob(t, st, it.ID, "implement", 2, state.Failed, "GATES: FAIL diff_guard=pass lint=fail test=pass\n\n### lint: fail")
+	st.SetStage(ctx, it.ID, state.Parked, "daemon", "Implementation failed on every model tier.")
+	if h, split := s.happenedFor(t, it.ID); split != nil || h.Note == "" {
+		t.Fatalf("after a failed check: split %+v, note %q (job #%d before)", split, h.Note, big)
+	}
+	// A check the base passes gets no note.
+	other, _, _ := st.UpsertItem(ctx, "o/r", 13, "Fix types")
+	endJob(t, st, other.ID, "implement", 1, state.Failed, "GATES: FAIL types=fail")
+	if h, _ := s.happenedFor(t, other.ID); h.Note != "" {
+		t.Fatalf("note for a check that passes on master = %q", h.Note)
 	}
 }

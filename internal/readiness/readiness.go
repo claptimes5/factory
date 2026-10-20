@@ -71,7 +71,7 @@ type Run struct {
 	Command  string        `json:"command"`
 	Passed   bool          `json:"passed"`
 	Duration time.Duration `json:"duration"`
-	Output   string        `json:"output,omitempty"` // the end of it, when it failed
+	Output   string        `json:"output,omitempty"` // the end of it, when it failed or ran no tests
 }
 
 // Report is the result for one repository.
@@ -125,7 +125,8 @@ func Assess(ctx context.Context, in Input) *Report {
 		start := time.Now()
 		code, out, err := in.Exec(ctx, in.Dir, cmd, install)
 		x := Run{Gate: gate, Command: cmd, Passed: err == nil && code == 0, Duration: time.Since(start).Round(time.Second)}
-		if !x.Passed {
+		// Kept when it failed, or passed without running a test.
+		if !x.Passed || ranNoTests.MatchString(out) {
 			if err != nil {
 				out += "\n" + err.Error()
 			}
@@ -236,6 +237,11 @@ func Assess(ctx context.Context, in Input) *Report {
 			Detail: "The factory proves a change by its tests. With none, a reviewer can only read the code.",
 			Issue: &Issue{Key: "no-tests", Title: "Add a test suite with tests for the main behaviors",
 				Body: "This repo has no tests. Set up the standard test framework for its stack, wire it to the test command in factory.yaml, and add tests for the most important behaviors (the main user flows and the riskiest logic). Keep them fast and deterministic: no network, no dependence on time or order."}})
+	case testRun != nil && testRun.Passed && ranNoTests.MatchString(testRun.Output):
+		// The factory's to fix, not the repo's: no issue.
+		r.add(Finding{Level: Blocker, Area: "tests", Title: "`test` passes without running any tests",
+			Detail: fmt.Sprintf("Its output says no tests ran, though the repo has %d test files, so every change would pass it untested. "+
+				"The command is probably for another framework, such as RSpec on a Minitest suite: fix `test` under the repo's gates in factory.yaml.\n\n%s", tests, fence(testRun.Output))})
 	case testRun != nil && testRun.Passed:
 		// Run them again: a suite that passes and fails at random makes every
 		// gate result a coin flip.
@@ -685,3 +691,7 @@ func Save(dir string, r *Report) (string, error) {
 }
 
 func jsonMarshal(r *Report) ([]byte, error) { return json.MarshalIndent(r, "", "  ") }
+
+// ranNoTests matches a test runner's summary of a run with no tests:
+// RSpec, Minitest, pytest, unittest, Jest and Vitest.
+var ranNoTests = regexp.MustCompile(`(?m)\b0 examples, 0 failures|^0 runs, 0 assertions|collected 0 items|^Ran 0 tests|No tests found|No test files found`)
