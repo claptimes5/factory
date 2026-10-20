@@ -277,14 +277,25 @@ func TestReadinessShowsASplitBlocker(t *testing.T) {
 			}
 		}
 	}
+	// The last waits for both, but only the one not done yet shows.
+	last, _, _ := st.UpsertItem(ctx, "o/r", 22, "the rest")
+	st.SetParent(ctx, last.ID, lint.ID)
+	first, _ := st.ItemByIssue(ctx, "o/r", 20)
+	done, _ := st.ItemByIssue(ctx, "o/r", 21)
+	if err := st.SetDependencies(ctx, last.ID, []int64{first.ID, done.ID}, "chat", "after the autocorrects"); err != nil {
+		t.Fatal(err)
+	}
 	var got APIReadiness
 	getJSON(t, base+"/api/v1/readiness", &got)
-	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitDone != 1 || f.SplitTotal != 2 {
+	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitDone != 1 || f.SplitTotal != 3 {
 		t.Fatalf("lint = %+v", f)
 	}
 	var d APIItemDetail
 	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(lint.ID, 10), &d)
-	if len(d.Children) != 2 || d.Children[0].Issue != 20 || d.Children[1].Stage != "done" || d.Item.NeedsYou {
+	if len(d.Children) != 3 || d.Children[0].Issue != 20 || d.Children[1].Stage != "done" || d.Item.NeedsYou {
 		t.Fatalf("detail = %+v", d)
+	}
+	if w := d.Children[2].WaitsFor; len(w) != 1 || w[0].ID != first.ID || w[0].Ref != "o/r#20" || len(d.Children[0].WaitsFor) != 0 {
+		t.Fatalf("waits for = %+v", d.Children)
 	}
 }

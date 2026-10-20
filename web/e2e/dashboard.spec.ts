@@ -69,6 +69,8 @@ test("an item whose plan waits shows the plan, a Build it button and another pla
   const card = needs.getByTestId("card").filter({ hasText: "Split billing out of the monolith" }).filter({ visible: true });
   await expect(card).toContainText("Plan check");
   await expect(card).toContainText("build it or ask for another plan");
+  await expect(card.getByTestId("waits-for")).toContainText("approving its plan now won't start it early");
+  await expect(card.getByTestId("waits-for").getByRole("link", { name: /103/ })).toBeVisible();
   await expect(card.getByRole("link", { name: /Open the issue/ })).toHaveAttribute("href", /acme\/api\/issues\/111$/);
   await card.getByRole("link", { name: "Read the plan" }).click();
   const plan = page.getByTestId("plan");
