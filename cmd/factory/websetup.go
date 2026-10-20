@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,8 +56,9 @@ type wizard struct {
 	images    map[string]bool // job image tag: built
 	access    map[string]web.APIWizardAccess
 	// detected is what each reachable repo's files suggest for its checks,
-	// read with the access check.
+	// read with the access check; tries are the last "Try these checks".
 	detected  map[string]*stack.Suggestion
+	tries     map[string]*web.APIWizardTry
 	credGen   int // bumped by each credential change, so stale checks are dropped
 	labels    []web.APIWizardLabel
 	missing   []string // accounts the app isn't installed on, from the last check
@@ -423,6 +425,11 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 	var unsaved, disagree []string
 	for _, r := range cfg.Repos {
 		c := wizardChecks(r, w.detected[r.Name])
+		if t := w.tries[r.Name]; t != nil {
+			cp := *t
+			cp.Steps = slices.Clone(t.Steps)
+			c.Try = &cp
+		}
 		out.Checks = append(out.Checks, c)
 		switch {
 		case !c.Saved:
@@ -788,6 +795,8 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return w.useBranch(ctx, cfg, in.Repo, in.Branch)
 	case "checks/save":
 		return w.saveChecks(ctx, cfg, in)
+	case "checks/try":
+		return w.tryChecks(cfg, in)
 	case "labels":
 		return w.createLabels(ctx, cfg)
 	case "claude":
@@ -1483,29 +1492,37 @@ func wizardChecks(r config.Repo, s *stack.Suggestion) web.APIWizardChecks {
 		}
 		c.Gates = append(c.Gates, row)
 	}
+	// The services: the saved ones, then the suggested it lacks.
+	c.Services, c.Env = []web.APIWizardService{}, map[string]string{}
+	for _, n := range slices.Sorted(maps.Keys(r.Services)) {
+		c.Services = append(c.Services, web.APIWizardService{Name: n, Image: r.Services[n].Image, Saved: true})
+	}
+	maps.Copy(c.Env, r.Env)
+	if s != nil {
+		for _, n := range slices.Sorted(maps.Keys(s.Services)) {
+			if _, ok := r.Services[n]; !ok {
+				c.Services = append(c.Services, web.APIWizardService{Name: n, Image: s.Services[n].Image})
+			}
+		}
+		for k, v := range s.Env {
+			if _, ok := c.Env[k]; !ok {
+				c.Env[k] = v
+			}
+		}
+	}
 	return c
 }
 
-// saveChecks writes a repo's install, base image and check commands to
-// factory.yaml, as the person confirmed them on the page.
-func (w *wizard) saveChecks(ctx context.Context, cfg *config.Config, in web.WizardInput) (string, error) {
-	i := slices.IndexFunc(cfg.Repos, func(r config.Repo) bool { return strings.EqualFold(r.Name, in.Repo) })
-	if i < 0 {
-		return "", fmt.Errorf("%s isn't one of the factory's repos", in.Repo)
-	}
-	repos := slices.Clone(cfg.Repos)
-	r := repos[i]
+// applyChecks is repo r with the install, base image, checks, services and
+// environment on the page: what checks/save writes and checks/try runs.
+// A service is one shown on the page: saved, or suggested in s.
+func applyChecks(r config.Repo, in web.WizardInput, s *stack.Suggestion) (config.Repo, error) {
 	var g config.Gates
 	if r.Gates != nil {
 		g = *r.Gates // keeps what the page doesn't show, such as the diff guard
-	} else {
-		w.mu.Lock()
-		s := w.detected[r.Name]
-		w.mu.Unlock()
-		if s == nil || !s.Go {
-			// proves_fix and coverage are Go-only for now.
-			g.ProvesFix, g.Coverage = "none", "none"
-		}
+	} else if s == nil || !s.Go {
+		// proves_fix and coverage are Go-only for now.
+		g.ProvesFix, g.Coverage = "none", "none"
 	}
 	g.Install = strings.TrimSpace(in.Install)
 	g.Commands, g.Required = map[string]string{}, nil
@@ -1517,9 +1534,51 @@ func (w *wizard) saveChecks(ctx context.Context, cfg *config.Config, in web.Wiza
 	}
 	slices.SortFunc(g.Required, byGateOrder)
 	if len(g.Required) == 0 {
-		return "", errors.New("give at least one check: a change that runs none is checked by nothing")
+		return r, errors.New("give at least one check: a change that runs none is checked by nothing")
+	}
+	svcs := map[string]config.Service{}
+	for _, n := range in.Services {
+		svc, ok := r.Services[n]
+		if !ok && s != nil {
+			svc, ok = s.Services[n]
+		}
+		if !ok {
+			return r, fmt.Errorf("no service %q to start: pick from the ones shown", n)
+		}
+		svcs[n] = svc
+	}
+	r.Services = nil
+	if len(svcs) > 0 {
+		r.Services = svcs
+	}
+	r.Env = nil
+	for k, v := range in.Env {
+		if k = strings.TrimSpace(k); k != "" {
+			if r.Env == nil {
+				r.Env = map[string]string{}
+			}
+			r.Env[k] = strings.TrimSpace(v)
+		}
 	}
 	r.Gates, r.ImageFrom = &g, strings.TrimSpace(in.ImageFrom)
+	return r, nil
+}
+
+// saveChecks writes a repo's checks, as the person confirmed them on the
+// page, to factory.yaml.
+func (w *wizard) saveChecks(ctx context.Context, cfg *config.Config, in web.WizardInput) (string, error) {
+	i := slices.IndexFunc(cfg.Repos, func(r config.Repo) bool { return strings.EqualFold(r.Name, in.Repo) })
+	if i < 0 {
+		return "", fmt.Errorf("%s isn't one of the factory's repos", in.Repo)
+	}
+	w.mu.Lock()
+	s := w.detected[cfg.Repos[i].Name]
+	w.mu.Unlock()
+	r, err := applyChecks(cfg.Repos[i], in, s)
+	if err != nil {
+		return "", err
+	}
+	repos := slices.Clone(cfg.Repos)
 	repos[i] = r
 	old, err := os.ReadFile(w.cfgPath)
 	if err != nil {
@@ -1537,5 +1596,144 @@ func (w *wizard) saveChecks(ctx context.Context, cfg *config.Config, in web.Wiza
 	// Reloading drops the last access check; the page shouldn't go back
 	// to "not checked".
 	w.checkAccess(ctx)
-	return fmt.Sprintf("Saved %s's checks to %s: %s.", r.Name, filepath.Base(w.cfgPath), strings.Join(g.Required, ", ")), nil
+	return fmt.Sprintf("Saved %s's checks to %s: %s.", r.Name, filepath.Base(w.cfgPath), strings.Join(r.Gates.Required, ", ")), nil
+}
+
+// tryChecks starts a try of a repo's checks as on the page, saved or not,
+// in the background: the page follows it.
+func (w *wizard) tryChecks(cfg *config.Config, in web.WizardInput) (string, error) {
+	i := slices.IndexFunc(cfg.Repos, func(r config.Repo) bool { return strings.EqualFold(r.Name, in.Repo) })
+	if i < 0 {
+		return "", fmt.Errorf("%s isn't one of the factory's repos", in.Repo)
+	}
+	name := cfg.Repos[i].Name
+	w.mu.Lock()
+	s := w.detected[name]
+	busy := w.tries[name] != nil && w.tries[name].Running
+	w.mu.Unlock()
+	if busy {
+		return "", fmt.Errorf("%s's checks are being tried already; wait for them", name)
+	}
+	r, err := applyChecks(cfg.Repos[i], in, s)
+	if err != nil {
+		return "", err
+	}
+	// The saved job image: a new base needs a save and a build first.
+	r.ImageFrom = cfg.Repos[i].ImageFrom
+	c := *cfg
+	c.Repos = slices.Clone(cfg.Repos)
+	c.Repos[i] = r
+	t := &web.APIWizardTry{Running: true, Since: time.Now().UTC().Format(time.RFC3339), Steps: []web.APIWizardTryStep{}}
+	if r.Gates.Install != "" {
+		t.Steps = append(t.Steps, web.APIWizardTryStep{Gate: "install", Command: r.Gates.Install, State: "waiting"})
+	}
+	for _, g := range r.Gates.Required {
+		t.Steps = append(t.Steps, web.APIWizardTryStep{Gate: g, Command: r.Gates.Commands[g], State: "waiting"})
+	}
+	w.mu.Lock()
+	if w.tries == nil {
+		w.tries = map[string]*web.APIWizardTry{}
+	}
+	w.tries[name] = t
+	w.mu.Unlock()
+	client := w.clients(&c, w.vals())
+	go func() {
+		err := tryRun(w.bg, &c, name, client, func(f func(*web.APIWizardTry)) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			f(t)
+		})
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		t.Running = false
+		if err != nil {
+			t.Error = err.Error()
+		}
+		for i := range t.Steps {
+			if t.Steps[i].State == "waiting" || t.Steps[i].State == "running" {
+				t.Steps[i].State = "skipped"
+			}
+		}
+	}()
+	return "Trying " + name + "'s checks: it clones the base branch, starts the services and runs each command. It takes a few minutes; this page follows it.", nil
+}
+
+// tryRun is runTry; tests replace it.
+var tryRun = runTry
+
+// runTry clones repo's base branch, starts its services and runs the
+// install and each check once, telling update as each starts and ends.
+// An install that fails stops it: nothing else can run.
+func runTry(ctx context.Context, cfg *config.Config, repo string, client clientFor, update func(func(*web.APIWizardTry))) error {
+	if client == nil {
+		return errors.New("connect the factory to the repo first")
+	}
+	rn, err := newRunner(cfg, "")
+	if err != nil {
+		return err
+	}
+	pl := &pipeline.Pipeline{Cfg: cfg, Runner: rn, JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
+		gh, ts, err := client(repo)
+		if err != nil {
+			gh, ts = newForge(cfg, repo, github.StaticToken("")), nil
+		}
+		return pipeline.RepoClients{GH: gh, Git: repoGit(cfg, repo, ts)}
+	}}
+	rc, _ := cfg.RepoConf(repo)
+	data := cfg.Path(cfg.DataDir)
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp(data, "readiness-try-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	g := pl.GitFor(repo)
+	ws, err := g.Prepare(ctx, dir, rc.BaseBranch, "", false, false)
+	if err != nil {
+		return fmt.Errorf("cloning %s: %w", repo, err)
+	}
+	export := filepath.Join(dir, "export")
+	if err := g.Export(ctx, ws.Repo, ws.BaseSHA, export); err != nil {
+		return err
+	}
+	if err := pl.CopyFiles(ctx, repo, export); err != nil {
+		return err
+	}
+	stop, err := pl.StartServices(ctx, 0, repo)
+	defer stop()
+	if err != nil {
+		return fmt.Errorf("starting its services: %w", err)
+	}
+	var steps []web.APIWizardTryStep
+	update(func(t *web.APIWizardTry) { steps = slices.Clone(t.Steps) })
+	for i, st := range steps {
+		update(func(t *web.APIWizardTry) { t.Steps[i].State = "running" })
+		start := time.Now()
+		code, out, err := pl.Exec(ctx, repo, export, st.Command, st.Gate == "install")
+		state := "pass"
+		if err != nil || code != 0 {
+			state = "fail"
+			if err != nil {
+				out += "\n" + err.Error()
+			}
+		}
+		update(func(t *web.APIWizardTry) {
+			t.Steps[i].State, t.Steps[i].Seconds, t.Steps[i].Output = state, int(time.Since(start).Seconds()), tailLines(out, 60)
+		})
+		if state == "fail" && st.Gate == "install" {
+			return nil // the rest need what it installs
+		}
+	}
+	return nil
+}
+
+// tailLines is the last n lines of s.
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = append([]string{"…"}, lines[len(lines)-n:]...)
+	}
+	return strings.Join(lines, "\n")
 }

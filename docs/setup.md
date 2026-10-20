@@ -100,8 +100,16 @@ marked done, needing attention, or optional, with the next one open:
    `AGENTS.md` or `CLAUDE.md` names wins over a guess from its files, and
    each says where it came from. Edit them and save; a saved command that
    the repo's instructions disagree with is flagged, with a button to use
-   theirs. Check the test command: one for the wrong framework can pass
-   without running a test.
+   theirs. When its tests look like they need a database or Redis (the
+   `pg`, `mysql2`, `redis` or `sidekiq` gems; `pg` or `redis` in
+   `package.json`), it suggests the service and the variable that finds
+   it, such as `DATABASE_URL`, each editable. **Try these checks** runs
+   them as they are on the page, saved or not: it clones the base branch,
+   starts the services ticked, and runs the install and each check once,
+   showing each one passing or failing with the end of its output, so you
+   can fix a command, a service or a variable before you save. It uses the
+   job image already built; a new base image needs a save and a build
+   first.
 6. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
    same choices as `factory setup`. For a ChatGPT plan, **Sign in** runs
    Codex's device-code sign-in on the factory's machine and shows the link

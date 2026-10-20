@@ -213,17 +213,35 @@ test("the checks step shows each repo's suggested checks, flags what its AGENTS.
   const checks = await openStep(page, "checks");
   const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
   await expect(api).toContainText("Looks like Ruby on Rails.");
-  await expect(api.getByLabel("lint")).toHaveValue("bundle exec rubocop");
+  await expect(api.getByLabel("lint", { exact: true })).toHaveValue("bundle exec rubocop");
   if (phone(info)) return; // saving changes the shared devserver: once is enough
   await expect(checks).toHaveAttribute("data-state", "attention");
-  await expect(api.getByLabel("test")).toHaveValue("bundle exec rspec");
+  await expect(api.getByLabel("test", { exact: true })).toHaveValue("bundle exec rspec");
   await expect(api).toContainText("AGENTS.md suggest");
   await api.getByRole("button", { name: "Use it" }).click();
-  await expect(api.getByLabel("test")).toHaveValue("bin/rails db:prepare test");
+  await expect(api.getByLabel("test", { exact: true })).toHaveValue("bin/rails db:prepare test");
   await api.getByRole("button", { name: "Save" }).click();
   await expect(api.getByRole("status")).toContainText("Saved acme/api's checks");
   const web = checks.getByTestId("repo-checks").filter({ hasText: "acme/web" });
   await expect(web).toContainText("Suggested, not saved yet.");
   await web.getByRole("button", { name: "Use these checks" }).click();
   await expect(checks).toHaveAttribute("data-state", "done");
+});
+
+test("the checks step tries the checks before saving, and shows what failed", async ({ page }, info) => {
+  await page.goto("/app/get-started");
+  const checks = await openStep(page, "checks");
+  const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
+  await expect(api.getByRole("checkbox", { name: /postgres/ })).toBeChecked();
+  await expect(api.getByText("DATABASE_URL")).toBeVisible();
+  // Without the database, the tests can't connect: the try says so.
+  await api.getByRole("checkbox", { name: /postgres/ }).uncheck();
+  await api.getByRole("button", { name: "Try these checks" }).click();
+  const result = api.getByTestId("try-result");
+  await expect(result).toContainText("1 of 3 failed");
+  await expect(result).toContainText("Connection refused");
+  await api.getByRole("checkbox", { name: /postgres/ }).check();
+  await api.getByRole("button", { name: "Try these checks" }).click();
+  await expect(result).toContainText("Every one passed on the base branch");
+  if (phone(info)) await noSidewaysScroll(page);
 });

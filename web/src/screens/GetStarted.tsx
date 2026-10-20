@@ -15,7 +15,7 @@ import {
   type WizardSecret,
   type WizardStep,
 } from "@/api/client";
-import { ErrorBox, Loading, PageTitle } from "@/components/common";
+import { Ago, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -606,6 +606,13 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
   const [install, setInstall] = useState(c.install);
   const [image, setImage] = useState(c.image_from);
   const [cmds, setCmds] = useState<Record<string, string>>(() => Object.fromEntries(c.gates.map((g) => [g.gate, g.command])));
+  // Saved services stay on; suggested ones start on while none are saved.
+  const [svcs, setSvcs] = useState<string[]>(() => {
+    const saved = c.services.filter((s) => s.saved);
+    return (saved.length > 0 ? saved : c.services).map((s) => s.name);
+  });
+  const [env, setEnv] = useState<Record<string, string>>(() => ({ ...c.env }));
+  const body = { repo: c.repo, install, image_from: image, commands: cmds, services: svcs, env };
   const names = [...c.gates.map((g) => g.gate), ...standardGates.filter((g) => !c.gates.some((x) => x.gate === g))];
   const id = (s: string) => `checks-${c.repo.replace(/[^a-z0-9]/gi, "-")}-${s}`;
   if (!c.stack && !c.saved) {
@@ -641,18 +648,106 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
           </div>
         );
       })}
+      {c.services.length > 0 && (
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="text-sm font-medium">Services the checks start</legend>
+          {c.services.map((s) => (
+            <label key={s.name} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={ro}
+                checked={svcs.includes(s.name)}
+                onChange={(e) => setSvcs(e.target.checked ? [...svcs, s.name] : svcs.filter((n) => n !== s.name))}
+              />
+              <span className="font-mono">{s.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {s.image}
+                {s.saved ? "" : ", suggested: its tests look like they need it"}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {Object.keys(env).length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">Environment</span>
+          {Object.keys(env)
+            .sort()
+            .map((k) => (
+              <label key={k} className="flex min-w-0 flex-col gap-1 text-xs sm:flex-row sm:items-center sm:gap-2">
+                <span className="w-32 shrink-0 font-mono">{k}</span>
+                <input className={cn(input, "font-mono")} value={env[k]} disabled={ro} spellCheck={false} onChange={(e) => setEnv({ ...env, [k]: e.target.value })} />
+              </label>
+            ))}
+          <span className="text-xs text-muted-foreground">Each service is reached by its name as the host, such as postgres.</span>
+        </div>
+      )}
       <TextField id={id("image")} label="Job image built on" value={image} set={setImage} disabled={ro} placeholder="the factory's default image" help="A Docker image with the repo's language, such as ruby:3.4-bookworm." />
       {c.notes.map((n) => (
         <p key={n} className="text-xs text-muted-foreground">
           {n}
         </p>
       ))}
-      <div>
-        <Button size="sm" disabled={ro || !!busy} onClick={() => run("checks/save", { repo: c.repo, install, image_from: image, commands: cmds })}>
-          {busy ? "Saving…" : c.saved ? "Save" : "Use these checks"}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" disabled={ro || !!busy || !!c.try?.running} onClick={() => run("checks/try", body)}>
+          {busy === "checks/try" ? "Starting…" : "Try these checks"}
+        </Button>
+        <Button size="sm" disabled={ro || !!busy} onClick={() => run("checks/save", body)}>
+          {busy === "checks/save" ? "Saving…" : c.saved ? "Save" : "Use these checks"}
         </Button>
       </div>
       <Message msg={msg} />
+      {c.try && <TryResult t={c.try} />}
+    </div>
+  );
+}
+
+const tryIcon: Record<string, ReactNode> = {
+  pass: <CheckCircle2 className="size-4 text-success" aria-label="passed" />,
+  fail: <XCircle className="size-4 text-destructive" aria-label="failed" />,
+  running: <Loader2 className="size-4 animate-spin text-primary-soft" aria-label="running" />,
+  waiting: <Circle className="size-4 text-muted-foreground" aria-label="waiting" />,
+  skipped: <Circle className="size-4 text-muted-foreground" aria-label="skipped" />,
+};
+
+/** The last try of a repo's checks: each command, how it went, and what a failing one printed. */
+function TryResult({ t }: { t: NonNullable<WizardChecks["try"]> }) {
+  const failed = t.steps.filter((s) => s.state === "fail").length;
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3 text-sm" data-testid="try-result">
+      <p className="font-medium">
+        {t.running ? (
+          <>
+            Trying them, started <Ago ts={t.since} />…
+          </>
+        ) : t.error ? (
+          "The try couldn't run them:"
+        ) : failed > 0 ? (
+          `${failed} of ${t.steps.length} failed. Fix the command, a service or the environment above, then try again.`
+        ) : (
+          "Every one passed on the base branch. Save them."
+        )}
+      </p>
+      {t.error && <p className="text-destructive">{t.error}</p>}
+      <ul className="flex flex-col gap-1.5">
+        {t.steps.map((s) => (
+          <li key={s.gate} className="flex flex-col gap-1">
+            <span className="flex flex-wrap items-center gap-2">
+              {tryIcon[s.state]}
+              <span className="font-medium">{s.gate}</span>
+              <Code>{s.command}</Code>
+              {s.seconds > 0 && <span className="text-xs text-muted-foreground">{s.seconds}s</span>}
+              {s.state === "skipped" && <span className="text-xs text-muted-foreground">not run</span>}
+            </span>
+            {s.output && (
+              <details open={s.state === "fail"}>
+                <summary className="cursor-pointer text-xs text-muted-foreground">Output</summary>
+                <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{s.output}</pre>
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

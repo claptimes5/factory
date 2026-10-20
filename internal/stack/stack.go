@@ -4,6 +4,8 @@
 package stack
 
 import (
+	"github.com/claptimes5/factory/internal/config"
+
 	"context"
 	"encoding/json"
 	"regexp"
@@ -30,7 +32,25 @@ type Suggestion struct {
 	// Sources names the file a gate's command came from, such as
 	// AGENTS.md; a gate not in it was guessed from the repo's files.
 	Sources map[string]string
+	// Services are the containers its tests likely need, such as a
+	// database, and Env how the repo finds them.
+	Services map[string]config.Service
+	Env      map[string]string
 }
+
+// service adds a container the tests need and the variable that finds it.
+func (s *Suggestion) service(name string, svc config.Service, key, url string) {
+	if s.Services == nil {
+		s.Services, s.Env = map[string]config.Service{}, map[string]string{}
+	}
+	s.Services[name], s.Env[key] = svc, url
+}
+
+var (
+	postgres = config.Service{Image: "postgres:16", Env: map[string]string{"POSTGRES_PASSWORD": "factory"}, Ready: "pg_isready -U postgres"}
+	mysql    = config.Service{Image: "mysql:8", Env: map[string]string{"MYSQL_ROOT_PASSWORD": "factory"}, Ready: "mysqladmin ping -h 127.0.0.1 -pfactory"}
+	redis    = config.Service{Image: "redis:7", Ready: "redis-cli ping"}
+)
 
 // Detect inspects the repository root. It returns nil when it recognizes
 // nothing.
@@ -144,11 +164,16 @@ func ruby(s *Suggestion, read func(string) string, has func(string) bool, minite
 	default:
 		add("test", "bundle exec rake test")
 	}
+	// The tests reach them by name, and Rails reads DATABASE_URL over
+	// config/database.yml.
 	switch {
 	case gem("pg"):
-		s.Notes = append(s.Notes, "It uses PostgreSQL. Declare the database under the repo's services in factory.yaml, or tests that need it will fail.")
+		s.service("postgres", postgres, "DATABASE_URL", "postgres://postgres:factory@postgres:5432/test")
 	case gem("mysql2") || gem("trilogy"):
-		s.Notes = append(s.Notes, "It uses MySQL. Declare the database under the repo's services in factory.yaml, or tests that need it will fail.")
+		s.service("mysql", mysql, "DATABASE_URL", "mysql2://root:factory@mysql:3306/test")
+	}
+	if gem("redis") || gem("sidekiq") {
+		s.service("redis", redis, "REDIS_URL", "redis://redis:6379")
 	}
 	return stack
 }
@@ -204,6 +229,12 @@ func node(s *Suggestion, read func(string) string, has func(string) bool, add fu
 		return ""
 	}
 	dep := func(n string) bool { return pkg.Dependencies[n] != "" || pkg.DevDependencies[n] != "" }
+	if dep("pg") || dep("postgres") {
+		s.service("postgres", postgres, "DATABASE_URL", "postgres://postgres:factory@postgres:5432/test")
+	}
+	if dep("redis") || dep("ioredis") {
+		s.service("redis", redis, "REDIS_URL", "redis://redis:6379")
+	}
 	run, install := "npm run", "npm ci"
 	switch {
 	case has("pnpm-lock.yaml"):

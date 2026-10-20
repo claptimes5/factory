@@ -49,8 +49,9 @@ func TestRailsAndVite(t *testing.T) {
 	if strings.Join(api.Required, ",") != "lint,test" || api.Commands["test"] != "bin/rails db:prepare test" {
 		t.Fatalf("rails gates: %v %v", api.Required, api.Commands)
 	}
-	if len(api.Notes) != 1 || !strings.Contains(api.Notes[0], "PostgreSQL") {
-		t.Fatalf("rails notes: %v", api.Notes)
+	// Its tests need the database: a service, and the URL Rails reads.
+	if pg := api.Services["postgres"]; pg.Image != "postgres:16" || pg.Ready == "" || api.Env["DATABASE_URL"] != "postgres://postgres:factory@postgres:5432/test" || len(api.Notes) != 0 {
+		t.Fatalf("rails services: %+v env %v notes %v", api.Services, api.Env, api.Notes)
 	}
 
 	web, err := Detect(ctx, fakeFiles{

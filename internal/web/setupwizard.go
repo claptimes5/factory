@@ -39,7 +39,7 @@ type Wizard interface {
 // WizardActions are the page's buttons, each POST /api/v1/setup/<action>.
 var WizardActions = []string{
 	"machine/check", "repos", "github/install-check", "github/existing-app", "github/token",
-	"access/check", "base-branch", "labels", "gitlab/token", "checks/save", "claude", "codex",
+	"access/check", "base-branch", "labels", "gitlab/token", "checks/save", "checks/try", "claude", "codex",
 	"codex/sign-in", "codex/sign-in/cancel", "notify", "notify/test", "sentry", "images/build", "finish",
 }
 
@@ -55,10 +55,14 @@ type WizardInput struct {
 	Anyway  bool   `json:"anyway"`   // claude: save a key that doesn't look like one
 	Mode    string `json:"mode"`     // codex: api-key, chatgpt or access-token
 	URL     string `json:"url"`      // notify
-	// checks/save: the repo's install, base image and gate commands.
+	// checks/save and checks/try: the repo's install, base image, gate
+	// commands, the services to start (by name, from those shown) and its
+	// environment.
 	Install   string            `json:"install"`
 	ImageFrom string            `json:"image_from"`
 	Commands  map[string]string `json:"commands"`
+	Services  []string          `json:"services"`
+	Env       map[string]string `json:"env"`
 }
 
 // APIWizard is the get-started page.
@@ -125,6 +129,40 @@ type APIWizardChecks struct {
 	SuggestedInstall string          `json:"suggested_install"`
 	Gates            []APIWizardGate `json:"gates"`
 	Notes            []string        `json:"notes"`
+	// Services are the containers its checks start, saved or suggested,
+	// and Env the variables that find them.
+	Services []APIWizardService `json:"services"`
+	Env      map[string]string  `json:"env"`
+	// Try is the last "Try these checks", or null.
+	Try *APIWizardTry `json:"try"`
+}
+
+// APIWizardService is a container a repo's checks start.
+type APIWizardService struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	// Saved: factory.yaml has it; else it's suggested from the repo's files.
+	Saved bool `json:"saved"`
+}
+
+// APIWizardTry runs a repo's install and each check once, on its base
+// branch, with the commands on the page, saved or not.
+type APIWizardTry struct {
+	Running bool               `json:"running"`
+	Since   string             `json:"since"`
+	Steps   []APIWizardTryStep `json:"steps"`
+	// Error is why it couldn't run them (a clone, a service), or "".
+	Error string `json:"error"`
+}
+
+// APIWizardTryStep is one command of a try.
+type APIWizardTryStep struct {
+	Gate    string `json:"gate"`
+	Command string `json:"command"`
+	State   string `json:"state"` // waiting, running, pass, fail or skipped
+	Seconds int    `json:"seconds"`
+	// Output is the end of what it printed.
+	Output string `json:"output"`
 }
 
 // APIWizardGate is one check's command.
