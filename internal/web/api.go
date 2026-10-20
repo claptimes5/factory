@@ -535,9 +535,9 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.NeedsYou = true
 		// Said here, not as recorded: the page and the card show the plan
 		// and the buttons, and the issue's link, beside it.
-		a.BlockedNote = "Waiting for your OK on the plan. Read it, then build it or ask for another plan."
+		a.BlockedNote = "Waiting for your OK on the plan before a big build: build it or ask for another plan. The plan says what to check."
 		if a.EstimateWaiting {
-			a.BlockedNote = "Waiting for your OK on the plan and the cost (est. " + e.Range() + "). Read the plan, then build it, which approves both, or ask for another plan."
+			a.BlockedNote = "Waiting for your OK on the plan and the cost (est. " + e.Range() + ") before a big build: build it, which approves both, or ask for another plan. The plan says what to check."
 		}
 	}
 	return a

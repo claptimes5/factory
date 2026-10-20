@@ -115,6 +115,9 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			integer("orchestrator.daily_issue_cap", "Issues a day", "How many issues it may open a day.", 10),
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
 		}},
+		{Name: "Asks", Help: "How the factory writes what you read and decide on.", Settings: []Setting{
+			{Path: []string{"concise_asks"}, Label: "Concise", Help: "Plans and chat replies lead with what you decide, in short numbered steps (prompts/concise.md, from the i-have-adhd skill).", Kind: "bool", Default: true},
+		}},
 		{Name: "Tuning", Help: "How often the factory reads its metrics and proposes changes to these settings.", Settings: []Setting{
 			{Path: []string{"tuning", "every"}, Label: "Every", Help: "How often it proposes changes, such as 720h, at least 1h; 0 turns it off.", Kind: "duration", Default: "720h", MinDuration: MinTuningEvery, Off: true},
 			integer("tuning.min_items", "Fewest builds", "It skips a run when fewer items were built since the last one.", 10),

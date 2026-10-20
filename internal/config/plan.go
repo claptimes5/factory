@@ -72,3 +72,7 @@ func (c *Config) checkPlan() []error {
 	}
 	return errs
 }
+
+// Concise says whether plans and chat replies are written with
+// prompts/concise.md.
+func (c *Config) Concise() bool { return c.ConciseAsks == nil || *c.ConciseAsks }
