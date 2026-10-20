@@ -22,6 +22,7 @@ import (
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
+	"github.com/claptimes5/factory/internal/stack"
 	"github.com/claptimes5/factory/internal/web"
 )
 
@@ -53,6 +54,9 @@ type wizard struct {
 	machineAt time.Time
 	images    map[string]bool // job image tag: built
 	access    map[string]web.APIWizardAccess
+	// detected is what each reachable repo's files suggest for its checks,
+	// read with the access check.
+	detected  map[string]*stack.Suggestion
 	credGen   int // bumped by each credential change, so stale checks are dropped
 	labels    []web.APIWizardLabel
 	missing   []string // accounts the app isn't installed on, from the last check
@@ -412,6 +416,28 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 	}
 	out.CanFinish = reach["github"]+reach["gitlab"] == len(cfg.Repos)
 
+	// Each repo's checks, saved or suggested: what every change must pass.
+	var unsaved, disagree []string
+	for _, r := range cfg.Repos {
+		c := wizardChecks(r, w.detected[r.Name])
+		out.Checks = append(out.Checks, c)
+		switch {
+		case !c.Saved:
+			unsaved = append(unsaved, r.Name)
+		case slices.ContainsFunc(c.Gates, func(g web.APIWizardGate) bool { return g.Suggested != "" && g.Source != "" }):
+			disagree = append(disagree, r.Name)
+		}
+	}
+	switch {
+	case len(unsaved) > 0:
+		step("checks", "Checks", "attention", "Confirm the checks for "+joinAnd(unsaved))
+		out.Warnings = append(out.Warnings, joinAnd(unsaved)+" has no checks of its own confirmed, so every change there runs the top-level ones in factory.yaml.")
+	case len(disagree) > 0:
+		step("checks", "Checks", "attention", "The repo's agent instructions suggest other commands for "+joinAnd(disagree))
+	default:
+		step("checks", "Checks", "done", "Every repo's checks are set")
+	}
+
 	if usesHarness(cfg, "claude") {
 		c := &web.APIWizardClaude{}
 		switch {
@@ -575,6 +601,7 @@ func (w *wizard) checkAccess(ctx context.Context) {
 		missing []string
 		instErr string
 		results = map[string]web.APIWizardAccess{}
+		found   = map[string]*stack.Suggestion{}
 		slots   = make(chan struct{}, accessParallel)
 	)
 	// Where the app is installed, so an uninstalled one shows too.
@@ -630,8 +657,17 @@ func (w *wizard) checkAccess(ctx context.Context) {
 			if isContextErr(err) {
 				a = timedOutAccess(a)
 			}
+			var s *stack.Suggestion
+			if a.State == "ok" {
+				if gh, _, err := client(n); err == nil {
+					s, _ = stack.Detect(ctx, ghFiles{gh})
+				}
+			}
 			mu.Lock()
 			results[n] = a
+			if s != nil {
+				found[n] = s
+			}
 			mu.Unlock()
 		}()
 	}
@@ -640,7 +676,7 @@ func (w *wizard) checkAccess(ctx context.Context) {
 	defer w.mu.Unlock()
 	// Only checks made with the credentials and repos still saved count.
 	if w.credGen == gen && w.cfg == cfg {
-		w.access, w.checkedAt = results, time.Now()
+		w.access, w.checkedAt, w.detected = results, time.Now(), found
 		w.missing, w.instErr = missing, instErr
 	}
 }
@@ -747,6 +783,8 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return "Saved the token. " + w.accessMessage(), nil
 	case "base-branch":
 		return w.useBranch(ctx, cfg, in.Repo, in.Branch)
+	case "checks/save":
+		return w.saveChecks(cfg, in)
 	case "labels":
 		return w.createLabels(ctx, cfg)
 	case "claude":
@@ -1383,3 +1421,115 @@ func (t *tailBuffer) String() string {
 }
 
 var _ web.Wizard = (*wizard)(nil)
+
+// gateOrder is the order checks run and are shown in.
+var gateOrder = []string{"types", "lint", "test", "build", "audit"}
+
+// byGateOrder sorts gate names in gateOrder, then the rest by name.
+func byGateOrder(a, b string) int {
+	ia, ib := slices.Index(gateOrder, a), slices.Index(gateOrder, b)
+	if ia < 0 {
+		ia = len(gateOrder)
+	}
+	if ib < 0 {
+		ib = len(gateOrder)
+	}
+	if ia != ib {
+		return ia - ib
+	}
+	return strings.Compare(a, b)
+}
+
+// wizardChecks is a repo's checks for the page: the saved ones, each with
+// the suggestion beside it when that differs, or the suggestion.
+func wizardChecks(r config.Repo, s *stack.Suggestion) web.APIWizardChecks {
+	c := web.APIWizardChecks{Repo: r.Name, Saved: r.Gates != nil, ImageFrom: r.ImageFrom, Gates: []web.APIWizardGate{}, Notes: []string{}}
+	sug := map[string]string{}
+	if s != nil {
+		c.Stack, sug = s.Stack, s.Commands
+		c.Notes = append(c.Notes, s.Notes...)
+		if !c.Saved {
+			c.ImageFrom, c.Install = s.ImageFrom, s.Install
+		} else if s.Install != r.Gates.Install {
+			c.SuggestedInstall = s.Install
+		}
+	}
+	saved := map[string]string{}
+	if c.Saved {
+		c.Install, saved = r.Gates.Install, r.Gates.Commands
+	}
+	var names []string
+	for _, m := range []map[string]string{saved, sug} {
+		for g := range m {
+			if !slices.Contains(names, g) {
+				names = append(names, g)
+			}
+		}
+	}
+	slices.SortFunc(names, byGateOrder)
+	for _, g := range names {
+		row := web.APIWizardGate{Gate: g, Command: sug[g]}
+		if s != nil {
+			row.Source = s.Sources[g]
+		}
+		if c.Saved {
+			row.Command = saved[g]
+			if sug[g] != row.Command {
+				row.Suggested = sug[g]
+			}
+		}
+		c.Gates = append(c.Gates, row)
+	}
+	return c
+}
+
+// saveChecks writes a repo's install, base image and check commands to
+// factory.yaml, as the person confirmed them on the page.
+func (w *wizard) saveChecks(cfg *config.Config, in web.WizardInput) (string, error) {
+	i := slices.IndexFunc(cfg.Repos, func(r config.Repo) bool { return strings.EqualFold(r.Name, in.Repo) })
+	if i < 0 {
+		return "", fmt.Errorf("%s isn't one of the factory's repos", in.Repo)
+	}
+	repos := slices.Clone(cfg.Repos)
+	r := repos[i]
+	var g config.Gates
+	if r.Gates != nil {
+		g = *r.Gates // keeps what the page doesn't show, such as the diff guard
+	} else {
+		w.mu.Lock()
+		s := w.detected[r.Name]
+		w.mu.Unlock()
+		if s == nil || !s.Go {
+			// proves_fix and coverage are Go-only for now.
+			g.ProvesFix, g.Coverage = "none", "none"
+		}
+	}
+	g.Install = strings.TrimSpace(in.Install)
+	g.Commands, g.Required = map[string]string{}, nil
+	for name, cmd := range in.Commands {
+		if cmd = strings.TrimSpace(cmd); cmd != "" {
+			g.Commands[name] = cmd
+			g.Required = append(g.Required, name)
+		}
+	}
+	slices.SortFunc(g.Required, byGateOrder)
+	if len(g.Required) == 0 {
+		return "", errors.New("give at least one check: a change that runs none is checked by nothing")
+	}
+	r.Gates, r.ImageFrom = &g, strings.TrimSpace(in.ImageFrom)
+	repos[i] = r
+	old, err := os.ReadFile(w.cfgPath)
+	if err != nil {
+		return "", err
+	}
+	if err := writeRepos(w.cfgPath, repos); err != nil {
+		return "", err
+	}
+	if err := w.reload(); err != nil {
+		// What was saved doesn't load: put the file back.
+		_ = os.WriteFile(w.cfgPath, old, 0o644)
+		_ = w.reload()
+		return "", fmt.Errorf("those checks aren't valid: %w", err)
+	}
+	return fmt.Sprintf("Saved %s's checks to %s: %s.", r.Name, filepath.Base(w.cfgPath), strings.Join(g.Required, ", ")), nil
+}

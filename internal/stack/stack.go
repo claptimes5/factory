@@ -27,6 +27,9 @@ type Suggestion struct {
 	Commands  map[string]string // gate name -> command
 	Go        bool              // a Go module: the top-level gates already fit
 	Notes     []string          // what it saw but can't set up yet
+	// Sources names the file a gate's command came from, such as
+	// AGENTS.md; a gate not in it was guessed from the repo's files.
+	Sources map[string]string
 }
 
 // Detect inspects the repository root. It returns nil when it recognizes
@@ -87,6 +90,25 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 	devcontainer(ctx, s, f, names, read)
 	if len(stacks) == 0 {
 		return nil, nil
+	}
+	// What the repo tells its agents beats a guess from its files.
+	for _, doc := range []string{"AGENTS.md", "CLAUDE.md"} {
+		for gate, cmd := range docCommands(read(doc)) {
+			if s.Sources[gate] != "" {
+				continue
+			}
+			if gate == "test" && strings.HasPrefix(cmd, "bin/rails test") && slices.Contains(stacks, "Ruby on Rails") {
+				cmd = "bin/rails db:prepare test" // a fresh checkout has no database yet
+			}
+			if s.Commands[gate] == "" {
+				s.Required = append(s.Required, gate)
+			}
+			s.Commands[gate] = cmd
+			if s.Sources == nil {
+				s.Sources = map[string]string{}
+			}
+			s.Sources[gate] = doc
+		}
 	}
 	s.Stack = strings.Join(stacks, " + ")
 	return s, nil
@@ -314,3 +336,32 @@ func version(file, def string) string {
 	}
 	return m
 }
+
+// docCommands are the test and lint commands a repo's agent instructions
+// give, in code spans or blocks: the first known runner for each, without
+// the paths or flags after it.
+func docCommands(doc string) map[string]string {
+	out := map[string]string{}
+	for _, m := range codeRE.FindAllStringSubmatch(doc, -1) {
+		for _, line := range strings.Split(m[1]+m[2], "\n") {
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "$ "))
+			for _, r := range docRunners {
+				if out[r.gate] == "" && r.re.MatchString(line) {
+					out[r.gate] = r.re.FindString(line)
+				}
+			}
+		}
+	}
+	return out
+}
+
+var (
+	codeRE     = regexp.MustCompile("(?s)```[a-z]*\\n(.*?)```|`([^`\\n]+)`")
+	docRunners = []struct {
+		gate string
+		re   *regexp.Regexp
+	}{
+		{"test", regexp.MustCompile(`^(bin/rails (db:prepare )?test|bundle exec rails test|bundle exec rake test|bundle exec rspec|bin/rspec|(uv run |poetry run |python -m )?pytest|(npm|pnpm|yarn) (run )?test|go test \./\.\.\.|cargo test|mix test|make test)\b`)},
+		{"lint", regexp.MustCompile(`^(bundle exec rubocop|bin/rubocop|(npm|pnpm|yarn) (run )?lint|(uv run )?ruff check|golangci-lint run|cargo clippy|make lint)\b`)},
+	}
+)

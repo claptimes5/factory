@@ -33,7 +33,7 @@ test("the get-started page lists each step and opens the first that needs attent
   await page.goto("/app/get-started");
   await expect(page.getByRole("heading", { name: "Get started" })).toBeVisible();
   const steps = page.getByTestId("wizard-step");
-  await expect(steps).toHaveCount(8);
+  await expect(steps).toHaveCount(9);
   await expect(step(page, "machine")).toHaveAttribute("data-state", "done");
   await expect(step(page, "notify")).toHaveAttribute("data-state", "optional");
   await expect(step(page, "claude")).toContainText("API key saved");
@@ -206,4 +206,24 @@ test("settings and the setup screen link to get-started", async ({ page }) => {
   await expect(page).toHaveURL(/\/app\/get-started$/);
   await page.goto("/app/setup");
   await expect(page.getByRole("link", { name: "get-started page" })).toHaveAttribute("href", "/app/get-started");
+});
+
+test("the checks step shows each repo's suggested checks, flags what its AGENTS.md disagrees with, and saves", async ({ page }, info) => {
+  await page.goto("/app/get-started");
+  const checks = await openStep(page, "checks");
+  const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
+  await expect(api).toContainText("Looks like Ruby on Rails.");
+  await expect(api.getByLabel("lint")).toHaveValue("bundle exec rubocop");
+  if (phone(info)) return; // saving changes the shared devserver: once is enough
+  await expect(checks).toHaveAttribute("data-state", "attention");
+  await expect(api.getByLabel("test")).toHaveValue("bundle exec rspec");
+  await expect(api).toContainText("AGENTS.md suggest");
+  await api.getByRole("button", { name: "Use it" }).click();
+  await expect(api.getByLabel("test")).toHaveValue("bin/rails db:prepare test");
+  await api.getByRole("button", { name: "Save" }).click();
+  await expect(api.getByRole("status")).toContainText("Saved acme/api's checks");
+  const web = checks.getByTestId("repo-checks").filter({ hasText: "acme/web" });
+  await expect(web).toContainText("Suggested, not saved yet.");
+  await web.getByRole("button", { name: "Use these checks" }).click();
+  await expect(checks).toHaveAttribute("data-state", "done");
 });

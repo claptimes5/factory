@@ -783,3 +783,60 @@ func TestWizardTokenSaveNamesTheExportedOne(t *testing.T) {
 		t.Fatalf("the same token: %q", msg)
 	}
 }
+
+// The access check reads each repo's files for its checks: the page shows
+// the suggestion, with the command the repo's AGENTS.md gives, and saving
+// writes them to factory.yaml.
+func TestWizardChecks(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, files: map[string]map[string]string{"o/r": {
+		"Gemfile":             "gem \"rails\"\ngem \"rspec-rails\"\ngem \"rubocop\"\n",
+		"spec/factories/x.rb": "",
+		"AGENTS.md":           "Tests are Minitest: run `bin/rails test <path>`.",
+	}}}
+	w := testWizard(t, f, "o/r", false, noDocker)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "github/token", web.WizardInput{Token: "ghp_token_123456789"}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.State(ctx, false)
+	if s := step(st, "checks"); s.State != "attention" || !strings.Contains(s.Summary, "Confirm the checks for o/r") {
+		t.Fatalf("checks step = %+v", s)
+	}
+	c := st.Checks[0]
+	byGate := map[string]web.APIWizardGate{}
+	for _, g := range c.Gates {
+		byGate[g.Gate] = g
+	}
+	if c.Saved || c.Stack != "Ruby on Rails" || byGate["test"].Command != "bin/rails db:prepare test" || byGate["test"].Source != "AGENTS.md" || byGate["lint"].Command != "bundle exec rubocop" {
+		t.Fatalf("checks = %+v", c)
+	}
+	if _, err := w.Do(ctx, "checks/save", web.WizardInput{Repo: "o/r", Commands: map[string]string{"test": " "}}); err == nil {
+		t.Fatal("saving no checks must be refused")
+	}
+	msg, err := w.Do(ctx, "checks/save", web.WizardInput{Repo: "o/r", Install: "bundle install", ImageFrom: "ruby:3.4-bookworm",
+		Commands: map[string]string{"test": "bin/rails db:prepare test", "lint": "bundle exec rubocop", "types": ""}})
+	if err != nil || !strings.Contains(msg, "lint, test") {
+		t.Fatalf("save: %q %v", msg, err)
+	}
+	cfg, _ := config.Load(w.cfgPath)
+	rc, _ := cfg.RepoConf("o/r")
+	if rc.Gates.Commands["test"] != "bin/rails db:prepare test" || strings.Join(rc.Gates.Required, ",") != "lint,test" || rc.ImageFrom != "ruby:3.4-bookworm" || cfg.Repos[0].Gates.ProvesFix != "none" {
+		t.Fatalf("saved = %+v image %q", rc.Gates, rc.ImageFrom)
+	}
+	if s := step(w.State(ctx, false), "checks"); s.State != "done" {
+		t.Fatalf("after saving: %+v", s)
+	}
+	// A saved command the repo's instructions disagree with is flagged.
+	if _, err := w.Do(ctx, "checks/save", web.WizardInput{Repo: "o/r", Install: "bundle install", Commands: map[string]string{"test": "bundle exec rspec"}}); err != nil {
+		t.Fatal(err)
+	}
+	st = w.State(ctx, false)
+	if s := step(st, "checks"); s.State != "attention" || !strings.Contains(s.Summary, "agent instructions") {
+		t.Fatalf("disagreeing: %+v", s)
+	}
+	if g := st.Checks[0].Gates; !slices.ContainsFunc(g, func(g web.APIWizardGate) bool {
+		return g.Gate == "test" && g.Command == "bundle exec rspec" && g.Suggested == "bin/rails db:prepare test"
+	}) {
+		t.Fatalf("gates = %+v", g)
+	}
+}

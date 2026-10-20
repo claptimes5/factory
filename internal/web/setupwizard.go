@@ -39,7 +39,7 @@ type Wizard interface {
 // WizardActions are the page's buttons, each POST /api/v1/setup/<action>.
 var WizardActions = []string{
 	"machine/check", "repos", "github/install-check", "github/existing-app", "github/token",
-	"access/check", "base-branch", "labels", "gitlab/token", "claude", "codex",
+	"access/check", "base-branch", "labels", "gitlab/token", "checks/save", "claude", "codex",
 	"codex/sign-in", "codex/sign-in/cancel", "notify", "notify/test", "sentry", "images/build", "finish",
 }
 
@@ -55,6 +55,10 @@ type WizardInput struct {
 	Anyway  bool   `json:"anyway"`   // claude: save a key that doesn't look like one
 	Mode    string `json:"mode"`     // codex: api-key, chatgpt or access-token
 	URL     string `json:"url"`      // notify
+	// checks/save: the repo's install, base image and gate commands.
+	Install   string            `json:"install"`
+	ImageFrom string            `json:"image_from"`
+	Commands  map[string]string `json:"commands"`
 }
 
 // APIWizard is the get-started page.
@@ -76,6 +80,8 @@ type APIWizard struct {
 	Repos            []string           `json:"repos"`
 	// Access is each repo's last access check.
 	Access []APIWizardAccess `json:"access"`
+	// Checks are each repo's checks, saved or suggested.
+	Checks []APIWizardChecks `json:"checks"`
 	// Labels are what the last "create labels" did; LabelNames the labels
 	// the factory uses.
 	Labels     []APIWizardLabel `json:"labels"`
@@ -104,9 +110,38 @@ type APIWizard struct {
 	StartedAt   string `json:"started_at"`
 }
 
+// APIWizardChecks is one repo's checks: what factory.yaml has, and what
+// the factory suggests from the repo's files and agent instructions.
+type APIWizardChecks struct {
+	Repo string `json:"repo"`
+	// Stack is what the repo looks like ("Ruby on Rails"); "" until the
+	// access check has read its files.
+	Stack string `json:"stack"`
+	// Saved: factory.yaml has the repo's own checks.
+	Saved     bool   `json:"saved"`
+	ImageFrom string `json:"image_from"`
+	Install   string `json:"install"`
+	// SuggestedInstall is the suggested install when it differs.
+	SuggestedInstall string          `json:"suggested_install"`
+	Gates            []APIWizardGate `json:"gates"`
+	Notes            []string        `json:"notes"`
+}
+
+// APIWizardGate is one check's command.
+type APIWizardGate struct {
+	Gate string `json:"gate"`
+	// Command is the saved one, else the suggested one.
+	Command string `json:"command"`
+	// Suggested is the suggestion when it differs from Command.
+	Suggested string `json:"suggested"`
+	// Source is the file the suggestion came from, such as AGENTS.md;
+	// "" when it was guessed from the repo's files.
+	Source string `json:"source"`
+}
+
 // APIWizardStep is one card.
 type APIWizardStep struct {
-	Key     string `json:"key"` // machine, repos, github, gitlab, claude, codex, notify, sentry, images, finish
+	Key     string `json:"key"` // machine, repos, github, gitlab, checks, claude, codex, notify, sentry, images, finish
 	Title   string `json:"title"`
 	State   string `json:"state"` // done, attention or optional
 	Summary string `json:"summary"`
