@@ -1925,6 +1925,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/setup/checks/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save a repo's install, base image and check commands to factory.yaml */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        install?: string;
+                        /** @description Empty for the default job image */
+                        image_from?: string;
+                        /** @description Gate name to command; an empty command drops the gate */
+                        commands: {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/setup/github/install-check": {
         parameters: {
             query?: never;
@@ -3402,6 +3445,8 @@ export interface components {
             repos: string[];
             /** @description Each repo's last access check */
             access: components["schemas"]["WizardAccess"][];
+            /** @description Each repo's checks, saved or suggested */
+            checks: components["schemas"]["WizardChecks"][];
             /** @description What the last label creation did */
             labels: components["schemas"]["WizardLabel"][];
             label_names: string[];
@@ -3434,11 +3479,34 @@ export interface components {
         };
         WizardStep: {
             /** @enum {string} */
-            key: "machine" | "repos" | "github" | "gitlab" | "claude" | "codex" | "notify" | "sentry" | "images" | "finish";
+            key: "machine" | "repos" | "github" | "gitlab" | "checks" | "claude" | "codex" | "notify" | "sentry" | "images" | "finish";
             title: string;
             /** @enum {string} */
             state: "done" | "attention" | "optional";
             summary: string;
+        };
+        WizardChecks: {
+            repo: string;
+            /** @description What the repo looks like, such as Ruby on Rails; empty until the access check has read its files */
+            stack: string;
+            /** @description factory.yaml has the repo's own checks */
+            saved: boolean;
+            /** @description The base image its job image is built on; empty for the default */
+            image_from: string;
+            install: string;
+            /** @description The suggested install when it differs */
+            suggested_install: string;
+            gates: components["schemas"]["WizardGate"][];
+            notes: string[];
+        };
+        WizardGate: {
+            gate: string;
+            /** @description The saved command, else the suggested one */
+            command: string;
+            /** @description The suggestion when it differs from command */
+            suggested: string;
+            /** @description The file the suggestion came from, such as AGENTS.md; empty when guessed from the repo's files */
+            source: string;
         };
         WizardFinding: {
             /** @enum {string} */

@@ -39,10 +39,14 @@ type wizard struct {
 	labeled   bool // acme/web has its labels; until then two are missing
 	pending   map[string]bool
 	changed   bool
+	// saved are the checks saved per repo: acme/api's test command is the
+	// one its AGENTS.md disagrees with; acme/web has none yet.
+	saved map[string]map[string]string
 }
 
 func newWizard(r *restarter) *wizard {
-	return &wizard{restart: r, repos: []string{"acme/api", "acme/web"}, claude: "sk-ant-api03-devserverwxyz", codexMode: "chatgpt", pending: map[string]bool{}}
+	return &wizard{restart: r, repos: []string{"acme/api", "acme/web"}, claude: "sk-ant-api03-devserverwxyz", codexMode: "chatgpt", pending: map[string]bool{},
+		saved: map[string]map[string]string{"acme/api": {"lint": "bundle exec rubocop", "test": "bundle exec rspec"}}}
 }
 
 var labelNames = []string{"factory:ready", "factory:spec", "factory:parked", "factory:retry"}
@@ -114,6 +118,43 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 		step("github", "GitHub", "attention", "Not connected yet")
 	}
 	out.CanFinish = w.reach()
+	var unsaved []string
+	for _, r := range w.repos {
+		c := web.APIWizardChecks{Repo: r, Gates: []web.APIWizardGate{}, Notes: []string{}}
+		{
+			c.Stack, c.Install, c.ImageFrom = "Ruby on Rails", "bundle install", "ruby:3.4-bookworm"
+			sug := map[string][2]string{"lint": {"bundle exec rubocop", ""}, "test": {"bin/rails db:prepare test", "AGENTS.md"}}
+			if r != "acme/api" {
+				c.Stack, c.Install, c.ImageFrom = "React (Vite)", "npm ci", ""
+				sug = map[string][2]string{"lint": {"npm run lint", ""}, "test": {"CI=true npm run test", ""}, "build": {"npm run build", ""}}
+			}
+			saved, ok := w.saved[r]
+			c.Saved = ok
+			for _, g := range []string{"lint", "test", "build"} {
+				s, has := sug[g]
+				if !has && saved[g] == "" {
+					continue
+				}
+				row := web.APIWizardGate{Gate: g, Command: s[0], Source: s[1]}
+				if ok {
+					row.Command = saved[g]
+					if s[0] != row.Command {
+						row.Suggested = s[0]
+					}
+				}
+				c.Gates = append(c.Gates, row)
+			}
+		}
+		if !c.Saved {
+			unsaved = append(unsaved, r)
+		}
+		out.Checks = append(out.Checks, c)
+	}
+	if len(unsaved) > 0 {
+		step("checks", "Checks", "attention", "Confirm the checks for "+strings.Join(unsaved, " and "))
+	} else {
+		step("checks", "Checks", "done", "Every repo's checks are set")
+	}
 
 	c := &web.APIWizardClaude{Key: secret(w.claude)}
 	switch {
@@ -170,6 +211,18 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 	switch action {
 	case "machine/check":
 		return "Checked this machine again.", nil
+	case "checks/save":
+		cmds := map[string]string{}
+		for g, c := range in.Commands {
+			if c = strings.TrimSpace(c); c != "" {
+				cmds[g] = c
+			}
+		}
+		if len(cmds) == 0 {
+			return "", errors.New("give at least one check: a change that runs none is checked by nothing")
+		}
+		w.saved[in.Repo], w.changed = cmds, true
+		return "Saved " + in.Repo + "'s checks to factory.yaml.", nil
 	case "repos":
 		var names []string
 		for _, f := range strings.FieldsFunc(in.Repos, func(r rune) bool { return r == ',' || r == ' ' }) {

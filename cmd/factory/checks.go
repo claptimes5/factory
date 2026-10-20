@@ -69,7 +69,11 @@ func setupChecks(ctx context.Context, p *prompter, cfgPath string, cfg *config.C
 				p.say("  install     %s", s.Install)
 			}
 			for _, g := range s.Required {
-				p.say("  %-11s %s", g, s.Commands[g])
+				from := ""
+				if src := s.Sources[g]; src != "" {
+					from = "   (from " + src + ")"
+				}
+				p.say("  %-11s %s%s", g, s.Commands[g], from)
 			}
 			if len(s.Required) == 0 {
 				p.say("  (no test, lint or build commands found; add them under gates.commands)")

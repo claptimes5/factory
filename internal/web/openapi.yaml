@@ -564,6 +564,25 @@ paths:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /setup/checks/save:
+    post:
+      summary: Save a repo's install, base image and check commands to factory.yaml
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, commands]
+              properties:
+                repo: { type: string }
+                install: { type: string }
+                image_from: { type: string, description: "Empty for the default job image" }
+                commands: { type: object, additionalProperties: { type: string }, description: "Gate name to command; an empty command drops the gate" }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /setup/github/install-check:
     post:
       summary: Check where the GitHub App is installed; once it is on every account, save the installation and check access
@@ -1637,7 +1656,7 @@ components:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
     Wizard:
       type: object
-      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, checks, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
       properties:
         mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
         writable: { type: boolean, description: This request may save here }
@@ -1649,6 +1668,7 @@ components:
         machine_checked_at: { type: string, description: "Empty while the first check runs" }
         repos: { type: array, items: { type: string } }
         access: { type: array, items: { $ref: "#/components/schemas/WizardAccess" }, description: Each repo's last access check }
+        checks: { type: array, items: { $ref: "#/components/schemas/WizardChecks" }, description: "Each repo's checks, saved or suggested" }
         labels: { type: array, items: { $ref: "#/components/schemas/WizardLabel" }, description: What the last label creation did }
         label_names: { type: array, items: { type: string } }
         github: { oneOf: [{ $ref: "#/components/schemas/WizardGitHub" }, { type: "null" }], description: Null without GitHub repos }
@@ -1669,10 +1689,30 @@ components:
       type: object
       required: [key, title, state, summary]
       properties:
-        key: { type: string, enum: [machine, repos, github, gitlab, claude, codex, notify, sentry, images, finish] }
+        key: { type: string, enum: [machine, repos, github, gitlab, checks, claude, codex, notify, sentry, images, finish] }
         title: { type: string }
         state: { type: string, enum: [done, attention, optional] }
         summary: { type: string }
+    WizardChecks:
+      type: object
+      required: [repo, stack, saved, image_from, install, suggested_install, gates, notes]
+      properties:
+        repo: { type: string }
+        stack: { type: string, description: "What the repo looks like, such as Ruby on Rails; empty until the access check has read its files" }
+        saved: { type: boolean, description: factory.yaml has the repo's own checks }
+        image_from: { type: string, description: "The base image its job image is built on; empty for the default" }
+        install: { type: string }
+        suggested_install: { type: string, description: "The suggested install when it differs" }
+        gates: { type: array, items: { $ref: "#/components/schemas/WizardGate" } }
+        notes: { type: array, items: { type: string } }
+    WizardGate:
+      type: object
+      required: [gate, command, suggested, source]
+      properties:
+        gate: { type: string }
+        command: { type: string, description: "The saved command, else the suggested one" }
+        suggested: { type: string, description: "The suggestion when it differs from command" }
+        source: { type: string, description: "The file the suggestion came from, such as AGENTS.md; empty when guessed from the repo's files" }
     WizardFinding:
       type: object
       required: [status, what, fix, action]

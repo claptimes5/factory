@@ -10,6 +10,7 @@ import {
   wizardDo,
   type Wizard,
   type WizardAccess,
+  type WizardChecks,
   type WizardManifest,
   type WizardSecret,
   type WizardStep,
@@ -581,6 +582,81 @@ function GitLabStep({ w, ro }: { w: Wizard; ro: boolean }) {
   );
 }
 
+/** Each repo's checks: what every change must pass. Suggested from its files and its AGENTS.md or CLAUDE.md, confirmed here. */
+function ChecksStep({ w, ro }: { w: Wizard; ro: boolean }) {
+  return (
+    <>
+      <p className="text-sm text-text-2">
+        Every change must pass these checks before review, so each must pass on the base branch first. The factory suggests them from each repo's
+        files, and takes the test and lint commands from its AGENTS.md or CLAUDE.md when they name one. Check them: a wrong test command can pass
+        without running a test.
+      </p>
+      {w.checks.map((c) => (
+        // Remounted once its files are read, so the fields take the suggestion; not on each save, which would drop its message.
+        <RepoChecks key={c.repo + (c.stack ? ":read" : "")} c={c} ro={ro} several={w.checks.length > 1} />
+      ))}
+    </>
+  );
+}
+
+const standardGates = ["types", "lint", "test", "build"];
+
+function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several: boolean }) {
+  const { busy, msg, run } = useAction();
+  const [install, setInstall] = useState(c.install);
+  const [image, setImage] = useState(c.image_from);
+  const [cmds, setCmds] = useState<Record<string, string>>(() => Object.fromEntries(c.gates.map((g) => [g.gate, g.command])));
+  const names = [...c.gates.map((g) => g.gate), ...standardGates.filter((g) => !c.gates.some((x) => x.gate === g))];
+  const id = (s: string) => `checks-${c.repo.replace(/[^a-z0-9]/gi, "-")}-${s}`;
+  if (!c.stack && !c.saved) {
+    return <p className="text-sm text-muted-foreground">{c.repo}: connect the factory to it above, so it can read the repo's files and suggest its checks.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-3 rounded-md border p-3" data-testid="repo-checks">
+      <p className="text-sm">
+        {several && <span className="font-medium">{c.repo}: </span>}
+        {c.stack ? `Looks like ${c.stack}.` : ""} {c.saved ? "Saved in factory.yaml." : "Suggested, not saved yet."}
+      </p>
+      <TextField id={id("install")} label="Install" value={install} set={setInstall} disabled={ro} placeholder="bundle install" help={c.suggested_install && `Suggested: ${c.suggested_install}`} />
+      {names.map((g) => {
+        const row = c.gates.find((x) => x.gate === g);
+        const from = row?.source ? `from ${row.source}` : row && c.stack ? "guessed from the repo's files" : "";
+        return (
+          <div key={g} className="flex min-w-0 flex-col gap-1">
+            <label htmlFor={id(g)} className="text-sm font-medium">
+              {g}
+            </label>
+            <input id={id(g)} className={cn(input, "font-mono")} value={cmds[g] ?? ""} disabled={ro} placeholder="none" spellCheck={false}
+              onChange={(e) => setCmds({ ...cmds, [g]: e.target.value })} />
+            {row?.suggested ? (
+              <span className="flex flex-wrap items-center gap-2 text-xs text-warning">
+                {row.source || "The repo's files"} suggest <Code>{row.suggested}</Code>
+                <Button size="sm" variant="outline" className="h-7" disabled={ro} onClick={() => setCmds({ ...cmds, [g]: row.suggested })}>
+                  Use it
+                </Button>
+              </span>
+            ) : (
+              from && <span className="text-xs text-muted-foreground">{from}</span>
+            )}
+          </div>
+        );
+      })}
+      <TextField id={id("image")} label="Job image built on" value={image} set={setImage} disabled={ro} placeholder="the factory's default image" help="A Docker image with the repo's language, such as ruby:3.4-bookworm." />
+      {c.notes.map((n) => (
+        <p key={n} className="text-xs text-muted-foreground">
+          {n}
+        </p>
+      ))}
+      <div>
+        <Button size="sm" disabled={ro || !!busy} onClick={() => run("checks/save", { repo: c.repo, install, image_from: image, commands: cmds })}>
+          {busy ? "Saving…" : c.saved ? "Save" : "Use these checks"}
+        </Button>
+      </div>
+      <Message msg={msg} />
+    </div>
+  );
+}
+
 function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const c = w.claude!;
   const [key, setKey] = useState("");
@@ -978,6 +1054,7 @@ const bodies: Record<string, (p: { w: Wizard; ro: boolean }) => ReactNode> = {
   repos: (p) => <ReposStep {...p} />,
   github: (p) => <GitHubStep {...p} />,
   gitlab: (p) => <GitLabStep {...p} />,
+  checks: (p) => <ChecksStep {...p} />,
   claude: (p) => <ClaudeStep {...p} />,
   codex: (p) => <CodexStep {...p} />,
   notify: (p) => <NotifyStep {...p} />,

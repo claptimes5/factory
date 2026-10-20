@@ -94,18 +94,26 @@ marked done, needing attention, or optional, with the next one open:
    just those.
 4. **GitLab** (with GitLab repos): links to make a legacy or fine-grained
    token, and the same access and label checks.
-5. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
+5. **Checks:** what every change in each repo must pass. Once the factory
+   can reach a repo it reads its files and suggests the install, the
+   checks and the job image's base. A test or lint command the repo's
+   `AGENTS.md` or `CLAUDE.md` names wins over a guess from its files, and
+   each says where it came from. Edit them and save; a saved command that
+   the repo's instructions disagree with is flagged, with a button to use
+   theirs. Check the test command: one for the wrong framework can pass
+   without running a test.
+6. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the
    same choices as `factory setup`. For a ChatGPT plan, **Sign in** runs
    Codex's device-code sign-in on the factory's machine and shows the link
    and code to enter, with a Cancel button. A code nobody enters within
    20 minutes ends the sign-in. The page says when you're
    signed in. Only someone who may save settings sees the code.
-6. **Notifications** and **Sentry** (both optional), with a button that
+7. **Notifications** and **Sentry** (both optional), with a button that
    sends a test notification.
-7. **Job images:** which are built, and a Build button that builds the
+8. **Job images:** which are built, and a Build button that builds the
    missing ones while you watch the log. A build `factory serve` started
    on its own shows here too, and the two never run at once.
-8. **Finish**, once the factory can reach every repo, and not while an
+9. **Finish**, once the factory can reach every repo, and not while an
    image builds or a Codex sign-in runs. If something won't
    work yet (no model key, say), it says what. Finish restarts the factory
    with the new settings and the page opens the dashboard when it's up.

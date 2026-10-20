@@ -140,3 +140,26 @@ func TestRubyTestRunner(t *testing.T) {
 		}
 	}
 }
+
+// The test command the repo's AGENTS.md gives wins over the guess from its
+// files, and says where it came from.
+func TestCommandsFromAgentInstructions(t *testing.T) {
+	ctx := context.Background()
+	agents := "## Conventions\n\n- **Tests** are Minitest under `test/`; run with `bin/rails test <path>`. Never write `RSpec.describe`.\n\n" +
+		"```sh\n$ bundle exec rubocop -a app/\n```\n"
+	s, err := Detect(ctx, fakeFiles{"Gemfile": "gem \"rails\"\ngem \"rspec-rails\"\n", "spec/factories/x.rb": "", "AGENTS.md": agents, "CLAUDE.md": "Use `bundle exec rspec`."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Commands["test"] != "bin/rails db:prepare test" || s.Sources["test"] != "AGENTS.md" {
+		t.Fatalf("test = %q from %q", s.Commands["test"], s.Sources["test"])
+	}
+	if s.Commands["lint"] != "bundle exec rubocop" || s.Sources["lint"] != "AGENTS.md" {
+		t.Fatalf("lint = %q from %q", s.Commands["lint"], s.Sources["lint"])
+	}
+	// No instructions: the guess, from no file.
+	s, _ = Detect(ctx, fakeFiles{"package.json": `{"scripts":{"test":"vitest"}}`, "CLAUDE.md": "Run `pnpm test` before pushing."})
+	if s.Commands["test"] != "pnpm test" || s.Sources["test"] != "CLAUDE.md" {
+		t.Fatalf("node test = %q from %q", s.Commands["test"], s.Sources["test"])
+	}
+}
