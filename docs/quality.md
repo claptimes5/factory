@@ -660,7 +660,13 @@ pieces that each pass a whole-repo lint. When the linter is RuboCop
    --no-auto-gen-timestamp`, which lists every current offense in
    `.rubocop_todo.yml` file by file (no cop is turned off for the whole
    repo) and includes it from `.rubocop.yml`;
-3. checks the lint command passes with it, or pushes nothing;
+3. checks the lint command passes with it. If it doesn't, it adds
+   `inherit_mode: merge: [Exclude]` to `.rubocop.yml` (the generated
+   lists otherwise replace a cop's own excludes, so a cop like
+   `Style/Documentation`, which skips `test/` by default, starts flagging
+   it), then lists any file still flagged, such as a `rubocop:disable`
+   comment the baseline made redundant. If lint still fails, it pushes
+   nothing;
 4. pushes only those two files to `factory/lint-baseline` and opens a
    pull request for you to review and merge.
 
