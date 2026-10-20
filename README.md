@@ -56,6 +56,9 @@ and admin rights on the repo you want the factory to work on.
    ```
 
    Or build it yourself: `CGO_ENABLED=0 go build -o factory ./cmd/factory`.
+   Or download a build from [Releases](https://github.com/claptimes5/factory/releases):
+   each archive has the binary with the prompts, skills and job image it
+   reads, and `./factory version` says which release it is.
 
 3. **Run `./factory serve`, then open http://127.0.0.1:8080/app/get-started.**
    The page walks you through the rest: your repos, Docker, a GitHub App it

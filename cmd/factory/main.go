@@ -80,8 +80,13 @@ func restart() error {
 	return syscall.Exec(exe, os.Args, startEnv)
 }
 
+// buildVersion is the release this binary was built from, set by the
+// release workflow with -ldflags "-X main.buildVersion=v1.2.3"; dev for a
+// local build.
+var buildVersion = "dev"
+
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] version|setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -93,6 +98,10 @@ func run(args []string) error {
 	// The egress proxy runs in its own container, also without either.
 	if len(args) > 0 && args[0] == "egress-proxy" {
 		return egressProxy(args[1:])
+	}
+	if len(args) == 1 && args[0] == "version" {
+		fmt.Println("factory", buildVersion)
+		return nil
 	}
 	fs := flag.NewFlagSet("factory", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FACTORY_CONFIG", "factory.yaml"), "path to factory.yaml")

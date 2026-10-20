@@ -16,6 +16,26 @@ Thanks for helping. Issues and pull requests are both welcome.
 - Run `gofmt -w` on the Go files you changed.
 - Update the docs under `docs/` when you change what a user sees or runs.
 
+## Versions and releases
+
+Factory follows [semantic versioning](https://semver.org). A maintainer
+labels each pull request with how much it changes:
+
+| Label | When | Example |
+|---|---|---|
+| `semver:major` | It breaks something people rely on: a config key, a command or the API changes or goes away | v1.4.2 → v2.0.0 |
+| `semver:minor` | It adds something without breaking anything | v1.4.2 → v1.5.0 |
+| none | A fix, docs, or anything else | v1.4.2 → v1.4.3 |
+
+Merging doesn't release. A maintainer releases when it's worth it, from
+**Actions > release > Run workflow**: it takes the biggest label among the
+pull requests merged since the last tag, builds `factory` for Linux and
+macOS (amd64 and arm64), and publishes a GitHub release with notes from
+those pull requests. Leave **dry_run** checked to see the version and its
+pull requests first; uncheck it to release. It only releases a commit whose
+CI passed on `main`. The first release is v0.1.0. While the version is
+0.x, the config and API may still change between minor versions.
+
 ## Contributor License Agreement
 
 Before your first pull request can be merged, you need to sign the

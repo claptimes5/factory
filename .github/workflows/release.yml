@@ -1,0 +1,111 @@
+name: release
+# Run by hand (Actions > release > Run workflow). The version comes from
+# the pull requests merged since the last tag: the biggest of their
+# semver:major and semver:minor labels, else a patch. The first release
+# is v0.1.0. With dry_run it only says what it would release.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print the next version and its pull requests
+        type: boolean
+        default: true
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: next version
+        id: next
+        run: |
+          sha=$(git rev-parse HEAD)
+          last=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$last" ]; then
+            next=v0.1.0
+            range=HEAD
+          else
+            if [ "$(git rev-parse "$last^{commit}")" = "$sha" ]; then
+              echo "::error::Nothing merged since $last."
+              exit 1
+            fi
+            range="$last..HEAD"
+            # Merge commits say "Merge pull request #12"; squash merges end "(#12)".
+            prs=$(git log --format=%s "$range" | sed -nE 's/^Merge pull request #([0-9]+).*/\1/p; s/.*\(#([0-9]+)\)$/\1/p' | sort -un)
+            bump=patch
+            for n in $prs; do
+              labels=$(gh pr view "$n" --json labels --jq '.labels[].name')
+              if echo "$labels" | grep -qx 'semver:major'; then bump=major
+              elif echo "$labels" | grep -qx 'semver:minor' && [ "$bump" = patch ]; then bump=minor
+              fi
+              echo "#$n: $(echo $labels | tr ' ' ',')"
+            done
+            IFS=. read -r major minor patch <<<"${last#v}"
+            case $bump in
+              major) next="v$((major + 1)).0.0" ;;
+              minor) next="v$major.$((minor + 1)).0" ;;
+              patch) next="v$major.$minor.$((patch + 1))" ;;
+            esac
+          fi
+          echo "Last: ${last:-none}. Next: $next."
+          echo "## $next" >> "$GITHUB_STEP_SUMMARY"
+          echo "From ${last:-the start} at $(git rev-parse --short HEAD)." >> "$GITHUB_STEP_SUMMARY"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "last=$last" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # Only a commit whose CI passed on main is released.
+      - name: ci passed
+        if: ${{ !inputs.dry_run }}
+        env:
+          SHA: ${{ steps.next.outputs.sha }}
+        run: |
+          ok=$(gh run list --workflow ci --branch main --commit "$SHA" --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
+          if [ "$ok" = 0 ]; then
+            echo "::error::CI hasn't passed on $SHA yet. Wait for it, or fix main, then run this again."
+            exit 1
+          fi
+      - uses: actions/setup-go@v6
+        if: ${{ !inputs.dry_run }}
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # The binary reads prompts/, skills/, evals/ and deploy/job-image from
+      # beside it, so each archive carries them with a sample factory.yaml.
+      - name: build
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            name="factory_${VERSION#v}_${os}_${arch}"
+            mkdir "dist/$name"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.buildVersion=$VERSION" -o "dist/$name/factory" ./cmd/factory
+            cp -R prompts skills evals deploy factory.yaml LICENSE.md README.md "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          done
+          (cd dist && sha256sum ./*.tar.gz > checksums.txt)
+      - name: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          LAST: ${{ steps.next.outputs.last }}
+          SHA: ${{ steps.next.outputs.sha }}
+        run: |
+          set -- --target "$SHA" --title "$VERSION" --generate-notes
+          [ -n "$LAST" ] && set -- "$@" --notes-start-tag "$LAST"
+          gh release create "$VERSION" "$@" dist/*.tar.gz dist/checksums.txt
