@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -17,6 +18,10 @@ type APIHappened struct {
 	Summary string `json:"summary"`
 	// Steps are its parts, in order, each with its job to link.
 	Steps []APIHappenedStep `json:"steps"`
+	// Note says what to do when the last build failed a check that fails
+	// on the base branch too, as the setup check found: no change passes
+	// it until the base does. "" otherwise.
+	Note string `json:"note"`
 }
 
 // APIHappenedStep is one thing that happened.
@@ -93,7 +98,51 @@ func (s *Server) whatHappened(it *store.WorkItem, jobs []*store.Job, evs []store
 		h.Summary += "."
 	}
 	h.Steps[0].Text = capitalFirst(h.Steps[0].Text)
+	if len(bad) > 0 {
+		h.Note = s.baseRedNote(it.Repo, bad[len(bad)-1])
+	}
 	return h
+}
+
+// baseRedNote names the checks a failed build failed that the setup
+// check found failing on the base branch too.
+func (s *Server) baseRedNote(repo string, j *store.Job) string {
+	line, _, _ := strings.Cut(j.Error, "\n")
+	if !strings.HasPrefix(line, "GATES: FAIL") {
+		return ""
+	}
+	rep, err := readiness.Load(s.ReadinessDir, repo)
+	if s.ReadinessDir == "" || err != nil || rep == nil {
+		return ""
+	}
+	var red []string
+	for _, f := range strings.Fields(line) {
+		gate, ok := strings.CutSuffix(f, "=fail")
+		if !ok {
+			continue
+		}
+		for _, b := range rep.Findings {
+			if b.Level == readiness.Blocker && b.Issue != nil && b.Issue.Key == "check:"+gate {
+				red = append(red, "`"+gate+"`")
+			}
+		}
+	}
+	if len(red) == 0 {
+		return ""
+	}
+	verb := "fails"
+	if len(red) > 1 {
+		verb = "fail"
+	}
+	return fmt.Sprintf("%s %s on %s too, as the setup check found, and every change has to pass it, so retrying or splitting this won't help. "+
+		"Make it pass on %s first (see Setup), or take it out of the required gates in factory.yaml until it does.", strings.Join(red, " and "), verb, rep.Branch, rep.Branch)
+}
+
+// sizeStop says whether a build stopped because the work was too big for
+// it: out of turns or budget, out of time, or over the diff size limit.
+// Splitting helps those, not a check that fails.
+func (s *Server) sizeStop(j *store.Job) bool {
+	return j.State == state.TimedOut || s.jobStop(j) != nil || strings.Contains(j.Error, "split the task")
 }
 
 // howItEnded is a job's ending as the store has it.
@@ -189,6 +238,10 @@ func (s *Server) splitOffer(ctx context.Context, it *store.WorkItem, jobs []*sto
 		}
 	}
 	if failed == nil && it.Stage != state.Parked {
+		return nil
+	}
+	// A build that failed its checks isn't helped by smaller pieces.
+	if failed != nil && !s.sizeStop(failed) {
 		return nil
 	}
 	sp := &APISplit{Prompt: SplitPrompt(it, h.Summary, failed)}

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
-import { ErrorBox, Loading, PageTitle } from "@/components/common";
+import { ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ago, cn, repoName, shortSha } from "@/lib/utils";
@@ -21,23 +21,6 @@ export const useReadiness = () =>
     queryFn: () => getJSON<Readiness>("/readiness"),
     refetchInterval: (q) => (q.state.data?.repos.some((r) => r.checking) ? 3_000 : 30_000),
   });
-
-/** "`lint` fails on main" with the command in code. */
-function Inline({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/(`[^`]+`)/).map((part, i) =>
-        part.startsWith("`") && part.endsWith("`") && part.length > 1 ? (
-          <code key={i} className="rounded bg-muted px-1 font-mono text-[0.9em]">
-            {part.slice(1, -1)}
-          </code>
-        ) : (
-          part
-        ),
-      )}
-    </>
-  );
-}
 
 /** A finding's detail: paragraphs, with command output in fenced blocks shown as is. */
 function Detail({ text }: { text: string }) {

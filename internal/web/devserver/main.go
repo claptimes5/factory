@@ -590,7 +590,7 @@ func seedCancelledRetry(ctx context.Context, st *store.Store, item int64) error 
 	if _, err := st.ClaimJob(ctx); err != nil {
 		return err
 	}
-	if err := st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 2.4, Error: "gates failed: test (TestAuditPage: want 50 rows, got 49)"}); err != nil {
+	if err := st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 2.4, Error: "gates failed: diff_guard (changes 912 lines, max 400; split the task)"}); err != nil {
 		return err
 	}
 	retry, err := st.EnqueueJob(ctx, store.Job{ItemID: &item, Kind: "implement", Harness: "claude", Model: "sonnet", BudgetUSD: 6, Attempt: 2})

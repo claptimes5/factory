@@ -1211,10 +1211,11 @@ components:
         children: { type: array, description: "The issues it was split into, oldest first", items: { $ref: "#/components/schemas/Item" } }
     Happened:
       type: object
-      required: [summary, steps]
+      required: [summary, steps, note]
       properties:
         summary: { type: string, description: "The whole story in a sentence: The build ran out of turns (job #12), then its retry was cancelled by you (job #14)." }
         steps: { type: array, items: { $ref: "#/components/schemas/HappenedStep" }, description: Its parts in order, each with its job to link }
+        note: { type: string, description: "What to do when the last build failed a check that fails on the base branch too, as the setup check found; empty otherwise" }
     HappenedStep:
       type: object
       required: [text, job_id]

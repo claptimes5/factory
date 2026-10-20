@@ -139,8 +139,12 @@ question from triage) shows why it was parked.
 
 ### Split it
 
-When an item's build failed or ran out of turns, or the item was
-parked, it may be too big for one build. **Split it** in the What
+When an item's build ran out of turns or budget, timed out, or went over
+the diff size limit, or the item was parked with no build to blame, it may
+be too big for one build. A build that failed a check isn't offered a
+split: smaller pieces fail it too. When that check fails on the base branch
+as well, as the setup check found, What happened says so: make it pass
+there first, or take it out of the required gates until it does. **Split it** in the What
 happened box starts a new [chat](#chat-opening-issues-with-the-orchestrator)
 with the orchestrator's model and sends it a message naming the item,
 its issue and what happened, with the failed run's job to read. The

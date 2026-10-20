@@ -4,7 +4,7 @@ import { ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split } from "@/api/client";
 import type { components } from "@/api/schema";
-import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge, WaitsFor } from "@/components/common";
+import { Empty, ErrorBox, Inline, JobStateBadge, Loading, StageBadge, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
@@ -474,6 +474,11 @@ function HappenedCard({ h, split }: { h: Happened; split: Split | null }) {
         ))}
         {endsSentence(h) ? "" : "."}
       </p>
+      {h.note && (
+        <p className="mt-2 font-medium" data-testid="happened-note">
+          <Inline text={h.note} />
+        </p>
+      )}
       {split && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" disabled={busy || !!split.unavailable} onClick={splitIt} title={split.unavailable || undefined}>
