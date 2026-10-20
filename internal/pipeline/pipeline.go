@@ -804,6 +804,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 	if p.Cfg.Orchestrator.On {
 		p.warn(p.intakeEpics(ctx, repo), "epics")
 	}
+	p.warn(p.dropClosed(ctx, repo, issues), "closed issues")
 	p.warn(p.intakeGo(ctx, repo), "factory:go")
 	p.warn(p.intakeReplan(ctx, repo), "factory:replan")
 	retries, err := gh.ListIssues(ctx, LabelRetry)
@@ -843,6 +844,68 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 		if err := p.enqueueTriage(ctx, it, 1, ""); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// dropClosed stops work on the items whose issue was closed on the forge:
+// their jobs are cancelled and they're done. open is the repo's open
+// issues with the intake label, read this poll; only the items missing
+// from it are looked up. An item with a PR is left to its PR.
+func (p *Pipeline) dropClosed(ctx context.Context, repo string, open []github.Issue) error {
+	items, err := p.Store.ListItems(ctx)
+	if err != nil {
+		return err
+	}
+	seen := map[int]bool{}
+	for _, is := range open {
+		seen[is.Number] = true
+	}
+	gh := p.gh(repo)
+	epics := false
+	for _, it := range items {
+		if !strings.EqualFold(it.Repo, repo) || seen[it.IssueNumber] || it.Stage == state.Done || it.Stage == state.AwaitingHuman || it.PRNumber > 0 {
+			continue
+		}
+		// An epic may carry only the epic label: the open ones are read
+		// once, not each on its own every poll.
+		if it.Stage == state.Epic && !epics {
+			epics = true
+			if open, err := gh.ListIssues(ctx, LabelEpic); err == nil {
+				for _, is := range open {
+					seen[is.Number] = true
+				}
+			}
+			if seen[it.IssueNumber] {
+				continue
+			}
+		}
+		is, err := gh.GetIssue(ctx, it.IssueNumber)
+		if err != nil || is.State != "closed" {
+			if !github.IsNotFound(err) { // a deleted issue isn't worth a warning every poll
+				p.warn(err, "GetIssue")
+			}
+			continue
+		}
+		why := fmt.Sprintf("its issue %s was closed", p.ref(repo, it.IssueNumber))
+		jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID})
+		if err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			if !j.State.Terminal() {
+				p.warn(p.stopJob(ctx, "human", j, why), "stopJob")
+			}
+		}
+		if it.Stage == state.Implementing || it.Stage == state.Reviewing {
+			if err := p.Store.SetStage(ctx, it.ID, state.Parked, "human", "Stopped: "+why+"."); err != nil {
+				return err
+			}
+		}
+		if err := p.Store.SetStage(ctx, it.ID, state.Done, "human", "Done: "+why+", so the factory stopped working on it."); err != nil {
+			return err
+		}
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "human", ItemID: &it.ID, Type: "issue_closed", Reason: why}), "AddEvent")
 	}
 	return nil
 }

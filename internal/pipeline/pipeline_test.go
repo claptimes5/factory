@@ -105,7 +105,7 @@ func (f *fakeGH) ListIssues(_ context.Context, label string) ([]github.Issue, er
 	}
 	var out []github.Issue
 	for _, is := range f.issues {
-		if hasLabel(is.Labels, label) {
+		if hasLabel(is.Labels, label) && is.State != "closed" { // open issues only, as the forges list them
 			out = append(out, *is)
 		}
 	}
@@ -114,6 +114,9 @@ func (f *fakeGH) ListIssues(_ context.Context, label string) ([]github.Issue, er
 func (f *fakeGH) GetIssue(_ context.Context, n int) (*github.Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.issues[n] == nil {
+		return nil, &github.HTTPError{Status: 404, Body: "Not Found"}
+	}
 	is := *f.issues[n]
 	return &is, nil
 }
