@@ -139,3 +139,36 @@ func TestStaleEgressProxiesKeepsOthers(t *testing.T) {
 		t.Errorf("removed its own proxy:\n%s", calls)
 	}
 }
+
+// The proxy isn't set to restart, and StopEgress removes it only once no
+// job is left on its network.
+func TestStopEgressWaitsForJobs(t *testing.T) {
+	d, log := fakeEgressDocker(t)
+	ctx := context.Background()
+	if _, err := d.Run(ctx, Spec{Name: "factory-job-1", Image: "img", Cmd: []string{"true"}}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	script, _ := os.ReadFile(d.Bin)
+	busy := strings.Replace(string(script), `"ps -a") ;;`, `"ps -a") ;;
+  "ps --filter") echo `+d.Egress.name()+`; echo factory-job-2 ;;`, 1)
+	if err := os.WriteFile(d.Bin, []byte(busy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StopEgress(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(d.Bin, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if calls := string(b); strings.Contains(calls, "--restart") || strings.Contains(calls, "rm -f "+d.Egress.name()) {
+		t.Fatalf("restarts, or removed in use:\n%s", calls)
+	}
+	if err := d.StopEgress(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(log)
+	if calls := string(b); !strings.Contains(calls, "ps --filter network=factory-egress") || !strings.Contains(calls, "rm -f "+d.Egress.name()) {
+		t.Fatalf("not removed:\n%s", calls)
+	}
+}

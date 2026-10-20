@@ -1672,6 +1672,7 @@ func runTry(ctx context.Context, cfg *config.Config, repo string, client clientF
 	if err != nil {
 		return err
 	}
+	defer stopEgress(rn)
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: rn, JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
 		gh, ts, err := client(repo)
 		if err != nil {
