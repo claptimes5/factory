@@ -46,5 +46,7 @@ jobs:
           branch: cla-signatures
           path-to-signatures: signatures/cla.json
           # The owner and known bots (the factory's own commits are
-          # factory[bot]) don't sign.
-          allowlist: claptimes5,factory[bot],dependabot[bot],github-actions[bot]
+          # factory[bot]) don't sign. Nor does claude, the account GitHub
+          # gives commits co-authored by Claude: the person who opens the
+          # pull request signs for their work.
+          allowlist: claptimes5,factory[bot],dependabot[bot],github-actions[bot],claude
