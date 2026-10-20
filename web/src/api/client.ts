@@ -174,7 +174,7 @@ export const useWizard = () =>
       if (w.machine_checked_at !== "") machineWaitSince = null;
       else if (machineWaitSince === null) machineWaitSince = Date.now();
       const checking = w.machine_checked_at === "" && !machineCheckStalled();
-      return checking || w.images?.building || w.codex?.sign_in.running ? 2_000 : 30_000;
+      return checking || w.images?.building || w.codex?.sign_in.running || w.checks.some((c) => c.try?.running) ? 2_000 : 30_000;
     },
   });
 

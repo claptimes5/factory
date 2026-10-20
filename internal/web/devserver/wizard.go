@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type wizard struct {
 	// saved are the checks saved per repo: acme/api's test command is the
 	// one its AGENTS.md disagrees with; acme/web has none yet.
 	saved map[string]map[string]string
+	tries map[string]*web.APIWizardTry
 }
 
 func newWizard(r *restarter) *wizard {
@@ -120,7 +122,11 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 	out.CanFinish = w.reach()
 	var unsaved []string
 	for _, r := range w.repos {
-		c := web.APIWizardChecks{Repo: r, Gates: []web.APIWizardGate{}, Notes: []string{}}
+		c := web.APIWizardChecks{Repo: r, Gates: []web.APIWizardGate{}, Notes: []string{}, Services: []web.APIWizardService{}, Env: map[string]string{}, Try: w.tries[r]}
+		if r == "acme/api" {
+			c.Services = []web.APIWizardService{{Name: "postgres", Image: "postgres:16"}}
+			c.Env["DATABASE_URL"] = "postgres://postgres:factory@postgres:5432/test"
+		}
 		{
 			c.Stack, c.Install, c.ImageFrom = "Ruby on Rails", "bundle install", "ruby:3.4-bookworm"
 			sug := map[string][2]string{"lint": {"bundle exec rubocop", ""}, "test": {"bin/rails db:prepare test", "AGENTS.md"}}
@@ -211,6 +217,26 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 	switch action {
 	case "machine/check":
 		return "Checked this machine again.", nil
+	case "checks/try":
+		// The tests need the database: without it they fail as a Rails
+		// app's would.
+		pg := slices.Contains(in.Services, "postgres") || in.Repo != "acme/api"
+		t := &web.APIWizardTry{Since: time.Now().UTC().Format(time.RFC3339), Steps: []web.APIWizardTryStep{
+			{Gate: "install", Command: in.Install, State: "pass", Seconds: 41, Output: "Bundle complete!"}}}
+		for _, g := range []string{"lint", "test", "build"} {
+			if c := strings.TrimSpace(in.Commands[g]); c != "" {
+				st := web.APIWizardTryStep{Gate: g, Command: c, State: "pass", Seconds: 12, Output: "ok"}
+				if g == "test" && !pg {
+					st.State, st.Output = "fail", "ActiveRecord::ConnectionNotEstablished: connection to server at \"127.0.0.1\", port 5432 failed: Connection refused"
+				}
+				t.Steps = append(t.Steps, st)
+			}
+		}
+		if w.tries == nil {
+			w.tries = map[string]*web.APIWizardTry{}
+		}
+		w.tries[in.Repo] = t
+		return "Trying " + in.Repo + "'s checks.", nil
 	case "checks/save":
 		cmds := map[string]string{}
 		for g, c := range in.Commands {

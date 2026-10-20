@@ -605,6 +605,29 @@ paths:
                 install: { type: string }
                 image_from: { type: string, description: "Empty for the default job image" }
                 commands: { type: object, additionalProperties: { type: string }, description: "Gate name to command; an empty command drops the gate" }
+                services: { type: array, items: { type: string }, description: "The services to start, by name, from those the page shows" }
+                env: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/checks/try:
+    post:
+      summary: Run a repo's install and each check once on its base branch, with the commands given, saved or not, in the background
+      description: Clones the base branch, starts the services given, and runs the install and each check, so a wrong command or a missing service shows before you save. One run per repo at a time. The job image is the one saved; a new base image needs a save and an image build first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, commands]
+              properties:
+                repo: { type: string }
+                install: { type: string }
+                commands: { type: object, additionalProperties: { type: string } }
+                services: { type: array, items: { type: string } }
+                env: { type: object, additionalProperties: { type: string } }
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -1722,7 +1745,7 @@ components:
         summary: { type: string }
     WizardChecks:
       type: object
-      required: [repo, stack, saved, image_from, install, suggested_install, gates, notes]
+      required: [repo, stack, saved, image_from, install, suggested_install, gates, notes, services, env, try]
       properties:
         repo: { type: string }
         stack: { type: string, description: "What the repo looks like, such as Ruby on Rails; empty until the access check has read its files" }
@@ -1732,6 +1755,37 @@ components:
         suggested_install: { type: string, description: "The suggested install when it differs" }
         gates: { type: array, items: { $ref: "#/components/schemas/WizardGate" } }
         notes: { type: array, items: { type: string } }
+        services: { type: array, items: { $ref: "#/components/schemas/WizardService" }, description: "The containers its checks start: saved, else suggested" }
+        env: { type: object, additionalProperties: { type: string }, description: "The variables that find them, such as DATABASE_URL" }
+        try:
+          description: The last Try these checks, or null
+          oneOf:
+            - $ref: "#/components/schemas/WizardTry"
+            - type: "null"
+    WizardService:
+      type: object
+      required: [name, image, saved]
+      properties:
+        name: { type: string }
+        image: { type: string }
+        saved: { type: boolean, description: "factory.yaml has it; else suggested from the repo's files" }
+    WizardTry:
+      type: object
+      required: [running, since, steps, error]
+      properties:
+        running: { type: boolean }
+        since: { type: string }
+        steps: { type: array, items: { $ref: "#/components/schemas/WizardTryStep" } }
+        error: { type: string, description: "Why it couldn't run them, such as a clone or a service; else empty" }
+    WizardTryStep:
+      type: object
+      required: [gate, command, state, seconds, output]
+      properties:
+        gate: { type: string }
+        command: { type: string }
+        state: { type: string, enum: [waiting, running, pass, fail, skipped] }
+        seconds: { type: integer }
+        output: { type: string, description: "The end of what it printed" }
     WizardGate:
       type: object
       required: [gate, command, suggested, source]

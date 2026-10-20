@@ -850,3 +850,76 @@ func TestWizardChecks(t *testing.T) {
 		t.Fatalf("gates = %+v", g)
 	}
 }
+
+// The page tries its checks before saving them: the install and each check
+// run with the commands and services on the page, and it follows each step.
+// Saving keeps the services picked and their environment.
+func TestWizardTriesAndSavesServices(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, files: map[string]map[string]string{"o/r": {
+		"Gemfile":             "gem \"rails\"\ngem \"pg\"\ngem \"redis\"\n",
+		"test/test_helper.rb": "",
+	}}}
+	w := testWizard(t, f, "o/r", false, noDocker)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "github/token", web.WizardInput{Token: "ghp_token_123456789"}); err != nil {
+		t.Fatal(err)
+	}
+	c := w.State(ctx, false).Checks[0]
+	if len(c.Services) != 2 || c.Services[0].Name != "postgres" || c.Services[0].Saved || c.Env["DATABASE_URL"] == "" || c.Env["REDIS_URL"] == "" || c.Try != nil {
+		t.Fatalf("suggested = %+v env %v", c.Services, c.Env)
+	}
+	release := make(chan struct{})
+	var ran *config.Config
+	old := tryRun
+	t.Cleanup(func() { tryRun = old })
+	tryRun = func(_ context.Context, cfg *config.Config, repo string, _ clientFor, update func(func(*web.APIWizardTry))) error {
+		ran = cfg
+		update(func(t *web.APIWizardTry) { t.Steps[0].State = "pass" })
+		<-release
+		update(func(t *web.APIWizardTry) { t.Steps[1].State, t.Steps[1].Output = "fail", "PG::ConnectionBad" })
+		return nil
+	}
+	in := web.WizardInput{Repo: "o/r", Install: "bundle install", Commands: map[string]string{"test": "bin/rails db:prepare test"},
+		Services: []string{"postgres"}, Env: map[string]string{"DATABASE_URL": "postgres://postgres:factory@postgres:5432/test"}}
+	if msg, err := w.Do(ctx, "checks/try", in); err != nil || !strings.Contains(msg, "Trying o/r's checks") {
+		t.Fatalf("try: %q %v", msg, err)
+	}
+	if _, err := w.Do(ctx, "checks/try", in); err == nil {
+		t.Fatal("a second try while one runs")
+	}
+	try := w.State(ctx, false).Checks[0].Try
+	if try == nil || !try.Running || len(try.Steps) != 2 || try.Steps[0].Gate != "install" {
+		t.Fatalf("while trying = %+v", try)
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); w.State(ctx, false).Checks[0].Try.Running; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the try never ended")
+		}
+	}
+	try = w.State(ctx, false).Checks[0].Try
+	if try.Steps[1].State != "fail" || try.Steps[1].Output != "PG::ConnectionBad" {
+		t.Fatalf("after = %+v", try)
+	}
+	// It ran with what was on the page, not saved yet.
+	rc, _ := ran.RepoConf("o/r")
+	if rc.Gates.Commands["test"] != "bin/rails db:prepare test" || rc.Services["postgres"].Image != "postgres:16" || rc.Services["redis"].Image != "" || rc.Env["DATABASE_URL"] == "" {
+		t.Fatalf("tried %+v services %v env %v", rc.Gates, rc.Services, rc.Env)
+	}
+	if cfg, _ := config.Load(w.cfgPath); cfg.Repos[0].Gates != nil {
+		t.Fatal("trying saved the checks")
+	}
+	if _, err := w.Do(ctx, "checks/save", in); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(w.cfgPath)
+	if r := cfg.Repos[0]; r.Services["postgres"].Ready != "pg_isready -U postgres" || len(r.Services) != 1 || r.Env["DATABASE_URL"] == "" {
+		t.Fatalf("saved services %v env %v", r.Services, r.Env)
+	}
+	if c := w.State(ctx, false).Checks[0]; len(c.Services) != 2 || !c.Services[0].Saved || c.Services[1].Saved {
+		t.Fatalf("after saving = %+v", c.Services)
+	}
+	if _, err := w.Do(ctx, "checks/save", web.WizardInput{Repo: "o/r", Commands: map[string]string{"test": "x"}, Services: []string{"mongo"}}); err == nil {
+		t.Fatal("a service the page didn't show was saved")
+	}
+}

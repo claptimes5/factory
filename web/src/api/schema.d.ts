@@ -2001,6 +2001,58 @@ export interface paths {
                         commands: {
                             [key: string]: string;
                         };
+                        /** @description The services to start, by name, from those the page shows */
+                        services?: string[];
+                        env?: {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/checks/try": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a repo's install and each check once on its base branch, with the commands given, saved or not, in the background
+         * @description Clones the base branch, starts the services given, and runs the install and each check, so a wrong command or a missing service shows before you save. One run per repo at a time. The job image is the one saved; a new base image needs a save and an image build first.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        install?: string;
+                        commands: {
+                            [key: string]: string;
+                        };
+                        services?: string[];
+                        env?: {
+                            [key: string]: string;
+                        };
                     };
                 };
             };
@@ -3548,6 +3600,36 @@ export interface components {
             suggested_install: string;
             gates: components["schemas"]["WizardGate"][];
             notes: string[];
+            /** @description The containers its checks start: saved, else suggested */
+            services: components["schemas"]["WizardService"][];
+            /** @description The variables that find them, such as DATABASE_URL */
+            env: {
+                [key: string]: string;
+            };
+            /** @description The last Try these checks, or null */
+            try: components["schemas"]["WizardTry"] | null;
+        };
+        WizardService: {
+            name: string;
+            image: string;
+            /** @description factory.yaml has it; else suggested from the repo's files */
+            saved: boolean;
+        };
+        WizardTry: {
+            running: boolean;
+            since: string;
+            steps: components["schemas"]["WizardTryStep"][];
+            /** @description Why it couldn't run them, such as a clone or a service; else empty */
+            error: string;
+        };
+        WizardTryStep: {
+            gate: string;
+            command: string;
+            /** @enum {string} */
+            state: "waiting" | "running" | "pass" | "fail" | "skipped";
+            seconds: number;
+            /** @description The end of what it printed */
+            output: string;
         };
         WizardGate: {
             gate: string;
