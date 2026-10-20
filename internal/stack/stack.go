@@ -58,7 +58,13 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 		s.Go = true
 		stacks = append(stacks, "Go")
 	case has("Gemfile"):
-		stacks = append(stacks, ruby(s, read, has, add))
+		// test/test_helper.rb is Minitest's, whatever else the repo has.
+		minitest := false
+		if has("test/") {
+			names, _ := f.List(ctx, "test/")
+			minitest = slices.Contains(names, "test_helper.rb")
+		}
+		stacks = append(stacks, ruby(s, read, has, minitest, add))
 	case has("pyproject.toml") || has("requirements.txt"):
 		stacks = append(stacks, python(s, read, has, add))
 	case has("Cargo.toml"):
@@ -86,7 +92,7 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 	return s, nil
 }
 
-func ruby(s *Suggestion, read func(string) string, has func(string) bool, add func(string, string)) string {
+func ruby(s *Suggestion, read func(string) string, has func(string) bool, minitest bool, add func(string, string)) string {
 	gemfile := read("Gemfile")
 	gem := func(name string) bool {
 		return regexp.MustCompile(`(?m)^\s*gem\s+["']` + regexp.QuoteMeta(name) + `["']`).MatchString(gemfile)
@@ -100,7 +106,15 @@ func ruby(s *Suggestion, read func(string) string, has func(string) bool, add fu
 	if gem("rubocop") || strings.Contains(gemfile, "rubocop") {
 		add("lint", "bundle exec rubocop")
 	}
+	// A repo may have rspec-rails for its matchers, or spec/ for
+	// factories, and run Minitest: .rspec is what RSpec suites have.
 	switch {
+	case has(".rspec"):
+		add("test", "bundle exec rspec")
+	case minitest && stack == "Ruby on Rails":
+		add("test", "bin/rails db:prepare test")
+	case minitest:
+		add("test", "bundle exec rake test")
 	case gem("rspec-rails") || gem("rspec") || has("spec/"):
 		add("test", "bundle exec rspec")
 	case stack == "Ruby on Rails":

@@ -118,3 +118,25 @@ func TestVersion(t *testing.T) {
 		}
 	}
 }
+
+// A Rails app that keeps rspec-rails for its matchers and spec/ for
+// factories, but runs Minitest, is tested with Minitest; one with .rspec
+// is tested with RSpec.
+func TestRubyTestRunner(t *testing.T) {
+	ctx := context.Background()
+	gemfile := "gem \"rails\"\ngem \"rspec-rails\"\ngem \"minitest-reporters\"\n"
+	for name, c := range map[string]struct {
+		files fakeFiles
+		want  string
+	}{
+		"minitest":       {fakeFiles{"Gemfile": gemfile, "spec/factories/x.rb": "", "test/test_helper.rb": "", "test/models/x_test.rb": ""}, "bin/rails db:prepare test"},
+		"rspec":          {fakeFiles{"Gemfile": gemfile, ".rspec": "--require spec_helper", "spec/models/x_spec.rb": "", "test/test_helper.rb": ""}, "bundle exec rspec"},
+		"rspec, no test": {fakeFiles{"Gemfile": gemfile, "spec/models/x_spec.rb": ""}, "bundle exec rspec"},
+		"plain minitest": {fakeFiles{"Gemfile": "gem \"minitest\"\n", "test/test_helper.rb": ""}, "bundle exec rake test"},
+	} {
+		s, err := Detect(ctx, c.files)
+		if err != nil || s.Commands["test"] != c.want {
+			t.Errorf("%s: test = %q, want %q (%v)", name, s.Commands["test"], c.want, err)
+		}
+	}
+}
