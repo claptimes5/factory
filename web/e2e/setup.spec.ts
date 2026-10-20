@@ -124,3 +124,18 @@ test("lint failing on main offers a baseline, and making it says where its pull 
   await expect(api.getByRole("status").filter({ hasText: "baseline" }).first()).toBeVisible();
   await expect(api).toContainText("https://github.com/acme/api/pull/120", { timeout: 10_000 });
 });
+
+test("a setup run in progress shows above every screen, with its time counting", async ({ page }) => {
+  await page.route("**/api/v1/readiness", async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    body.repos[0].checking = true;
+    body.repos[0].action = "baseline";
+    body.repos[0].checking_since = new Date(Date.now() - 90_000).toISOString();
+    await route.fulfill({ response: r, json: body });
+  });
+  await page.goto("/app/");
+  const banner = page.getByRole("region", { name: "Setup", exact: true });
+  await expect(banner).toContainText(/Making the lint baseline for api, started 1m ago/);
+  await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);
+});

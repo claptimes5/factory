@@ -6,7 +6,7 @@ import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { useRepo } from "@/lib/repo";
-import { cn, duration, money, shortRef, stageName } from "@/lib/utils";
+import { brief, cn, duration, money, shortRef, stageName } from "@/lib/utils";
 
 // The floor's columns, in the order work moves through them. The quiet
 // ones show only when they hold something.
@@ -196,7 +196,7 @@ function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; 
       )}
       {c.live && kind === "implement" && <div className="working h-[3px] rounded-full" aria-hidden />}
       {c.gates_total > 0 && c.stage !== "implementing" && <GateBar passed={c.gates_passed} total={c.gates_total} />}
-      {c.stage === "blocked" && c.blocked_note && <p className="line-clamp-2 text-xs text-muted-foreground">{c.blocked_note}</p>}
+      {c.stage === "blocked" && c.blocked_note && <p className="line-clamp-2 text-xs text-muted-foreground">{brief(c.blocked_note)}</p>}
       <WaitsFor items={c.waits_for} />
       <Footer card={c} next={next} />
     </article>
@@ -277,7 +277,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
           )}
         </div>
       ) : (
-        c.blocked_note && <p className="text-sm leading-relaxed text-text-2">“{c.blocked_note}”</p>
+        c.blocked_note && <p className="line-clamp-3 text-sm leading-relaxed text-text-2">“{brief(c.blocked_note)}”</p>
       )}
       <WaitsFor items={c.waits_for} plan={plan} className="text-[13px]" />
       <div className="mt-auto flex flex-wrap gap-2">

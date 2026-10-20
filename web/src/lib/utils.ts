@@ -51,3 +51,16 @@ export const shortRef = (ref: string) => ref.replace(/^[^/#]+\//, "");
 export const repoName = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
 export const shortSha = (s: string) => s.slice(0, 7);
+
+/**
+ * A note as a line or two for a card: the part before any log or code it
+ * quotes ("Last failure: ```…"), cut at about max characters.
+ */
+export function brief(note: string, max = 220): string {
+  let s = note.split("```")[0];
+  const cut = s.search(/\b(Last failure|Output|Log):/);
+  if (cut > 0) s = s.slice(0, cut);
+  s = s.replace(/\s+/g, " ").trim();
+  if (s.length > max) s = s.slice(0, max).replace(/\s+\S*$/, "") + "…";
+  return s;
+}
