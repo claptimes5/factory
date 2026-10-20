@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -255,5 +256,35 @@ func TestReadinessFileFromThePage(t *testing.T) {
 	}
 	if r := got.Repos[0]; r.Result != "Opened 1 issue(s) on o/r." || r.CheckError != "" || len(queued) != 1 || !queued[0] {
 		t.Fatalf("after = %+v, queued %v", r, queued)
+	}
+}
+
+// A blocker whose item was split shows the split's progress, and the
+// item's page lists the issues it was split into.
+func TestReadinessShowsASplitBlocker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base, st, _ := readinessServer(t)
+	lint, _ := st.ItemByIssue(ctx, "o/r", 12)
+	st.SetStage(ctx, lint.ID, state.Parked, "daemon", "")
+	st.SetStage(ctx, lint.ID, state.Epic, "chat", "split")
+	for i, stage := range []state.Stage{state.Triage, state.Done} {
+		c, _, _ := st.UpsertItem(ctx, "o/r", 20+i, "part")
+		st.SetParent(ctx, c.ID, lint.ID)
+		if stage == state.Done {
+			for _, s := range []state.Stage{state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Done} {
+				st.SetStage(ctx, c.ID, s, "daemon", "")
+			}
+		}
+	}
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitDone != 1 || f.SplitTotal != 2 {
+		t.Fatalf("lint = %+v", f)
+	}
+	var d APIItemDetail
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(lint.ID, 10), &d)
+	if len(d.Children) != 2 || d.Children[0].Issue != 20 || d.Children[1].Stage != "done" || d.Item.NeedsYou {
+		t.Fatalf("detail = %+v", d)
 	}
 }

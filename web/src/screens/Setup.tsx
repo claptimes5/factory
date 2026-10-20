@@ -87,13 +87,17 @@ const statusText: Record<string, { label: string; variant: "default" | "secondar
   waiting: { label: "Waiting its turn", variant: "secondary" },
   building: { label: "Being built", variant: "default" },
   needs_you: { label: "Needs you", variant: "warning" },
+  split: { label: "Split", variant: "default" },
   done: { label: "Done", variant: "success" },
 };
 
 /** One blocker or gap, with its issue and the factory's work on it. */
 function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean }) {
   const [open, setOpen] = useState(false);
-  const s = statusText[f.status] ?? { label: f.status, variant: "secondary" as const };
+  const s =
+    f.status === "split"
+      ? { label: `Split: ${f.split_done} of ${f.split_total} done`, variant: "default" as const }
+      : (statusText[f.status] ?? { label: f.status, variant: "secondary" as const });
   const hint =
     f.status === "none"
       ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
@@ -101,7 +105,9 @@ function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo
         ? canFile && repo.unfiled > 0 && "No issue yet: File issues opens one."
         : f.status === "not_queued"
           ? `Add the ${label} label on the issue so the factory works on it.`
-          : f.status === "done" && f.level === "blocker"
+          : f.status === "split"
+            ? `Split into ${f.split_total} smaller issues: See the work for each one's progress. ${f.level === "blocker" ? "Once all are merged, Check again to confirm it." : ""}`
+            : f.status === "done" && f.level === "blocker"
             ? "The factory's fix is merged. Check again to confirm it."
             : "";
   return (

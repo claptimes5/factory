@@ -966,7 +966,7 @@ components:
         blockers: { type: array, items: { $ref: "#/components/schemas/ReadinessFinding" } }
     ReadinessFinding:
       type: object
-      required: [level, area, title, detail, issue, issue_url, status, item_id, item_stage]
+      required: [level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
       properties:
         level: { type: string, enum: [blocker, gap, tip, good] }
         area: { type: string }
@@ -976,8 +976,10 @@ components:
         issue_url: { type: string }
         status:
           type: string
-          enum: [none, not_filed, not_queued, closed, waiting, building, needs_you, done]
-          description: "The work on it: none when there's nothing to file (yours to fix, or in place)"
+          enum: [none, not_filed, not_queued, closed, waiting, building, needs_you, split, done]
+          description: "The work on it: none when there's nothing to file (yours to fix, or in place); split when its item was split into smaller issues"
+        split_done: { type: integer, description: "Of a split item's issues, how many are done" }
+        split_total: { type: integer, description: "How many issues a split item was split into" }
         item_id: { type: ["integer", "null"] }
         item_stage: { type: string }
     MainHealth:
@@ -1161,7 +1163,7 @@ components:
         data: { type: string, description: JSON }
     ItemDetail:
       type: object
-      required: [item, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split]
+      required: [item, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split, children]
       properties:
         item: { $ref: "#/components/schemas/Item" }
         jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
@@ -1196,6 +1198,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Split"
             - type: "null"
+        children: { type: array, description: "The issues it was split into, oldest first", items: { $ref: "#/components/schemas/Item" } }
     Happened:
       type: object
       required: [summary, steps]

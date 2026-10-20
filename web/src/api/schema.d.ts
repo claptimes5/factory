@@ -2725,10 +2725,14 @@ export interface components {
             issue: number;
             issue_url: string;
             /**
-             * @description The work on it: none when there's nothing to file (yours to fix, or in place)
+             * @description The work on it: none when there's nothing to file (yours to fix, or in place); split when its item was split into smaller issues
              * @enum {string}
              */
-            status: "none" | "not_filed" | "not_queued" | "closed" | "waiting" | "building" | "needs_you" | "done";
+            status: "none" | "not_filed" | "not_queued" | "closed" | "waiting" | "building" | "needs_you" | "split" | "done";
+            /** @description Of a split item's issues, how many are done */
+            split_done: number;
+            /** @description How many issues a split item was split into */
+            split_total: number;
             item_id: number | null;
             item_stage: string;
         };
@@ -2936,6 +2940,8 @@ export interface components {
             happened: components["schemas"]["Happened"] | null;
             /** @description The Split it button, for an item whose build failed or ran out of turns, or that was parked; null otherwise */
             split: components["schemas"]["Split"] | null;
+            /** @description The issues it was split into, oldest first */
+            children: components["schemas"]["Item"][];
         };
         Happened: {
             /** @description The whole story in a sentence: The build ran out of turns (job #12), then its retry was cancelled by you (job #14). */

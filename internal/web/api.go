@@ -307,6 +307,8 @@ type APIItemDetail struct {
 	// Split offers chat a split of an item whose build failed or ran out
 	// of turns, or that was parked; null otherwise.
 	Split *APISplit `json:"split"`
+	// Children are the issues it was split into, oldest first.
+	Children []APIItem `json:"children"`
 }
 
 // APIJobDetail is one job with its gates.
@@ -477,6 +479,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func apiErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, APIError{Error: msg})
+}
+
+// children are the items an item was split into.
+func (s *Server) children(ctx context.Context, id int64) []*store.WorkItem {
+	all, _ := s.Store.ListItems(ctx)
+	var out []*store.WorkItem
+	for _, it := range all {
+		if it.ParentID != nil && *it.ParentID == id {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func (s *Server) apiItem(ctx context.Context, it *store.WorkItem) APIItem {
@@ -953,6 +967,10 @@ func (s *Server) apiItemDetail(w http.ResponseWriter, r *http.Request) {
 	d.RiskReasons, d.NeedsPerson = diffRisk(jobs, evs)
 	d.Happened = s.whatHappened(it, jobs, evs)
 	d.Split = s.splitOffer(ctx, it, jobs, d.Happened)
+	d.Children = []APIItem{}
+	for _, c := range s.children(ctx, it.ID) {
+		d.Children = append(d.Children, s.apiItem(ctx, c))
+	}
 	for _, j := range jobs {
 		d.Jobs = append(d.Jobs, apiJob(j))
 		if j.Kind == "triage" && j.State == state.Succeeded {
