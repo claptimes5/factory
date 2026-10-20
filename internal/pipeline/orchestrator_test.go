@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -578,5 +579,37 @@ func TestChatClosesASplitItem(t *testing.T) {
 	e.p.Store.SetStage(ctx, b.ID, state.Ready, "test", "")
 	if _, err := callTool(t, tools, "close_split", map[string]any{"item": b.ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "only a parked") {
 		t.Fatalf("closing a ready item = %v", err)
+	}
+}
+
+// A parked item split without close_split is closed in favor of its
+// sub-issues once they stop coming.
+func TestSettleSplitsClosesAForgottenSplit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	gh := &notPlannedGH{fakeGH: e.gh}
+	e.p.GH = gh
+	e.gh.issues[9] = &github.Issue{Number: 9, Title: "Make lint pass", State: "open"}
+	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 9, "Make lint pass")
+	e.p.Store.SetStage(ctx, it.ID, state.Parked, "test", "")
+	c, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 12, "Lint app/")
+	e.p.Store.SetParent(ctx, c.ID, it.ID)
+	if err := e.p.settleSplits(ctx); err != nil || len(gh.closed) != 0 {
+		t.Fatalf("a split still being opened was closed: %v %v", gh.closed, err)
+	}
+	db, err := sql.Open("sqlite", e.p.Store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE work_items SET created_at = '2000-01-01T00:00:00.000000000Z' WHERE id = ?`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.settleSplits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := e.p.Store.GetItem(ctx, it.ID); got.Stage != state.Epic || len(gh.closed) != 1 || !strings.Contains(e.gh.comments[9][0], "#12") {
+		t.Fatalf("stage %s, closed %v, comments %q", got.Stage, gh.closed, e.gh.comments[9])
 	}
 }
