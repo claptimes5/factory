@@ -21,15 +21,17 @@ const (
 	Epic          Stage = "epic" // split by the orchestrator, never built itself
 )
 
+// An item whose issue was closed is done from any stage where nothing
+// runs; one being built is cancelled, which parks it, first.
 var stageEdges = map[Stage][]Stage{
-	Triage:        {Spec, Ready, Parked, Blocked, Epic},
-	Spec:          {Ready, Parked, Blocked},
-	Ready:         {Implementing, Parked, Blocked},
+	Triage:        {Spec, Ready, Parked, Blocked, Epic, Done},
+	Spec:          {Ready, Parked, Blocked, Done},
+	Ready:         {Implementing, Parked, Blocked, Done},
 	Implementing:  {Reviewing, Parked, Blocked},
 	Reviewing:     {Implementing, AwaitingHuman, Parked},
 	AwaitingHuman: {Done, Implementing, Parked},
-	Parked:        {Triage, Ready, Epic},
-	Blocked:       {Ready, Parked},
+	Parked:        {Triage, Ready, Epic, Done},
+	Blocked:       {Ready, Parked, Done},
 	Epic:          {Done, Parked},
 	Done:          {},
 }

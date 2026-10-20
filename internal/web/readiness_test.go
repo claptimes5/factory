@@ -299,3 +299,49 @@ func TestReadinessShowsASplitBlocker(t *testing.T) {
 		t.Fatalf("waits for = %+v", d.Children)
 	}
 }
+
+// Lint failing on the base branch, with a linter that can be baselined,
+// offers the baseline; making it runs in the background and says where
+// its pull request is.
+func TestReadinessLintBaseline(t *testing.T) {
+	t.Parallel()
+	base, _, s := readinessServer(t)
+	s.Listen = "127.0.0.1:8080"
+	s.CheckReadiness = func(context.Context, string) error { return nil }
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if got.Repos[0].CanBaseline {
+		t.Fatal("offered without a way to make it")
+	}
+	release := make(chan struct{})
+	s.CanBaseline = func(repo string) bool { return repo == "o/r" }
+	s.LintBaseline = func(_ context.Context, repo string) (string, error) {
+		<-release
+		return "https://github.com/o/r/pull/7", nil
+	}
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if !got.Repos[0].CanBaseline || got.Repos[1].CanBaseline {
+		t.Fatalf("can baseline = %v %v", got.Repos[0].CanBaseline, got.Repos[1].CanBaseline)
+	}
+	if code, body := postJSON(t, base+"/api/v1/readiness/baseline", "", `{"repo":"o/r"}`); code != http.StatusOK || !strings.Contains(body, "lint offenses as a baseline") {
+		t.Fatalf("baseline = %d %s", code, body)
+	}
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if !got.Repos[0].Checking || got.Repos[0].Action != "baseline" {
+		t.Fatalf("while making it = %+v", got.Repos[0])
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		got = APIReadiness{}
+		getJSON(t, base+"/api/v1/readiness", &got)
+		if !got.Repos[0].Checking {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the baseline never finished")
+		}
+	}
+	if !strings.Contains(got.Repos[0].Result, "https://github.com/o/r/pull/7") {
+		t.Fatalf("result = %q (error %q)", got.Repos[0].Result, got.Repos[0].CheckError)
+	}
+}

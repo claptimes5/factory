@@ -114,6 +114,11 @@ type Server struct {
 	// that has none, as `factory readiness -file` does, or -queue with
 	// queue. It says what it did.
 	FileReadiness func(ctx context.Context, repo string, queue bool) (string, error)
+	// LintBaseline records a repo's lint offenses as a baseline and opens
+	// a pull request with it, returning its address; CanBaseline says
+	// whether its linter can.
+	LintBaseline func(ctx context.Context, repo string) (string, error)
+	CanBaseline  func(repo string) bool
 	IntakeLabel   string
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the

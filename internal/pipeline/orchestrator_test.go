@@ -613,3 +613,41 @@ func TestSettleSplitsClosesAForgottenSplit(t *testing.T) {
 		t.Fatalf("stage %s, closed %v, comments %q", got.Stage, gh.closed, e.gh.comments[9])
 	}
 }
+
+// An item whose issue was closed on the forge stops: its queued job is
+// cancelled and it's done. Open issues, and items with a PR, are left be.
+func TestClosedIssuesStopTheirItems(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	mk := func(n int, stage state.Stage, closed bool) *store.WorkItem {
+		st := "open"
+		if closed {
+			st = "closed"
+		}
+		e.gh.issues[n] = &github.Issue{Number: n, Title: "x", State: st, Labels: []string{"factory:ready"}}
+		it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", n, "x")
+		for _, s := range map[state.Stage][]state.Stage{state.Parked: {state.Parked}, state.Ready: {state.Ready}, state.Triage: {}}[stage] {
+			e.p.Store.SetStage(ctx, it.ID, s, "test", "")
+		}
+		return it
+	}
+	parked := mk(30, state.Parked, true)
+	ready := mk(31, state.Ready, true)
+	job, _ := e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &ready.ID, Kind: "implement", Harness: "claude", Model: "opus"})
+	stillOpen := mk(32, state.Parked, false)
+	if err := e.p.Intake(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{parked.ID, ready.ID} {
+		if it, _ := e.p.Store.GetItem(ctx, id); it.Stage != state.Done {
+			t.Errorf("item %d with a closed issue is %s", id, it.Stage)
+		}
+	}
+	if j, _ := e.p.Store.GetJob(ctx, job); j.State != state.Cancelled {
+		t.Errorf("its queued job is %s", j.State)
+	}
+	if it, _ := e.p.Store.GetItem(ctx, stillOpen.ID); it.Stage != state.Parked {
+		t.Errorf("an open issue's item is %s", it.Stage)
+	}
+}

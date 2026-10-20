@@ -126,6 +126,11 @@ it names no address.
 The `factory:retry` label still works, but you don't have to go to the
 issue unless the factory asked a question there (a park from triage).
 
+To drop an item altogether, close its issue on GitHub or GitLab. On its
+next poll the factory cancels any job queued or running for it and marks
+it done ("its issue was closed"). An item with a pull request is left to
+its pull request: close or merge that instead.
+
 ### What happened
 
 The header shows only where an item is now, so a build that failed and

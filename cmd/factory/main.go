@@ -566,6 +566,18 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		defer done()
 		return fileReadiness(ctx, cfg, p, repo, queue)
 	}
+	// A lint baseline runs the repo's install and linter like a check, in
+	// containers named apart from the daemon's jobs.
+	srv.CanBaseline = p.CanBaseline
+	srv.LintBaseline = func(_ context.Context, repo string) (string, error) {
+		done, err := readinessRun()
+		if err != nil {
+			return "", err
+		}
+		defer done()
+		pl := &pipeline.Pipeline{Cfg: cfg, Runner: p.Runner, JobPrefix: readinessPrefix(), ClientsFor: p.ClientsFor}
+		return pl.LintBaseline(ctx, repo)
+	}
 	go relinkSaved(ctx, cfg, p)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]

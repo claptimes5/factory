@@ -113,3 +113,14 @@ test("without leave to file, the setup screen names no buttons it doesn't show",
   await expect(api.getByRole("button", { name: /File/ })).toHaveCount(0);
   await expect(api).toContainText("Checking from here needs a dashboard password.");
 });
+
+test("lint failing on main offers a baseline, and making it says where its pull request is", async ({ page }) => {
+  await page.goto("/app/setup");
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  const offer = api.getByTestId("baseline");
+  await expect(offer).toContainText("Lint fails on main today");
+  await expect(offer).toContainText("rubocop --auto-gen-config");
+  await offer.getByRole("button", { name: "Accept today's offenses" }).click();
+  await expect(api.getByRole("status").filter({ hasText: "baseline" }).first()).toBeVisible();
+  await expect(api).toContainText("https://github.com/acme/api/pull/120", { timeout: 10_000 });
+});

@@ -199,7 +199,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <div className="flex flex-col items-end gap-1.5">
           {r.checking ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
-              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "check" ? "Checking now" : "Checking, then filing issues"}, started{" "}
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "check" ? "Checking now" : r.action === "baseline" ? "Making the lint baseline" : "Checking, then filing issues"}, started{" "}
               {ago(r.checking_since)}
             </span>
           ) : data.can_check ? (
@@ -293,6 +293,23 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>
           {msg.text}
         </p>
+      )}
+
+      {r.can_baseline && data.can_check && !r.checking && (
+        <div data-testid="baseline" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+          <p className="font-semibold">Lint fails on {r.branch} today. Accept today's offenses, and block new ones?</p>
+          <p className="text-text-2">
+            The factory runs RuboCop's own baseline (<code className="font-mono text-[0.9em]">rubocop --auto-gen-config</code>) on {r.branch}, checks
+            that lint passes with it, and opens a pull request that changes only <code className="font-mono text-[0.9em]">.rubocop_todo.yml</code>{" "}
+            (and <code className="font-mono text-[0.9em]">.rubocop.yml</code>, to include it). Once you merge it, lint passes and only new offenses fail a
+            change; fix the old ones later, a cop at a time. When the check sees lint pass, it closes the issue filed for it and any issues it was split into.
+          </p>
+          <div>
+            <Button size="sm" disabled={busy} onClick={() => run("/readiness/baseline", {})}>
+              Accept today's offenses
+            </Button>
+          </div>
+        </div>
       )}
 
       {r.steps.length > 0 && (

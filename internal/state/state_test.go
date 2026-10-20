@@ -18,6 +18,8 @@ func TestStageTransitions(t *testing.T) {
 		{Parked, Triage},
 		{Parked, Ready},
 		{Blocked, Ready},
+		{Parked, Done}, // its issue was closed
+		{Blocked, Done},
 	}
 	for _, c := range allowed {
 		if err := CheckStage(c.from, c.to); err != nil {
