@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/readiness"
+	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
 
@@ -109,15 +111,80 @@ func linkFiled(r *readiness.Report, filed []github.Issue) {
 // relink reads the issues the check filed on repo and saves the report
 // with them linked. A report that can't be linked is still right about
 // the repo, so failing to read them only goes to the log.
-func relink(ctx context.Context, cfg *config.Config, gh forge, r *readiness.Report) error {
+func relink(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, r *readiness.Report) error {
 	filed, err := gh.ListIssuesIn(ctx, pipeline.LabelReadiness, "all")
 	if err != nil {
 		return fmt.Errorf("reading the issues it filed: %w", err)
 	}
+	closeFixed(ctx, gh, st, r, filed)
 	linkFiled(r, filed)
 	_, err = readiness.Save(readinessDir(cfg), r)
 	return err
 }
+
+// closeFixed closes each open issue the check filed for a required check
+// that passes on the base branch now, and the open issues it was split
+// into: they're done. The factory stops working on their items when it
+// sees them closed. filed is updated to match.
+func closeFixed(ctx context.Context, gh forge, st *store.Store, r *readiness.Report, filed []github.Issue) {
+	closer, ok := gh.(interface {
+		CloseIssue(ctx context.Context, n int) error
+	})
+	if r.Incomplete || !ok {
+		return
+	}
+	passed := map[string]bool{}
+	for _, run := range r.Runs {
+		passed[run.Gate] = run.Passed
+	}
+	sha := r.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	for i, o := range filed {
+		m := markerRE.FindStringSubmatch(o.Body)
+		if o.State != "open" || m == nil {
+			continue
+		}
+		gate, ok := strings.CutPrefix(m[1], "check:")
+		if !ok || !passed[gate] {
+			continue
+		}
+		if err := closer.CloseIssue(ctx, o.Number); err != nil {
+			slog.Warn("readiness", "repo", r.Repo, "close", o.Number, "err", err)
+			continue
+		}
+		filed[i].State = "closed"
+		why := fmt.Sprintf("`%s` passes on `%s` now, at %s", gate, r.Branch, sha)
+		if err := gh.Comment(ctx, o.Number, "**Factory:** "+why+", so this is done."); err != nil {
+			slog.Warn("readiness", "repo", r.Repo, "comment", o.Number, "err", err)
+		}
+		if st == nil {
+			continue
+		}
+		it, err := st.ItemByIssue(ctx, r.Repo, o.Number)
+		if err != nil {
+			continue
+		}
+		items, _ := st.ListItems(ctx)
+		for _, c := range items {
+			if c.ParentID == nil || *c.ParentID != it.ID || c.Stage == state.Done {
+				continue
+			}
+			if is, err := gh.GetIssue(ctx, c.IssueNumber); err != nil || is.State != "open" {
+				continue
+			}
+			if err := closer.CloseIssue(ctx, c.IssueNumber); err != nil {
+				slog.Warn("readiness", "repo", r.Repo, "close", c.IssueNumber, "err", err)
+				continue
+			}
+			_ = gh.Comment(ctx, c.IssueNumber, fmt.Sprintf("**Factory:** closed with #%d: %s.", o.Number, why))
+		}
+	}
+}
+
+// markerRE finds the key in an issue the check filed.
+var markerRE = regexp.MustCompile(`<!-- factory-readiness: (\S+) -->`)
 
 // recheckReadiness is the dashboard's Check again: the readiness check on
 // repo's base branch, with its issues linked. It only reads: it files
@@ -130,7 +197,7 @@ func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.
 		return err
 	}
 	if gh, ok := daemon.GitHubFor(repo).(forge); ok {
-		if err := relink(ctx, cfg, gh, r); err != nil {
+		if err := relink(ctx, cfg, gh, daemon.Store, r); err != nil {
 			slog.Warn("readiness", "repo", repo, "err", err)
 		}
 	}
@@ -147,7 +214,7 @@ func relinkSaved(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline) 
 		if err != nil || r == nil || !ok {
 			continue
 		}
-		if err := relink(ctx, cfg, gh, r); err != nil {
+		if err := relink(ctx, cfg, gh, p.Store, r); err != nil {
 			slog.Warn("readiness", "repo", repo, "err", err)
 		}
 	}
@@ -292,7 +359,7 @@ func readinessFor(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	gh, ok := p.GitHubFor(repo).(forge)
 	if !file {
 		if ok {
-			if err := relink(ctx, cfg, gh, r); err != nil {
+			if err := relink(ctx, cfg, gh, p.Store, r); err != nil {
 				fmt.Printf("Couldn't link the report to its issues: %v\n", err)
 			}
 		}

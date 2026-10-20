@@ -613,6 +613,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/readiness/baseline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a repo's lint offenses on its base branch as a baseline, and open a pull request with it, in the background
+         * @description For a lint check that fails on the base branch (RuboCop for now), runs
+         *     the repo's install and the linter's baseline command on the base
+         *     branch, checks the lint command passes with it, and pushes only the
+         *     linter's files to factory/lint-baseline with a pull request to merge.
+         *     Once merged, lint passes and only new offenses fail a change. Shares
+         *     the one-at-a-time slot with /readiness/check (409 while a run is
+         *     going). Needs the password, or a request from this machine (403
+         *     otherwise).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description owner/name */
+                        repo: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Action"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats": {
         parameters: {
             query?: never;
@@ -2735,14 +2783,16 @@ export interface components {
             checking: boolean;
             checking_since: string;
             /**
-             * @description What that run does: check, file issues, or file and start work
+             * @description What that run does: check, file issues, file and start work, or make a lint baseline
              * @enum {string}
              */
-            action: "" | "check" | "file" | "queue";
+            action: "" | "check" | "file" | "queue" | "baseline";
             /** @description Why the last run started here failed, or empty */
             check_error: string;
-            /** @description What the last run started here did, when it filed; else empty */
+            /** @description What the last run started here did, when it filed or made a baseline; else empty */
             result: string;
+            /** @description Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline */
+            can_baseline: boolean;
         };
         ReadinessStep: {
             /** @enum {string} */

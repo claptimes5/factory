@@ -66,6 +66,9 @@ type APIRepoReadiness struct {
 	// Result what it did when it worked.
 	CheckError string `json:"check_error"`
 	Result     string `json:"result"`
+	// CanBaseline: lint fails on the base branch, and its linter can
+	// record today's offenses as a baseline (POST readiness/baseline).
+	CanBaseline bool `json:"can_baseline"`
 }
 
 // APIReadinessStep is one setup step.
@@ -114,6 +117,7 @@ func (s *Server) routesReadiness(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/readiness", s.apiReadiness)
 	mux.HandleFunc("POST /api/v1/readiness/check", s.apiCheckReadiness)
 	mux.HandleFunc("POST /api/v1/readiness/file", s.apiFileReadiness)
+	mux.HandleFunc("POST /api/v1/readiness/baseline", s.apiLintBaseline)
 }
 
 func (s *Server) apiReadiness(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +183,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			as := APIReadinessStep{Key: st.Key, Title: st.Title, Why: st.Why, State: st.State, Passed: st.Passed, Blockers: []APIReadinessFinding{}}
 			for _, f := range st.Blockers {
 				as.Blockers = append(as.Blockers, find(f))
+				if f.Issue != nil && f.Issue.Key == "check:lint" && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
+					rr.CanBaseline = true
+				}
 			}
 			rr.Steps = append(rr.Steps, as)
 		}
@@ -272,8 +279,25 @@ func (s *Server) canCheckReadiness(r *http.Request) (bool, string) {
 // do, and files nothing. It takes the daemon's time, so like settings it
 // needs the password, or a request from this machine.
 func (s *Server) apiCheckReadiness(w http.ResponseWriter, r *http.Request) {
-	s.startReadiness(w, r, false, func(ctx context.Context, repo string, _ bool) (string, error) {
+	s.startReadiness(w, r, "check", func(ctx context.Context, repo string, _ bool) (string, error) {
 		return "", s.CheckReadiness(ctx, repo)
+	})
+}
+
+// apiLintBaseline records the lint offenses on a repo's base branch as a
+// baseline and opens a pull request with it, in the background: the
+// repo's own lint passes once it's merged, and only new offenses fail.
+func (s *Server) apiLintBaseline(w http.ResponseWriter, r *http.Request) {
+	if s.LintBaseline == nil {
+		apiErr(w, http.StatusForbidden, "This dashboard can't make a lint baseline.")
+		return
+	}
+	s.startReadiness(w, r, "baseline", func(ctx context.Context, repo string, _ bool) (string, error) {
+		url, err := s.LintBaseline(ctx, repo)
+		if err != nil {
+			return "", err
+		}
+		return "Opened the lint baseline for review: " + url + " . Merge it, then check again.", nil
 	})
 }
 
@@ -286,11 +310,12 @@ func (s *Server) apiFileReadiness(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusForbidden, "This dashboard can't file issues.")
 		return
 	}
-	s.startReadiness(w, r, true, s.FileReadiness)
+	s.startReadiness(w, r, "file", s.FileReadiness)
 }
 
 // startReadiness starts run on the repo in the request, one run at a time.
-func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, files bool, run func(ctx context.Context, repo string, queue bool) (string, error)) {
+// action is check, file (queue with queue set) or baseline.
+func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action string, run func(ctx context.Context, repo string, queue bool) (string, error)) {
 	if !jsonOnly(w, r) {
 		return
 	}
@@ -312,12 +337,15 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, files bo
 		return
 	}
 	repo := s.Repos[i]
-	action, msg := "check", "Checking "+repo+". It takes a few minutes, and this page updates when it's done."
-	if files {
-		action, msg = "file", "Checking "+repo+" again, then filing its issues. It takes a few minutes, and this page updates when it's done."
+	msg := "Checking " + repo + ". It takes a few minutes, and this page updates when it's done."
+	switch action {
+	case "file":
+		msg = "Checking " + repo + " again, then filing its issues. It takes a few minutes, and this page updates when it's done."
 		if in.Queue {
 			action = "queue"
 		}
+	case "baseline":
+		msg = "Recording " + repo + "'s lint offenses as a baseline. It installs and runs the linter, so it takes a few minutes; this page updates when it's done."
 	}
 	s.ready.mu.Lock()
 	if s.ready.repo != "" {

@@ -224,3 +224,61 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 		t.Fatalf("msg %q, err %v, issues %v", msg, err, f.issues)
 	}
 }
+
+// closingForge records what closeFixed closes and says; nothing else of
+// the forge is used.
+type closingForge struct {
+	forge
+	open     map[int]bool
+	closed   []int
+	comments map[int]string
+}
+
+func (f *closingForge) CloseIssue(_ context.Context, n int) error {
+	f.closed, f.open[n] = append(f.closed, n), false
+	return nil
+}
+func (f *closingForge) Comment(_ context.Context, n int, body string) error {
+	f.comments[n] = body
+	return nil
+}
+func (f *closingForge) GetIssue(_ context.Context, n int) (*github.Issue, error) {
+	st := "closed"
+	if f.open[n] {
+		st = "open"
+	}
+	return &github.Issue{Number: n, State: st}, nil
+}
+
+// Once a check the setup check filed an issue for passes on the base
+// branch, that issue and the issues it was split into are closed.
+func TestCloseFixedClosesTheIssueAndItsSplit(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	lint, _, _ := st.UpsertItem(ctx, "o/r", 9, "Make the lint check pass on master")
+	for _, n := range []int{12, 13} {
+		c, _, _ := st.UpsertItem(ctx, "o/r", n, "part")
+		st.SetParent(ctx, c.ID, lint.ID)
+	}
+	f := &closingForge{open: map[int]bool{9: true, 10: true, 12: true, 13: false}, comments: map[int]string{}}
+	filed := []github.Issue{
+		{Number: 9, State: "open", Body: "x\n<!-- factory-readiness: check:lint -->"},
+		{Number: 10, State: "open", Body: "<!-- factory-readiness: e2e -->"},
+		{Number: 11, State: "open", Body: "<!-- factory-readiness: check:test -->"},
+	}
+	r := &readiness.Report{Repo: "o/r", Branch: "master", SHA: "abc1234567", Runs: []readiness.Run{{Gate: "lint", Passed: true}, {Gate: "test", Passed: false}}}
+	closeFixed(ctx, f, st, r, filed)
+	if fmt.Sprint(f.closed) != "[9 12]" || filed[0].State != "closed" || filed[2].State != "open" {
+		t.Fatalf("closed %v, filed %+v", f.closed, filed)
+	}
+	if !strings.Contains(f.comments[9], "`lint` passes on `master` now, at abc1234") || !strings.Contains(f.comments[12], "closed with #9") {
+		t.Fatalf("comments = %v", f.comments)
+	}
+	// An incomplete check closes nothing.
+	f.closed = nil
+	filed[2].State = "open"
+	closeFixed(ctx, f, st, &readiness.Report{Repo: "o/r", Incomplete: true, Runs: []readiness.Run{{Gate: "test", Passed: true}}}, filed)
+	if len(f.closed) != 0 {
+		t.Fatalf("closed %v from an incomplete check", f.closed)
+	}
+}

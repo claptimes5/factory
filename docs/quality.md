@@ -643,6 +643,33 @@ any, and once the repo is ready to the issues filed earlier too. Like
 Settings, these need the dashboard password or a browser on the
 factory's own machine.
 
+When a check the factory filed an issue for passes on the base branch,
+the next check closes that issue with a comment, and the issues it was
+split into too; the factory then stops working on their items.
+
+### Lint that fails on the base branch: a baseline
+
+A repo with years of lint debt fails `lint` on its base branch, so every
+change fails it, and a fix too big for one build can't be split into
+pieces that each pass a whole-repo lint. When the linter is RuboCop
+(`bundle exec rubocop` or `bin/rubocop`), the Setup screen offers
+**Accept today's offenses**. The factory then, without a model:
+
+1. clones the base branch and runs the repo's install;
+2. runs `rubocop --auto-gen-config --no-exclude-limit --no-offense-counts
+   --no-auto-gen-timestamp`, which lists every current offense in
+   `.rubocop_todo.yml` file by file (no cop is turned off for the whole
+   repo) and includes it from `.rubocop.yml`;
+3. checks the lint command passes with it, or pushes nothing;
+4. pushes only those two files to `factory/lint-baseline` and opens a
+   pull request for you to review and merge.
+
+Once it's merged, **Check again**: lint passes, the issue filed for it
+and any issues it was split into are closed, and only new offenses fail
+a change. Pay the old ones down later by deleting a cop's entry from
+`.rubocop_todo.yml` and fixing what it flags, a cop at a time. Running it
+again before the pull request is merged updates the same pull request.
+
 For what a new repo needs to pass, see [new-project.md](new-project.md).
 
 ## Hidden scenarios

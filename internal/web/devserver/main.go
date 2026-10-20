@@ -192,6 +192,10 @@ func main() {
 			return ""
 		},
 		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports), FileReadiness: fileIssues(reports),
+		CanBaseline: func(repo string) bool { return repo == "acme/api" },
+		LintBaseline: func(_ context.Context, repo string) (string, error) {
+			return "https://github.com/" + repo + "/pull/120", nil
+		},
 		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Chat:         &chatter{st: st},
 		Wizard:       newWizard(rs),

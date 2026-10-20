@@ -186,6 +186,32 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Action" }
+  /readiness/baseline:
+    post:
+      summary: Record a repo's lint offenses on its base branch as a baseline, and open a pull request with it, in the background
+      description: |
+        For a lint check that fails on the base branch (RuboCop for now), runs
+        the repo's install and the linter's baseline command on the base
+        branch, checks the lint command passes with it, and pushes only the
+        linter's files to factory/lint-baseline with a pull request to merge.
+        Once merged, lint passes and only new offenses fail a change. Shares
+        the one-at-a-time slot with /readiness/check (409 while a run is
+        going). Needs the password, or a request from this machine (403
+        otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties:
+                repo: { type: string, description: "owner/name" }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Action" }
   /chats:
     get:
       summary: The chat with the orchestrator's model, whether it can reply now, and the chats so far
@@ -950,7 +976,7 @@ components:
         can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -970,9 +996,10 @@ components:
         can_queue: { type: boolean, description: "Filing with the intake label would do something: file what isn't filed, or label what waited for the blockers" }
         checking: { type: boolean, description: A run started from the dashboard is going }
         checking_since: { type: string }
-        action: { type: string, enum: ["", check, file, queue], description: "What that run does: check, file issues, or file and start work" }
+        action: { type: string, enum: ["", check, file, queue, baseline], description: "What that run does: check, file issues, file and start work, or make a lint baseline" }
         check_error: { type: string, description: "Why the last run started here failed, or empty" }
-        result: { type: string, description: "What the last run started here did, when it filed; else empty" }
+        result: { type: string, description: "What the last run started here did, when it filed or made a baseline; else empty" }
+        can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]
