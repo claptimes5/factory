@@ -260,6 +260,25 @@ func TestClaudeReadsRateLimitEvents(t *testing.T) {
 	}
 }
 
+// Newer CLIs send every window's reading on each event, well under the
+// limits.
+func TestClaudeReadsUnifiedWindows(t *testing.T) {
+	fr := &fakeRunner{out: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792516200,"rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":0.02,"resetsAt":1792516200},"seven_day":{"utilization":0.74,"resetsAt":1792659600}}}}
+{"type":"result","subtype":"success","result":"ok","num_turns":1,"total_cost_usd":0.01}
+`}
+	res, err := NewClaude(fr).Run(context.Background(), req(t, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Limit{}
+	for _, l := range res.Limits {
+		got[l.Window] = l
+	}
+	if len(got) != 2 || int(got["5h"].UsedPercent) != 2 || int(got["weekly"].UsedPercent) != 74 || got["weekly"].ResetsAt != time.Unix(1792659600, 0).UTC() {
+		t.Fatalf("limits = %+v", res.Limits)
+	}
+}
+
 func TestCodexCapturesLimitsFromItsSessionFile(t *testing.T) {
 	r := req(t, true)
 	cmd, err := codexAdapter{}.command(RunRequest{Model: "m", CaptureLimits: true}, runner.Paths{Work: "/w", Out: "/out", Home: "/home/agent"})

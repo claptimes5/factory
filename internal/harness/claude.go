@@ -228,6 +228,12 @@ type claudeLine struct {
 		ResetsAt    int64    `json:"resetsAt"`      // Unix seconds
 		Type        string   `json:"rateLimitType"` // five_hour, seven_day, ...
 		Utilization *float64 `json:"utilization"`   // 0 to 1
+		// Windows is every window's reading, sent on each event by newer
+		// CLIs, not only near a limit.
+		Windows map[string]struct {
+			Utilization *float64 `json:"utilization"`
+			ResetsAt    int64    `json:"resetsAt"`
+		} `json:"unifiedWindows"`
 	} `json:"rate_limit_info"`
 	Usage *struct {
 		InputTokens              int64 `json:"input_tokens"`
@@ -265,25 +271,23 @@ func (claudeAdapter) parse(line []byte, res *Result, emit func(Event)) {
 	case "rate_limit_event":
 		// Subscriptions only, and not in Claude Code's documented stream:
 		// read it when it's there.
-		if rl := l.RateLimit; rl != nil && rl.Type != "" {
-			lim := Limit{Window: windowName(rl.Type)}
-			switch {
-			case rl.Utilization != nil && *rl.Utilization <= 1:
-				lim.UsedPercent = *rl.Utilization * 100
-			case rl.Utilization != nil:
-				lim.UsedPercent = *rl.Utilization
-			case rl.Status == "rejected":
-				lim.UsedPercent = 100
-			default:
-				return // no reading
+		rl := l.RateLimit
+		if rl == nil {
+			return
+		}
+		for name, w := range rl.Windows {
+			if w.Utilization != nil {
+				res.setLimit(claudeLimit(name, *w.Utilization, w.ResetsAt))
 			}
-			if rl.Status == "rejected" {
-				lim.UsedPercent = 100
-			}
-			if rl.ResetsAt > 0 {
-				lim.ResetsAt = time.Unix(rl.ResetsAt, 0).UTC()
-			}
-			res.setLimit(lim)
+		}
+		// The event's own window last: when it's rejected, that is 100%
+		// whatever the windows said.
+		switch {
+		case rl.Type == "":
+		case rl.Status == "rejected":
+			res.setLimit(claudeLimit(rl.Type, 1, rl.ResetsAt))
+		case rl.Utilization != nil:
+			res.setLimit(claudeLimit(rl.Type, *rl.Utilization, rl.ResetsAt))
 		}
 	case "result":
 		res.Final = l.Result
@@ -310,6 +314,19 @@ func (claudeAdapter) parse(line []byte, res *Result, emit func(Event)) {
 		emit(Event{Kind: "usage", Payload: line})
 		emit(Event{Kind: "final", Payload: line})
 	}
+}
+
+// claudeLimit is a window's reading: utilization is 0 to 1, or a
+// percentage from CLIs that sent one.
+func claudeLimit(window string, utilization float64, resetsAt int64) Limit {
+	lim := Limit{Window: windowName(window), UsedPercent: utilization}
+	if utilization <= 1 {
+		lim.UsedPercent = utilization * 100
+	}
+	if resetsAt > 0 {
+		lim.ResetsAt = time.Unix(resetsAt, 0).UTC()
+	}
+	return lim
 }
 
 // windowName gives a limit window a short name: 5h, weekly or the CLI's.

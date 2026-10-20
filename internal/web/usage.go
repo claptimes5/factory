@@ -29,10 +29,9 @@ type APIUsagePlan struct {
 
 // plans describes each harness's plan, and when it reports its usage.
 var plans = map[string]struct{ name, plan, noReading string }{
-	// Claude Code puts the reading in a rate_limit_event, which carries a
-	// percentage only once a window nears its limit (allowed_warning) or
-	// hits it.
-	"claude": {"Claude", "Claude subscription", "No reading yet: Claude reports usage when it gets close to a limit."},
+	// Claude Code puts the reading in a rate_limit_event: newer CLIs send
+	// every window's on each job, older ones only near a limit.
+	"claude": {"Claude", "Claude subscription", "No reading yet: Claude reports usage as its jobs run."},
 	// Codex writes its windows to its session file on every run, which
 	// the factory copies out of a Docker job.
 	"codex": {"Codex", "ChatGPT plan", "No reading yet: Codex reports usage after each job it runs with the Docker runner."},
