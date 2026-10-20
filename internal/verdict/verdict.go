@@ -23,6 +23,9 @@ type Triage struct {
 
 // Plan is the short plan a big item's builder writes before the build.
 type Plan struct {
+	// Ask is the one call the person approving it makes, with the
+	// planner's recommendation; empty on plans from before it was asked.
+	Ask      string   `json:"ask"`
 	Approach string   `json:"approach"` // how it will make the change
 	Files    []string `json:"files"`    // the files it expects to touch
 	Risks    []string `json:"risks"`    // what could go wrong, or is unclear
@@ -279,7 +282,7 @@ func (p *Plan) Validate() error {
 	if p.Files == nil || p.Risks == nil {
 		errs = append(errs, errors.New("files and risks are required (use [])"))
 	}
-	n := len(strings.Fields(p.Approach)) + len(strings.Fields(p.Tests))
+	n := len(strings.Fields(p.Ask)) + len(strings.Fields(p.Approach)) + len(strings.Fields(p.Tests))
 	for _, s := range append(slices.Clone(p.Files), p.Risks...) {
 		n += len(strings.Fields(s))
 	}
@@ -449,8 +452,9 @@ var schemas = map[string]string{
  "question":{"type":"string"},
  "summary":{"type":"string"}}}`,
 	"plan": `{"type":"object","additionalProperties":false,
-"required":["approach","files","risks","tests"],
+"required":["ask","approach","files","risks","tests"],
 "properties":{
+ "ask":{"type":"string"},
  "approach":{"type":"string"},
  "files":{"type":"array","items":{"type":"string"}},
  "risks":{"type":"array","items":{"type":"string"}},

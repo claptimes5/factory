@@ -269,7 +269,7 @@ function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; est
         {p.replan_of && <span className="text-xs text-muted-foreground">the new plan {p.replan_of} asked for</span>}
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {p.waiting && <PlanAsk size={it.complexity} />}
+        {p.waiting && <PlanAsk size={it.complexity} ask={p.ask} />}
         {p.waiting && <div className="text-xs font-semibold text-muted-foreground uppercase">The plan</div>}
         <p className="whitespace-pre-wrap">{p.approach}</p>
         {p.files.length > 0 && (
@@ -525,7 +525,7 @@ function SplitInto({ items }: { items: Item[] }) {
 const sizeName: Record<string, string> = { XS: "extra small", S: "small", M: "medium", L: "large" };
 
 /** Why a plan waits for a person, and what they are deciding, ahead of the plan itself. */
-function PlanAsk({ size }: { size: string }) {
+function PlanAsk({ size, ask }: { size: string; ask: string }) {
   return (
     <div className="space-y-2 rounded-md bg-warning/10 p-3" data-testid="plan-ask">
       <p>
@@ -533,18 +533,33 @@ function PlanAsk({ size }: { size: string }) {
         {size ? `triage sized this ${sizeName[size] ?? size} (${size}), and` : ""} a big build's plan waits for a person, so a wrong approach is
         caught before the build is paid for. Nothing is wrong with it.
       </p>
-      <div>
-        <p className="font-medium">What you're deciding: is this the right change, done the right way?</p>
-        <ul className="mt-1 list-disc space-y-0.5 pl-5">
-          <li>The approach does what the issue asks, and no more.</li>
-          <li>The files are the ones you expect it to change.</li>
-          <li>You accept the risks it lists, and any assumption it makes.</li>
-        </ul>
-      </div>
-      <p>
-        <span className="font-medium">Build it</span> if all three hold. <span className="font-medium">Ask for another plan</span> if one doesn't,
-        and say what to change.
-      </p>
+      {ask ? (
+        <>
+          <div data-testid="plan-decide">
+            <p className="font-medium">What you're deciding</p>
+            <p className="mt-0.5 whitespace-pre-wrap">{ask}</p>
+          </div>
+          <p>
+            <span className="font-medium">Build it</span> to go ahead as it recommends. <span className="font-medium">Ask for another plan</span> to answer
+            differently, or to change anything else below.
+          </p>
+        </>
+      ) : (
+        <>
+          <div>
+            <p className="font-medium">What you're deciding: is this the right change, done the right way?</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5">
+              <li>The approach does what the issue asks, and no more.</li>
+              <li>The files are the ones you expect it to change.</li>
+              <li>You accept the risks it lists, and any assumption it makes.</li>
+            </ul>
+          </div>
+          <p>
+            <span className="font-medium">Build it</span> if all three hold. <span className="font-medium">Ask for another plan</span> if one doesn't,
+            and say what to change.
+          </p>
+        </>
+      )}
       <p className="text-xs text-muted-foreground">
         To skip this for {size || "big"} items, take {size || "the size"} out of <span className="font-mono">plan.sizes</span> in factory.yaml.
       </p>

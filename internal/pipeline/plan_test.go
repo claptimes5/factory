@@ -9,6 +9,7 @@ import (
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
+	"github.com/claptimes5/factory/internal/verdict"
 )
 
 const (
@@ -509,5 +510,22 @@ func TestRethinkKeepsTheApprovedPlan(t *testing.T) {
 	}
 	if pr := e.claude.prompts["implement"][3]; !strings.Contains(pr, "## The approved plan") || !strings.Contains(pr, "rethink how to carry it out") || !strings.Contains(pr, "approach itself may be wrong") {
 		t.Fatalf("rethink prompt:\n%s", pr)
+	}
+}
+
+// The plan posted on the issue leads with the call it needs; a plan from
+// before it was asked has none.
+func TestPlanTextLeadsWithTheAsk(t *testing.T) {
+	t.Parallel()
+	var v verdict.Plan
+	if err := verdict.Parse([]byte(`{"ask":"Safe fixes only (recommended), or unsafe ones too?","approach":"a","files":[],"risks":[],"tests":"t"}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	if got := planText(&v); !strings.HasPrefix(got, "Decide: Safe fixes only (recommended), or unsafe ones too?\n\nApproach: a") {
+		t.Fatalf("plan text = %q", got)
+	}
+	v.Ask = ""
+	if got := planText(&v); strings.Contains(got, "Decide:") {
+		t.Fatalf("an old plan's text = %q", got)
 	}
 }

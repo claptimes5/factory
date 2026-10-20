@@ -144,6 +144,9 @@ func (p *Pipeline) approvedPlan(ctx context.Context, it *store.WorkItem) (string
 // planText is a plan as people read it.
 func planText(v *verdict.Plan) string {
 	var b strings.Builder
+	if a := strings.TrimSpace(v.Ask); a != "" {
+		fmt.Fprintf(&b, "Decide: %s\n\n", a)
+	}
 	fmt.Fprintf(&b, "Approach: %s\n", strings.TrimSpace(v.Approach))
 	if len(v.Files) > 0 {
 		b.WriteString("\nFiles:\n")

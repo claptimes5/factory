@@ -3031,6 +3031,8 @@ export interface components {
         Plan: {
             /** @description The plan job */
             job_id: number;
+            /** @description The call the plan needs from the person, with its recommendation; empty on plans from before it was asked */
+            ask: string;
             approach: string;
             /** @description The files it expects to touch */
             files: string[];

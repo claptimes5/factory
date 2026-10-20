@@ -1290,9 +1290,10 @@ components:
         error: { type: string }
     Plan:
       type: object
-      required: [job_id, approach, files, risks, tests, waiting, approved_by, replan_of, can_approve]
+      required: [job_id, ask, approach, files, risks, tests, waiting, approved_by, replan_of, can_approve]
       properties:
         job_id: { type: integer, description: The plan job }
+        ask: { type: string, description: "The call the plan needs from the person, with its recommendation; empty on plans from before it was asked" }
         approach: { type: string }
         files: { type: array, items: { type: string }, description: The files it expects to touch }
         risks: { type: array, items: { type: string } }

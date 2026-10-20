@@ -91,7 +91,10 @@ type APIStop struct {
 
 // APIPlan is the plan the builder wrote before building a big item.
 type APIPlan struct {
-	JobID    int64    `json:"job_id"`
+	JobID int64 `json:"job_id"`
+	// Ask is the call the plan needs from the person, with its
+	// recommendation; "" on plans from before it was asked.
+	Ask      string   `json:"ask"`
 	Approach string   `json:"approach"`
 	Files    []string `json:"files"`
 	Risks    []string `json:"risks"`
@@ -558,7 +561,7 @@ func (s *Server) apiPlan(r *http.Request, it *store.WorkItem) *APIPlan {
 		From  string `json:"from"`
 	}
 	_ = json.Unmarshal([]byte(ps.Job.Input), &in)
-	a := &APIPlan{JobID: ps.Job.ID, Approach: v.Approach, Files: v.Files, Risks: v.Risks, Tests: v.Tests,
+	a := &APIPlan{JobID: ps.Job.ID, Ask: v.Ask, Approach: v.Approach, Files: v.Files, Risks: v.Risks, Tests: v.Tests,
 		Waiting: ps.Waiting && it.Stage == state.Blocked}
 	if a.Files == nil {
 		a.Files = []string{}

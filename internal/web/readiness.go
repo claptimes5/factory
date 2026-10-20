@@ -94,8 +94,8 @@ type APIReadinessFinding struct {
 	Status     string `json:"status"`
 	SplitDone  int    `json:"split_done"`
 	SplitTotal int    `json:"split_total"`
-	ItemID    *int64 `json:"item_id"`
-	ItemStage string `json:"item_stage"`
+	ItemID     *int64 `json:"item_id"`
+	ItemStage  string `json:"item_stage"`
 }
 
 // readinessRun is the check (or check and file) started from the

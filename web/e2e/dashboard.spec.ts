@@ -73,6 +73,8 @@ test("an item whose plan waits shows the plan, a Build it button and another pla
   await card.getByRole("link", { name: "Read the plan" }).click();
   const plan = page.getByTestId("plan");
   await expect(plan).toContainText("Plan: waiting for your OK");
+  await expect(plan.getByTestId("plan-ask")).toContainText("triage sized this large (L)");
+  await expect(plan.getByTestId("plan-decide")).toContainText("Keep the billing tables in the main database");
   await expect(plan).toContainText("Move billing/ into a new service");
   await expect(plan).toContainText("billing/service.go");
   await expect(plan).toContainText("counted twice");
