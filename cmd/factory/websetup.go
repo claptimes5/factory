@@ -343,6 +343,9 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 			}
 		}
 		a.BaseBranch, a.CanUseDefault = rc.BaseBranch, len(cfg.Repos) == 1
+		if a.MissingLabels == nil {
+			a.MissingLabels = []string{} // unchecked, or unreachable: a list, never null
+		}
 		if a.DefaultBranch == a.BaseBranch {
 			a.DefaultBranch = ""
 		}
@@ -784,7 +787,7 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 	case "base-branch":
 		return w.useBranch(ctx, cfg, in.Repo, in.Branch)
 	case "checks/save":
-		return w.saveChecks(cfg, in)
+		return w.saveChecks(ctx, cfg, in)
 	case "labels":
 		return w.createLabels(ctx, cfg)
 	case "claude":
@@ -1485,7 +1488,7 @@ func wizardChecks(r config.Repo, s *stack.Suggestion) web.APIWizardChecks {
 
 // saveChecks writes a repo's install, base image and check commands to
 // factory.yaml, as the person confirmed them on the page.
-func (w *wizard) saveChecks(cfg *config.Config, in web.WizardInput) (string, error) {
+func (w *wizard) saveChecks(ctx context.Context, cfg *config.Config, in web.WizardInput) (string, error) {
 	i := slices.IndexFunc(cfg.Repos, func(r config.Repo) bool { return strings.EqualFold(r.Name, in.Repo) })
 	if i < 0 {
 		return "", fmt.Errorf("%s isn't one of the factory's repos", in.Repo)
@@ -1531,5 +1534,8 @@ func (w *wizard) saveChecks(cfg *config.Config, in web.WizardInput) (string, err
 		_ = w.reload()
 		return "", fmt.Errorf("those checks aren't valid: %w", err)
 	}
+	// Reloading drops the last access check; the page shouldn't go back
+	// to "not checked".
+	w.checkAccess(ctx)
 	return fmt.Sprintf("Saved %s's checks to %s: %s.", r.Name, filepath.Base(w.cfgPath), strings.Join(g.Required, ", ")), nil
 }
