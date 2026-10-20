@@ -39,7 +39,7 @@ func TestSensitiveDefaults(t *testing.T) {
 // another name is added. Risk and the security pass both follow it.
 func TestSensitiveOverride(t *testing.T) {
 	t.Parallel()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestSensitiveOverride(t *testing.T) {
 // so a half-written line can't open a hole.
 func TestSensitiveNullKeepsDefaults(t *testing.T) {
 	t.Parallel()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

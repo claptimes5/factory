@@ -14,7 +14,7 @@ import (
 
 func load(t *testing.T) *Config {
 	t.Helper()
-	c, err := Load("../../factory.yaml")
+	c, err := Load("../../factory.example.yaml")
 	if err != nil {
 		t.Fatalf("repo factory.yaml must load: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestRepoConfigLoads(t *testing.T) {
 }
 
 func TestSeveralRepos(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	y := regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAllString(string(b), `repos:
   - o/api
   - name: o/web
@@ -72,7 +72,7 @@ func TestSeveralRepos(t *testing.T) {
 // included: it reviews in a session of its own (see the pipeline's
 // TestReviewNeverResumesTheBuildersSession), so it isn't refused.
 func TestReviewerMayShareTheBuildersModel(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	claudeReview := func(model, tiers string) string {
 		y := strings.Replace(string(b), "review:            {harness: codex,  model: gpt-6.1-sol}", "review: {harness: claude, model: "+model+"}", 1)
 		y = strings.Replace(y, "review.high_risk:  {harness: codex,  model: gpt-6.1-sol, effort: high}", "", 1)
@@ -100,7 +100,7 @@ func TestReviewerMayShareTheBuildersModel(t *testing.T) {
 }
 
 func TestRejectsUnknownFields(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	if _, err := Parse(append(b, []byte("\nbogus: 1\n")...)); err == nil {
 		t.Fatal("unknown top-level field should be rejected")
 	}
@@ -161,7 +161,7 @@ func TestGatesRoundTrip(t *testing.T) {
 }
 
 func TestRepoImagesAndEnvAreChecked(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
 	for name, c := range map[string]struct{ repos, err string }{
 		"two bases":   {"repos:\n  - {name: o/a, image: shared, image_from: ruby:3.4-bookworm}\n  - {name: o/b, image: shared, image_from: python:3.13-bookworm}\n", "different bases"},
@@ -179,7 +179,7 @@ func TestRepoImagesAndEnvAreChecked(t *testing.T) {
 }
 
 func TestGitLabRepos(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
 	c, err := Parse([]byte("repos:\n  - o/api\n  - https://gitlab.com/team/web.git\n  - {name: platform/infra/deploy, host: git.example.com}\n  - github.com/o/cli\n" + base))
 	if err != nil {
@@ -234,7 +234,7 @@ func TestGitLabRepos(t *testing.T) {
 // own; a repo's replace them. Names must be host names, each needs an
 // image, and only the docker runner runs them.
 func TestServices(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
 	c, err := Parse([]byte(`repos:
   - o/api
@@ -274,7 +274,7 @@ services:
 }
 
 func TestWorkspaces(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
 	repos := "repos: [o/api, o/web, o/docs, p/web]\n"
 	c, err := Parse([]byte(repos + "workspaces:\n  shop: [O/API, o/web]\n" + base))
@@ -372,7 +372,7 @@ func TestStepInstructions(t *testing.T) {
 
 func TestStepFilesResolveAgainstTheConfig(t *testing.T) {
 	dir := t.TempDir()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestAutoMergeBreaker(t *testing.T) {
 	if never.BreakerThreshold() != 0 || never.BreakerWindow() != 72*time.Hour || never.BreakerCoolOff() != 24*time.Hour || !never.On() {
 		t.Fatalf("set: %+v", never.Breaker)
 	}
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	c, err := ParseIn([]byte(strings.Replace(string(b), "\nrouting:", "\nauto_merge: {up_to: low, breaker: {threshold: 3, window: 48h}}\nrouting:", 1)), "../..")
 	if err != nil || c.AutoMerge.BreakerThreshold() != 3 || c.AutoMerge.BreakerWindow() != 48*time.Hour {
 		t.Fatalf("parse: %v", err)
@@ -534,7 +534,7 @@ func TestTuning(t *testing.T) {
 	if r := c.Routing["tune"]; !reflect.DeepEqual(r, c.Routing["orchestrate"]) {
 		t.Fatalf("routing.tune = %+v, want the orchestrate route", r)
 	}
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	with := func(block string) (*Config, error) { return Parse([]byte(string(b) + "\ntuning: " + block + "\n")) }
 	for block, every := range map[string]time.Duration{"{every: 0}": 0, "{every: 0s}": 0, "{every: none}": 0, "{every: 168h}": 168 * time.Hour, "{every: 1h}": time.Hour} {
 		c, err := with(block)
@@ -659,7 +659,7 @@ func TestRiskSettings(t *testing.T) {
 		!slices.Equal(r.NeedsPerson, []string{"migrations", "new_dependencies", "auth", "deleted_tests"}) {
 		t.Fatalf("defaults %+v", r)
 	}
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	set := func(risk string) (*Config, error) {
 		return ParseIn([]byte(strings.Replace(string(b), "\nrouting:", "\nrisk: "+risk+"\nrouting:", 1)), "../..")
 	}

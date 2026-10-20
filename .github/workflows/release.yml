@@ -105,7 +105,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       # The binary reads prompts/, skills/, evals/ and deploy/job-image from
-      # beside it, so each archive carries them with a sample factory.yaml.
+      # beside it, so each archive carries them with factory.example.yaml, copied to factory.yaml on first run.
       - name: build
         if: ${{ !inputs.dry_run }}
         env:
@@ -117,7 +117,7 @@ jobs:
             name="factory_${VERSION#v}_${os}_${arch}"
             mkdir "dist/$name"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.buildVersion=$VERSION" -o "dist/$name/factory" ./cmd/factory
-            cp -R prompts skills evals deploy factory.yaml LICENSE.md README.md "dist/$name/"
+            cp -R prompts skills evals deploy factory.example.yaml LICENSE.md README.md "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
           done
           (cd dist && sha256sum ./*.tar.gz > checksums.txt)

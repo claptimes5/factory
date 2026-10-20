@@ -10,7 +10,7 @@ import (
 
 func repoYAML(t *testing.T) ([]byte, string) {
 	t.Helper()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestSettings(t *testing.T) {
 }
 
 func TestReviewSettingsAreEditable(t *testing.T) {
-	src, _ := os.ReadFile("../../factory.yaml")
+	src, _ := os.ReadFile("../../factory.example.yaml")
 	groups, err := Settings(src)
 	if err != nil {
 		t.Fatal(err)

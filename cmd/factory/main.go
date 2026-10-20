@@ -114,6 +114,9 @@ func run(args []string) error {
 	}
 	// Now, so codex-login and the rest don't hand on a token the shell exported.
 	takeSentryToken()
+	if err := firstConfig(*cfgPath); err != nil {
+		return err
+	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
@@ -1456,5 +1459,24 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 		fmt.Printf("%-16s %-16s review=%-9s cost=$%.2f time=%.0fs %s\n", a.Skillset, a.Stage, a.Review, a.CostUSD, a.Seconds, a.Error)
 	}
 	fmt.Printf("\nReport: %s (also in the control room under Compare)\n", filepath.Join(dir, "report.md"))
+	return nil
+}
+
+// firstConfig makes the config from factory.example.yaml beside it when
+// there's none yet. factory.yaml is yours, and git ignores it, so pulling
+// a new version of the factory never conflicts with your settings.
+func firstConfig(path string) error {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	example := filepath.Join(filepath.Dir(path), "factory.example.yaml")
+	b, err := os.ReadFile(example)
+	if err != nil {
+		return nil // loading says what's missing
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Made %s from %s. It's yours to edit; git leaves it alone.\n", path, filepath.Base(example))
 	return nil
 }

@@ -7,3 +7,4 @@
 /web/playwright-report/
 /factory.env
 *.pem
+/factory.yaml

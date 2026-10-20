@@ -7,7 +7,7 @@ import (
 )
 
 func TestLearning(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.yaml")
+	b, _ := os.ReadFile("../../factory.example.yaml")
 	y := string(b)
 	c, err := Parse(b)
 	if err != nil {

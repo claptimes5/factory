@@ -537,7 +537,7 @@ func TestParseIssue(t *testing.T) {
 
 func testConfig(t *testing.T, repo string) string {
 	t.Helper()
-	b, err := os.ReadFile("../../factory.yaml")
+	b, err := os.ReadFile("../../factory.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
