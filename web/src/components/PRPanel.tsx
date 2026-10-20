@@ -68,7 +68,8 @@ function Checks({ p }: { p: PRPanelT }) {
   );
 }
 
-export function PRPanel({ itemId, needsYou }: { itemId: number; needsYou: boolean }) {
+/** noActions leaves out the retry buttons, for a page that shows them already. */
+export function PRPanel({ itemId, needsYou, noActions }: { itemId: number; needsYou: boolean; noActions?: boolean }) {
   const { data: p, error, isLoading } = usePRPanel(itemId);
   if (isLoading) return <Loading what="Loading the PR" />;
   if (error) return <ErrorBox error={error} />;
@@ -129,7 +130,7 @@ export function PRPanel({ itemId, needsYou }: { itemId: number; needsYou: boolea
             View diff
           </Link>
         </div>
-        <Actions jobId={p.last_job_id} itemId={itemId} />
+        {!noActions && <Actions jobId={p.last_job_id} itemId={itemId} />}
         <section>
           <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">CI</h4>
           <Checks p={p} />

@@ -164,10 +164,43 @@ func (s *Server) howItEnded(j *store.Job, evs []store.Event) string {
 		}
 		return "ran out of turns"
 	}
+	if gates := failedGates(j.Error); len(gates) > 0 {
+		noun := "check"
+		if len(gates) > 1 {
+			noun = "checks"
+		}
+		return "failed the " + joinAnd(gates) + " " + noun
+	}
 	if why := reasonLine(j.Error); why != "" {
 		return "failed: " + why
 	}
 	return "failed"
+}
+
+// failedGates are the gates a build's "GATES: FAIL a=pass b=fail" line
+// says failed, as a person reads them.
+func failedGates(err string) []string {
+	line, _, _ := strings.Cut(err, "\n")
+	if !strings.HasPrefix(line, "GATES: FAIL") {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.Fields(line) {
+		if g, ok := strings.CutSuffix(f, "=fail"); ok {
+			out = append(out, strings.ReplaceAll(g, "_", " "))
+		} else if g, ok := strings.CutSuffix(f, "=misconfigured"); ok {
+			out = append(out, strings.ReplaceAll(g, "_", " ")+" (misconfigured)")
+		}
+	}
+	return out
+}
+
+// joinAnd is "a", "a and b", or "a, b and c".
+func joinAnd(xs []string) string {
+	if len(xs) <= 1 {
+		return strings.Join(xs, "")
+	}
+	return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
 }
 
 // parkedText is why the item was parked, from its latest move to parked.
