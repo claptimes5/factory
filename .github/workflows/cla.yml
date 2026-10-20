@@ -1,0 +1,50 @@
+name: cla
+on:
+  issue_comment:
+    types: [created]
+  # pull_request_target so the check can comment and record signatures on
+  # pull requests from forks. It never checks out the pull request's code.
+  pull_request_target:
+    types: [opened, reopened, closed, synchronize]
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+# One run at a time, so two signatures don't race to update the same file
+# or to create the signatures branch.
+concurrency:
+  group: cla
+  cancel-in-progress: false
+jobs:
+  cla:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       (github.event.comment.body == 'recheck' ||
+        contains(github.event.comment.body, 'I hereby sign the CLA')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The signatures branch has to exist before the first signature;
+      # make it from the default branch the first time.
+      - name: signatures branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/$REPO/git/refs/heads/cla-signatures" >/dev/null 2>&1 ||
+            gh api "repos/$REPO/git/refs" -f ref=refs/heads/cla-signatures -f sha="$SHA" >/dev/null
+      # v2.6.1
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/${{ github.repository }}/blob/main/CLA.md
+          # Signatures live on their own branch, so recording one never
+          # needs a push to main.
+          branch: cla-signatures
+          path-to-signatures: signatures/cla.json
+          # The owner and known bots (the factory's own commits are
+          # factory[bot]) don't sign.
+          allowlist: claptimes5,factory[bot],dependabot[bot],github-actions[bot]
