@@ -823,8 +823,18 @@ func TestWizardChecks(t *testing.T) {
 	if rc.Gates.Commands["test"] != "bin/rails db:prepare test" || strings.Join(rc.Gates.Required, ",") != "lint,test" || rc.ImageFrom != "ruby:3.4-bookworm" || cfg.Repos[0].Gates.ProvesFix != "none" {
 		t.Fatalf("saved = %+v image %q", rc.Gates, rc.ImageFrom)
 	}
-	if s := step(w.State(ctx, false), "checks"); s.State != "done" {
+	after := w.State(ctx, false)
+	if s := step(after, "checks"); s.State != "done" {
 		t.Fatalf("after saving: %+v", s)
+	}
+	// Saving reloads the config: access is checked again, and no list
+	// goes to the page as null.
+	if after.Access[0].State != "ok" {
+		t.Fatalf("access after saving = %+v", after.Access)
+	}
+	w.credentialsChanged() // as a reload does, before the check runs again
+	if b, _ := json.Marshal(w.State(ctx, false)); strings.Contains(string(b), `"missing_labels":null`) {
+		t.Fatalf("an unchecked repo's labels went as null: %s", b)
 	}
 	// A saved command the repo's instructions disagree with is flagged.
 	if _, err := w.Do(ctx, "checks/save", web.WizardInput{Repo: "o/r", Install: "bundle install", Commands: map[string]string{"test": "bundle exec rspec"}}); err != nil {
