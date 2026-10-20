@@ -627,9 +627,14 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					return "", err
 				}
 				since := time.Now().UTC().Format("2006-01-02") + "T00:00:00"
-				n, err := p.Store.CountEventsSince(ctx, "orchestrator", "create_issue", since)
-				if err != nil {
-					return "", err
+				// Chat and the orchestrator share the cap.
+				n := 0
+				for _, who := range []string{"orchestrator", "chat"} {
+					c, err := p.Store.CountEventsSince(ctx, who, "create_issue", since)
+					if err != nil {
+						return "", err
+					}
+					n += c
 				}
 				if n >= p.Cfg.Orchestrator.DailyIssueCap {
 					return "", fmt.Errorf("refused: daily issue cap (%d) reached", p.Cfg.Orchestrator.DailyIssueCap)
@@ -638,7 +643,11 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := audit(ctx, "create_issue", nil, a.Reason, raw); err != nil {
 					return "", err
 				}
-				num, err := p.gh(repo).CreateIssue(ctx, a.Title, a.Body+"\n\n_Opened by the factory orchestrator._", labels)
+				by := "the factory orchestrator"
+				if actor == "chat" {
+					by = "the factory's chat"
+				}
+				num, err := p.gh(repo).CreateIssue(ctx, a.Title, a.Body+"\n\n_Opened by "+by+"._", labels)
 				if err != nil {
 					return "", err
 				}
@@ -651,7 +660,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					// tidy the text). Should this fail, it parks at triage.
 					is, err := p.gh(repo).GetIssue(ctx, num)
 					if err == nil {
-						err = p.approve(ctx, it, *is, "the factory orchestrator")
+						err = p.approve(ctx, it, *is, by)
 					}
 					p.warn(err, "approve")
 				}
@@ -659,7 +668,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					p.warn(p.Store.SetParent(ctx, it.ID, a.Parent), "SetParent")
 				}
 				if len(a.DependsOn) > 0 {
-					if err := p.Store.SetDependencies(ctx, it.ID, a.DependsOn, "orchestrator", a.Reason); err != nil {
+					if err := p.Store.SetDependencies(ctx, it.ID, a.DependsOn, actor, a.Reason); err != nil {
 						return "", err
 					}
 				}
@@ -776,6 +785,52 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					return "", err
 				}
 				return "ok", p.retry(ctx, "orchestrator", a.Job, a.TierUp)
+			})},
+		{Name: "close_split", Description: "Close a parked or untriaged item's issue in favor of the issues you opened with it as their parent. It comments the new issues on it and makes the item their epic, done once they are.",
+			InputSchema: schema(`"item":{"type":"integer"},`+reasonProp, "item", "reason"),
+			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var a itemArgs
+				if err := json.Unmarshal(raw, &a); err != nil {
+					return "", err
+				}
+				it, err := p.Store.GetItem(ctx, a.Item)
+				if err != nil {
+					return "", fmt.Errorf("refused: no item %d", a.Item)
+				}
+				if err := state.CheckStage(it.Stage, state.Epic); err != nil {
+					return "", fmt.Errorf("refused: item %d is %s; only a parked or untriaged item can be split", a.Item, it.Stage)
+				}
+				all, err := p.Store.ListItems(ctx)
+				if err != nil {
+					return "", err
+				}
+				var refs []string
+				for _, c := range all {
+					if c.ParentID != nil && *c.ParentID == it.ID {
+						refs = append(refs, p.ref(c.Repo, c.IssueNumber))
+					}
+				}
+				if len(refs) == 0 {
+					return "", fmt.Errorf("refused: item %d has no child issues; open them with create_issue and parent %d first", a.Item, a.Item)
+				}
+				if err := audit(ctx, "close_split", &a.Item, a.Reason, raw); err != nil {
+					return "", err
+				}
+				gh := p.gh(it.Repo)
+				closeIt := func(context.Context, int) error { return errors.New("its client can't close issues") }
+				if c, ok := gh.(issueCloser); ok {
+					closeIt = c.CloseIssue
+				}
+				// Not planned, where the host says so: the readiness check
+				// files again an issue closed as done.
+				if c, ok := gh.(notPlannedCloser); ok {
+					closeIt = c.CloseNotPlanned
+				}
+				p.warn(gh.Comment(ctx, it.IssueNumber, fmt.Sprintf("**Factory:** split into %s, which replace this issue. %s", strings.Join(refs, ", "), a.Reason)), "Comment")
+				if err := closeIt(ctx, it.IssueNumber); err != nil {
+					return "", err
+				}
+				return "ok", p.Store.SetStage(ctx, it.ID, state.Epic, actor, "split into "+strings.Join(refs, ", "))
 			})},
 		{Name: "park", Description: "Park an item for a human, with the reason they will read.",
 			InputSchema: schema(`"item":{"type":"integer"},`+reasonProp, "item", "reason"),
@@ -1063,6 +1118,16 @@ func (p *Pipeline) pickRepo(name string) (string, error) {
 	}
 	r, ok := p.Cfg.RepoConf(name)
 	if !ok {
+		// A GitLab repo named without its host, as owner/name.
+		var hits []string
+		for _, n := range p.Cfg.RepoNames() {
+			if strings.HasSuffix(strings.ToLower(n), "/"+strings.ToLower(name)) {
+				hits = append(hits, n)
+			}
+		}
+		if len(hits) == 1 {
+			return hits[0], nil
+		}
 		return "", fmt.Errorf("refused: %s is not one of the factory's repos (%s)", name, strings.Join(p.Cfg.RepoNames(), ", "))
 	}
 	return r.Name, nil

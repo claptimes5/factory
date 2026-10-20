@@ -89,8 +89,11 @@ type APIReadinessFinding struct {
 	IssueURL string `json:"issue_url"`
 	// Status is the work on it: none (nothing to file: it's yours, or in
 	// place), not_filed, not_queued (filed without the intake label),
-	// closed, waiting, building, needs_you or done.
-	Status    string `json:"status"`
+	// closed, waiting, building, needs_you, split (into SplitTotal
+	// issues, SplitDone of them done) or done.
+	Status     string `json:"status"`
+	SplitDone  int    `json:"split_done"`
+	SplitTotal int    `json:"split_total"`
 	ItemID    *int64 `json:"item_id"`
 	ItemStage string `json:"item_stage"`
 }
@@ -225,6 +228,14 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 	switch item := s.apiItem(ctx, it); {
 	case it.Stage == state.Done:
 		a.Status = "done"
+	case it.Stage == state.Epic:
+		a.Status = "split"
+		for _, c := range s.children(ctx, it.ID) {
+			a.SplitTotal++
+			if c.Stage == state.Done {
+				a.SplitDone++
+			}
+		}
 	case item.NeedsYou:
 		a.Status = "needs_you"
 	case it.Stage == state.Implementing || it.Stage == state.Reviewing:

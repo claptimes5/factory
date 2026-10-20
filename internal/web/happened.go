@@ -26,7 +26,7 @@ type APIHappenedStep struct {
 }
 
 // APISplit is the "Split it" button: a chat message asking the
-// orchestrator's model to draft smaller issues for a stopped item.
+// orchestrator's model to split a stopped item into smaller issues.
 type APISplit struct {
 	Prompt string `json:"prompt"`
 	// Unavailable says why chat can't take it now, or "".
@@ -212,7 +212,7 @@ func SplitPrompt(it *store.WorkItem, happened string, failed *store.Job) string 
 	} else {
 		b.WriteString("Read the issue, ")
 	}
-	fmt.Fprintf(&b, "then draft smaller issues, each with parent %d (this item, %s#%d).", it.ID, it.Repo, it.IssueNumber)
+	fmt.Fprintf(&b, "then open smaller issues, each with parent %d (this item, %s#%d), and close it in favor of them with close_split.", it.ID, it.Repo, it.IssueNumber)
 	return b.String()
 }
 

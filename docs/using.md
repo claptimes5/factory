@@ -22,7 +22,7 @@ To reach it from another machine, or to put a password on it, see
 | **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
 | **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
-| **Orchestrator** | [Chat](#chat-drafting-issues-with-the-orchestrator) with the orchestrator's model to draft issues, and, under Decisions, everything the orchestrator did on its own with its reason, filterable by item and type. |
+| **Orchestrator** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model to open issues, and, under Decisions, everything the orchestrator did on its own with its reason, filterable by item and type. |
 | **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
 | **Inbox** | PRs ready for review, parked items (with their choices), items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
@@ -141,11 +141,13 @@ question from triage) shows why it was parked.
 
 When an item's build failed or ran out of turns, or the item was
 parked, it may be too big for one build. **Split it** in the What
-happened box starts a new [chat](#chat-drafting-issues-with-the-orchestrator)
+happened box starts a new [chat](#chat-opening-issues-with-the-orchestrator)
 with the orchestrator's model and sends it a message naming the item,
 its issue and what happened, with the failed run's job to read. The
-model drafts smaller issues, each with this item as its parent; nothing
-is filed until you press Create issue on a draft. The button is off,
+model opens smaller issues, each with this item as its parent, then
+closes this item's issue in favor of them (as not planned on GitHub),
+with a comment naming them. The item becomes their epic, done once they
+are. The button is off,
 with the reason, while chat can't reply (its daily budget is spent, for
 one).
 
@@ -354,27 +356,27 @@ The orchestrator also:
 
 It sees every repo and names one when it opens an issue.
 
-### Chat: drafting issues with the orchestrator
+### Chat: opening issues with the orchestrator
 
 The Orchestrator screen opens on a chat with the orchestrator's model (the
 `orchestrate` route, Opus by default). Say what you want built, as you would
-to a teammate. Each message starts one read-only run (prompt
-`prompts/chat.md`) that can read your base branches and the factory's work
-with the orchestrator's read tools, and draft issues with `draft_issue`.
+to a teammate. Each message starts one run (prompt `prompts/chat.md`) that
+can read your base branches and the factory's work with the orchestrator's
+read tools, open issues with `create_issue`, and close a split item's issue
+with `close_split`. It can't change code or run commands.
 It works whether or not the orchestrator runs on its own schedule.
 
-A draft is not an issue. It shows as a card under the reply, and nothing
-reaches GitHub or GitLab until you press **Create issue**, after editing it
-if you like, or **Dismiss** it. A created issue gets the intake label and
-any of `orchestrator.labels` the draft asked for, is approved as created by
-you, and goes to triage like an issue you labeled. It doesn't count against
-the orchestrator's daily issue cap. Ask the chat to change a draft and it
-revises the same card. While a reply is being written, Create waits for it,
-and a create files only the text you saw: a card that changed since is
-refused until you look again. A draft the factory stopped in the middle of
-creating goes back to a draft with a note to check the repo for its issue.
+An issue chat opens gets the intake label and any of `orchestrator.labels`
+it asked for, is approved as the chat's, and goes to triage like an issue
+you labeled. Chat and the orchestrator share `orchestrator.daily_issue_cap`.
 
-A reply doesn't take or wait for a job slot, since it only reads, but one is
+Chats from before it could open issues may hold drafts: cards under the
+reply that reach GitHub or GitLab only when you press **Create issue** (or
+**Create all**), after editing them if you like, or **Dismiss** them. A
+create files only the text you saw: a card that changed since is refused
+until you look again.
+
+A reply doesn't take or wait for a job slot, since it builds nothing, but one is
 written at a time, and a restart waits for it. Each costs up to `orchestrator.run_budget`, and chat
 shares `orchestrator.daily_budget` with the orchestrator and tuning. A reply
 that fails says why, with **Try again**; **How it got there** on a reply opens

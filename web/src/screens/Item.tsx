@@ -18,7 +18,7 @@ export function ItemScreen() {
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split } = data!;
+  const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split, children } = data!;
   const live = jobs.find((j) => j.state === "running");
   return (
     <div className="space-y-4">
@@ -31,11 +31,20 @@ export function ItemScreen() {
           <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
             {it.ref} <ExternalLink className="size-3" />
           </a>
+          {it.parent_id != null && (
+            <>
+              <span>/</span>
+              <Link to={`/items/${it.parent_id}`} className="hover:text-foreground">
+                Part of item {it.parent_id}
+              </Link>
+            </>
+          )}
         </div>
         <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
           {it.title} <StageBadge stage={it.stage} />
         </h1>
         {happened && <HappenedCard h={happened} split={split} />}
+        {children.length > 0 && <SplitInto items={children} />}
         {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}
         {it.choice_job_id != null && it.choices.length > 0 && (
           <Card className="mt-2 border-warning/60" data-testid="next">
@@ -478,5 +487,35 @@ function HappenedCard({ h, split }: { h: Happened; split: Split | null }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** The issues an item was split into, and how far each has got. Once all are done, so is the item. */
+function SplitInto({ items }: { items: Item[] }) {
+  const done = items.filter((c) => c.stage === "done").length;
+  return (
+    <Card className="mt-2" data-testid="split-into">
+      <CardHeader>
+        <CardTitle>
+          Split into {items.length} {items.length === 1 ? "issue" : "issues"}: {done} done
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        <ul className="space-y-1 text-sm">
+          {items.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-2">
+              <StageBadge stage={c.stage} />
+              <Link to={`/items/${c.id}`} className="min-w-0 break-words text-primary hover:underline">
+                {c.ref} {c.title}
+              </Link>
+              {c.needs_you && <span className="text-xs text-warning">needs you</span>}
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted-foreground">
+          {done === items.length ? "All done, so this item is too." : "This item is done once each of these is."}
+        </p>
+      </CardContent>
+    </Card>
   );
 }

@@ -23,7 +23,7 @@ test.afterEach(async ({ page }, info) => {
 test("the orchestrator tab opens on a chat that explains itself and shows what it drafted", async ({ page }, info) => {
   await page.goto("/app/orchestrator");
   await expect(page.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("Nothing is filed until you press")).toBeVisible();
+  await expect(page.getByText("then opens issues, which the factory builds")).toBeVisible();
   await expect(page.getByText("The orchestrator doesn't run on its own.")).toBeVisible();
   await expect(page.getByText("$1.84 of today's $10.00")).toBeVisible();
   await page.getByTestId("chat-list").getByRole("button", { name: /Split the CSV export/ }).click();
@@ -36,6 +36,7 @@ test("the orchestrator tab opens on a chat that explains itself and shows what i
   await expect(drafts.first()).toContainText("Write invoices as CSV");
   await expect(drafts.first()).toContainText("billing");
   await expect(drafts.first().getByRole("button", { name: "Create issue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create all 2" })).toBeVisible();
   await expect(page.getByTestId("draft-dismissed")).toContainText("Export invoices as PDF");
   await shot(page, info, "chat");
   if (phone(info)) await noSidewaysScroll(page);
