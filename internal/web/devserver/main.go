@@ -500,6 +500,10 @@ new file mode 100644
 		}
 	}
 	// 111 was planned before its build, as an L item, and the plan waits.
+	// It's built after 103.
+	if err := st.SetDependencies(ctx, ids[111], []int64{ids[103]}, "human", "billing builds on the rate limiter"); err != nil {
+		return err
+	}
 	if _, err := job(111, "triage", "haiku", state.Succeeded, 0.05, `{"decision":"ready","complexity":"L","risk":"low","question":"","summary":"Move billing into its own service behind the existing API."}`); err != nil {
 		return err
 	}

@@ -4,7 +4,7 @@ import { ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split } from "@/api/client";
 import type { components } from "@/api/schema";
-import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge } from "@/components/common";
+import { Empty, ErrorBox, JobStateBadge, Loading, StageBadge, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
@@ -44,6 +44,7 @@ export function ItemScreen() {
           {it.title} <StageBadge stage={it.stage} />
         </h1>
         {happened && <HappenedCard h={happened} split={split} />}
+        <WaitsFor items={it.waits_for} plan={it.plan_waiting} className="mt-1 text-sm" />
         {children.length > 0 && <SplitInto items={children} />}
         {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}
         {it.choice_job_id != null && it.choices.length > 0 && (
@@ -511,6 +512,7 @@ function SplitInto({ items }: { items: Item[] }) {
                 {c.ref} {c.title}
               </Link>
               {c.needs_you && <span className="text-xs text-warning">needs you</span>}
+              {c.waits_for.length > 0 && <span className="text-xs text-muted-foreground">after {c.waits_for.map((w) => w.ref).join(", ")}</span>}
             </li>
           ))}
         </ul>

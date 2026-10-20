@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
 import { act, useJob, type Gate } from "@/api/client";
@@ -165,5 +166,23 @@ function PlainActions({ jobId, itemId, running }: { jobId?: number | null; itemI
         </p>
       )}
     </div>
+  );
+}
+
+/** The items one waits for: it isn't built until they're done, whatever is approved. */
+export function WaitsFor({ items, plan, className }: { items: { id: number; ref: string }[]; plan?: boolean; className?: string }) {
+  if (items.length === 0) return null;
+  const refs = items.map((w, i) => (
+    <span key={w.id}>
+      {i > 0 && (i === items.length - 1 ? " and " : ", ")}
+      <Link to={`/items/${w.id}`} className="relative z-10 text-primary hover:underline">
+        {w.ref}
+      </Link>
+    </span>
+  ));
+  return (
+    <p className={cn("text-xs text-muted-foreground", className)} data-testid="waits-for">
+      Built after {refs} {items.length === 1 ? "is" : "are"} done{plan ? ": approving its plan now won't start it early." : "."}
+    </p>
   );
 }

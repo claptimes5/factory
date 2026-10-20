@@ -60,6 +60,15 @@ type APIItem struct {
 	// what a person can do next; null and empty unless it is parked.
 	ChoiceJobID *int64      `json:"choice_job_id"`
 	Choices     []APIChoice `json:"choices"`
+	// WaitsFor are the items it depends on that aren't done: it isn't
+	// built until they are, whatever is approved.
+	WaitsFor []APIItemRef `json:"waits_for"`
+}
+
+// APIItemRef names another item.
+type APIItemRef struct {
+	ID  int64  `json:"id"`
+	Ref string `json:"ref"`
 }
 
 // APIChoice is one thing a person can do next with a job that ended,
@@ -522,6 +531,15 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		NeedsYou: it.Stage == state.AwaitingHuman || it.Stage == state.Parked,
 	}
 	a.PRs, a.PRURL = s.linkedPRs(ctx, it)
+	a.WaitsFor = []APIItemRef{}
+	if it.Stage != state.Done {
+		deps, _ := s.Store.Dependencies(ctx, it.ID)
+		for _, d := range deps {
+			if dep, err := s.Store.GetItem(ctx, d); err == nil && dep.Stage != state.Done {
+				a.WaitsFor = append(a.WaitsFor, APIItemRef{ID: dep.ID, Ref: s.ref(dep.Repo, dep.IssueNumber)})
+			}
+		}
+	}
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}

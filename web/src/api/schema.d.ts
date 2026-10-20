@@ -2792,6 +2792,12 @@ export interface components {
             choice_job_id: number | null;
             /** @description What a person can do next with a parked item, each explained; empty unless it is parked */
             choices: components["schemas"]["Choice"][];
+            /** @description The items it depends on that aren't done: it isn't built until they are, whatever is approved */
+            waits_for: components["schemas"]["ItemRef"][];
+        };
+        ItemRef: {
+            id: number;
+            ref: string;
         };
         Choice: {
             /** @enum {string} */
