@@ -285,7 +285,7 @@ test("a stopped item says what happened, job by job, and Split it asks chat for 
   await page.goto(itemURL);
 
   // Split it starts a new chat with the item, its issue and the failed run in it.
-  await happened.getByRole("button", { name: "Split it" }).click();
+  await page.getByTestId("status").getByRole("button", { name: "Split it" }).click();
   await expect(page).toHaveURL(/\/orchestrator\?chat=\d+/);
   const you = page.getByTestId("you").first();
   await expect(you).toContainText(/Split item #\d+ \(acme\/api#115\) into smaller issues\. Its title:/);
@@ -307,8 +307,9 @@ test("a build that ran out of turns says so at the top, and Split it waits for c
   await needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true }).getByRole("link", { name: /Add SSO sign-in/ }).click();
   const happened = page.getByTestId("happened");
   await expect(happened).toContainText(/The build ran out of turns \(job #\d+\)\./);
-  await expect(happened.getByRole("button", { name: "Split it" })).toBeDisabled();
-  await expect(happened).toContainText("Today's orchestration budget is spent");
+  const status = page.getByTestId("status");
+  await expect(status.getByRole("button", { name: "Split it" })).toBeDisabled();
+  await expect(status).toContainText("Today's orchestration budget is spent");
 });
 
 test("inbox lists what needs you", async ({ page }, info) => {

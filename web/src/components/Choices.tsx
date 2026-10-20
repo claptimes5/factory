@@ -62,8 +62,8 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
         ))}
       </ul>
       {hidden.length > 0 && (
-        <div data-testid="choice-unavailable">
-          <p>Not offered now:</p>
+        <details data-testid="choice-unavailable">
+          <summary className="cursor-pointer">Not offered now ({hidden.length})</summary>
           <ul className="mt-1 space-y-1 pl-3">
             {hidden.map((c) => (
               <li key={c.action}>
@@ -72,7 +72,7 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
     </div>
   );

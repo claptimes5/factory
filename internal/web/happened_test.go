@@ -143,6 +143,9 @@ func TestFailedChecksAreNotSplit(t *testing.T) {
 	if split == nil {
 		t.Fatalf("a build over the diff limit wasn't offered a split: %+v", h)
 	}
+	if !strings.HasPrefix(h.Summary, "The build failed the diff guard and lint checks (job #") {
+		t.Fatalf("summary = %q", h.Summary)
+	}
 	if !strings.Contains(h.Note, "`lint` fails on master too") || !strings.Contains(h.Note, "won't help") {
 		t.Fatalf("note = %q", h.Note)
 	}

@@ -20,6 +20,9 @@ export function ItemScreen() {
   if (error) return <ErrorBox error={error} />;
   const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split, children } = data!;
   const live = jobs.find((j) => j.state === "running");
+  // A plan or cost that waits says so on its own card.
+  const note = it.plan_waiting || it.estimate_waiting ? "" : it.blocked_note;
+  const choices = it.choice_job_id != null && it.choices.length > 0;
   return (
     <div className="space-y-4">
       <div>
@@ -43,30 +46,42 @@ export function ItemScreen() {
         <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
           {it.title} <StageBadge stage={it.stage} />
         </h1>
-        {happened && <HappenedCard h={happened} split={split} />}
         <WaitsFor items={it.waits_for} plan={it.plan_waiting} className="mt-1 text-sm" />
-        {children.length > 0 && <SplitInto items={children} />}
-        {it.blocked_note && <p className="mt-1 rounded-md bg-warning/10 p-2 text-sm text-warning">{it.blocked_note}</p>}
-        {it.choice_job_id != null && it.choices.length > 0 && (
-          <Card className="mt-2 border-warning/60" data-testid="next">
-            <CardHeader>
-              <CardTitle>What next?</CardTitle>
-              <Link to={`/jobs/${it.choice_job_id}`} className="text-xs text-primary hover:underline">
-                job #{it.choice_job_id}
-              </Link>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Choices jobId={it.choice_job_id} itemId={it.id} choices={it.choices} />
-              <p className="text-xs text-muted-foreground">
-                Or on{" "}
-                <a href={it.issue_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                  the issue
-                </a>
-                : add the factory:retry label to send it back through triage.
-              </p>
+        {/* One card for where it stands and what you can do: what happened, then the buttons, with the raw error out of the way. */}
+        {(happened || note || choices) && (
+          <Card className="mt-3 border-warning/60" data-testid="status">
+            <CardContent className="space-y-3 pt-4">
+              {happened ? <HappenedCard h={happened} /> : note && <p className="text-sm">{note}</p>}
+              {split && !choices && <SplitButton split={split} />}
+              {happened && note && (
+                <details>
+                  <summary className="cursor-pointer text-xs text-muted-foreground">Details</summary>
+                  <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{note}</pre>
+                </details>
+              )}
+              {choices && (
+                <div className="space-y-2 border-t pt-3" data-testid="next">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="text-sm font-semibold">What you can do</span>
+                    <Link to={`/jobs/${it.choice_job_id}`} className="text-xs text-primary hover:underline">
+                      about job #{it.choice_job_id}
+                    </Link>
+                  </div>
+                  <Choices jobId={it.choice_job_id!} itemId={it.id} choices={it.choices} />
+                  {split && <SplitButton split={split} />}
+                  <p className="text-xs text-muted-foreground">
+                    Or on{" "}
+                    <a href={it.issue_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                      the issue
+                    </a>
+                    : add the factory:retry label to send it back through triage.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
+        {children.length > 0 && <SplitInto items={children} />}
         {live && (
           <Link to={`/jobs/${live.id}`} className="mt-2 inline-flex items-center gap-2 text-sm text-primary hover:underline">
             <span className="size-2 animate-pulse rounded-full bg-primary" /> Watch the running {live.kind} job
@@ -75,8 +90,9 @@ export function ItemScreen() {
       </div>
       <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
         <div className="min-w-0 space-y-4">
-          {plan && <PlanCard item={it} plan={plan} estimate={it.estimate_waiting ? estimate : null} />}
-          {estimate && <EstimateCard itemId={it.id} e={estimate} waiting={it.estimate_waiting} planWaiting={it.plan_waiting} />}
+          {/* What waits for you first, then the issue; a plan already approved is folded away. */}
+          {plan?.waiting && <PlanCard item={it} plan={plan} estimate={it.estimate_waiting ? estimate : null} />}
+          {estimate && it.estimate_waiting && <EstimateCard itemId={it.id} e={estimate} waiting planWaiting={it.plan_waiting} />}
           <Card>
             <CardHeader>
               <CardTitle>Issue</CardTitle>
@@ -110,6 +126,17 @@ export function ItemScreen() {
               {(risk_reasons.length > 0 || needs_person.length > 0) && <DiffRisk reasons={risk_reasons} person={needs_person} />}
             </CardContent>
           </Card>
+          {plan && !plan.waiting && (
+            <details className="rounded-xl border bg-card" data-testid="plan-folded">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold">
+                Plan
+                {plan.approved_by && <span className="font-normal text-muted-foreground"> · approved {plan.approved_by}</span>}
+              </summary>
+              <div className="border-t">
+                <PlanCard item={it} plan={plan} estimate={null} flat />
+              </div>
+            </details>
+          )}
           <Screenshots itemId={it.id} />
           <Card>
             <CardHeader>
@@ -169,7 +196,10 @@ export function ItemScreen() {
           </Card>
         </div>
         <div className="min-w-0">
-          <PRPanel itemId={it.id} needsYou={it.stage === "awaiting_human"} />
+          <div className="space-y-4">
+            <PRPanel itemId={it.id} needsYou={it.stage === "awaiting_human"} noActions={choices} />
+            {estimate && !it.estimate_waiting && <EstimateCard itemId={it.id} e={estimate} waiting={false} planWaiting={it.plan_waiting} />}
+          </div>
         </div>
       </div>
     </div>
@@ -244,7 +274,7 @@ function EstimateCard({ itemId, e, waiting, planWaiting }: { itemId: number; e: 
 }
 
 /** The plan the builder wrote before a big build, and what to do while it waits for an OK. */
-function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; estimate: Estimate | null | undefined }) {
+function PlanCard({ item: it, plan: p, estimate, flat }: { item: Item; plan: Plan; estimate: Estimate | null | undefined; flat?: boolean }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -264,7 +294,7 @@ function PlanCard({ item: it, plan: p, estimate }: { item: Item; plan: Plan; est
     </a>
   );
   return (
-    <Card data-testid="plan" className={cn(p.waiting && "border-warning/60")}>
+    <Card data-testid="plan" className={cn(p.waiting && "border-warning/60", flat && "rounded-none border-0 shadow-none")}>
       <CardHeader>
         <CardTitle>{p.waiting ? "Plan: waiting for your OK" : "Plan"}</CardTitle>
         {p.replan_of && <span className="text-xs text-muted-foreground">the new plan {p.replan_of} asked for</span>}
@@ -434,27 +464,9 @@ const endsSentence = (h: Happened) => {
 };
 
 /** How a stopped item got there, each step linked to its job, and the offer to split it. */
-function HappenedCard({ h, split }: { h: Happened; split: Split | null }) {
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const splitIt = async () => {
-    if (!split) return;
-    setBusy(true);
-    setErr("");
-    try {
-      // Chat may have become unavailable since the page loaded.
-      const chats = await getJSON<components["schemas"]["Chats"]>("/chats");
-      if (!chats.available) throw new Error(chats.unavailable);
-      const r = await postJSON<components["schemas"]["SentChat"]>("/chats", { chat_id: 0, text: split.prompt });
-      void navigate(`/orchestrator?chat=${r.chat_id}`);
-    } catch (e) {
-      setErr(e instanceof APIError || e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  };
+function HappenedCard({ h }: { h: Happened }) {
   return (
-    <div className="mt-2 rounded-md border border-warning/60 bg-warning/5 p-3 text-sm" data-testid="happened">
+    <div className="text-sm" data-testid="happened">
       <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">What happened</div>
       <p>
         {h.steps.map((st, i) => (
@@ -479,20 +491,41 @@ function HappenedCard({ h, split }: { h: Happened; split: Split | null }) {
           <Inline text={h.note} />
         </p>
       )}
-      {split && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={busy || !!split.unavailable} onClick={splitIt} title={split.unavailable || undefined}>
-            <Scissors /> {busy ? "Starting a chat…" : "Split it"}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {split.unavailable || "Asks the orchestrator's model, in a new chat, to draft smaller issues for it."}
-          </span>
-          {err && (
-            <p role="alert" className="w-full text-destructive">
-              {err}
-            </p>
-          )}
-        </div>
+    </div>
+  );
+}
+
+/** Split it: asks chat to split an item too big for one build into smaller issues. */
+function SplitButton({ split }: { split: Split }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const splitIt = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      // Chat may have become unavailable since the page loaded.
+      const chats = await getJSON<components["schemas"]["Chats"]>("/chats");
+      if (!chats.available) throw new Error(chats.unavailable);
+      const r = await postJSON<components["schemas"]["SentChat"]>("/chats", { chat_id: 0, text: split.prompt });
+      void navigate(`/orchestrator?chat=${r.chat_id}`);
+    } catch (e) {
+      setErr(e instanceof APIError || e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" disabled={busy || !!split.unavailable} onClick={splitIt} title={split.unavailable || undefined}>
+        <Scissors /> {busy ? "Starting a chat…" : "Split it"}
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        {split.unavailable || "Asks the orchestrator's model, in a new chat, to split it into smaller issues and close this one in favor of them."}
+      </span>
+      {err && (
+        <p role="alert" className="w-full text-destructive">
+          {err}
+        </p>
       )}
     </div>
   );
