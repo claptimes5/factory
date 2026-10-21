@@ -180,9 +180,7 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   await page.goto("/app/line");
   await page.getByTestId("card").filter({ hasText: "webhook client" }).filter({ visible: true }).click();
   await page.getByRole("link", { name: /Watch the running implement job/ }).click();
-  if (phone(info)) {
-    await expect(page.getByRole("tab", { name: "Terminal" })).toBeVisible();
-  }
+  await expect(page.getByRole("tab", { name: "Terminal" })).toBeVisible();
   const transcript = page.getByTestId("transcript");
   await expect(transcript).toContainText("Writing a failing test first");
   // Narration is the thread; tool calls fold into a line each, failures in sight.
@@ -198,7 +196,7 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   await page.getByLabel("Message the agent").fill("Also cover an empty input.");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "devserver: would send job" })).toBeVisible();
-  if (phone(info)) await page.getByRole("tab", { name: "Terminal" }).click();
+  await page.getByRole("tab", { name: "Terminal" }).click();
   await page.getByRole("button", { name: "Connect terminal" }).click();
   const term = page.getByTestId("terminal");
   await expect(page.getByText("· connected")).toBeVisible();

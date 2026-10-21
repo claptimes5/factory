@@ -3,6 +3,7 @@ import { parse } from "diff2html/lib-esm/diff-parser";
 import type { DiffFile, DiffLine } from "diff2html/lib-esm/types";
 import type { Finding } from "@/api/client";
 import { FindingRow, findingAnchor } from "@/components/PRPanel";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
 
 type Row = { left?: DiffLine; right?: DiffLine };
@@ -73,17 +74,16 @@ export function DiffView({ patch, findings, itemId }: { patch: string; findings:
         <span className="text-muted-foreground">
           {files.length} files · {findings.length} findings
         </span>
-        <div className="ml-auto flex rounded-md border p-0.5">
-          {(["split", "unified"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cn("cursor-pointer rounded px-2 py-0.5 text-xs", mode === m ? "bg-accent font-medium" : "text-muted-foreground")}
-            >
-              {m === "split" ? "Side by side" : "Unified"}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          label="Diff layout"
+          className="ml-auto"
+          value={mode}
+          onValueChange={(m) => setMode(m as typeof mode)}
+          options={[
+            { value: "split", label: "Side by side" },
+            { value: "unified", label: "Unified" },
+          ]}
+        />
       </div>
       {unplaced.length > 0 && (
         <ul className="divide-y rounded-control border bg-card px-3">
