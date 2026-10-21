@@ -438,6 +438,7 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		p.say("Skipping the readiness check: %v", err)
 		return
 	}
+	defer stopEgress(rn)
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: rn, JobPrefix: readinessPrefix(), ClientsFor: func(repo string) pipeline.RepoClients {
 		gh, ts, err := client(repo)
 		if err != nil {

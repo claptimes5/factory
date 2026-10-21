@@ -374,6 +374,16 @@ func newRunner(cfg *config.Config, owner string) (runner.Runner, error) {
 	return d, nil
 }
 
+// stopEgress removes r's egress proxy, if it has one, once a command that
+// isn't the daemon is done with it.
+func stopEgress(r runner.Runner) {
+	if d, ok := r.(*runner.Docker); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = d.StopEgress(ctx)
+	}
+}
+
 // daemonOwner names the daemon of this data directory, for the egress
 // proxies it makes.
 func daemonOwner(cfg *config.Config) string {
@@ -1128,6 +1138,7 @@ func runEval(ctx context.Context, cfg *config.Config, st *store.Store, args []st
 		return err
 	}
 	defer done()
+	defer stopEgress(o.Runner)
 	rep, err := eval.Run(ctx, o, cases)
 	if err != nil {
 		return err
