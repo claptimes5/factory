@@ -1,6 +1,6 @@
 # Plan: Factory's design system and the new home
 
-Status: phase 0 (foundations) done; phase 1 next. Mockups:
+Status: phases 0 to 5 built (branch claude/design-phase-0 onward). What each phase became is under "Order of work"; the open questions that remain are at the end. Mockups:
 [Factory design directions](https://claude.ai/artifact/Huz7XkuZKRMnwtdC2ZyYKV),
 round 4 ("All together, with trust and quiet hours").
 
@@ -189,9 +189,39 @@ The first fix to the get-started page, which led to this, is a separate
 branch: `claude/get-started-ux` ("Get started asks which repos, and every
 step explains itself"). Its PR may still need opening.
 
+## What was built
+
+- **Phase 0:** the tokens (light and dark, every text pair 4.5:1), Geist,
+  the type scale and radii, the Radix components, `/app/design`, and
+  `npm run check-styles` in the build.
+- **Phase 1:** the sidebar and phone tabs, one notice area, Ask as a side
+  panel on a wide desk and a sheet elsewhere.
+- **Phase 2:** Home at `/`; the Floor became The line at `/line`. "Since
+  you looked" is kept by the factory (`/api/v1/home`).
+- **Phase 3:** History, station stamps on an item, every heading and
+  radius on the scale; Settings leads to the screens a phone's tabs leave
+  out.
+- **Phase 4:** Trust (`/api/v1/trust`), with seven levels, not three, after
+  research on agent autonomy (docs/using.md, "Trust"): 1 to 5 are
+  auto_merge, 6 (pick its own work) and 7 (ship) are the road to full
+  automation, shown as not built yet. Practice runs are worked out from
+  the merges already recorded, so there's no shadow mode to run.
+- **Phase 5:** quiet hours (`notify.quiet_hours`), urgent notifications
+  (`pipeline.Urgent`) that get through them, the held catch-up, Web Push
+  in `internal/push` (RFC 8291 and 8292, standard library only, checked
+  against RFC 8291's example), the installable web app (manifest, icons,
+  a service worker that only shows notifications), and the **When to tell
+  you** screen.
+- **The mark:** the line itself, three stations on a track with the last
+  lit; an ink tile that inverts with the theme (`web/public/icon.svg`).
+- **Dark mode:** follows the system until the theme button picks one.
+
 ## Open questions
 
-- The mark: a new logo to go with the new look.
-- Dark mode values (phase 0) and whether a phone follows the system.
-- Whether three trust levels are enough, or medium-risk splits by size.
-- "The line" or "Floor" as the name of the full view.
+- Level 6: the factory labelling the issues it files itself (main health
+  fixes already can), within a budget, under level 5's rules.
+- Level 7 needs deploys, canaries and rollback the factory doesn't have.
+- Trust earned with one model may not hold with the next: re-earn on a
+  model change, as autonomy certificates suggest?
+- Whether "you edited it before merging" should count against a level's
+  practice run (learning reads those edits already).

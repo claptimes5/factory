@@ -43,7 +43,6 @@ import (
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/mcp"
 	"github.com/claptimes5/factory/internal/metrics"
-	"github.com/claptimes5/factory/internal/notify"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/sentry"
@@ -270,6 +269,7 @@ func run(args []string) error {
 				return err
 			}
 			autoBuild(ctx, cfg, builder, p.Notify)
+			go deliveries.catchUpLoop(ctx)
 			if cfg.Runner.Kind == "docker" {
 				go pruneLoop(ctx, cfg)
 			}
@@ -417,6 +417,8 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Notifications go to the channel and the browsers with push, held in quiet hours.
+	deliveries = newDeliverer(cfg, st)
 	return &pipeline.Pipeline{
 		Cfg:   cfg,
 		Store: st,
@@ -438,7 +440,7 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 		Secrets:    secrets(),
 		PlanBilled: planBilled(secrets(), os.Getenv, codexAuthMode()),
 		Log:        slog.Default(),
-		Notify:     notifier(),
+		Notify:     deliveries.notify,
 		Sentry:     sentryClient(cfg),
 		ReviewEval: reviewEvaluator(cfg),
 	}, nil
@@ -514,25 +516,6 @@ func sentryClient(cfg *config.Config) pipeline.SentryAPI {
 	return &sentry.Client{BaseURL: cfg.Sources.Sentry.BaseURL, Token: sentryToken}
 }
 
-// notifier sends to FACTORY_NOTIFY_URL (ntfy, Slack or Discord), at most
-// 20 messages an hour.
-func notifier() func(ctx context.Context, msg string) {
-	n, err := notify.New(os.Getenv("FACTORY_NOTIFY_URL"))
-	if err != nil {
-		slog.Warn("notifications disabled", "err", err)
-		return nil
-	}
-	if n == nil {
-		return nil
-	}
-	rl := &notify.RateLimited{Next: n, N: 20, Window: time.Hour}
-	return func(ctx context.Context, msg string) {
-		if err := rl.Send(ctx, "Factory", msg); err != nil {
-			slog.Warn("notify", "err", err)
-		}
-	}
-}
-
 func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, st *store.Store, p *pipeline.Pipeline, builder *imageBuilder) error {
 	host, _, err := net.SplitHostPort(cfg.Web.Listen)
 	if err != nil {
@@ -599,6 +582,10 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)
 	srv.Listen = cfg.Web.Listen
 	srv.Restarter = p
+	srv.Push = deliveries.push
+	srv.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge) error {
+		return config.SetRepoAutoMerge(srv.ConfigPath, repo, a)
+	}
 	srv.Breakers = func(ctx context.Context) []web.APIBreaker {
 		var out []web.APIBreaker
 		for _, b := range p.Breakers(ctx) {

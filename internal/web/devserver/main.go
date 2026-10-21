@@ -27,6 +27,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/preview"
+	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -120,6 +121,7 @@ func (r *restarter) RestartWaitsFor() string            { return "" }
 const sampleConfig = `# A sample factory.yaml for the devserver.
 repos: [acme/api, acme/web]
 runner: {kind: local}
+auto_merge: {up_to: low, max_size: S}
 
 routing:
   triage:       {harness: claude, model: haiku}
@@ -201,6 +203,11 @@ func main() {
 		Wizard:       newWizard(rs),
 		Uninstaller:  uninstaller{},
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
+		Push:         devPush(),
+		// Trust levels are written to the sample config as the factory writes them.
+		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge) error {
+			return config.SetRepoAutoMerge(cfgPath, repo, a)
+		},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
 				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},
@@ -674,6 +681,16 @@ func sampleChoices(st *store.Store) func(ctx context.Context, id int64) []web.AP
 }
 
 // seedHealth makes acme/api's main flaky, with its issue filed.
+// devPush can push to a browser that turns notifications on, with a key
+// made for this run.
+func devPush() *push.Sender {
+	k, err := push.NewKey()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &push.Sender{Key: k, Subject: "https://github.com/claptimes5/factory"}
+}
+
 func seedHealth(ctx context.Context, st *store.Store) error {
 	for _, h := range []store.RepoHealth{
 		{Repo: "acme/api", Branch: "main", HeadSHA: "9f2c1e0", State: store.HealthFlaky, Detail: "test"},

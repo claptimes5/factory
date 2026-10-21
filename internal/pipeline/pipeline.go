@@ -297,7 +297,7 @@ func (p *Pipeline) warn(err error, what string) {
 
 func (p *Pipeline) notify(ctx context.Context, msg string) {
 	if h, ok := ctx.Value(heldNotesKey{}).(*heldNotes); ok {
-		h.msgs = append(h.msgs, msg) // sent once the lock is let go
+		h.msgs = append(h.msgs, queuedNote{msg, IsUrgent(ctx)}) // sent once the lock is let go
 		return
 	}
 	p.log().Info("notify", "msg", msg)
@@ -306,10 +306,28 @@ func (p *Pipeline) notify(ctx context.Context, msg string) {
 	}
 }
 
+// alert notifies of something wrong: main broken, a revert, the budget
+// or the disk run out. It goes out even in quiet hours.
+func (p *Pipeline) alert(ctx context.Context, msg string) { p.notify(Urgent(ctx), msg) }
+
+type urgentKey struct{}
+
+// Urgent marks the notifications sent with ctx as ones that go out even
+// in quiet hours.
+func Urgent(ctx context.Context) context.Context { return context.WithValue(ctx, urgentKey{}, true) }
+
+// IsUrgent says whether a notification sent with ctx is urgent.
+func IsUrgent(ctx context.Context) bool { u, _ := ctx.Value(urgentKey{}).(bool); return u }
+
 // heldNotes collects the notifications of code that runs under claimMu,
 // to send after it unlocks: sending is a network call that can take
 // seconds, and the scheduler and every sub-job start wait on that lock.
-type heldNotes struct{ msgs []string }
+type heldNotes struct{ msgs []queuedNote }
+
+type queuedNote struct {
+	msg    string
+	urgent bool
+}
 
 type heldNotesKey struct{}
 
@@ -321,7 +339,11 @@ func (p *Pipeline) lockClaims(ctx context.Context) (context.Context, func()) {
 	return context.WithValue(ctx, heldNotesKey{}, h), func() {
 		p.claimMu.Unlock()
 		for _, m := range h.msgs {
-			p.notify(ctx, m)
+			if m.urgent {
+				p.alert(ctx, m.msg)
+			} else {
+				p.notify(ctx, m.msg)
+			}
 		}
 	}
 }
@@ -570,7 +592,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if msg := p.diskLow(ctx); msg != "" {
 		if !p.diskHalt {
 			p.diskHalt = true
-			p.notify(ctx, msg)
+			p.alert(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
 		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos()); j != nil || err != nil {
@@ -588,7 +610,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if spent >= p.Cfg.Budgets.DailyTotal {
 		if p.budgetHalt != store.Today() {
 			p.budgetHalt = store.Today()
-			p.notify(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
+			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
 		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos())

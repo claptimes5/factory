@@ -5,10 +5,11 @@ import { useBoard, useOverview, type Card as CardT } from "@/api/client";
 import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
+import { Badge } from "@/components/ui/badge";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, shortRef, stageName } from "@/lib/utils";
 
-// The floor's columns, in the order work moves through them. The quiet
+// The line's stations, in the order work moves through them. The quiet
 // ones show only when they hold something.
 const floor = ["epic", "triage", "spec", "ready", "implementing", "reviewing", "blocked"];
 const quiet = new Set(["epic", "spec", "blocked"]);
@@ -45,12 +46,12 @@ export function BoardScreen() {
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]" data-testid="board">
       <div className="flex min-w-0 flex-col gap-6">
         <section aria-label="Needs you">
-          <h2 className="label mb-3 flex items-center gap-2.5 text-warning">
+          <h2 className="label mb-3 flex items-center gap-2 text-foreground">
             Needs you
-            <span className="rounded-full bg-warning-fill px-2 font-mono text-xs tracking-normal text-warning-ink">{needs.length}</span>
+            <span className="rounded-full bg-ink px-2 font-mono text-caption text-ink-foreground">{needs.length}</span>
           </h2>
           {needs.length === 0 ? (
-            <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Nothing needs you. The floor is running on its own.</p>
+            <p className="rounded-card border border-dashed px-4 py-5 text-body-sm text-muted-foreground">Nothing needs you. The line is running on its own.</p>
           ) : (
             <div className="grid gap-3.5 lg:grid-cols-2">
               {needs.map((c) => (
@@ -83,7 +84,7 @@ export function BoardScreen() {
                   aria-expanded={open === s}
                   onClick={() => setOpen(open === s ? "" : s)}
                   className={cn(
-                    "flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-meta",
+                    "flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-control border bg-card text-meta",
                     open === s && "border-foreground",
                   )}
                 >
@@ -107,7 +108,7 @@ export function BoardScreen() {
             Done <span className="font-mono tracking-normal">{done.length}</span> {showDone ? "▴" : "▾"}
           </button>
           {showDone && (
-            <ul className="mt-3 divide-y rounded-xl border bg-card">
+            <ul className="mt-3 divide-y rounded-card border bg-card">
               {done.map((c) => (
                 <li key={c.id}>
                   <Link to={`/items/${c.id}`} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent">
@@ -126,7 +127,7 @@ export function BoardScreen() {
       <aside aria-label="Live activity" className="flex flex-col gap-4 max-md:hidden xl:sticky xl:top-[88px] xl:max-h-[calc(100vh-112px)] xl:self-start">
         <div className="flex items-center justify-between">
           <LiveHeading />
-          <Link to="/live" className="text-sm text-primary hover:underline">
+          <Link to="/history" className="text-sm text-primary hover:underline">
             All activity
           </Link>
         </div>
@@ -148,7 +149,7 @@ function Column({ stage, cards }: { stage: string; cards: CardT[] }) {
       {cards.map((c, i) => (
         <FloorCard key={c.id} card={c} next={stage === "ready" && i === 0} />
       ))}
-      {cards.length === 0 && <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
+      {cards.length === 0 && <div className="rounded-control border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
     </section>
   );
 }
@@ -241,26 +242,24 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
   const plan = c.plan_waiting;
   const held = c.estimate_waiting || plan;
   const chooser = !pr && !held && c.choice_job_id != null && c.choices.some((x) => x.available);
-  const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-lg px-3.5 text-sm md:h-9";
+  const btn = "relative z-10 flex h-11 items-center gap-1.5 rounded-control px-3.5 text-body-sm font-medium md:h-9";
+  const main = "bg-ink text-ink-foreground hover:bg-ink/90";
+  const other = "border bg-surface hover:bg-accent";
   return (
     <article
       data-testid="card"
-      className="relative flex flex-col gap-3 rounded-xl border border-warning-border bg-warning-bg p-4 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-warning"
+      className="relative flex flex-col gap-3 rounded-card border bg-surface p-4 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-muted-foreground/40"
     >
       <div className="flex items-center gap-2.5">
-        <span className="font-mono text-xs font-medium text-warning">{shortRef(c.ref)}</span>
-        {pr ? (
-          <span className="rounded bg-warning-fill px-1.5 text-xs font-semibold text-warning-ink">PR ready</span>
-        ) : (
-          <span className="rounded border border-warning-border px-1.5 text-xs font-semibold text-warning">{plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</span>
-        )}
+        <span className="font-mono text-caption text-muted-foreground">{shortRef(c.ref)}</span>
+        <Badge variant="attention">{pr ? "PR ready" : plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</Badge>
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
             ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")
             : [c.complexity && `size ${c.complexity}`, c.estimate_waiting && c.estimate].filter(Boolean).join(" · ")}
         </span>
       </div>
-      <CardLink card={c} className="font-display text-title-sm leading-tight font-semibold" />
+      <CardLink card={c} className="text-title-sm leading-tight font-semibold" />
       {pr ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-2">
           {c.gates_total > 0 && (
@@ -290,29 +289,29 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
                 target="_blank"
                 rel="noreferrer"
                 title={`Merge ${i + 1} of ${c.prs.length}`}
-                className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}
+                className={cn(btn, main)}
               >
                 {i + 1}. Review {p.ref} <ExternalLink className="size-3.5" aria-hidden />
               </a>
             ))
           : pr &&
             c.pr_url && (
-              <a href={c.pr_url} target="_blank" rel="noreferrer" className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+              <a href={c.pr_url} target="_blank" rel="noreferrer" className={cn(btn, main)}>
                 Review PR #{c.prs[0]?.number ?? c.pr_number} <ExternalLink className="size-3.5" aria-hidden />
               </a>
             )}
         {pr && (
-          <Link to={`/items/${c.id}/diff`} className={cn(btn, "border border-warning-border hover:bg-warning-fill/10")}>
+          <Link to={`/items/${c.id}/diff`} className={cn(btn, other)}>
             View diff
           </Link>
         )}
         {held && (
-          <Link to={`/items/${c.id}`} className={cn(btn, "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}>
+          <Link to={`/items/${c.id}`} className={cn(btn, main)}>
             {plan ? "Read the plan" : "See the estimate"}
           </Link>
         )}
         {plan && c.issue_url && (
-          <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, "border border-warning-border hover:bg-warning-fill/10")}>
+          <a href={c.issue_url} target="_blank" rel="noreferrer" className={cn(btn, other)}>
             Open the issue <ExternalLink className="size-3.5" aria-hidden />
           </a>
         )}
@@ -321,7 +320,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
             href={c.issue_url}
             target="_blank"
             rel="noreferrer"
-            className={cn(btn, chooser ? "border border-warning-border hover:bg-warning-fill/10" : "bg-warning-fill font-semibold text-warning-ink hover:brightness-110")}
+            className={cn(btn, chooser ? other : main)}
           >
             {chooser ? "Open the issue" : "Answer on the issue"} <ExternalLink className="size-3.5" aria-hidden />
           </a>

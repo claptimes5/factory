@@ -86,7 +86,7 @@ export function DiffView({ patch, findings, itemId }: { patch: string; findings:
         </div>
       </div>
       {unplaced.length > 0 && (
-        <ul className="divide-y rounded-lg border bg-card px-3">
+        <ul className="divide-y rounded-control border bg-card px-3">
           {unplaced.map((f, i) => (
             <FindingRow key={i} f={f} itemId={itemId} />
           ))}
@@ -100,7 +100,7 @@ export function DiffView({ patch, findings, itemId }: { patch: string; findings:
         const at = (l?: DiffLine) => (l?.newNumber !== undefined ? fs.filter((x) => x.line === l.newNumber) : []);
         const cols = mode === "split" ? 4 : 2;
         return (
-          <section key={name} className="overflow-hidden rounded-lg border bg-card" data-testid="diff-file">
+          <section key={name} className="overflow-hidden rounded-control border bg-card" data-testid="diff-file">
             <header className="flex items-center gap-2 border-b bg-muted/50 px-3 py-2 font-mono text-xs">
               <span className="truncate">{name}</span>
               {f.isNew && <span className="text-success">new</span>}

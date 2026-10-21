@@ -313,6 +313,12 @@ type Config struct {
 		} `yaml:"egress"`
 	} `yaml:"runner"`
 
+	// Notify is when notifications go out: where is FACTORY_NOTIFY_URL
+	// and the browsers that turned on the dashboard's push.
+	Notify struct {
+		QuietHours QuietHours `yaml:"quiet_hours"`
+	} `yaml:"notify"`
+
 	Web struct {
 		// Listen is the control room address. Anywhere but localhost or a
 		// Tailscale address needs FACTORY_WEB_PASSWORD.
@@ -756,6 +762,9 @@ func (c *Config) Validate() error {
 	bad := func(f string, a ...any) { errs = append(errs, fmt.Errorf(f, a...)) }
 	if _, single := SplitRepo("", c.SingleRepo); c.SingleRepo != "" && (len(c.Repos) != 1 || c.Repos[0].Name != single) {
 		bad("use repo: for one repository or repos: for several, not both")
+	}
+	if err := c.Notify.QuietHours.check(); err != nil {
+		errs = append(errs, err)
 	}
 	// No repos yet is a factory not set up: setup and serve's get-started
 	// page ask for them, and the other commands refuse (see NoRepos).

@@ -1,5 +1,6 @@
 import { useMetrics, useSpend } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
+import { PlanUsageMeter } from "@/components/PlanUsage";
 import { Chart } from "@/components/Chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { money, pct } from "@/lib/utils";
@@ -17,6 +18,7 @@ export function MetricsScreen() {
   return (
     <div className="space-y-4">
       <PageTitle>Spend and metrics</PageTitle>
+      <PlanUsageMeter className="mb-4 rounded-card border bg-surface p-3.5" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         <Stat label="Cost per merged PR" value={r.merged ? money(r.cost_per_merged_usd) : "–"} big />
         <Stat label="First-pass rate" value={pct(r.first_pass_rate)} />
@@ -91,7 +93,7 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint?
   return (
     <Card className="p-3" title={hint}>
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={big ? "text-2xl font-semibold" : "text-xl font-semibold"}>{value}</div>
+      <div className={big ? "text-display font-semibold" : "text-title font-semibold"}>{value}</div>
     </Card>
   );
 }

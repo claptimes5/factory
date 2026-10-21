@@ -27,8 +27,8 @@ export function SessionScreen() {
     <div className="flex flex-col gap-4">
       <div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Link to="/" className="hover:text-foreground">
-            Floor
+          <Link to="/line" className="hover:text-foreground">
+            The line
           </Link>
           {itemId > 0 && (
             <>
@@ -39,7 +39,7 @@ export function SessionScreen() {
             </>
           )}
         </div>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
+        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-title font-semibold tracking-tight">
           {j.kind} job #{j.id} <JobStateBadge state={stop ? "stopped" : j.state} />
         </h1>
         <p className="text-sm text-muted-foreground">

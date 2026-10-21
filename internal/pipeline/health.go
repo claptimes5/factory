@@ -464,7 +464,7 @@ func (p *Pipeline) followHealth(ctx context.Context, r *healthReading, h store.H
 			note = fmt.Sprintf("Main health: %s, flaky before, now fails on %s at %s. %s is for it.", SafeName(h.Check), h.Repo, short(r.sha), p.ref(h.Repo, h.IssueNumber))
 		}
 		p.warn(gh.Comment(ctx, h.IssueNumber, msg), "Comment")
-		p.notify(ctx, note)
+		p.alert(ctx, note)
 		return nil
 	case h.IssueNumber == 0:
 		h.Kind, h.URL = c.State, c.Failed.URL
@@ -598,7 +598,7 @@ func (p *Pipeline) fileHealth(ctx context.Context, r *healthReading, h store.Hea
 	case !p.Cfg.MainHealth.RequireApproval:
 		next = fmt.Sprintf("It's been filed %d times without passing in between, so a fix that passes on a PR may not fix it on the base branch (a check that runs only there?). %s", h.Refiles+1, next)
 	}
-	p.notify(ctx, fmt.Sprintf("Main health: %s. %s", what, next))
+	p.alert(ctx, fmt.Sprintf("Main health: %s. %s", what, next))
 	return nil
 }
 

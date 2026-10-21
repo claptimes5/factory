@@ -11,9 +11,17 @@ async function noSidewaysScroll(page: Page) {
   expect(over).toBeLessThanOrEqual(0);
 }
 
+/** A notice by its name, opening the notice area's "more" when it's behind it. */
+async function notice(page: Page, name: string) {
+  const more = page.getByRole("button", { name: /more notices?$/ });
+  await page.getByRole("group", { name: "Notices" }).waitFor();
+  if (await more.isVisible()) await more.click();
+  return page.getByRole("region", { name, exact: true });
+}
+
 test("while a repo isn't ready, a banner leads to its setup steps and the work on each blocker", async ({ page }, info) => {
   await page.goto("/app/");
-  const banner = page.getByRole("region", { name: "Setup", exact: true });
+  const banner = await notice(page, "Setup");
   await expect(banner).toContainText("Setup isn't finished.");
   await expect(banner).toContainText("api: 1 of 3 setup steps done");
   await banner.getByRole("link", { name: "See what's missing" }).click();
@@ -81,8 +89,9 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
 });
 
 test("plan usage shows as percentages, and dollar costs say they're API-price estimates", async ({ page }, info) => {
-  await page.goto("/app/");
-  const usage = page.getByRole("group", { name: "Plan usage" });
+  // On a desk, the sidebar shows it; on a phone, the Spend screen.
+  await page.goto(phone(info) ? "/app/metrics" : "/app/");
+  const usage = page.getByRole("group", { name: "Plan usage" }).filter({ visible: true });
   await expect(usage).toContainText("5-hour: 42% used, resets");
   await expect(usage).toContainText("Weekly: 18% used");
   await expect(usage.getByTestId("plan-usage").filter({ hasText: "Codex" })).toContainText("no reading yet");
@@ -135,7 +144,7 @@ test("a setup run in progress shows above every screen, with its time counting",
     await route.fulfill({ response: r, json: body });
   });
   await page.goto("/app/");
-  const banner = page.getByRole("region", { name: "Setup", exact: true });
+  const banner = await notice(page, "Setup");
   await expect(banner).toContainText(/Making the lint baseline for api, started 1m ago/);
   await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);
 });

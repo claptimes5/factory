@@ -5,6 +5,7 @@ import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "luci
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Ago, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
+import type { Notice } from "@/components/Notices";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ago, cn, repoName, shortSha } from "@/lib/utils";
@@ -182,10 +183,10 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
   const gaps = r.extras.filter((f) => f.level !== "good");
   const good = r.extras.filter((f) => f.level === "good");
   return (
-    <section aria-label={`Setup of ${r.repo}`} data-testid="setup-repo" className="flex flex-col gap-4 rounded-xl border bg-card p-4 md:p-5">
+    <section aria-label={`Setup of ${r.repo}`} data-testid="setup-repo" className="flex flex-col gap-4 rounded-card border bg-card p-4 md:p-5">
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h2 className="flex flex-wrap items-center gap-2.5 font-display text-lg font-semibold">
+          <h2 className="flex flex-wrap items-center gap-2.5 text-title-sm font-semibold">
             <span className="font-mono break-all">{many ? r.repo : repoName(r.repo) || r.repo}</span>
             <Badge variant={variant}>{badge}</Badge>
           </h2>
@@ -229,7 +230,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       )}
 
       {r.state === "ready" && (
-        <div className="rounded-lg border border-success/40 bg-success/10 p-3 text-sm">
+        <div className="rounded-control border border-success/40 bg-success/10 p-3 text-sm">
           <p className="font-semibold text-success">Ready: add the {label} label to issues to start.</p>
           <p className="mt-1 text-text-2">Every setup step passes, so the factory's changes can be checked. It picks up each issue with that label.</p>
           {r.unqueued > 0 && (
@@ -296,7 +297,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       )}
 
       {r.can_baseline && data.can_check && !r.checking && (
-        <div data-testid="baseline" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+        <div data-testid="baseline" className="flex flex-col gap-2 rounded-control border border-primary/40 bg-primary/5 p-3 text-sm">
           <p className="font-semibold">Lint fails on {r.branch} today. Accept today's offenses, and block new ones?</p>
           <p className="text-text-2">
             The factory runs RuboCop's own baseline (<code className="font-mono text-[0.9em]">rubocop --auto-gen-config</code>) on {r.branch}, checks
@@ -386,45 +387,50 @@ const actionText: Record<string, string> = {
   baseline: "Making the lint baseline for",
 };
 
-/** A line above every screen while a repo isn't ready, or once all are and nothing else has started. */
-export function SetupBanner() {
+/**
+ * The setup notice: while a repo isn't ready, or once all are and nothing
+ * else has started, or while setup's own check runs (not a job, so the
+ * Floor doesn't show it). None on the setup screen itself.
+ */
+export function useSetupNotice(): Notice | null {
   const { data } = useReadiness();
   const here = useLocation().pathname === "/setup";
   if (!data || here) return null;
-  // Setup's own runs aren't jobs, so the Floor doesn't show them: say so here.
   const running = data.repos.find((r) => r.checking);
   const doing = running && (
-    <span className="flex items-center gap-2">
-      <Loader2 className="size-3.5 animate-spin text-primary-soft" aria-hidden />
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
       {actionText[running.action] ?? "Checking"} {repoName(running.repo) || running.repo}, started <Ago ts={running.checking_since} />.
-      <Link to="/setup" className="underline underline-offset-2">
+      <Link to="/setup" className="font-medium underline underline-offset-2">
         Watch it
       </Link>
     </span>
   );
   if (!data.banner) {
-    return doing ? (
-      <section aria-label="Setup" className="border-b px-4 py-2 text-sm md:px-6">
-        <div className="mx-auto max-w-[1680px]">{doing}</div>
-      </section>
-    ) : null;
+    return doing ? { key: "setup", label: "Setup", tone: "info", body: doing } : null;
   }
   if (data.banner === "ready") {
-    return (
-      <section aria-label="Setup" className="border-b border-success/30 bg-success/10 px-4 py-2.5 text-sm md:px-6">
-        <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-3 gap-y-1">
+    return {
+      key: "setup",
+      label: "Setup",
+      tone: "success",
+      body: (
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-medium text-success">Ready: add the {data.intake_label} label to issues to start.</span>
           <Link to="/setup" className="underline underline-offset-2">
             See the setup
           </Link>
-        </div>
-      </section>
-    );
+        </span>
+      ),
+    };
   }
   const behind = data.repos.filter((r) => r.state === "not_ready" || r.state === "incomplete");
-  return (
-    <section aria-label="Setup" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm md:px-6">
-      <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-3 gap-y-1">
+  return {
+    key: "setup",
+    label: "Setup",
+    tone: "attention",
+    body: (
+      <span className="flex flex-col gap-1">
         <span className="min-w-0 break-words">
           <span className="font-medium text-warning">Setup isn't finished.</span>{" "}
           {behind
@@ -434,13 +440,13 @@ export function SetupBanner() {
                 : `${data.repos.length > 1 ? repoName(r.repo) + ": " : ""}${r.done} of ${r.total} setup steps done`,
             )
             .join("; ")}
-          . Fix these before adding real tasks.
+          . Fix these before adding real tasks.{" "}
+          <Link to="/setup" className="font-medium underline underline-offset-2">
+            See what's missing
+          </Link>
         </span>
-        <Link to="/setup" className="font-medium underline underline-offset-2">
-          See what's missing
-        </Link>
         {doing}
-      </div>
-    </section>
-  );
+      </span>
+    ),
+  };
 }

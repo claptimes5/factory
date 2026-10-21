@@ -11,6 +11,9 @@ const rules = [
   [/\btext-\[\d[\d.]*(px|rem)\]/g, "off the type scale (text-caption, -meta, -body-sm, -body, -title-sm, -title, -display)"],
   [/\brounded(-[trbl]{1,2})?-\[\d[^\]]*\]/g, "off the radii (rounded-control, rounded-card, rounded-full)"],
   [/\b(bg|text|border|fill|stroke|ring|outline|from|to|via)-\[#[0-9a-fA-F]+\]/g, "not a color token: add a role to index.css"],
+  [/\btext-(lg|[2-9]?xl)\b/g, "off the type scale: headings are text-title-sm, text-title or text-display"],
+  [/\brounded(-[trbl]{1,2})?-(lg|[2-3]?xl)\b/g, "off the radii (rounded-control, rounded-card, rounded-full)"],
+  [/\bfont-display\b/g, "a second typeface: everything is Geist (font-sans) or Geist Mono (font-mono)"],
 ];
 
 function* files(dir) {

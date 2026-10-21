@@ -14,35 +14,48 @@ system's dark or light setting, and the sun/moon button switches it.
 To reach it from another machine, or to put a password on it, see
 [Control room login](security.md#control-room-login).
 
+On a desk, a sidebar holds the screens, search, the repo filter, what's
+running, the day's spend and plan usage. On a phone, tabs at the bottom do
+(Home, Line, Ask, History, Settings), and Settings leads to the rest. The
+dashboard installs as a web app: on a phone, add it to the home screen
+(on an iPhone, Share, then Add to Home Screen) and it opens like an app,
+with push notifications (see [Notifications](#notifications)).
+
 | Screen | What it shows |
 | --- | --- |
-| **Floor** | What needs you first: PRs ready for review, with their gates and a button to the PR, and parked items with why they stopped and what you can do, with the buttons right there (see [What to do with a parked item](#what-to-do-with-a-parked-item)). Below, a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
+| **Home** | What needs you, one decision at a time: a PR to review, a plan or a cost to OK, a question or your call on a parked item, each with its buttons. Reviews come first; **Later** sends one to the back, and the next two are listed. Below, the line at a glance (Queue, Build, Review, and You as the last station), a line when a repo has [earned more trust](#trust), "since you looked": what went live since Home was last marked seen (kept by the factory, so a phone and a desk agree), and a box that opens Ask. |
+| **Ask the factory** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model from any screen, with suggestions to start from: beside the screen on a wide desk, a sheet over it on a laptop or phone. |
+| **The line** | The old Floor: what needs you, with each item's buttons, then a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
-| **Live** | The feed on its own, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"), with the orchestrator's decisions marked. |
-| **Item** | The [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
+| **History** | The activity, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"); what's done; and the orchestrator's own decisions with their reasons, filterable by item and type. |
+| **Trust** | Each repo's [trust level](#trust), its record, its practice runs, and the level its record has earned. |
+| **Item** | Where it is along the line, as stamps (Plan, Build, Review, You, Live); the [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
 | **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
-| **Orchestrator** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model to open issues, and, under Decisions, everything the orchestrator did on its own with its reason, filterable by item and type. |
-| **Spend** | Cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
-| **Inbox** | PRs ready for review, parked items (with their choices), items waiting for your OK on their cost or their plan, and budget alerts. "Notify me in this browser" turns on browser notifications while a dashboard tab is open. |
-| **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
+| **Orchestrator** | The full chat, with every conversation (Ask opens it), and the orchestrator's decisions. |
+| **Spend** | Plan usage, cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
+| **Inbox** | Every item waiting on you in one list, and budget alerts. "Notify me in this browser" shows them while a dashboard tab is open. |
+| **When to tell you** | Push notifications on this device and the list of devices with them on, a test, and [quiet hours](#quiet-hours). |
+| **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, quiet hours, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
 | **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): "2 of 3 setup steps done", each step passing or not and why it matters, and each blocker linked to its issue and the factory's item for it (waiting its turn, being built, needs you, done). **Check again** runs the check on the repo as it is now, so blockers fixed outside the factory show as fixed. **File issues** and **File and start work** check again, then file what has no issue yet, as `factory readiness -file` and `-queue` do. |
+| **Design** | `/app/design`, not in the menus: the dashboard's colors, type and components, for anyone changing it. |
 
-When a repo's base branch is red or flaky (see
-[Keeping main green](#keeping-main-green)), a line under the header says so
-on every screen, with a link to the fix issue. When a repo's
-[auto-merge breaker](#auto-merge-guard-rails) has tripped, a line says
+Warnings that apply to every screen sit in one notice area above it; the
+most serious shows, and the rest wait behind "more notices". When a repo's
+base branch is red or flaky (see [Keeping main green](#keeping-main-green)),
+a notice says so, with a link to the fix issue. When a repo's
+[auto-merge breaker](#auto-merge-guard-rails) has tripped, a notice says
 that too, with a **Reset** button behind the same password check as
 Settings.
 
 While a repo the readiness check looked at has blockers, or its check
-couldn't finish, a line under the header says how far its setup is, with a
-link to **Setup**. Once every checked repo is ready, it says to add the
+couldn't finish, a notice says how far its setup is, with a link to
+**Setup**. Once every checked repo is ready, it says to add the
 `factory:ready` label to issues to start, until the factory has worked on
 anything but setup.
 
-When Claude or Codex runs on a subscription plan, a line under the header
-shows each plan's usage windows ("5-hour: 42% used, resets 6:06pm",
+When Claude or Codex runs on a subscription plan, the sidebar and Spend
+show each plan's usage windows ("5-hour: 42% used, resets 6:06pm",
 "Weekly: 18% used"), since on a plan those limit the work, not dollars.
 Until a harness reports a reading it says so: Claude Code only includes a
 percentage once a window gets close to its limit, and Codex reports after
@@ -247,8 +260,34 @@ turns it back on). A PR set to merge itself that it hands back to you
 (CI failed once it was brought up to date with main, say) is one
 notification too.
 
-The dashboard's Inbox can also show browser notifications, but only while
-a dashboard tab is open.
+The same notifications go to every device that turned on push from the
+dashboard's **When to tell you** screen: the dashboard installed on a
+phone's home screen (iPhones need iOS 16.4 or later, and the web app
+opened from the home screen; a tap opens the dashboard, as iPhones don't
+show buttons on web notifications), or a desktop browser. The factory
+makes its own push key the first time and keeps it in its database, so
+there's nothing to set up. The dashboard's Inbox can also show browser
+notifications while a dashboard tab is open.
+
+### Quiet hours
+
+With quiet hours set, only something wrong goes out during them: main
+broken or flaky, a factory PR reverted or turning main red, the
+auto-merge breaker tripping or auto-merge that couldn't be turned off, the
+daily budget reached, or the disk full. Everything else is held, and sent
+as one catch-up ("While it was quiet: 4 updates") once they end:
+
+```yaml
+notify:
+  quiet_hours:
+    from: "19:00"        # 24-hour; until may be earlier, spanning midnight
+    until: "08:00"
+    weekends: true       # Saturday and Sunday quiet all day
+    timezone: Europe/Madrid  # IANA name; left out, the factory machine's
+```
+
+Set them on the **When to tell you** screen or in Settings; they apply
+once the factory restarts.
 
 ## Commands
 
@@ -667,6 +706,45 @@ until you reopen it.
 
 `factory status` shows each repo's state and the checks failing now; so
 does the dashboard while a repo is red or flaky.
+
+## Trust
+
+How much the factory may do on its own is a level for each repo, on a
+ladder toward full automation, on the dashboard's **Trust** screen:
+
+| Level | The factory may, on its own |
+| --- | --- |
+| 1 | Nothing: every PR waits for you. |
+| 2 | Merge tiny, low-risk changes (size XS). |
+| 3 | Merge small, low-risk changes (up to S). |
+| 4 | Merge low-risk changes up to size M. |
+| 5 | Merge medium-risk changes too. |
+| 6 | Pick its own work: file and start its own fixes. *Not built yet.* |
+| 7 | Ship: release and deploy, with a canary and an automatic rollback. *Not built yet.* |
+
+Levels 1 to 5 are names for a repo's [`auto_merge`](configuration.md#auto-merge)
+(`up_to` and `max_size`). At every level, high-risk changes and the kinds
+in `risk.needs_person` (a migration, a new dependency, auth code, a
+deleted test) wait for you, and the [breaker](#auto-merge-guard-rails)
+steps a repo back to level 1 when its merges are reverted or break main,
+until you reset it.
+
+**Earned, never taken.** For each repo the screen shows its record over
+the last 30 days (merged, merged by itself, reverted, broke main) and a
+practice run of each level: how many of those merged PRs that level would
+have merged on its own, and how many of them went wrong. When the next
+level's practice run is long enough (5 changes for level 2, then 10, 20
+and 30) and none went wrong, the factory suggests it, on the screen and on
+Home. Only a person raises a level: **Move here** writes the repo's own
+`auto_merge` to `factory.yaml`, and it applies once the factory restarts.
+
+The ladder follows research on agent autonomy: oversight moving from
+approving each action to watching and stepping in (Anthropic, [Measuring
+AI agent autonomy in practice](https://www.anthropic.com/research/measuring-agent-autonomy)),
+autonomy as a level a person grants on evidence and takes back
+([Levels of Autonomy for AI Agents](https://knightcolumbia.org/content/levels-of-autonomy-for-ai-agents-1)),
+and a change freeze when a budget for failure is spent ([error budget
+policy](https://sre.google/workbook/error-budget-policy/)).
 
 ## Auto-merge guard rails
 

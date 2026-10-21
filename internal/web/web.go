@@ -28,6 +28,8 @@ import (
 	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/state"
+	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/store"
 )
 
@@ -96,6 +98,11 @@ type Server struct {
 	StartedConfig string
 	// Restarter applies saved settings by restarting (may be nil).
 	Restarter Restarter
+	// Push sends Web Push notifications (nil: the factory can't).
+	Push *push.Sender
+	// SetTrust gives a repo its own auto_merge in factory.yaml, for a
+	// trust level (may be nil: then trust can't be changed here).
+	SetTrust func(ctx context.Context, repo string, a *config.AutoMerge) error
 	// Breakers reads each repo's auto-merge breaker (may be nil).
 	Breakers func(ctx context.Context) []APIBreaker
 	// Choices are what a person can do next with a job that ended:

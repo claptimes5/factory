@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
-import { Activity, Bell, LayoutGrid, LogOut, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { act, useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
+import { Activity, History, House, ShieldCheck, LayoutGrid, LogOut, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
 import { PlanUsageMeter } from "@/components/PlanUsage";
-import { SetupBanner } from "@/screens/Setup";
+import { Ask } from "@/components/Ask";
+import { NoticeArea } from "@/components/Notices";
+import { Dialog, DialogTitle, SheetContent } from "@/components/ui/dialog";
 import { useBrowserNotifications } from "@/lib/notify";
 import { setRepo, useRepo } from "@/lib/repo";
 import { cn, money, repoName } from "@/lib/utils";
@@ -48,29 +49,37 @@ function usePalette() {
   return [open, setOpen] as const;
 }
 
+/**
+ * Factory's mark: the line, with its stations on a track. The last one is
+ * lit, the moment work reaches you or ships. The tile is ink, so it
+ * inverts with the theme like the decision cards (public/icon.svg too).
+ */
 export function Logo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 28 28" aria-hidden className={className}>
-      <rect x="2" y="10" width="7" height="16" rx="1.5" className="fill-warning-fill" />
-      <rect x="10.5" y="5" width="7" height="21" rx="1.5" className="fill-primary" />
-      <rect x="19" y="14" width="7" height="12" rx="1.5" className="fill-success-fill" />
+      <rect width="28" height="28" rx="7" className="fill-ink" />
+      <path d="M7 14h14" strokeWidth="1.6" strokeLinecap="round" className="stroke-ink-foreground opacity-45" />
+      <circle cx="7" cy="14" r="2.1" className="fill-ink-foreground" />
+      <circle cx="14" cy="14" r="2.1" className="fill-ink-foreground" />
+      <circle cx="21" cy="14" r="3.2" className="fill-ink-attention" />
     </svg>
   );
 }
 
 const links = [
-  { to: "/", label: "Floor", end: true },
-  { to: "/orchestrator", label: "Orchestrator" },
-  { to: "/metrics", label: "Spend" },
-  { to: "/settings", label: "Settings" },
-  { to: "/setup", label: "Setup" },
+  { to: "/", label: "Home", icon: House, end: true },
+  { to: "/line", label: "The line", icon: LayoutGrid },
+  { to: "/history", label: "History", icon: History },
+  { to: "/trust", label: "Trust", icon: ShieldCheck },
+  { to: "/metrics", label: "Spend", icon: Activity },
+  { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
+// On a phone, Spend and the rest are reached from Settings.
 const tabs = [
-  { to: "/", label: "Floor", icon: LayoutGrid, end: true },
-  { to: "/notifications", label: "Inbox", icon: Bell },
-  { to: "/live", label: "Live", icon: Radio },
-  { to: "/metrics", label: "Spend", icon: Activity },
+  { to: "/", label: "Home", icon: House, end: true },
+  { to: "/line", label: "Line", icon: LayoutGrid },
+  { to: "/history", label: "History", icon: History },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
@@ -89,13 +98,9 @@ export function Layout() {
 function ThemeButton() {
   const [dark, setDark] = useTheme();
   return (
-    <button
-      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-      className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-card text-foreground hover:bg-accent md:size-9"
-      onClick={() => setDark(!dark)}
-    >
-      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </button>
+    <Button variant="ghost" size="icon" aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} onClick={() => setDark(!dark)}>
+      {dark ? <Sun /> : <Moon />}
+    </Button>
   );
 }
 
@@ -104,160 +109,240 @@ function SetupShell() {
   return (
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1680px] items-center gap-4 px-4 md:px-6">
+        <div className="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4 md:px-6">
           <span className="flex items-center gap-2.5">
-            <Logo className="size-6 md:size-7" />
-            <span className="font-display text-lg font-bold tracking-tight">Factory</span>
+            <Logo className="size-6" />
+            <span className="text-body font-semibold">Factory</span>
           </span>
           <span className="ml-auto" />
           <ThemeButton />
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 pb-12 md:px-6">{here ? <Outlet /> : <Navigate to="/get-started" replace />}</main>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-12 md:px-6">{here ? <Outlet /> : <Navigate to="/get-started" replace />}</main>
     </div>
   );
 }
 
+/** A screen wide enough to keep Ask beside the content (Tailwind's 2xl). */
+function useWide() {
+  const q = "(min-width: 1536px)";
+  const [wide, setWide] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setWide(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+/** Whether the Ask panel is open beside the screen, on a wide desk; kept per browser. */
+function useAskOpen() {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem("ask-open") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const set = (v: boolean) => {
+    setOpen(v);
+    try {
+      localStorage.setItem("ask-open", v ? "1" : "0");
+    } catch {
+      /* it stays as set until a reload */
+    }
+  };
+  return [open, set] as const;
+}
+
+/**
+ * The frame around every screen. On a desk: a sidebar with the screens,
+ * the repo filter, search, what's running and the day's spend; the Ask
+ * panel on the right when open. On a phone: a slim top bar, tabs at the
+ * bottom, and Ask as a sheet. Warnings for every screen sit in one notice
+ * area above the screen's own content.
+ */
 function FullLayout() {
   useLiveUpdates();
   const { data: o } = useOverview();
   const { data: n } = useNotifications();
   useBrowserNotifications(n?.notifications);
   const [palette, setPalette] = usePalette();
+  // Beside the content on a wide screen; narrower, a sheet over it (from
+  // the right on a laptop, the bottom on a phone), so the screen keeps its room.
+  const wide = useWide();
+  const [askDocked, setAskDocked] = useAskOpen();
+  const [askSheet, setAskSheet] = useState(false);
+  const askOpen = wide ? askDocked : askSheet;
+  const setAskOpen = wide ? setAskDocked : setAskSheet;
+  // Home's "Ask" box, and anything else, opens it with this event.
+  useEffect(() => {
+    const on = () => setAskOpen(true);
+    window.addEventListener("factory:ask", on);
+    return () => window.removeEventListener("factory:ask", on);
+  });
+  // Following a link out of the sheet (to the full chat, a job) closes it.
+  const path = useLocation().pathname;
+  useEffect(() => setAskSheet(false), [path]);
   const inbox = n?.notifications.length ?? 0;
   const repos = o?.repos ?? [];
   const repo = useRepo(repos);
-  const theme = <ThemeButton />;
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 md:px-6 lg:h-16 lg:flex-nowrap lg:py-0">
-          <Link to="/" className="flex items-center gap-2.5">
-            <Logo className="size-6 md:size-7" />
-            <span className="font-display text-lg font-bold tracking-tight">Factory</span>
-          </Link>
-
-          {/* Repos, the main screens and search: a row of their own until a laptop has room. */}
-          <div className="order-last flex w-full min-w-0 items-center gap-2 max-md:hidden lg:order-none lg:w-auto lg:flex-1">
-            {repos.length > 1 && (
-              <div className="min-w-0 shrink overflow-x-auto">
-                <RepoChips repos={repos} repo={repo} />
-              </div>
+    <div className="flex min-h-full">
+      <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col gap-5 overflow-y-auto border-r bg-surface px-3 py-5 lg:flex">
+        <Link to="/" className="flex items-center gap-2.5 px-2.5">
+          <Logo className="size-6" />
+          <span className="text-body font-semibold">Factory</span>
+        </Link>
+        <button
+          onClick={() => setPalette(true)}
+          className="flex h-9 cursor-pointer items-center gap-2 rounded-control border bg-background px-2.5 text-left text-body-sm text-muted-foreground hover:border-muted-foreground/40"
+        >
+          <Search className="size-4 shrink-0" aria-hidden />
+          <span className="flex-1 truncate">Jump to an issue or screen</span>
+          <kbd className="rounded border px-1 font-mono text-caption">⌘K</kbd>
+        </button>
+        <nav aria-label="Main" className="flex flex-col gap-0.5">
+          {links.map(({ to, label, icon: Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              className={({ isActive }) =>
+                cn(
+                  "flex h-9 items-center gap-2.5 rounded-control px-2.5 text-body-sm",
+                  isActive ? "bg-muted font-medium text-foreground" : "text-text-2 hover:bg-muted/60 hover:text-foreground",
+                )
+              }
+            >
+              <Icon className="size-4 shrink-0" aria-hidden />
+              <span className="flex-1">{label}</span>
+              {to === "/notifications" && inbox > 0 && <Count n={inbox} label={`${inbox} need you`} />}
+            </NavLink>
+          ))}
+          <button
+            onClick={() => setAskOpen(!askOpen)}
+            aria-pressed={askOpen}
+            className={cn(
+              "flex h-9 cursor-pointer items-center gap-2.5 rounded-control px-2.5 text-left text-body-sm",
+              askOpen ? "bg-muted font-medium text-foreground" : "text-text-2 hover:bg-muted/60 hover:text-foreground",
             )}
-            <nav aria-label="Main" className="flex shrink-0 gap-1">
-              {links.map((l) => (
-                <NavLink
-                  key={l.to}
-                  to={l.to}
-                  end={l.end}
-                  className={({ isActive }) =>
-                    cn("rounded-md px-2.5 py-1.5 text-sm", isActive ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground")
-                  }
-                >
-                  {l.label}
-                </NavLink>
-              ))}
-            </nav>
-            <button
-              onClick={() => setPalette(true)}
-              className="ml-auto flex h-10 min-w-40 flex-1 cursor-pointer items-center gap-2.5 rounded-lg border bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/50 lg:h-9 lg:max-w-96"
-            >
-              <Search className="size-4 shrink-0" aria-hidden />
-              <span className="flex-1 truncate">Jump to an issue or screen</span>
-              <kbd className="rounded border px-1.5 font-mono text-xs">⌘K</kbd>
-            </button>
+          >
+            <MessageCircle className="size-4 shrink-0" aria-hidden />
+            Ask the factory
+          </button>
+        </nav>
+        {repos.length > 1 && <RepoChips repos={repos} repo={repo} wrap />}
+        <div className="mt-auto flex flex-col gap-4 border-t px-2.5 pt-4">
+          {o && <Running o={o} />}
+          {o && <SpendMeter o={o} />}
+          <PlanUsageMeter stacked />
+          <div className="-mx-2.5 flex items-center gap-1">
+            <ThemeButton />
+            {o?.signed_in && <SignOut />}
           </div>
+        </div>
+      </aside>
 
-          <div className="ml-auto flex items-center gap-3 lg:ml-0">
-            {o && <Running o={o} className="max-md:hidden" />}
-            {o && <SpendMeter o={o} className="max-md:hidden" />}
-            <button
-              aria-label="Search"
-              onClick={() => setPalette(true)}
-              className="flex size-11 cursor-pointer items-center justify-center rounded-lg border bg-card md:hidden"
-            >
-              <Search className="size-4" />
-            </button>
-            <Link
-              to="/notifications"
-              aria-label={inbox ? `Inbox, ${inbox} need you` : "Inbox"}
-              className="relative flex size-11 items-center justify-center rounded-lg border bg-card hover:bg-accent max-md:hidden md:size-9"
-            >
-              <Bell className="size-[18px]" />
-              {inbox > 0 && <Count n={inbox} className="absolute -top-1.5 -right-1.5" />}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 border-b bg-surface/95 backdrop-blur lg:hidden">
+          <div className="flex h-14 items-center gap-2 px-4">
+            <Link to="/" className="flex items-center gap-2.5">
+              <Logo className="size-6" />
+              <span className="text-body font-semibold">Factory</span>
             </Link>
-            {theme}
-            {o?.signed_in && (
-              <form method="post" action="/logout">
-                <button
-                  aria-label="Sign out"
-                  title="Sign out"
-                  className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-card text-foreground hover:bg-accent md:size-9"
-                >
-                  <LogOut className="size-4" />
-                </button>
-              </form>
-            )}
+            <span className="flex-1" />
+            {o && <Running o={o} compact />}
+            <Button variant="ghost" size="icon" aria-label="Search" onClick={() => setPalette(true)}>
+              <Search />
+            </Button>
+            <ThemeButton />
+            {o?.signed_in && <SignOut />}
           </div>
-
-          {/* Phone: what's running and the day's spend under the logo. */}
-          {o && (
-            <div className="flex w-full items-center gap-3 md:hidden">
-              <Running o={o} />
-              <SpendMeter o={o} className="flex-1" />
-            </div>
-          )}
           {repos.length > 1 && (
-            <div className="-mx-4 w-[calc(100%+2rem)] overflow-x-auto px-4 md:hidden">
+            <div className="overflow-x-auto px-4 pb-2.5">
               <RepoChips repos={repos} repo={repo} />
             </div>
           )}
-        </div>
-      </header>
-      <SetupBanner />
-      <PlanUsageMeter className="border-b px-4 py-2 md:px-6" />
-      {o && <MainHealth o={o} />}
-      {o && <AutoMergeBreaker o={o} />}
-      {o?.disk_low && (
-        <div role="alert" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm text-warning md:px-6">
-          <div className="mx-auto max-w-[1680px]">{o.disk_low}</div>
-        </div>
+        </header>
+        <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 pb-28 md:px-6 lg:px-8 lg:py-7 lg:pb-10">
+          <NoticeArea o={o} />
+          <Outlet />
+        </main>
+      </div>
+
+      {wide && askDocked && (
+        <aside aria-label="Ask the factory" className="sticky top-0 flex h-dvh w-[380px] shrink-0 border-l bg-surface p-4">
+          <Ask className="flex-1" />
+        </aside>
       )}
-      <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 pb-28 md:px-6 md:pb-8">
-        <Outlet />
-      </main>
-      <nav
-        aria-label="Tabs"
-        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
-      >
-        {tabs.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn("relative flex h-16 flex-col items-center justify-center gap-1 text-caption", isActive ? "text-foreground" : "text-muted-foreground")
-            }
-          >
-            <Icon className="size-5" aria-hidden />
-            {label}
-            {to === "/notifications" && inbox > 0 && <Count n={inbox} className="absolute top-2 left-[55%]" />}
-          </NavLink>
+
+      <nav aria-label="Tabs" className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden">
+        {tabs.slice(0, 2).map((t) => (
+          <Tab key={t.to} {...t} inbox={inbox} />
+        ))}
+        <button onClick={() => setAskSheet(true)} className="flex h-16 cursor-pointer flex-col items-center justify-center gap-1 text-caption text-muted-foreground">
+          <MessageCircle className="size-5" aria-hidden />
+          Ask
+        </button>
+        {tabs.slice(2).map((t) => (
+          <Tab key={t.to} {...t} inbox={inbox} />
         ))}
       </nav>
+      <Dialog open={!wide && askSheet} onOpenChange={setAskSheet}>
+        <AskSheet />
+      </Dialog>
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
     </div>
   );
 }
 
-function RepoChips({ repos, repo }: { repos: string[]; repo: string }) {
+/** Ask over the screen: from the bottom of a phone, the right of a laptop. */
+function AskSheet() {
+  const lg = window.matchMedia("(min-width: 1024px)").matches;
+  return (
+    <SheetContent side={lg ? "right" : "bottom"} aria-describedby={undefined} className={lg ? "" : "h-[85dvh]"}>
+      <DialogTitle className="sr-only">Ask the factory</DialogTitle>
+      <Ask className="flex-1" inSheet />
+    </SheetContent>
+  );
+}
+
+function Tab({ to, label, icon: Icon, end, inbox }: (typeof tabs)[number] & { inbox: number }) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        cn("relative flex h-16 flex-col items-center justify-center gap-1 text-caption", isActive ? "font-medium text-foreground" : "text-muted-foreground")
+      }
+    >
+      <Icon className="size-5" aria-hidden />
+      {label}
+      {to === "/notifications" && inbox > 0 && <Count n={inbox} label={`${inbox} need you`} className="absolute top-2 left-[55%]" />}
+    </NavLink>
+  );
+}
+
+function SignOut() {
+  return (
+    <form method="post" action="/logout">
+      <Button variant="ghost" size="icon" aria-label="Sign out" title="Sign out">
+        <LogOut />
+      </Button>
+    </form>
+  );
+}
+
+function RepoChips({ repos, repo, wrap }: { repos: string[]; repo: string; wrap?: boolean }) {
   const chip = (value: string, label: string) => (
     <button
       key={value || "all"}
       aria-pressed={repo === value}
       onClick={() => setRepo(value)}
       className={cn(
-        "h-9 shrink-0 cursor-pointer rounded-full border px-3 text-meta font-medium whitespace-nowrap lg:h-8",
+        "h-9 shrink-0 cursor-pointer rounded-full border px-3 text-meta font-medium whitespace-nowrap lg:h-7 lg:px-2.5",
         value && "font-mono",
         repo === value ? "border-foreground bg-foreground text-background" : "text-text-2 hover:border-muted-foreground",
       )}
@@ -266,25 +351,25 @@ function RepoChips({ repos, repo }: { repos: string[]; repo: string }) {
     </button>
   );
   return (
-    <div role="group" aria-label="Repositories" className="flex gap-1.5">
+    <div role="group" aria-label="Repositories" className={cn("flex gap-1.5", wrap && "flex-wrap px-1")}>
       {chip("", "All repos")}
       {repos.map((r) => chip(r, repoName(r)))}
     </div>
   );
 }
 
-function Running({ o, className }: { o: Overview; className?: string }) {
+function Running({ o, className, compact }: { o: Overview; className?: string; compact?: boolean }) {
   return (
     <div
       title="Jobs running and queued"
       className={cn(
         className,
-        "flex h-8 items-center gap-2 rounded-full px-3 text-meta font-medium whitespace-nowrap",
-        o.running > 0 ? "bg-primary/10 text-primary-soft" : "bg-muted text-muted-foreground",
+        "flex h-8 w-fit items-center gap-2 rounded-full px-3 text-meta font-medium whitespace-nowrap",
+        o.running > 0 ? "bg-live-bg text-primary" : "bg-muted text-muted-foreground",
       )}
     >
       <span className={cn("size-2 rounded-full", o.running > 0 ? "pulse bg-primary" : "bg-muted-foreground")} />
-      {o.running} running · {o.queued} queued
+      {compact ? `${o.running} running` : `${o.running} running · ${o.queued} queued`}
     </div>
   );
 }
@@ -293,8 +378,8 @@ function SpendMeter({ o, className }: { o: Overview; className?: string }) {
   const share = o.daily_cap_usd > 0 ? Math.min(1, o.spent_today_usd / o.daily_cap_usd) : 0;
   const near = share >= 0.8;
   return (
-    <div className={cn("flex flex-col gap-1.5 md:w-40", className)} title="Spent today (UTC) of the daily cap">
-      <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+    <div className={cn("flex flex-col gap-1.5", className)} title="Spent today (UTC) of the daily cap">
+      <div className="flex justify-between gap-3 text-meta text-muted-foreground">
         <span>Today</span>
         <span className={cn("font-mono", near ? "font-semibold text-warning" : "text-foreground")}>
           {money(o.spent_today_usd)} / {money(o.daily_cap_usd)}
@@ -307,94 +392,11 @@ function SpendMeter({ o, className }: { o: Overview; className?: string }) {
   );
 }
 
-function Count({ n, className }: { n: number; className?: string }) {
+function Count({ n, label, className }: { n: number; label: string; className?: string }) {
   return (
     <span className={cn("flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-fill px-1 text-caption font-bold text-warning-ink", className)}>
-      {n}
+      <span aria-hidden>{n}</span>
+      <span className="sr-only">{label}</span>
     </span>
-  );
-}
-
-/** A line per repo whose base branch is red or flaky, with the fix issue. */
-function MainHealth({ o }: { o: Overview }) {
-  const bad = o.main_health.filter((h) => h.state === "red" || h.state === "flaky");
-  if (bad.length === 0) return null;
-  return (
-    <section aria-label="Main health" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm md:px-6">
-      <ul className="mx-auto max-w-[1680px] space-y-1">
-        {bad.map((h) => (
-          <li key={h.repo} className="min-w-0 break-words">
-            <span className="font-medium text-destructive">
-              {o.repos.length > 1 ? `${repoName(h.repo)} ` : ""}
-              {h.branch} is {h.state === "red" ? "red" : "flaky"}
-            </span>
-            {": "}
-            {h.checks.length === 0
-              ? h.detail
-              : h.checks.map((c, i) => (
-                  <span key={c.check}>
-                    {i > 0 && ", "}
-                    <span className="font-mono">{c.check}</span>
-                    {c.kind === "flaky" && h.state === "red" ? " (flaky)" : ""}{" "}
-                    {c.issue > 0 ? (
-                      <a href={c.issue_url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                        #{c.issue}
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">(not filed yet)</span>
-                    )}
-                  </span>
-                ))}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-/** A line per repo whose auto-merge breaker tripped, with its Reset button. */
-function AutoMergeBreaker({ o }: { o: Overview }) {
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const tripped = o.auto_merge.filter((b) => b.tripped);
-  if (tripped.length === 0 && !msg) return null;
-  const reset = async (repo: string) => {
-    setBusy(repo);
-    const r = await act("/auto-merge/reset", { repo });
-    setBusy("");
-    setMsg({ ok: r.ok, text: r.message });
-    void qc.invalidateQueries();
-  };
-  return (
-    <section aria-label="Auto-merge breaker" className="border-b border-warning-border bg-warning-bg px-4 py-2.5 text-sm md:px-6">
-      <ul className="mx-auto max-w-[1680px] space-y-1">
-        {tripped.map((b) => (
-          <li key={b.repo} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words">
-            <span className="min-w-0">
-              <span className="font-medium text-warning">
-                Auto-merge is off{o.repos.length > 1 ? ` for ${repoName(b.repo)}` : ""}
-              </span>
-              {": "}
-              {b.reason}. New PRs wait for you.
-            </span>
-            {b.can_reset ? (
-              <Button size="sm" variant="outline" disabled={busy === b.repo} onClick={() => reset(b.repo)}>
-                Reset
-              </Button>
-            ) : (
-              <span className="text-xs text-muted-foreground">
-                Resetting it here needs a dashboard password: set FACTORY_WEB_PASSWORD.
-              </span>
-            )}
-          </li>
-        ))}
-        {msg && (
-          <li role="status" className={cn(msg.ok ? "text-success" : "text-destructive")}>
-            {msg.text}
-          </li>
-        )}
-      </ul>
-    </section>
   );
 }

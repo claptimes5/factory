@@ -29,15 +29,15 @@ export function windowLine(u: Usage): string {
 }
 
 /**
- * Each plan's usage windows, for the header: on a subscription the windows
+ * Each plan's usage windows, for the sidebar and the Spend screen: on a subscription the windows
  * are what limit the work, not dollars. Nothing with API keys.
  */
-export function PlanUsageMeter({ className }: { className?: string }) {
+export function PlanUsageMeter({ className, stacked }: { className?: string; stacked?: boolean }) {
   const plans = usePlanUsage().data?.plans ?? [];
   if (plans.length === 0) return null;
   return (
-    <div role="group" aria-label="Plan usage" className={cn("bg-surface", className)}>
-      <div className="mx-auto flex max-w-[1680px] min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
+    <div role="group" aria-label="Plan usage" className={className}>
+      <div className={cn("flex min-w-0 gap-x-5 gap-y-1", stacked ? "flex-col gap-y-2" : "flex-wrap items-center")}>
         {plans.map((p) => (
           <PlanLine key={p.harness} p={p} />
         ))}
@@ -64,9 +64,9 @@ function PlanLine({ p }: { p: UsagePlan }) {
         shown.map((w) => {
           const near = w.used_percent >= p.pause_at * 0.8;
           return (
-            <span key={w.window} className="flex items-center gap-1.5 whitespace-nowrap">
+            <span key={w.window} className="flex min-w-0 items-center gap-1.5">
               <span
-                className="h-1 w-8 rounded-full bg-border"
+                className="h-1 w-8 shrink-0 rounded-full bg-border"
                 role="meter"
                 aria-label={`${p.name} ${windowName(w.window)} usage`}
                 aria-valuenow={Math.round(w.used_percent)}

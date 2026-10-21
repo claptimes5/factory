@@ -13,7 +13,7 @@ async function noSidewaysScroll(page: Page) {
 }
 
 test("the floor puts what needs you first, with live work and repo chips", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const board = page.getByTestId("board");
   const needs = board.getByRole("region", { name: "Needs you" });
   await expect(needs).toContainText("Parser drops the last token");
@@ -48,7 +48,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
 });
 
 test("an item over the cost limit waits for an OK on its estimate", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
   const card = needs.getByTestId("card").filter({ hasText: "Rewrite the job scheduler" }).filter({ visible: true });
   await expect(card).toContainText("Cost check");
@@ -64,7 +64,7 @@ test("an item over the cost limit waits for an OK on its estimate", async ({ pag
 });
 
 test("an item whose plan waits shows the plan, a Build it button and another plan's ask", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
   const card = needs.getByTestId("card").filter({ hasText: "Split billing out of the monolith" }).filter({ visible: true });
   await expect(card).toContainText("Plan check");
@@ -94,7 +94,7 @@ test("an item whose plan waits shows the plan, a Build it button and another pla
 });
 
 test("a change across a workspace links a PR per repo, in merge order", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const card = page.getByRole("region", { name: "Needs you" }).getByTestId("card").filter({ hasText: "Show order totals" }).filter({ visible: true });
   await expect(card.getByRole("link", { name: /1\. Review api#91/ })).toHaveAttribute("href", /acme\/api\/pull\/91$/);
   await expect(card.getByRole("link", { name: /2\. Review web#92/ })).toHaveAttribute("href", /acme\/web\/pull\/92$/);
@@ -108,7 +108,7 @@ test("a change across a workspace links a PR per repo, in merge order", async ({
 });
 
 test("the palette jumps to an item by number", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   await expect(page.getByTestId("board")).toBeVisible();
   if (phone(info)) await page.getByRole("button", { name: "Search" }).click();
   else await page.keyboard.press("ControlOrMeta+k");
@@ -132,7 +132,7 @@ test("live activity reads like a log of the day", async ({ page }, info) => {
 });
 
 test("PR panel shows CI, gates and findings linked to diff lines", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   await page.getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true }).click();
   const pr = page.getByTestId("pr-panel");
   await expect(pr).toContainText("PR #88");
@@ -154,7 +154,7 @@ test("PR panel shows CI, gates and findings linked to diff lines", async ({ page
 });
 
 test("an item's page shows its build's screenshots, before and after", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   await page.getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true }).click();
   const gallery = page.getByTestId("screenshots");
   await expect(gallery).toContainText("/settings");
@@ -177,7 +177,7 @@ test("buttons go through the daemon and show its answer", async ({ page }) => {
 });
 
 test("session view streams the transcript and attaches a terminal", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   await page.getByTestId("card").filter({ hasText: "webhook client" }).filter({ visible: true }).click();
   await page.getByRole("link", { name: /Watch the running implement job/ }).click();
   if (phone(info)) {
@@ -209,7 +209,7 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
 });
 
 test("a build that ran out of turns waits for you, and Continue picks it up with more budget and a note", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
   const card = needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true });
   await expect(card).toContainText("Your call");
@@ -270,7 +270,7 @@ test("spend and metrics show charts", async ({ page }, info) => {
 });
 
 test("a stopped item says what happened, job by job, and Split it asks chat for smaller issues", async ({ page }, info) => {
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
   await needs.getByTestId("card").filter({ hasText: "Paginate the audit log API" }).filter({ visible: true }).getByRole("link", { name: /Paginate/ }).click();
   const happened = page.getByTestId("happened");
@@ -302,7 +302,7 @@ test("a build that ran out of turns says so at the top, and Split it waits for c
     if (body.split) body.split.unavailable = "Today's orchestration budget is spent ($10.00 of $10.00).";
     await route.fulfill({ response: r, json: body });
   });
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
   await needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true }).getByRole("link", { name: /Add SSO sign-in/ }).click();
   const happened = page.getByTestId("happened");
