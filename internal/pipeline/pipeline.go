@@ -222,6 +222,11 @@ type Pipeline struct {
 	restart atomic.Bool  // a restart was asked for: claim nothing more
 	held    atomic.Int32 // Hold calls not yet released: start nothing
 
+	stopping atomic.Bool   // shutting down and cutting jobs short: builds keep their work
+	nowOnce  sync.Once     // makes now
+	nowDone  sync.Once     // closes now
+	now      chan struct{} // closed by StopNow
+
 	previewMu sync.Mutex // a build's post and a sweep's removal, one at a time
 }
 
@@ -475,22 +480,35 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			// Stop claiming; give running jobs a grace period, then kill them.
-			// Killed jobs are requeued on the next start.
+			// Stop claiming; give running jobs a grace period (or until
+			// StopNow), then cut them short. A build cut short keeps its
+			// work and continues on the next start; any other job is
+			// requeued and runs again.
 			p.closeChat()
 			done := make(chan struct{})
 			go func() { p.wg.Wait(); close(done) }()
 			p.log().Info("shutting down", "grace", ShutdownGrace)
 			select {
 			case <-done:
+			case <-p.nowCh():
 			case <-time.After(ShutdownGrace):
-				cancelJobs()
-				<-done
 			}
+			p.stopping.Store(true)
+			cancelJobs()
+			<-done
 			return nil
 		case <-t.C:
 		}
 	}
+}
+
+// StopNow ends a shutdown's grace period: running jobs are cut short
+// now. Builds keep their work and continue on the next start.
+func (p *Pipeline) StopNow() { p.nowDone.Do(func() { close(p.nowCh()) }) }
+
+func (p *Pipeline) nowCh() chan struct{} {
+	p.nowOnce.Do(func() { p.now = make(chan struct{}) })
+	return p.now
 }
 
 // Tick polls GitHub when due and starts as many queued jobs as the caps

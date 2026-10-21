@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -275,6 +276,7 @@ func run(args []string) error {
 			}
 			healthCheck(ctx, cfg, p, builder)
 			slog.Info("factory serving", "repos", strings.Join(cfg.RepoNames(), ","), "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
+			go stopping(ctx, os.Stderr, p)
 			return p.Serve(ctx)
 		}
 		if err := p.Recover(ctx); err != nil {
@@ -284,6 +286,26 @@ func run(args []string) error {
 	default:
 		return usage()
 	}
+}
+
+// stopping tells the person at the terminal what a Ctrl-C does once the
+// first has stopped the daemon claiming jobs: a second cuts running jobs
+// short, keeping builds' work for the next start, and a third quits at
+// once.
+func stopping(ctx context.Context, w io.Writer, p *pipeline.Pipeline) {
+	<-ctx.Done()
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	if n := p.Running(); n > 0 {
+		fmt.Fprintf(w, "\nStopping: no new jobs will start. Waiting up to %s for %d running %s to finish.\n"+
+			"Press Ctrl-C again to stop now: a build keeps its work and picks up where it left off when the factory starts again; any other job runs again from the start.\n",
+			pipeline.ShutdownGrace, n, plural(n, "job", "jobs"))
+	}
+	<-sig
+	fmt.Fprintln(w, "\nStopping running jobs now and keeping builds' work. Press Ctrl-C again to quit at once (a build cut off then starts over).")
+	p.StopNow()
+	<-sig
+	os.Exit(130)
 }
 
 func envOr(k, def string) string {

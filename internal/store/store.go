@@ -904,7 +904,7 @@ func (s *Store) RequeueRunning(ctx context.Context, alive func(*Job) bool) (int,
 			}
 			if c, _ := res.RowsAffected(); c == 1 {
 				n++
-				return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &j.ID, Type: "job_requeued", Reason: "daemon restart: no live container"})
+				return insertEvent(tx, Event{Actor: "daemon", ItemID: j.ItemID, JobID: &j.ID, Type: "job_requeued", Reason: "the factory stopped while it ran, so it runs again from the start"})
 			}
 			return nil
 		})

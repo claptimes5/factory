@@ -322,6 +322,20 @@ the command name to use other files.
 With several repos, name an issue as `owner/name#12`. With one, `12` or
 `#12` is enough.
 
+### Stopping the factory
+
+Ctrl-C (or SIGTERM) on `factory serve` stops it starting new jobs and
+says how many are running. They get up to 10 minutes to finish.
+
+- **Ctrl-C again** stops them now. A build cut short keeps its checkout,
+  as one that [runs out of turns](#when-a-build-runs-out-of-turns-or-budget)
+  does, and is queued again to continue from it when the factory starts:
+  its job says "Cut short when the factory shut down. Its work is kept".
+  Any other job (triage, a review) runs again from the start.
+- **Ctrl-C a third time** quits at once. A build cut off then starts over
+  on the next start, as after a crash; its item's history says "the
+  factory stopped while it ran, so it runs again from the start".
+
 ## Taking over an item: `factory pull`
 
 To look at or finish an item yourself, run `factory pull 12` in a checkout

@@ -437,3 +437,54 @@ func TestKeptStaleSparesTakenWork(t *testing.T) {
 		t.Fatalf("taken work is swept: %q", why)
 	}
 }
+
+// A build the factory's shutdown cuts short keeps its work and is queued
+// again to continue it, even when the continue is cut short too.
+func TestShutdownKeepsABuildsWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(129)
+	var cut context.CancelFunc
+	shutdown := func(build func(string) error) func(string) error {
+		return func(work string) error {
+			err := build(work)
+			e.p.stopping.Store(true)
+			cut()
+			return err
+		}
+	}
+	e.claude.builds = []func(string) error{shutdown(halfBuild), shutdown(func(string) error { return nil }), finishBuild}
+	e.codex.reviews = []string{pass}
+	for range 2 {
+		var jctx context.Context
+		jctx, cut = context.WithCancel(ctx)
+		e.p.Drain(jctx)
+		e.p.stopping.Store(false)
+	}
+	it := e.item(t, 129)
+	jobs := implJobs(t, e, it.ID)
+	if len(jobs) != 3 {
+		t.Fatalf("%d builds", len(jobs))
+	}
+	first, second := jobs[2], jobs[1]
+	for _, j := range []*store.Job{first, second} {
+		if j.State != state.Cancelled || !strings.Contains(j.Error, "shut down") || !strings.Contains(j.Error, "kept") {
+			t.Fatalf("job %d = %s %q", j.ID, j.State, j.Error)
+		}
+	}
+	if !keptWork(e, first.ID) || e.p.keptTakenBy(first.ID) != 0 {
+		t.Fatal("the work wasn't kept for the next start")
+	}
+	var in ImplementInput
+	_ = json.Unmarshal([]byte(jobs[0].Input), &in)
+	if jobs[0].State != state.Queued || in.Continue == nil || in.Continue.From != first.ID || jobs[0].Attempt != first.Attempt {
+		t.Fatalf("next = %s %+v attempt %d", jobs[0].State, in.Continue, jobs[0].Attempt)
+	}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.item(t, 129).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage = %s", st)
+	}
+}

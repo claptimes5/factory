@@ -124,6 +124,35 @@ func (p *Pipeline) stopped(ctx context.Context, j *store.Job, it *store.WorkItem
 	return p.park(ctx, it, stopReasonText(j, rec))
 }
 
+// shutdownNote marks a build the factory's shutdown cut short.
+const shutdownNote = " (queued again to continue when the factory starts)"
+
+// shutDown keeps the work of build j, cut short by the factory shutting
+// down, and queues a build that continues it on the next start. A
+// continue that is cut short gives its checkout back to the build it
+// came from (see takeKept), so its replacement continues that one.
+func (p *Pipeline) shutDown(ctx context.Context, j *store.Job, run agentRun, parts []*part, in ImplementInput) bool {
+	ctx = context.WithoutCancel(ctx)
+	msg := "Cut short when the factory shut down."
+	if in.Continue == nil {
+		if _, err := p.keepCheckout(ctx, j, parts); err != nil {
+			// Requeued as it was: it starts over.
+			p.log().Warn("couldn't keep the work of a build cut short by shutdown", "job", j.ID, "err", err)
+			msg += " Its work couldn't be kept, so it starts over."
+		} else {
+			rec := StopRecord{Reason: "shutdown", Summary: "Stopped: it was cut short when the factory shut down.", CostUSD: run.cost, BudgetUSD: j.BudgetUSD, Kept: true, At: store.Now()}
+			b, _ := json.MarshalIndent(rec, "", "  ")
+			p.warn(os.WriteFile(filepath.Join(p.jobDir(j.ID), "stop.json"), b, 0o644), "save stop record")
+			in.Continue = &ContinueInput{From: j.ID}
+			msg += " Its work is kept and the next build picks up from it."
+		}
+	} else {
+		msg += " The work it continued is kept and the next build picks up from it."
+	}
+	b, _ := json.Marshal(in)
+	return p.requeueSame(ctx, j, run, string(b), msg, shutdownNote, 5)
+}
+
 // stopReasonText is why a stopped build's item waits: what happened and
 // what each choice does.
 func stopReasonText(j *store.Job, rec StopRecord) string {

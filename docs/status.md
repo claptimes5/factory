@@ -36,7 +36,9 @@ Side-by-side skill comparison, services, workspaces across repos,
 - **A malformed review retries once, then parks**, so a broken reviewer
   never consumes a fix round or passes code.
 - **On restart, live job containers are killed and requeued** without using
-  a retry. Reattaching to them comes with container reattach (M2 recovery).
+  a retry. A build a graceful shutdown cut short keeps its checkout and
+  continues from it (see [Stopping the factory](using.md#stopping-the-factory));
+  one a crash cut off starts over. Reattaching to them comes with container reattach (M2 recovery).
   Spend from a job killed mid-run is not recorded (the CLIs report cost only
   at the end), so the daily cap can undercount after a crash.
 - **Test-proves-fix counts a compile failure as a failing test.** A new test
