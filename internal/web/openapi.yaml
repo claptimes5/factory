@@ -482,6 +482,33 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /settings/preset:
+    post:
+      summary: Set how hard the factory works
+      description: |
+        Applies a preset's changes to factory.yaml (the model for each step,
+        review strictness, escalation) for the harness that builds and the
+        one that reviews: as they are, or ones named here that have a key or
+        sign-in. Without a key, the current preset (Balanced when set by
+        hand) is made again for the harnesses named, so this also swaps
+        them. Applies when the factory restarts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                key: { type: string, description: "lean, balanced, thorough or maximum; empty keeps the current one" }
+                builder: { type: string, description: "claude or codex; empty keeps the current one" }
+                reviewer: { type: string, description: "claude or codex; empty keeps the current one" }
+                version: { type: string, description: "The version the GET returned; a file changed since is refused (409)" }
+      responses:
+        "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /settings/restart:
     post:
       summary: Restart the factory once running jobs finish, to apply saved settings
@@ -1799,7 +1826,7 @@ components:
         fields: { type: array, items: { $ref: "#/components/schemas/Setting" } }
     Settings:
       type: object
-      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups]
+      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups, presets, preset, builder, reviewer, harnesses]
       properties:
         path: { type: string, description: The config file }
         writable: { type: boolean }
@@ -1810,6 +1837,18 @@ components:
         restart_waits_for: { type: string, description: "Other work the pending restart waits for, such as \"the job image build\" or \"the Codex sign-in\"; else empty" }
         running_jobs: { type: integer }
         groups: { type: array, items: { $ref: "#/components/schemas/SettingsGroup" } }
+        presets: { type: array, description: "How hard the factory works, least first", items: { $ref: "#/components/schemas/Preset" } }
+        preset: { type: string, description: "The preset the file matches; empty when its settings were changed by hand" }
+        builder: { type: string, description: The harness that builds }
+        reviewer: { type: string, description: "The harness that reviews; the builder's with only one" }
+        harnesses: { type: array, items: { type: string }, description: "Harnesses with a key or sign-in, which routes may name" }
+    Preset:
+      type: object
+      required: [key, name, summary]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        summary: { type: string }
     TuningChange:
       type: object
       required: [path, value, why, reason, now]
@@ -2004,20 +2043,21 @@ components:
         tokens_url: { type: string, description: The page fine-grained tokens are made on }
     WizardClaude:
       type: object
-      required: [kind, key]
+      required: [kind, key, role]
       properties:
         kind: { type: string, enum: [api_key, subscription, ""] }
         key: { $ref: "#/components/schemas/WizardSecret" }
+        role: { type: string, enum: [builds, reviews, builds and reviews, ""], description: "What Claude does; empty while it isn't connected" }
     WizardCodex:
       type: object
-      required: [mode, api_key, access_token, signed_in, sign_in, review_only]
+      required: [mode, api_key, access_token, signed_in, sign_in, role]
       properties:
         mode: { type: string, enum: [api-key, chatgpt, access-token] }
         api_key: { $ref: "#/components/schemas/WizardSecret" }
         access_token: { $ref: "#/components/schemas/WizardSecret" }
         signed_in: { type: boolean, description: The ChatGPT sign-in is saved }
         sign_in: { $ref: "#/components/schemas/WizardSignIn" }
-        review_only: { type: boolean, description: Claude writes the code and Codex reviews it }
+        role: { type: string, enum: [builds, reviews, builds and reviews, ""], description: "What Codex does; empty while it isn't connected" }
     WizardSignIn:
       type: object
       description: A ChatGPT sign-in with a device code, started with /setup/codex/sign-in

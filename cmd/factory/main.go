@@ -493,6 +493,18 @@ func planHarnesses(cfg *config.Config, billed map[string]bool) []string {
 	return out
 }
 
+// connected are the harnesses with a key or sign-in: the ones a route may
+// name.
+func connected(secrets map[string]map[string]string, plans map[string]bool) []string {
+	var out []string
+	for _, h := range []string{"claude", "codex"} {
+		if len(secrets[h]) > 0 || plans[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // onlyPlans says every harness the routing uses runs on a subscription
 // plan: no job costs dollars, so the dashboard shows plan usage instead.
 func onlyPlans(cfg *config.Config, billed map[string]bool) bool {
@@ -590,6 +602,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	srv.PlansOnly = onlyPlans(cfg, p.PlanBilled)
+	srv.Harnesses = func() []string { return connected(p.Secrets, p.PlanBilled) }
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
 	srv.Orchestrator = web.OrchestratorInfo{On: cfg.Orchestrator.On, Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),

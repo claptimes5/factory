@@ -278,6 +278,9 @@ type APIWizardHost struct {
 type APIWizardClaude struct {
 	Kind string          `json:"kind"` // api_key, subscription or ""
 	Key  APIWizardSecret `json:"key"`
+	// Role is what Claude does: builds, reviews, or builds and reviews;
+	// "" while it isn't connected.
+	Role string `json:"role"`
 }
 
 // APIWizardCodex is how Codex signs in.
@@ -289,8 +292,9 @@ type APIWizardCodex struct {
 	// from the page (codex/sign-in), running or last.
 	SignedIn bool            `json:"signed_in"`
 	SignIn   APIWizardSignIn `json:"sign_in"`
-	// ReviewOnly: Claude writes the code and Codex reviews it.
-	ReviewOnly bool `json:"review_only"`
+	// Role is what Codex does: builds, reviews, or builds and reviews;
+	// "" while it isn't connected.
+	Role string `json:"role"`
 }
 
 // APIWizardSignIn is a ChatGPT sign-in with a device code: Codex shows a

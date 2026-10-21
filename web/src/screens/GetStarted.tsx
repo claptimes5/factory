@@ -1003,6 +1003,27 @@ function TryResult({ t }: { t: NonNullable<WizardChecks["try"]> }) {
   );
 }
 
+/**
+ * What a harness does, or would: Claude and Codex are equals, either one is
+ * enough, and with both one builds and the other reviews what it builds.
+ */
+function RoleLine({ name, other, role }: { name: string; other: string; role: string }) {
+  const text =
+    role === "builds and reviews"
+      ? `${name} builds and reviews. Connect ${other} too, and it reviews what ${name} builds: another vendor's model catches more.`
+      : role === "builds"
+        ? `${name} builds, and ${other} reviews what it builds.`
+        : role === "reviews"
+          ? `${name} reviews what ${other} builds.`
+          : `The factory runs on Claude, Codex or both: either one is enough. With both, one builds and the other reviews what it builds, which catches more.`;
+  return (
+    <p className="text-sm text-text-2">
+      {text}
+      {(role === "builds" || role === "reviews") && " Settings can swap them."}
+    </p>
+  );
+}
+
 function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const c = w.claude!;
   const [key, setKey] = useState("");
@@ -1015,7 +1036,8 @@ function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
   };
   return (
     <>
-      <p className="text-sm text-text-2">Claude writes the code. It can use either of these:</p>
+      <RoleLine name="Claude" other="Codex" role={c.role} />
+      <p className="text-sm text-text-2">Claude can use either of these:</p>
       <ul className="flex flex-col gap-2 text-sm">
         <li className="rounded-control border p-3">
           <span className="font-medium">A Claude subscription</span> (Pro or Max), using the plan's limits. Run <CopyCommand cmd="claude setup-token" /> in a
@@ -1055,9 +1077,8 @@ function CodexStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const { busy, msg, run } = useAction();
   return (
     <>
-      <p className="text-sm text-text-2">
-        {c.review_only ? "factory.yaml has Codex review Claude's work." : "factory.yaml runs every job on Codex."} Codex can sign in with:
-      </p>
+      <RoleLine name="Codex" other="Claude" role={c.role} />
+      <p className="text-sm text-text-2">Codex can sign in with:</p>
       <RadioGroup aria-label="How Codex signs in" value={mode} onValueChange={setMode}>
         {codexModes.map((m) => (
           <label key={m.mode} className="flex items-start gap-2.5 text-body-sm">
@@ -1069,8 +1090,7 @@ function CodexStep({ w, ro }: { w: Wizard; ro: boolean }) {
       {mode === "api-key" && (
         <>
           <p className="text-sm text-text-2">
-            Paste an API key from <A href="https://platform.openai.com/api-keys">platform.openai.com</A>. No OpenAI account? See Claude-only review in
-            docs/configuration.md.
+            Paste an API key from <A href="https://platform.openai.com/api-keys">platform.openai.com</A>.
           </p>
           <SecretField id="wizard-openai" label="OpenAI API key" saved={c.api_key} value={key} set={setKey} disabled={ro} placeholder="sk-…" />
         </>

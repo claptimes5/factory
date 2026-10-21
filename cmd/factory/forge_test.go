@@ -65,6 +65,7 @@ func TestSetupWithGitLab(t *testing.T) {
 		"", "glpat-wrong", "y", "glpat-abc", // GitLab: a legacy token, a bad one then a good one
 		"y", // create labels on both
 		"",  // run the readiness check
+		"",  // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"", "", // Codex on an API key, but none
 		"",

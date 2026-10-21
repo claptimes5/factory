@@ -425,7 +425,7 @@ func (d *doctor) codex(context.Context) []finding {
 		return one(finding{pass, "Codex: OpenAI API key", ""})
 	}
 	return one(finding{fail, "factory.yaml routes " + codexStage(d.cfg) + " to Codex, but there's no OpenAI API key or ChatGPT sign-in",
-		"./factory setup asks for one; no OpenAI account? see docs/configuration.md#claude-only-review"})
+		"./factory setup: connect Codex, or choose Claude only and it routes every job to Claude"})
 }
 
 // codexStage names a stage routed to Codex: review if it is, else the

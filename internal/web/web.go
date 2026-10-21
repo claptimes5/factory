@@ -119,6 +119,9 @@ type Server struct {
 	// the factory.
 	ReadinessDir   string
 	QueueReadiness func(ctx context.Context, repo, why string) (bool, error)
+	// Harnesses are the harnesses with a key or sign-in, which a preset may
+	// route to (nil when the dashboard can't tell: then any).
+	Harnesses func() []string
 	// BaseSHA is a repo's base branch head on its host, for
 	// FollowReadiness to see when it moves.
 	BaseSHA     func(ctx context.Context, repo string) (string, error)

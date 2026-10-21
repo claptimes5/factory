@@ -852,6 +852,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/stream", s.apiStream)
 	mux.HandleFunc("GET /api/v1/settings", s.apiSettings)
 	mux.HandleFunc("POST /api/v1/settings", s.apiSaveSettings)
+	mux.HandleFunc("POST /api/v1/settings/preset", s.apiApplyPreset)
 	mux.HandleFunc("POST /api/v1/settings/restart", s.apiRestart)
 	mux.HandleFunc("POST /api/v1/settings/restart/cancel", s.apiCancelRestart)
 	mux.HandleFunc("GET /api/v1/settings/tuning", s.apiTuning)

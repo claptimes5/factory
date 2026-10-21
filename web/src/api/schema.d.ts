@@ -1724,6 +1724,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/preset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set how hard the factory works
+         * @description Applies a preset's changes to factory.yaml (the model for each step,
+         *     review strictness, escalation) for the harness that builds and the
+         *     one that reviews: as they are, or ones named here that have a key or
+         *     sign-in. Without a key, the current preset (Balanced when set by
+         *     hand) is made again for the harnesses named, so this also swaps
+         *     them. Applies when the factory restarts.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description lean, balanced, thorough or maximum; empty keeps the current one */
+                        key?: string;
+                        /** @description claude or codex; empty keeps the current one */
+                        builder?: string;
+                        /** @description claude or codex; empty keeps the current one */
+                        reviewer?: string;
+                        /** @description The version the GET returned; a file changed since is refused (409) */
+                        version: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Settings"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings/restart": {
         parameters: {
             query?: never;
@@ -3862,6 +3922,21 @@ export interface components {
             restart_waits_for: string;
             running_jobs: number;
             groups: components["schemas"]["SettingsGroup"][];
+            /** @description How hard the factory works, least first */
+            presets: components["schemas"]["Preset"][];
+            /** @description The preset the file matches; empty when its settings were changed by hand */
+            preset: string;
+            /** @description The harness that builds */
+            builder: string;
+            /** @description The harness that reviews; the builder's with only one */
+            reviewer: string;
+            /** @description Harnesses with a key or sign-in, which routes may name */
+            harnesses: string[];
+        };
+        Preset: {
+            key: string;
+            name: string;
+            summary: string;
         };
         TuningChange: {
             /** @description One key per level: [routing, implement.S, model] */
@@ -4093,6 +4168,11 @@ export interface components {
             /** @enum {string} */
             kind: "api_key" | "subscription" | "";
             key: components["schemas"]["WizardSecret"];
+            /**
+             * @description What Claude does; empty while it isn't connected
+             * @enum {string}
+             */
+            role: "builds" | "reviews" | "builds and reviews" | "";
         };
         WizardCodex: {
             /** @enum {string} */
@@ -4102,8 +4182,11 @@ export interface components {
             /** @description The ChatGPT sign-in is saved */
             signed_in: boolean;
             sign_in: components["schemas"]["WizardSignIn"];
-            /** @description Claude writes the code and Codex reviews it */
-            review_only: boolean;
+            /**
+             * @description What Codex does; empty while it isn't connected
+             * @enum {string}
+             */
+            role: "builds" | "reviews" | "builds and reviews" | "";
         };
         /** @description A ChatGPT sign-in with a device code, started with /setup/codex/sign-in */
         WizardSignIn: {

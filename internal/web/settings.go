@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -67,6 +68,22 @@ type APISettings struct {
 	RestartWaitsFor string             `json:"restart_waits_for"`
 	RunningJobs     int                `json:"running_jobs"`
 	Groups          []APISettingsGroup `json:"groups"`
+	// Presets are how hard the factory works, least first; Preset is the
+	// one the file matches, or "" when its settings were changed by hand.
+	Presets []APIPreset `json:"presets"`
+	Preset  string      `json:"preset"`
+	// Builder is the harness that builds, Reviewer the one that reviews
+	// (the same with one), and Harnesses those with a key or sign-in.
+	Builder   string   `json:"builder"`
+	Reviewer  string   `json:"reviewer"`
+	Harnesses []string `json:"harnesses"`
+}
+
+// APIPreset is one rung of how hard the factory works.
+type APIPreset struct {
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
 }
 
 // ConfigVersion is the version the Settings screen gives a config file's
@@ -119,6 +136,17 @@ func (s *Server) settings(r *http.Request) (APISettings, []config.SettingGroup, 
 		out.RestartWaitsFor = s.Restarter.RestartWaitsFor()
 	} else {
 		out.RunningJobs, _ = s.Store.CountJobs(ctx, state.Running, "")
+	}
+	out.Presets, out.Harnesses = []APIPreset{}, []string{}
+	for _, p := range config.Presets {
+		out.Presets = append(out.Presets, APIPreset{Key: p.Key, Name: p.Name, Summary: p.Summary})
+	}
+	if c, err := config.Parse(b); err == nil {
+		out.Builder, out.Reviewer = c.Harnesses()
+		out.Preset, _ = config.PresetNow(b)
+	}
+	if s.Harnesses != nil {
+		out.Harnesses = s.Harnesses()
 	}
 	for _, g := range groups {
 		ag := APISettingsGroup{Name: g.Name, Help: g.Help, Fields: []APISetting{}}
@@ -206,6 +234,13 @@ func (s *Server) saveChanges(r *http.Request, in []config.Change, version string
 		}
 		changes = append(changes, config.Change{Path: c.Path, Value: v})
 	}
+	return s.writeChanges(r, src, changes)
+}
+
+// writeChanges applies changes to src, factory.yaml as read, and writes
+// it if it still loads. The caller holds settingsMu and checked the
+// version.
+func (s *Server) writeChanges(r *http.Request, src []byte, changes []config.Change) (APISettings, int, error) {
 	out, err := config.Edit(src, changes)
 	if err != nil {
 		return APISettings{}, http.StatusBadRequest, err
@@ -223,6 +258,83 @@ func (s *Server) saveChanges(r *http.Request, in []config.Change, version string
 		return APISettings{}, http.StatusInternalServerError, err
 	}
 	return res, http.StatusOK, nil
+}
+
+// apiApplyPreset sets how hard the factory works: a preset's changes,
+// made for the harness that builds and the one that reviews (as they are,
+// unless the request names others it has a key or sign-in for). Like any
+// settings change it applies when the factory restarts.
+func (s *Server) apiApplyPreset(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(w, r) {
+		return
+	}
+	if s.ConfigPath == "" {
+		apiErr(w, http.StatusNotFound, "this control room has no config file to edit")
+		return
+	}
+	if ok, why := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, why)
+		return
+	}
+	var in struct {
+		Key      string `json:"key"`
+		Builder  string `json:"builder"`
+		Reviewer string `json:"reviewer"`
+		Version  string `json:"version"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	cur, _, src, err := s.settings(r)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if in.Version != cur.Version {
+		apiErr(w, http.StatusConflict, "factory.yaml changed since this page loaded it; reload to see what changed")
+		return
+	}
+	if in.Builder == "" {
+		in.Builder = cur.Builder
+	}
+	if in.Reviewer == "" {
+		in.Reviewer = cur.Reviewer
+	}
+	for _, h := range []string{in.Builder, in.Reviewer} {
+		if h != "claude" && h != "codex" {
+			apiErr(w, http.StatusBadRequest, fmt.Sprintf("no harness %q: claude or codex", h))
+			return
+		}
+		if s.Harnesses != nil && !slices.Contains(cur.Harnesses, h) {
+			apiErr(w, http.StatusBadRequest, fmt.Sprintf("%s has no key or sign-in yet: add one on the get-started page first", h))
+			return
+		}
+	}
+	c, err := config.Parse(src)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if in.Key == "" {
+		in.Key = cur.Preset
+	}
+	if in.Key == "" {
+		in.Key = "balanced" // set by hand: a harness change starts from the middle
+	}
+	changes, err := c.PresetChanges(in.Key, in.Builder, in.Reviewer)
+	if err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, code, err := s.writeChanges(r, src, changes)
+	if err != nil {
+		apiErr(w, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) apiRestart(w http.ResponseWriter, r *http.Request) {

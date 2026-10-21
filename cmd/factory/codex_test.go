@@ -78,6 +78,7 @@ func TestSetupSignsCodexInToAChatGPTPlan(t *testing.T) {
 		"o/r",
 		"3", "ghp_token123",
 		"n", "n",
+		"", // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"2", // a ChatGPT plan
 		"",
@@ -117,6 +118,7 @@ func TestSetupTakesACodexAccessToken(t *testing.T) {
 		"o/r",
 		"3", "ghp_token123",
 		"n", "n",
+		"", // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"4", "3", "codex-access-token", // a wrong answer, then a token
 		"",
