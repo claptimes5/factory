@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, ExternalLink, Loader2, UserRound, XCircle } from "lucide-react";
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Ago, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
@@ -76,8 +76,26 @@ const statusText: Record<string, { label: string; variant: "default" | "secondar
 };
 
 /** One blocker or gap, with its issue and the factory's work on it. */
-function Finding({ f, label, repo, canFile, offersFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean; offersFile: boolean }) {
+/** The next step, for the finding it's about to show on its row. */
+type Placed = { next: Next; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; id: string };
+
+function Finding({
+  f,
+  label,
+  repo,
+  canFile,
+  offersFile,
+  placed,
+}: {
+  f: FindingT;
+  label: string;
+  repo: RepoReadiness;
+  canFile: boolean;
+  offersFile: boolean;
+  placed?: Placed;
+}) {
   const [open, setOpen] = useState(false);
+  const here = placed && isAt(placed.next, f) ? placed : undefined;
   // Lint with a baseline under way is being fixed by that, whatever became of its issue.
   const baseline = f.key === "check:lint" && f.status !== "done" ? (repo.checking && repo.action === "baseline" ? "making" : repo.baseline_pr ? "waiting" : "") : "";
   const s =
@@ -113,29 +131,34 @@ function Finding({ f, label, repo, canFile, offersFile }: { f: FindingT; label: 
         <span className="min-w-0 flex-1 text-sm font-medium break-words">
           <Inline text={f.title} />
         </span>
-        {f.level !== "good" && (
+        {/* The next step on this row says all there is to do; its status and links would only compete. */}
+        {!here && f.level !== "good" && (
           <Badge variant={s.variant}>
             {baseline === "making" && <Loader2 className="size-3 animate-spin" aria-hidden />}
             {s.label}
           </Badge>
         )}
-        {baseline === "waiting" && (
+        {!here && baseline === "waiting" && (
           <a href={repo.baseline_pr} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
             Open the pull request <ExternalLink className="size-3" aria-hidden />
           </a>
         )}
-        {f.issue > 0 && (
+        {!here && f.issue > 0 && (
           <a href={f.issue_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-mono text-xs text-primary hover:underline">
             #{f.issue} <ExternalLink className="size-3" aria-hidden />
           </a>
         )}
-        {f.item_id != null && (
+        {!here && f.item_id != null && (
           <Link to={`/items/${f.item_id}`} className="text-xs text-primary hover:underline">
             See the work
           </Link>
         )}
       </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {here ? (
+        <NextBox next={here.next} r={repo} busy={here.busy} run={here.run} id={here.id} />
+      ) : (
+        hint && <p className="text-xs text-muted-foreground">{hint}</p>
+      )}
       {f.detail && (
         <div>
           <button onClick={() => setOpen(!open)} aria-expanded={open} className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
@@ -158,7 +181,23 @@ function StepIcon({ state }: { state: string }) {
   return <CircleDashed aria-label="Not checked yet" className="size-5 shrink-0 text-muted-foreground" />;
 }
 
-function StepRow({ step, n, label, repo, canFile, offersFile }: { step: Step; n: number; label: string; repo: RepoReadiness; canFile: boolean; offersFile: boolean }) {
+function StepRow({
+  step,
+  n,
+  label,
+  repo,
+  canFile,
+  offersFile,
+  placed,
+}: {
+  step: Step;
+  n: number;
+  label: string;
+  repo: RepoReadiness;
+  canFile: boolean;
+  offersFile: boolean;
+  placed: Placed;
+}) {
   return (
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
@@ -172,7 +211,7 @@ function StepRow({ step, n, label, repo, canFile, offersFile }: { step: Step; n:
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} offersFile={offersFile} />
+              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} offersFile={offersFile} placed={placed} />
             ))}
           </ul>
         )}
@@ -185,7 +224,33 @@ function StepRow({ step, n, label, repo, canFile, offersFile }: { step: Step; n:
 type NextAction = { label: string; primary?: boolean; run?: [string, Record<string, unknown>]; to?: string; href?: string };
 
 /** A repo's next step: the one thing to do now, and its buttons. */
-export type Next = { tone: "info" | "success" | "attention"; title: string; body: string; actions: NextAction[]; running?: boolean };
+export type Next = {
+  tone: "info" | "success" | "attention";
+  title: string;
+  body: string;
+  actions: NextAction[];
+  running?: boolean;
+  /** The finding it's about, by key or "area:name": Setup shows it there. */
+  at?: string;
+  /** Only a person can do it: the factory waits on them. */
+  human?: boolean;
+};
+
+/** Whether next step n is about finding f. */
+const isAt = (n: Next, f: FindingT) => !!n.at && (n.at.startsWith("area:") ? f.area === n.at.slice(5) : f.key === n.at);
+
+/** What a pull request is called on the repo's host: a GitLab repo is named host/path. */
+export const prWord = (r: RepoReadiness) => (r.repo.split("/").length > 2 ? "merge request" : "pull request");
+
+/** Marks what only a person can do. */
+export function NeedsYou({ className }: { className?: string }) {
+  return (
+    <Badge variant="warning" className={className}>
+      <UserRound className="size-3" aria-hidden />
+      Needs you
+    </Badge>
+  );
+}
 
 /** The one thing to do next on a repo, most pressing first. */
 export function nextStep(r: RepoReadiness, data: Readiness): Next {
@@ -218,7 +283,14 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       `Checking ${repoName(r.repo) || r.repo}`,
       `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks twice to catch flaky tests. It takes a few minutes; this updates by itself.`,
     ];
-    return { tone: "info", title: `Working on it: ${title.charAt(0).toLowerCase()}${title.slice(1)}`, body, actions: [], running: true };
+    return {
+      tone: "info",
+      title: `Working on it: ${title.charAt(0).toLowerCase()}${title.slice(1)}`,
+      body,
+      actions: [],
+      running: true,
+      at: r.action === "baseline" ? "check:lint" : undefined,
+    };
   }
   if (r.state === "unchecked") {
     return {
@@ -248,6 +320,8 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
         ...(host ? [{ label: "Open your access tokens", primary: true, href: `https://${host}/-/user_settings/personal_access_tokens` }] : []),
         ...check.map((a) => ({ ...a, primary: !host })),
       ],
+      at: "area:access",
+      human: true,
     };
   }
   const files = blockers.find((f) => f.area === "files");
@@ -255,27 +329,31 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
     return {
       tone: "attention",
       title: "Next: let the factory copy the files git doesn't track",
-      body: `${files.title.replace(/`/g, "")}. A fresh copy of the repo lacks what its .worktreeinclude lists, and no change can add it, so every job would fail. Point factory.yaml's files setting at a checkout of the repo on this machine (the checks step below says exactly what to add), restart the factory, then check again.`,
+      body: `${files.title.replace(/`/g, "")}. A fresh copy of the repo lacks what its .worktreeinclude lists, and no change can add it, so every job would fail. Point factory.yaml's files setting at a checkout of the repo on this machine (Details says exactly what to add), restart the factory, then check again.`,
       actions: check,
+      at: "area:files",
+      human: true,
     };
   }
   if (r.state === "not_ready" && merged > 0) {
+    const fixed = blockers.find((f) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total));
     return {
       tone: "info",
       title: "Next: check again to confirm the fix",
       body: `The factory's fix for ${merged === 1 ? "a blocker is" : `${merged} blockers are`} merged, but only a fresh check proves it. The factory checks again by itself within a few minutes of ${r.branch} changing.`,
       actions: check,
+      at: merged === 1 && fixed?.key ? fixed.key : undefined,
     };
   }
   if (r.state === "not_ready" && r.baseline_pr) {
+    const pr = prWord(r);
     return {
       tone: "attention",
-      title: "Next: merge the lint baseline",
-      body: `Lint passes on ${r.branch} once it's merged; only new offenses fail a change. The factory checks again by itself when ${r.branch} changes.`,
-      actions: [
-        { label: "Open the pull request", primary: true, href: r.baseline_pr },
-        ...(data.can_check && !r.checking ? [{ label: "Make it again", run: ["/readiness/baseline", {}] as [string, Record<string, unknown>] }] : []),
-      ],
+      title: `Next: open and merge the lint baseline's ${pr}`,
+      body: `The factory can't merge it for you. It changes only .rubocop_todo.yml and .rubocop.yml; once it's merged, lint passes on ${r.branch} and only new offenses fail a change. The factory checks again by itself after you merge.`,
+      actions: [{ label: `Open the ${pr} to merge it`, primary: true, href: r.baseline_pr }],
+      at: "check:lint",
+      human: true,
     };
   }
   if (r.state === "not_ready" && r.can_baseline && lintFails) {
@@ -284,14 +362,19 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       title: "Next: accept today's lint offenses",
       body: `Lint fails across all of ${r.branch}, and the factory can't fix that in pieces: each piece is checked against the whole repo. This opens a pull request that records today's offenses in .rubocop_todo.yml. Once you merge it, lint passes and only new offenses fail; fix the old ones later, a cop at a time.`,
       actions: data.can_check && !r.checking ? [{ label: "Accept today's offenses", primary: true, run: ["/readiness/baseline", {}] }] : [],
+      at: "check:lint",
+      human: true,
     };
   }
   if (needsYou > 0) {
+    const waiting = [...blockers, ...r.extras].find((f) => f.status === "needs_you");
     return {
       tone: "attention",
       title: `Next: ${needsYou === 1 ? "one of these needs" : `${needsYou} of these need`} you`,
       body: "The factory stopped on it and is waiting for your call. See the work to answer it.",
-      actions: [],
+      actions: waiting?.item_id != null ? [{ label: "See the work", primary: true, to: `/items/${waiting.item_id}` }] : [],
+      at: needsYou === 1 && waiting?.key ? waiting.key : undefined,
+      human: true,
     };
   }
   if (r.state === "not_ready" && canStart) {
@@ -313,6 +396,7 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
   if (r.state === "not_ready" && yours > 0) {
     return {
       tone: "attention",
+      human: true,
       title: `Next: ${yours === 1 ? "one blocker is" : `${yours} blockers are`} yours to fix`,
       body: `The factory can't change ${yours === 1 ? "it" : "them"}: the fix is in factory.yaml or the factory's setup. The factory is working on the rest${r.following ? `, and checks again by itself when ${r.branch} changes` : ""}.`,
       actions: [],
@@ -352,12 +436,13 @@ export function useReadinessRun(r: RepoReadiness) {
   // What a run started here said goes once it's done: its result shows instead.
   useEffect(() => {
     if (!r.checking) setMsg(null);
-  }, [r.checking]);
+  }, [r.checking, r.result, r.check_error]);
   const run = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     const res = await act(path, { repo: r.repo, ...body });
     setBusy(false);
-    setMsg({ ok: res.ok, text: res.message });
+    // What started shows on the page itself; only a refusal needs saying.
+    setMsg(res.ok ? null : { ok: false, text: res.message });
     void qc.invalidateQueries({ queryKey: ["readiness"] });
   };
   return { busy, msg, run };
@@ -394,19 +479,20 @@ export function NextActions({ next, busy, run, inverse }: { next: Next; busy: bo
   );
 }
 
-function NextStep({ r, data, busy, run }: { r: RepoReadiness; data: Readiness; busy: boolean; run: (path: string, body: Record<string, unknown>) => void }) {
-  const next = nextStep(r, data);
+function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; id?: string }) {
   return (
     <div
+      id={id}
       data-testid="next-step"
       className={cn(
         "flex flex-col gap-2 rounded-control border p-3 text-sm",
         next.tone === "success" ? "border-success/40 bg-success/10" : next.tone === "attention" ? "border-warning/40 bg-warning/10" : "border-primary/40 bg-primary/5",
       )}
     >
-      <p className={cn("flex items-center gap-2 font-semibold", next.tone === "success" && "text-success")}>
+      <p className={cn("flex scroll-mt-24 flex-wrap items-center gap-2 font-semibold", next.tone === "success" && "text-success")}>
         {next.running && <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden />}
         {next.title}
+        {next.human && <NeedsYou />}
       </p>
       {next.running && (
         <p className="text-meta text-muted-foreground">
@@ -429,7 +515,14 @@ const stateBadge: Record<string, [string, "success" | "warning" | "destructive" 
 function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: boolean }) {
   const { busy, msg, run } = useReadinessRun(r);
   const check = () => run("/readiness/check", {});
-  const offersFile = nextStep(r, data).actions.some((a) => a.run?.[0] === "/readiness/file");
+  const next = nextStep(r, data);
+  const offersFile = next.actions.some((a) => a.run?.[0] === "/readiness/file");
+  // A next step about one finding sits on that finding's row; the top
+  // only points there, so the action is next to what it fixes.
+  const stepAt = r.steps.findIndex((st) => st.blockers.some((f) => isAt(next, f)));
+  const placed = stepAt >= 0 || r.extras.some((f) => isAt(next, f));
+  const boxId = `next-${r.repo.replace(/[^a-z0-9]+/gi, "-")}`;
+  const placedNext = { next, busy, run, id: boxId };
   const [badge, variant] = stateBadge[r.state] ?? [r.state, "secondary"];
   const label = data.intake_label;
   const gaps = r.extras.filter((f) => f.level === "gap");
@@ -482,9 +575,26 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         </div>
       )}
 
-      <NextStep r={r} data={data} busy={busy} run={run} />
+      {placed ? (
+        <button
+          data-testid="next-pointer"
+          onClick={() => document.getElementById(boxId)?.scrollIntoView({ behavior: "smooth", block: "center" })}
+          className={cn(
+            "flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-control border px-3 py-2 text-left text-sm hover:bg-accent",
+            next.tone === "attention" ? "border-warning/40" : "border-primary/40",
+          )}
+        >
+          {next.running && <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden />}
+          <span className="font-semibold">{next.title}</span>
+          {next.human && <NeedsYou />}
+          <span className="text-muted-foreground">{stepAt >= 0 ? `in step ${stepAt + 1} ↓` : "below ↓"}</span>
+        </button>
+      ) : (
+        <NextBox next={next} r={r} busy={busy} run={run} />
+      )}
       {!data.can_check && !r.checking && data.check_note && <p className="text-xs text-muted-foreground">{data.check_note}</p>}
-      {r.result && !r.checking && (
+      {/* The baseline's next step on its row says what its result would. */}
+      {r.result && !r.checking && !(placed && r.baseline_pr) && (
         <p role="status" className="text-sm text-success">
           {r.result}
         </p>
@@ -503,7 +613,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.steps.length > 0 && (
         <ol aria-label="Setup steps" className="divide-y border-y">
           {r.steps.map((s, i) => (
-            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
+            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
           ))}
         </ol>
       )}
@@ -523,7 +633,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           </p>
           <ul className="divide-y">
             {gaps.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
             ))}
           </ul>
         </section>
@@ -533,7 +643,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           <summary className="cursor-pointer text-sm font-medium">Nice to have ({tips.length})</summary>
           <ul className="divide-y">
             {tips.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
             ))}
           </ul>
         </details>

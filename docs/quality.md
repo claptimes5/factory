@@ -644,8 +644,11 @@ into smaller issues shows how many of them are done, even once splitting
 closed its own issue. A blocker with
 no issue yet, or one only you can fix (a missing service in `factory.yaml`),
 says so. Gaps follow as **Recommended**, each with the same status, and
-tips under **Nice to have**. Above the steps, one **Next** box says the
-one thing to do now and holds its button, most pressing first: check the
+tips under **Nice to have**. One **Next** box says the one thing to do now and holds its button. When
+it's about one finding (a token, lint, a missing file), it sits on that
+finding's row, in place of its status and links, and a line at the top
+points to it; anything only a person can do is marked **Needs you**. In
+order, most pressing first: check the
 repo, check again once a fix merged, merge the lint baseline, accept
 today's lint offenses (lint that fails across the repo can't be fixed in
 pieces), answer an item that needs you, let the factory work through it,
@@ -707,7 +710,13 @@ starts nothing if it may not.
 
 Once it's merged, the daemon checks again by itself: lint passes, the issue filed for it
 and any issues it was split into are closed, and only new offenses fail
-a change. Pay the old ones down later by deleting a cop's entry from
+a change. The check knows the baseline is in from the commit it checked
+(its `.rubocop_todo.yml` says RuboCop generated it), not from timing. If
+lint still finds offenses there, ones that landed after the baseline was
+made, the issues lint was split into close anyway (the offenses they were
+for are accepted), and the leftovers get one new issue, labeled for the
+factory. A baseline pull request closed without merging stops being
+asked for, and the offer to make one comes back. Pay the old ones down later by deleting a cop's entry from
 `.rubocop_todo.yml` and fixing what it flags, a cop at a time. Running it
 again before the pull request is merged updates the same pull request.
 

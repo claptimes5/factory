@@ -91,6 +91,10 @@ type Report struct {
 	// Filed are the numbers of every issue the check has filed on the
 	// repo, as last read, fixed or not.
 	Filed []int `json:"filed,omitempty"`
+	// Baselined: the commit checked has a lint baseline RuboCop wrote
+	// (.rubocop_todo.yml from --auto-gen-config), so lint failing there
+	// is offenses since, not the old ones.
+	Baselined bool `json:"baselined,omitempty"`
 }
 
 // Exec runs a command on the export the way gates do; install marks the
@@ -172,6 +176,9 @@ func joinAnd(s []string) string {
 func Assess(ctx context.Context, in Input) *Report {
 	r := &Report{Repo: in.Repo.Name, SHA: in.SHA, Branch: in.Repo.BaseBranch, Started: time.Now().UTC()}
 	r.access(in)
+	if b, err := os.ReadFile(filepath.Join(in.Dir, ".rubocop_todo.yml")); err == nil {
+		r.Baselined = strings.Contains(string(b), "--auto-gen-config")
+	}
 	g := in.Repo.Gates
 	files := listFiles(in.Dir)
 	// run runs one command. When the command couldn't be run at all, it

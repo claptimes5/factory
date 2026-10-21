@@ -39,16 +39,16 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   await expect(steps.nth(0)).toContainText("Dependencies install from a clean checkout");
   await expect(steps.nth(0).getByLabel("Done")).toBeVisible();
 
-  // Each blocker links its issue and says what the factory is doing about it.
+  // Each blocker says what the factory is doing about it and links its
+  // issue, unless the next step is on its row: then that's all it says.
   const lint = steps.nth(1).getByTestId("readiness-finding");
   await expect(lint).toContainText("lint fails on main");
-  await expect(lint).toContainText("Being built");
-  await expect(lint.getByRole("link", { name: /#113/ })).toHaveAttribute("href", /acme\/api\/issues\/113$/);
   await lint.getByRole("button", { name: /Details/ }).click();
   await expect(lint).toContainText("ineffectual assignment");
   const flaky = steps.nth(2).getByTestId("readiness-finding");
   await expect(flaky).toContainText("Tests are flaky");
   await expect(flaky).toContainText("Waiting its turn");
+  await expect(flaky.getByRole("link", { name: /#106/ })).toHaveAttribute("href", /acme\/api\/issues\/106$/);
   // One next step, and it's a button, never a command to run. Lint that
   // fails across the repo can't be fixed in pieces, so the baseline leads.
   const next = api.getByTestId("next-step");
@@ -57,6 +57,10 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   await expect(api).not.toContainText("./factory");
   await expect(next.getByRole("button", { name: "Accept today's offenses" })).toBeVisible();
   await expect(api.getByRole("button", { name: "File and start work" })).toHaveCount(0);
+  // It sits on the row it fixes; the top points there.
+  await expect(lint.getByTestId("next-step")).toBeVisible();
+  await expect(api.getByTestId("next-pointer")).toContainText("Next: accept today's lint offenses");
+  await expect(api.getByTestId("next-pointer")).toContainText("in step 2");
 
   // What isn't needed to start is recommended, in plain view.
   const recommended = api.getByRole("region", { name: "Recommended" });
@@ -91,8 +95,8 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   }
 
   // A blocker's work opens from its row.
-  await lint.getByRole("link", { name: "See the work" }).click();
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Make the lint check pass on main");
+  await flaky.getByRole("link", { name: "See the work" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Flaky TestCacheEviction on CI");
 });
 
 test("blockers the factory can fix lead with File and start work, which carries on to the recommended work", async ({ page }) => {
@@ -167,14 +171,17 @@ test("lint failing on main offers a baseline, and making it keeps its pull reque
   // Retried, since the other project's run can hold the one slot.
   await expect(async () => {
     await offer.getByRole("button", { name: "Accept today's offenses" }).click({ timeout: 5_000 });
-    await expect(offer).toContainText("Next: merge the lint baseline", { timeout: 8_000 });
+    await expect(offer).toContainText("Next: open and merge the lint baseline's pull request", { timeout: 8_000 });
   }).toPass({ timeout: 40_000 });
-  const pr = offer.getByRole("link", { name: "Open the pull request" });
+  const pr = offer.getByRole("link", { name: "Open the pull request to merge it" });
   await expect(pr).toHaveAttribute("href", "https://github.com/acme/api/pull/120", { timeout: 10_000 });
+  // Only a person can merge it, and the row says nothing else that competes.
   const lint = api.getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
-  await expect(lint).toContainText("Baseline: yours to merge");
-  await expect(lint.getByRole("link", { name: "Open the pull request" })).toHaveAttribute("href", /\/pull\/120$/);
-  await expect(api).toContainText("Once you merge it, the factory checks again by itself.");
+  await expect(lint).toContainText("Needs you");
+  await expect(lint).not.toContainText("See the work");
+  await expect(lint).not.toContainText("#113");
+  await expect(lint.getByRole("button", { name: "Make it again" })).toHaveCount(0);
+  await expect(offer).toContainText("The factory checks again by itself after you merge.");
 });
 
 test("a setup run in progress shows the same on every screen, with its time counting", async ({ page }) => {
@@ -206,8 +213,7 @@ test("a setup run in progress shows the same on every screen, with its time coun
   await expect(next).toContainText("Started 1m ago");
   // The lint row says so too, rather than what became of its issue.
   const lint = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
-  await expect(lint).toContainText("Making the baseline");
-  await expect(lint).toContainText("recording today's offenses as a baseline");
+  await expect(lint.getByTestId("next-step")).toContainText("Working on it: making the lint baseline");
 });
 
 test("a token that can't open pull requests comes first, on Setup and Home, before any work", async ({ page }) => {

@@ -388,7 +388,7 @@ func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
 	s.ready.mu.Lock()
 	res := s.ready.results["o/r"]
 	s.ready.mu.Unlock()
-	if !strings.Contains(res, "main changed") {
+	if !strings.Contains(res, "main moved from abc1234 to def5678") {
 		t.Fatalf("result = %q", res)
 	}
 	if err := readiness.Follow(s.ReadinessDir, "o/r"); err != nil {

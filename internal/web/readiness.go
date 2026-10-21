@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -471,7 +472,13 @@ func (s *Server) followOnce(ctx context.Context, repo string) {
 	if err != nil || sha == "" || sha == rep.SHA {
 		return
 	}
-	why := rep.Branch + " changed, so the factory checked again by itself. "
+	short := func(s string) string {
+		if len(s) > 7 {
+			return s[:7]
+		}
+		return s
+	}
+	why := fmt.Sprintf("Checked again by itself at %s UTC: %s moved from %s to %s. ", time.Now().UTC().Format("15:04"), rep.Branch, short(rep.SHA), short(sha))
 	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {
 		s.beginReadiness(repo, "queue", func(ctx context.Context) (string, error) {
 			res, err := s.FileReadiness(ctx, repo, true)
@@ -480,6 +487,6 @@ func (s *Server) followOnce(ctx context.Context, repo string) {
 		return
 	}
 	s.beginReadiness(repo, "check", func(ctx context.Context) (string, error) {
-		return why + "Its steps below are up to date.", s.CheckReadiness(ctx, repo)
+		return why + "The steps below are as of " + short(sha) + ".", s.CheckReadiness(ctx, repo)
 	})
 }

@@ -298,7 +298,9 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
         )}
       </div>
       <article data-testid="setup-lead" className="flex flex-col gap-3 rounded-card bg-ink p-5 text-ink-foreground md:p-6">
-        <div className="text-meta font-semibold text-ink-attention">{next.running ? "Setup · working on it now" : "Setup · new tasks wait until it's done"}</div>
+        <div className="text-meta font-semibold text-ink-attention">
+          {next.running ? "Setup · working on it now" : next.human ? "Setup · needs you · new tasks wait until it's done" : "Setup · new tasks wait until it's done"}
+        </div>
         <p className="flex items-center gap-2.5 text-title-sm font-semibold md:text-title">
           {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
           {title.charAt(0).toUpperCase() + title.slice(1)}

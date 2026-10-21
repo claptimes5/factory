@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -136,6 +137,7 @@ func relink(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, 
 	if err != nil {
 		return fmt.Errorf("reading the issues it filed: %w", err)
 	}
+	filed = settleBaseline(ctx, cfg, gh, st, r, filed)
 	closeFixed(ctx, gh, st, r, filed)
 	linkFiled(r, filed)
 	_, err = readiness.Save(readinessDir(cfg), r)
@@ -179,28 +181,88 @@ func closeFixed(ctx context.Context, gh forge, st *store.Store, r *readiness.Rep
 		if err := gh.Comment(ctx, o.Number, "**Factory:** "+why+", so this is done."); err != nil {
 			slog.Warn("readiness", "repo", r.Repo, "comment", o.Number, "err", err)
 		}
-		if st == nil {
+		closeSplit(ctx, gh, st, r.Repo, o.Number, fmt.Sprintf("closed with #%d: %s.", o.Number, why))
+	}
+}
+
+// closeSplit closes the open issues the issue n was split into, saying
+// why. The factory stops working on their items when it sees them closed.
+func closeSplit(ctx context.Context, gh forge, st *store.Store, repo string, n int, why string) {
+	closer, ok := gh.(interface {
+		CloseIssue(ctx context.Context, n int) error
+	})
+	if st == nil || !ok {
+		return
+	}
+	it, err := st.ItemByIssue(ctx, repo, n)
+	if err != nil {
+		return
+	}
+	items, _ := st.ListItems(ctx)
+	for _, c := range items {
+		if c.ParentID == nil || *c.ParentID != it.ID || c.Stage == state.Done {
 			continue
 		}
-		it, err := st.ItemByIssue(ctx, r.Repo, o.Number)
-		if err != nil {
+		if is, err := gh.GetIssue(ctx, c.IssueNumber); err != nil || is.State != "open" {
 			continue
 		}
-		items, _ := st.ListItems(ctx)
-		for _, c := range items {
-			if c.ParentID == nil || *c.ParentID != it.ID || c.Stage == state.Done {
-				continue
-			}
-			if is, err := gh.GetIssue(ctx, c.IssueNumber); err != nil || is.State != "open" {
-				continue
-			}
-			if err := closer.CloseIssue(ctx, c.IssueNumber); err != nil {
-				slog.Warn("readiness", "repo", r.Repo, "close", c.IssueNumber, "err", err)
-				continue
-			}
-			_ = gh.Comment(ctx, c.IssueNumber, fmt.Sprintf("**Factory:** closed with #%d: %s.", o.Number, why))
+		if err := closer.CloseIssue(ctx, c.IssueNumber); err != nil {
+			slog.Warn("readiness", "repo", repo, "close", c.IssueNumber, "err", err)
+			continue
+		}
+		_ = gh.Comment(ctx, c.IssueNumber, "**Factory:** "+why)
+	}
+}
+
+// settleBaseline follows a lint baseline once it's out of review. When
+// the commit checked has it, its pull request is done: the page stops
+// asking for it, the issues lint was split into (for the offenses it now
+// accepts) close, and whatever lint still finds, offenses since, gets an
+// issue of its own, labeled for the factory. Closed without merging, the
+// page stops asking for it, and the offer to make one comes back.
+func settleBaseline(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, r *readiness.Report, filed []github.Issue) []github.Issue {
+	dir := readinessDir(cfg)
+	url := readiness.BaselinePR(dir, r.Repo)
+	if !r.Baselined {
+		if url == "" {
+			return filed
+		}
+		n, _ := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
+		if pr, err := gh.GetPR(ctx, n); err == nil && pr.State != "open" && !pr.Merged {
+			readiness.ClearBaselinePR(dir, r.Repo)
+		}
+		return filed
+	}
+	readiness.ClearBaselinePR(dir, r.Repo)
+	sha := r.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	open := false
+	for _, o := range filed {
+		if m := markerRE.FindStringSubmatch(o.Body); m != nil && m[1] == "check:lint" {
+			open = open || o.State == "open"
+			closeSplit(ctx, gh, st, r.Repo, o.Number, fmt.Sprintf("the lint baseline is on `%s` now (at %s), so the offenses this piece was for are accepted, and only new ones fail lint.", r.Branch, sha))
 		}
 	}
+	var lint *readiness.Finding
+	for i, f := range r.Findings {
+		if f.Issue != nil && f.Issue.Key == "check:lint" {
+			lint = &r.Findings[i]
+		}
+	}
+	// Lint passes (closeFixed closes its issue), or what's left has one.
+	if lint == nil || r.Incomplete || open {
+		return filed
+	}
+	title := "Fix the lint offenses on " + r.Branch + " since the baseline"
+	body := lint.Issue.Body + "\n\n---\nFiled by the factory's readiness check of `" + r.Branch + "` at " + r.SHA + ", once the lint baseline was in.\n" + marker("check:lint")
+	n, err := gh.CreateIssue(ctx, title, body, []string{pipeline.LabelReadiness, cfg.Intake.Label})
+	if err != nil {
+		slog.Warn("readiness", "repo", r.Repo, "file lint since the baseline", err)
+		return filed
+	}
+	return append(filed, github.Issue{Number: n, Title: title, Body: body, State: "open"})
 }
 
 // markerRE finds the key in an issue the check filed.

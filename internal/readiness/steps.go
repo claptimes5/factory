@@ -176,6 +176,11 @@ func SaveBaselinePR(dir, repo, url string) error {
 	return os.WriteFile(beside(dir, repo, "baseline"), []byte(url), 0o644)
 }
 
+// ClearBaselinePR forgets the pull request SaveBaselinePR recorded.
+func ClearBaselinePR(dir, repo string) {
+	_ = os.Remove(beside(dir, repo, "baseline"))
+}
+
 // BaselinePR is the pull request SaveBaselinePR recorded, or "".
 func BaselinePR(dir, repo string) string {
 	b, _ := os.ReadFile(beside(dir, repo, "baseline"))
