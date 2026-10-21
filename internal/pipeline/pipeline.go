@@ -25,6 +25,7 @@ import (
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -623,7 +624,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos()); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -641,7 +642,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos())
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -650,7 +651,50 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos())
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+}
+
+// ReadinessDir is where the readiness check keeps each repo's report.
+func ReadinessDir(cfg *config.Config) string {
+	return filepath.Join(cfg.Path(cfg.DataDir), "readiness")
+}
+
+// heldForSetup are the items with queued jobs that wait for their repo's
+// setup (see readiness.Report.Holds): every job would fail on its
+// blockers, so only the work fixing them runs. They start once a check
+// finds the repo ready.
+func (p *Pipeline) heldForSetup(ctx context.Context) []int64 {
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{State: state.Queued})
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	for _, j := range jobs {
+		if j.ItemID == nil || slices.Contains(out, *j.ItemID) {
+			continue
+		}
+		if it, err := p.Store.GetItem(ctx, *j.ItemID); err == nil && p.SetupHolds(ctx, it) {
+			out = append(out, it.ID)
+		}
+	}
+	return out
+}
+
+// SetupHolds says whether item it waits for its repo's setup.
+func (p *Pipeline) SetupHolds(ctx context.Context, it *store.WorkItem) bool {
+	r, _ := readiness.Load(ReadinessDir(p.Cfg), it.Repo)
+	return r.Holds(it.IssueNumber, p.parentIssue(ctx, it))
+}
+
+// parentIssue is the issue of the epic it was split from, or 0.
+func (p *Pipeline) parentIssue(ctx context.Context, it *store.WorkItem) int {
+	if it.ParentID == nil {
+		return 0
+	}
+	if parent, err := p.Store.GetItem(ctx, *it.ParentID); err == nil {
+		return parent.IssueNumber
+	}
+	return 0
 }
 
 // heldRepos are the repos whose job image is being built, with the repos

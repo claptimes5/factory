@@ -20,7 +20,8 @@ async function notice(page: Page, name: string) {
 }
 
 test("while a repo isn't ready, a banner leads to its setup steps and the work on each blocker", async ({ page }, info) => {
-  await page.goto("/app/");
+  // On every screen but Home, which leads with setup itself.
+  await page.goto("/app/line");
   const banner = await notice(page, "Setup");
   await expect(banner).toContainText("Setup isn't finished.");
   await expect(banner).toContainText("api: 1 of 3 setup steps done");
@@ -48,13 +49,14 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   const flaky = steps.nth(2).getByTestId("readiness-finding");
   await expect(flaky).toContainText("Tests are flaky");
   await expect(flaky).toContainText("Waiting its turn");
-  // One next step, and it's a button, never a command to run.
+  // One next step, and it's a button, never a command to run. Lint that
+  // fails across the repo can't be fixed in pieces, so the baseline leads.
   const next = api.getByTestId("next-step");
-  await expect(next).toContainText("Next: let the factory work through it");
-  await expect(next).toContainText("starts on the 2 recommended items below by itself");
+  await expect(next).toContainText("Next: accept today's lint offenses");
+  await expect(next).toContainText("can't fix that in pieces");
   await expect(api).not.toContainText("./factory");
-  await expect(next.getByRole("button", { name: "Only file the issues" })).toBeVisible();
-  await expect(next.getByRole("button", { name: "File and start work" })).toBeVisible();
+  await expect(next.getByRole("button", { name: "Accept today's offenses" })).toBeVisible();
+  await expect(api.getByRole("button", { name: "File and start work" })).toHaveCount(0);
 
   // What isn't needed to start is recommended, in plain view.
   const recommended = api.getByRole("region", { name: "Recommended" });
@@ -82,15 +84,30 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   if (!phone(info)) {
     // Retried, since the phone project's own check can hold the one slot.
     await expect(async () => {
-      await api.getByRole("button", { name: "File and start work" }).click({ timeout: 5_000 });
-      await expect(api.getByRole("status").first()).toContainText(/[Cc]hecking/);
-      await expect(api.getByText("Opened 1 issue(s) on acme/api.")).toBeVisible({ timeout: 8_000 });
+      await web.getByRole("button", { name: "File and start work" }).click({ timeout: 5_000 });
+      await expect(web.getByRole("status").first()).toContainText(/[Cc]hecking/);
+      await expect(web.getByText("Opened 0 issue(s) on acme/web.")).toBeVisible({ timeout: 8_000 });
     }).toPass({ timeout: 40_000 });
   }
 
   // A blocker's work opens from its row.
   await lint.getByRole("link", { name: "See the work" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Make the lint check pass on main");
+});
+
+test("blockers the factory can fix lead with File and start work, which carries on to the recommended work", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.repos[0].can_baseline = false;
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/app/setup");
+  const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
+  await expect(next).toContainText("Next: let the factory work through it");
+  await expect(next).toContainText("starts on the 2 recommended items below by itself");
+  await expect(next.getByRole("button", { name: "Only file the issues" })).toBeVisible();
+  await expect(next.getByRole("button", { name: "File and start work" })).toBeVisible();
 });
 
 test("plan usage shows as percentages, and dollar costs say they're API-price estimates", async ({ page }, info) => {
@@ -140,13 +157,16 @@ test("lint failing on main offers a baseline, and making it keeps its pull reque
   });
   await page.goto("/app/setup");
   const api = page.getByRole("region", { name: "Setup of acme/api" });
-  const offer = api.getByTestId("baseline");
-  await expect(offer).toContainText("Lint fails on main today");
-  await expect(offer).toContainText("rubocop --auto-gen-config");
+  const offer = api.getByTestId("next-step");
+  await expect(offer).toContainText("Next: accept today's lint offenses");
+  await expect(offer).toContainText(".rubocop_todo.yml");
   made = true;
-  await offer.getByRole("button", { name: "Accept today's offenses" }).click();
-  await expect(api.getByRole("status").filter({ hasText: "baseline" }).first()).toBeVisible();
-  const pr = api.getByTestId("baseline").getByRole("link", { name: "Open the pull request" });
+  // Retried, since the other project's run can hold the one slot.
+  await expect(async () => {
+    await offer.getByRole("button", { name: "Accept today's offenses" }).click({ timeout: 5_000 });
+    await expect(offer).toContainText("Next: merge the lint baseline", { timeout: 8_000 });
+  }).toPass({ timeout: 40_000 });
+  const pr = offer.getByRole("link", { name: "Open the pull request" });
   await expect(pr).toHaveAttribute("href", "https://github.com/acme/api/pull/120", { timeout: 10_000 });
   await expect(api).toContainText("Once you merge it, the factory checks again by itself.");
 });
@@ -160,7 +180,7 @@ test("a setup run in progress shows above every screen, with its time counting",
     body.repos[0].checking_since = new Date(Date.now() - 90_000).toISOString();
     await route.fulfill({ response: r, json: body });
   });
-  await page.goto("/app/");
+  await page.goto("/app/line");
   const banner = await notice(page, "Setup");
   await expect(banner).toContainText(/Making the lint baseline for api, started 1m ago/);
   await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);

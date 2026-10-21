@@ -25,7 +25,8 @@ test("every screen sits in one frame: the sidebar on a desk, tabs on a phone", a
 });
 
 test("warnings for every screen share one notice area: the most serious shows, the rest wait behind more", async ({ page }) => {
-  await page.goto("/app/");
+  // Home leads with setup itself, so its notice shows on the other screens.
+  await page.goto("/app/line");
   const area = page.getByRole("group", { name: "Notices" });
   await expect(area.getByRole("region")).toHaveCount(1);
   await expect(area.getByRole("region", { name: "Main health" })).toContainText("api main is flaky");

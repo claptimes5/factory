@@ -3320,6 +3320,13 @@ export interface components {
             choices: components["schemas"]["Choice"][];
             /** @description The items it depends on that aren't done: it isn't built until they are, whatever is approved */
             waits_for: components["schemas"]["ItemRef"][];
+            /**
+             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty
+             * @enum {string}
+             */
+            setup: "" | "blocks" | "held";
+            /** @description Why, in a sentence */
+            setup_note: string;
         };
         ItemRef: {
             id: number;

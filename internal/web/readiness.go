@@ -241,17 +241,21 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 	}
 	linked[it.ID] = true
 	a.ItemID, a.ItemStage = &it.ID, string(it.Stage)
+	// Split work is done when its pieces are, whatever became of the
+	// issue it was split from (splitting can close it).
+	kids := s.children(ctx, it.ID)
 	switch item := s.apiItem(ctx, it); {
-	case it.Stage == state.Done:
-		a.Status = "done"
-	case it.Stage == state.Epic:
+	case len(kids) > 0 || it.Stage == state.Epic:
 		a.Status = "split"
-		for _, c := range s.children(ctx, it.ID) {
+		for _, c := range kids {
+			linked[c.ID] = true
 			a.SplitTotal++
 			if c.Stage == state.Done {
 				a.SplitDone++
 			}
 		}
+	case it.Stage == state.Done:
+		a.Status = "done"
 	case item.NeedsYou:
 		a.Status = "needs_you"
 	case it.Stage == state.Implementing || it.Stage == state.Reviewing:
@@ -260,6 +264,33 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 		a.Status = "waiting"
 	}
 	return a
+}
+
+// setupOf says how item it stands to its repo's setup (see
+// APIItem.Setup), and why.
+func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, string) {
+	if s.ReadinessDir == "" || it.Stage == state.Done {
+		return "", ""
+	}
+	r, _ := readiness.Load(s.ReadinessDir, it.Repo)
+	if r == nil || r.Ready || r.Incomplete {
+		return "", ""
+	}
+	parent := 0
+	if it.ParentID != nil {
+		if p, err := s.Store.GetItem(ctx, *it.ParentID); err == nil {
+			parent = p.IssueNumber
+		}
+	}
+	f := r.Fixes(it.IssueNumber, parent)
+	if f == nil {
+		return "held", "Waits for setup: every job on " + it.Repo + " would fail until its setup steps pass, so it starts by itself once they do."
+	}
+	if f.Issue.Key == "check:lint" && parent != 0 && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(it.Repo) {
+		return "blocks", "A piece of making lint pass on " + r.Branch + ". Lint is checked across the whole repo, so no piece can pass on its own while the rest still fails. " +
+			"Accept today's offenses on the Setup screen instead: once that's merged, lint passes and the factory closes these pieces."
+	}
+	return "blocks", "Fixes a setup blocker (" + strings.ReplaceAll(f.Title, "`", "") + "). Nothing else runs on " + it.Repo + " until the blockers are fixed."
 }
 
 // workedBeyondSetup says whether the factory has an item that isn't for

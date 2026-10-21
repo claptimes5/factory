@@ -601,6 +601,12 @@ you/api at main (4f2c1a9): 59/100, not ready yet: fix the blockers first
   tests that fail on the base branch, flaky tests, no tests at all.
 - A **gap** means jobs work but less of what they change is verified.
 
+While a repo's latest report has blockers, only the work fixing them
+runs there: the issues filed for the blockers, and the pieces any of them
+was split into. Every other task on that repo waits in the queue,
+untouched, and starts by itself once a check finds the repo ready. (A
+repo never checked, or whose check couldn't finish, holds nothing.)
+
 Each one comes with an issue written for the factory's builder, so the
 first thing the factory does on a new repo can be making it verifiable.
 While a repo has blockers, `-queue` labels only those for the factory,
@@ -627,14 +633,21 @@ each repo's latest report as setup steps: dependencies install, every
 required check passes on the base branch, and there are tests that pass
 every time. Each step says whether it passes and why the factory needs it,
 and lists its blockers, each linked to its issue and to the factory's item
-for it: waiting its turn, being built, needs you or done. A blocker with
+for it: waiting its turn, being built, needs you or done. A blocker split
+into smaller issues shows how many of them are done, even once splitting
+closed its own issue. A blocker with
 no issue yet, or one only you can fix (a missing service in `factory.yaml`),
 says so. Gaps follow as **Recommended**, each with the same status, and
 tips under **Nice to have**. Above the steps, one **Next** box says the
-one thing to do now and holds its button: check the repo, answer an item
-that needs you, let the factory work through it, merge the lint
-baseline, fix a blocker only you can, or, once ready, start the
-recommended work and add the `factory:ready` label to issues. While a
+one thing to do now and holds its button, most pressing first: check the
+repo, check again once a fix merged, merge the lint baseline, accept
+today's lint offenses (lint that fails across the repo can't be fixed in
+pieces), answer an item that needs you, let the factory work through it,
+fix a blocker only you can, or, once ready, start the recommended work
+and add the `factory:ready` label to issues. While a repo isn't ready,
+Home leads with the same next step, and lists what needs you under it:
+the work fixing setup first, marked **Blocks setup**, and what waits for
+it last, marked **Waits for setup**. While a
 repo has blockers, a line above every screen links there; once every
 repo is ready, it says to add the `factory:ready` label to issues to
 start.

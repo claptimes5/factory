@@ -1176,7 +1176,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for, setup, setup_note]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -1213,6 +1213,8 @@ components:
           type: array
           description: "The items it depends on that aren't done: it isn't built until they are, whatever is approved"
           items: { $ref: "#/components/schemas/ItemRef" }
+        setup: { type: string, enum: ["", blocks, held], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty" }
+        setup_note: { type: string, description: "Why, in a sentence" }
     ItemRef:
       type: object
       required: [id, ref]

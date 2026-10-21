@@ -582,14 +582,21 @@ func (s *Store) ClaimJobExcept(ctx context.Context, kinds ...string) (*Job, erro
 // given harnesses (one whose usage limit is spent, say), nor jobs whose
 // input says they wait on one of those harnesses (waits_on).
 func (s *Store) ClaimJobSkipping(ctx context.Context, kinds, harnesses []string) (*Job, error) {
-	return s.ClaimJobHolding(ctx, kinds, harnesses, nil)
+	return s.ClaimJobHolding(ctx, kinds, harnesses, nil, nil)
 }
 
 // ClaimJobHolding is ClaimJobSkipping that also holds back the jobs for
 // the given repos: an item's repo, or for a job with no item the repo its
-// input names. "" among them holds the jobs for no repo at all.
-func (s *Store) ClaimJobHolding(ctx context.Context, kinds, harnesses, repos []string) (*Job, error) {
+// input names. "" among them holds the jobs for no repo at all. It holds
+// back the jobs for the given items too.
+func (s *Store) ClaimJobHolding(ctx context.Context, kinds, harnesses, repos []string, items []int64) (*Job, error) {
 	filter, args := "", []any{}
+	if len(items) > 0 {
+		filter += ` AND coalesce(item_id, 0) NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(items)), ",") + `)`
+		for _, id := range items {
+			args = append(args, id)
+		}
+	}
 	if len(repos) > 0 {
 		filter += ` AND coalesce((SELECT repo FROM work_items WHERE id = jobs.item_id), CASE WHEN json_valid(input) THEN json_extract(input, '$.repo') END, '') NOT IN (` +
 			strings.TrimSuffix(strings.Repeat("?,", len(repos)), ",") + `)`

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
@@ -160,107 +160,191 @@ function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; lab
   );
 }
 
-/** The one thing to do next on a repo, with its button when the factory can do it. */
-function NextStep({
-  r,
-  data,
-  busy,
-  run,
-}: {
-  r: RepoReadiness;
-  data: Readiness;
-  busy: boolean;
-  run: (path: string, body: Record<string, unknown>) => Promise<void>;
-}) {
+/** One button of a next step: it runs a readiness action, opens a page, or opens a link. */
+type NextAction = { label: string; primary?: boolean; run?: [string, Record<string, unknown>]; to?: string; href?: string };
+
+/** A repo's next step: the one thing to do now, and its buttons. */
+export type Next = { tone: "info" | "success" | "attention"; title: string; body: string; actions: NextAction[] };
+
+/** The one thing to do next on a repo, most pressing first. */
+export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const label = data.intake_label;
   const blockers = r.steps.flatMap((s) => s.blockers);
+  const merged = blockers.filter((f) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total)).length;
+  const lintFails = blockers.some((f) => f.status !== "done" && /^`?lint`? fails/.test(f.title));
   const needsYou = [...blockers, ...r.extras].filter((f) => f.status === "needs_you").length;
   const yours = blockers.filter((f) => f.status === "none").length;
   const recommended = r.extras.filter((f) => f.level === "gap" && f.status !== "done").length;
   const canStart = data.can_file && !r.checking && r.can_queue;
-  const start = (
+  const check: NextAction[] = data.can_check && !r.checking ? [{ label: r.state === "unchecked" ? "Check now" : "Check again", primary: true, run: ["/readiness/check", {}] }] : [];
+  const start: NextAction[] = [
+    { label: "File and start work", primary: true, run: ["/readiness/file", { queue: true }] },
+    ...(r.unfiled > 0 ? [{ label: "Only file the issues", run: ["/readiness/file", { queue: false }] as [string, Record<string, unknown>] }] : []),
+  ];
+  if (r.state === "unchecked") {
+    return {
+      tone: "info",
+      title: `Next: check ${repoName(r.repo) || r.repo}`,
+      body: `The check clones ${r.repo}, installs it and runs its checks twice to catch flaky tests. It takes a few minutes and changes nothing.`,
+      actions: check,
+    };
+  }
+  if (r.state === "incomplete") {
+    return {
+      tone: "attention",
+      title: "Next: fix what stopped the check, then check again",
+      body: "The check stopped early, so this says nothing about the repo past that point. It's usually the factory's setup or a command in factory.yaml, not the repo's code.",
+      actions: check,
+    };
+  }
+  if (r.state === "not_ready" && merged > 0) {
+    return {
+      tone: "info",
+      title: "Next: check again to confirm the fix",
+      body: `The factory's fix for ${merged === 1 ? "a blocker is" : `${merged} blockers are`} merged, but only a fresh check proves it. The factory checks again by itself within a few minutes of ${r.branch} changing.`,
+      actions: check,
+    };
+  }
+  if (r.state === "not_ready" && r.baseline_pr) {
+    return {
+      tone: "attention",
+      title: "Next: merge the lint baseline",
+      body: `Lint passes on ${r.branch} once it's merged; only new offenses fail a change. The factory checks again by itself when ${r.branch} changes.`,
+      actions: [
+        { label: "Open the pull request", primary: true, href: r.baseline_pr },
+        ...(data.can_check && !r.checking ? [{ label: "Make it again", run: ["/readiness/baseline", {}] as [string, Record<string, unknown>] }] : []),
+      ],
+    };
+  }
+  if (r.state === "not_ready" && r.can_baseline && lintFails) {
+    return {
+      tone: "attention",
+      title: "Next: accept today's lint offenses",
+      body: `Lint fails across all of ${r.branch}, and the factory can't fix that in pieces: each piece is checked against the whole repo. This opens a pull request that records today's offenses in .rubocop_todo.yml. Once you merge it, lint passes and only new offenses fail; fix the old ones later, a cop at a time.`,
+      actions: data.can_check && !r.checking ? [{ label: "Accept today's offenses", primary: true, run: ["/readiness/baseline", {}] }] : [],
+    };
+  }
+  if (needsYou > 0) {
+    return {
+      tone: "attention",
+      title: `Next: ${needsYou === 1 ? "one of these needs" : `${needsYou} of these need`} you`,
+      body: "The factory stopped on it and is waiting for your call. See the work to answer it.",
+      actions: [],
+    };
+  }
+  if (r.state === "not_ready" && canStart) {
+    return {
+      tone: "info",
+      title: "Next: let the factory work through it",
+      body: `File and start work files an issue for each blocker and labels them ${label}, so the factory fixes them. Once every step passes it starts on the ${recommended > 0 ? `${recommended} recommended ${recommended === 1 ? "item" : "items"}` : "recommended work"} below by itself, checking again whenever ${r.branch} changes. You review every pull request; nothing merges without you.`,
+      actions: start,
+    };
+  }
+  if (r.state === "not_ready" && r.can_queue && !data.can_file) {
+    return {
+      tone: "info",
+      title: "Next: hand the blockers to the factory",
+      body: `Filing their issues from this page needs leave to change settings (see below). Once filed with the ${label} label, the factory fixes them.`,
+      actions: [],
+    };
+  }
+  if (r.state === "not_ready" && yours > 0) {
+    return {
+      tone: "attention",
+      title: `Next: ${yours === 1 ? "one blocker is" : `${yours} blockers are`} yours to fix`,
+      body: `The factory can't change ${yours === 1 ? "it" : "them"}: the fix is in factory.yaml or the factory's setup. The factory is working on the rest${r.following ? `, and checks again by itself when ${r.branch} changes` : ""}.`,
+      actions: [],
+    };
+  }
+  if (r.state === "not_ready") {
+    return {
+      tone: "info",
+      title: "Nothing for you right now: the factory is fixing the blockers",
+      body: r.following
+        ? `It checks again by itself whenever ${r.branch} changes, and starts the recommended work once every step passes. You'll review each fix as a pull request.`
+        : "You'll review each fix as a pull request. Once they're merged, check again.",
+      actions: [],
+    };
+  }
+  if (canStart) {
+    return {
+      tone: "success",
+      title: "Ready. Next: start the recommended work",
+      body: `Every setup step passes, so you can add the ${label} label to real issues now. File and start work also hands the recommended ${recommended === 1 ? "item" : "items"} below to the factory, so it can prove more of what it changes.`,
+      actions: start,
+    };
+  }
+  return {
+    tone: "success",
+    title: `Ready: add the ${label} label to issues to start`,
+    body: "Every setup step passes, so the factory's changes can be checked. It picks up each issue with that label.",
+    actions: [],
+  };
+}
+
+/** Runs a repo's readiness actions, saying what each started. */
+export function useReadinessRun(r: RepoReadiness) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // What a run started here said goes once it's done: its result shows instead.
+  useEffect(() => {
+    if (!r.checking) setMsg(null);
+  }, [r.checking]);
+  const run = async (path: string, body: Record<string, unknown>) => {
+    setBusy(true);
+    const res = await act(path, { repo: r.repo, ...body });
+    setBusy(false);
+    setMsg({ ok: res.ok, text: res.message });
+    void qc.invalidateQueries({ queryKey: ["readiness"] });
+  };
+  return { busy, msg, run };
+}
+
+/** A next step's buttons; inverse on an ink card. */
+export function NextActions({ next, busy, run, inverse }: { next: Next; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; inverse?: boolean }) {
+  if (next.actions.length === 0) return null;
+  return (
     <div className="flex flex-wrap gap-2">
-      <Button size="sm" disabled={busy} onClick={() => run("/readiness/file", { queue: true })}>
-        File and start work
-      </Button>
-      {r.unfiled > 0 && (
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => run("/readiness/file", { queue: false })}>
-          Only file the issues
-        </Button>
-      )}
+      {next.actions.map((a) => {
+        const variant = inverse ? (a.primary ? "inverse" : "inverse-outline") : a.primary ? "default" : "outline";
+        if (a.href)
+          return (
+            <Button key={a.label} size="sm" variant={variant} asChild>
+              <a href={a.href} target="_blank" rel="noreferrer">
+                {a.label} <ExternalLink className="size-3.5" aria-hidden />
+              </a>
+            </Button>
+          );
+        if (a.to)
+          return (
+            <Button key={a.label} size="sm" variant={variant} asChild>
+              <Link to={a.to}>{a.label}</Link>
+            </Button>
+          );
+        return (
+          <Button key={a.label} size="sm" variant={variant} disabled={busy} onClick={() => a.run && run(...a.run)}>
+            {a.label}
+          </Button>
+        );
+      })}
     </div>
   );
-  let tone: "info" | "success" | "attention" = "info";
-  let title: string;
-  let body: ReactNode;
-  let action: ReactNode = null;
-  if (r.state === "unchecked") {
-    title = `Next: check ${repoName(r.repo) || r.repo}`;
-    body = `The check clones ${r.repo}, installs it and runs its checks twice to catch flaky tests. It takes a few minutes and changes nothing.`;
-  } else if (r.state === "incomplete") {
-    tone = "attention";
-    title = "Next: fix what stopped the check, then check again";
-    body =
-      "The check stopped early, so this says nothing about the repo past that point. It's usually the factory's setup or a command in factory.yaml, not the repo's code.";
-  } else if (needsYou > 0) {
-    tone = "attention";
-    title = `Next: ${needsYou === 1 ? "one of these needs" : `${needsYou} of these need`} you`;
-    body = "The factory stopped on it and is waiting for your call. See the work to answer it.";
-  } else if (r.state === "not_ready" && canStart) {
-    title = "Next: let the factory work through it";
-    body = `File and start work files an issue for each blocker and labels them ${label}, so the factory fixes them. Once every step passes it starts on the ${recommended > 0 ? `${recommended} recommended ${recommended === 1 ? "item" : "items"}` : "recommended work"} below by itself, checking again whenever ${r.branch} changes. You review every pull request; nothing merges without you.`;
-    action = start;
-  } else if (r.state === "not_ready" && r.can_queue && !data.can_file) {
-    title = "Next: hand the blockers to the factory";
-    body = `Filing their issues from this page needs leave to change settings (see below). Once filed with the ${label} label, the factory fixes them.`;
-  } else if (r.state === "not_ready" && r.baseline_pr) {
-    tone = "attention";
-    title = "Next: merge the lint baseline";
-    body = `Lint passes on ${r.branch} once it's merged; only new offenses fail a change. The factory checks again by itself when ${r.branch} changes.`;
-    action = (
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" asChild>
-          <a href={r.baseline_pr} target="_blank" rel="noreferrer">
-            Open the pull request <ExternalLink className="size-3.5" aria-hidden />
-          </a>
-        </Button>
-        {data.can_check && !r.checking && (
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => run("/readiness/baseline", {})}>
-            Make it again
-          </Button>
-        )}
-      </div>
-    );
-  } else if (r.state === "not_ready" && yours > 0) {
-    tone = "attention";
-    title = `Next: ${yours === 1 ? "one blocker is" : `${yours} blockers are`} yours to fix`;
-    body = `The factory can't change ${yours === 1 ? "it" : "them"}: the fix is in factory.yaml or the factory's setup. The factory is working on the rest${r.following ? `, and checks again by itself when ${r.branch} changes` : ""}.`;
-  } else if (r.state === "not_ready") {
-    title = "Nothing for you right now: the factory is fixing the blockers";
-    body = r.following
-      ? `It checks again by itself whenever ${r.branch} changes, and starts the recommended work once every step passes. You'll review each fix as a pull request.`
-      : `You'll review each fix as a pull request. Once they're merged, check again.`;
-  } else if (canStart) {
-    tone = "success";
-    title = "Ready. Next: start the recommended work";
-    body = `Every setup step passes, so you can add the ${label} label to real issues now. File and start work also hands the recommended ${recommended === 1 ? "item" : "items"} below to the factory, so it can prove more of what it changes.`;
-    action = start;
-  } else {
-    tone = "success";
-    title = `Ready: add the ${label} label to issues to start`;
-    body = "Every setup step passes, so the factory's changes can be checked. It picks up each issue with that label.";
-  }
+}
+
+function NextStep({ r, data, busy, run }: { r: RepoReadiness; data: Readiness; busy: boolean; run: (path: string, body: Record<string, unknown>) => void }) {
+  const next = nextStep(r, data);
   return (
     <div
       data-testid="next-step"
       className={cn(
         "flex flex-col gap-2 rounded-control border p-3 text-sm",
-        tone === "success" ? "border-success/40 bg-success/10" : tone === "attention" ? "border-warning/40 bg-warning/10" : "border-primary/40 bg-primary/5",
+        next.tone === "success" ? "border-success/40 bg-success/10" : next.tone === "attention" ? "border-warning/40 bg-warning/10" : "border-primary/40 bg-primary/5",
       )}
     >
-      <p className={cn("font-semibold", tone === "success" && "text-success")}>{title}</p>
-      <p className="text-text-2">{body}</p>
-      {action}
+      <p className={cn("font-semibold", next.tone === "success" && "text-success")}>{next.title}</p>
+      <p className="text-text-2">{next.body}</p>
+      <NextActions next={next} busy={busy} run={run} />
     </div>
   );
 }
@@ -273,21 +357,8 @@ const stateBadge: Record<string, [string, "success" | "warning" | "destructive" 
 };
 
 function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: boolean }) {
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const run = async (path: string, body: Record<string, unknown>) => {
-    setBusy(true);
-    const res = await act(path, { repo: r.repo, ...body });
-    setBusy(false);
-    setMsg({ ok: res.ok, text: res.message });
-    void qc.invalidateQueries({ queryKey: ["readiness"] });
-  };
+  const { busy, msg, run } = useReadinessRun(r);
   const check = () => run("/readiness/check", {});
-  // What a run started here said goes once it's done: its result shows instead.
-  useEffect(() => {
-    if (!r.checking) setMsg(null);
-  }, [r.checking]);
   const [badge, variant] = stateBadge[r.state] ?? [r.state, "secondary"];
   const label = data.intake_label;
   const gaps = r.extras.filter((f) => f.level === "gap");
@@ -356,31 +427,6 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>
           {msg.text}
         </p>
-      )}
-
-      {r.can_baseline && r.baseline_pr && (
-        <div data-testid="baseline" className="flex flex-wrap items-center gap-2 rounded-control border p-3 text-sm">
-          <p className="min-w-0 flex-1">The lint baseline is waiting for you to merge it. The factory checks again by itself once you have.</p>
-          <a href={r.baseline_pr} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-medium text-primary hover:underline">
-            Open the pull request <ExternalLink className="size-3.5" aria-hidden />
-          </a>
-        </div>
-      )}
-      {r.can_baseline && data.can_check && !r.checking && !r.baseline_pr && (
-        <div data-testid="baseline" className="flex flex-col gap-2 rounded-control border border-primary/40 bg-primary/5 p-3 text-sm">
-          <p className="font-semibold">Lint fails on {r.branch} today. Accept today's offenses, and block new ones?</p>
-          <p className="text-text-2">
-            The factory runs RuboCop's own baseline (<code className="font-mono text-[0.9em]">rubocop --auto-gen-config</code>) on {r.branch}, checks
-            that lint passes with it, and opens a pull request that changes only <code className="font-mono text-[0.9em]">.rubocop_todo.yml</code>{" "}
-            (and <code className="font-mono text-[0.9em]">.rubocop.yml</code>, to include it). Once you merge it, lint passes and only new offenses fail a
-            change; fix the old ones later, a cop at a time. The factory checks again by itself once it's merged.
-          </p>
-          <div>
-            <Button size="sm" disabled={busy} onClick={() => run("/readiness/baseline", {})}>
-              Accept today's offenses
-            </Button>
-          </div>
-        </div>
       )}
 
       {r.steps.length > 0 && (
@@ -483,7 +529,9 @@ const actionText: Record<string, string> = {
  */
 export function useSetupNotice(): Notice | null {
   const { data } = useReadiness();
-  const here = useLocation().pathname === "/setup";
+  // Home leads with setup itself.
+  const path = useLocation().pathname;
+  const here = path === "/setup" || path === "/";
   if (!data || here) return null;
   const running = data.repos.find((r) => r.checking);
   const doing = running && (
@@ -531,8 +579,8 @@ export function useSetupNotice(): Notice | null {
             .join("; ")}
           .{" "}
           {behind.every((r) => r.following && r.state === "not_ready")
-            ? "The factory is working through it; add real tasks once it's done."
-            : "Fix these before adding real tasks."}{" "}
+            ? "The factory is working through it; new tasks wait until it's done."
+            : "New tasks wait until it's done."}{" "}
           <Link to="/setup" className="font-medium underline underline-offset-2">
             See what's missing
           </Link>

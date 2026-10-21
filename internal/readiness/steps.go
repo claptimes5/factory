@@ -115,6 +115,29 @@ func (r *Report) Extras() []Finding {
 	return out
 }
 
+// Fixes is the blocker that work on issue fixes, or nil: the blocker
+// filed as issue, or as parent, the epic issue was split from (0 for
+// none).
+func (r *Report) Fixes(issue, parent int) *Finding {
+	if r == nil {
+		return nil
+	}
+	for i, f := range r.Findings {
+		if f.Level == Blocker && f.Issue != nil && f.Issue.Number != 0 && (f.Issue.Number == issue || f.Issue.Number == parent) {
+			return &r.Findings[i]
+		}
+	}
+	return nil
+}
+
+// Holds says whether work on issue waits for the repo's setup: the check
+// found blockers, so every job would fail on them, and the work isn't
+// fixing one. An unchecked repo, or a check that couldn't finish, holds
+// nothing.
+func (r *Report) Holds(issue, parent int) bool {
+	return r != nil && !r.Ready && !r.Incomplete && r.Fixes(issue, parent) == nil
+}
+
 // Path is where Save keeps repo's latest report in dir.
 func Path(dir, repo string) string {
 	return filepath.Join(dir, strings.ReplaceAll(repo, "/", "__")+".json")

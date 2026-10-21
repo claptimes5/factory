@@ -72,9 +72,7 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 
 // readinessDir holds each repo's latest report, which the dashboard and
 // status read.
-func readinessDir(cfg *config.Config) string {
-	return filepath.Join(cfg.Path(cfg.DataDir), "readiness")
-}
+func readinessDir(cfg *config.Config) string { return pipeline.ReadinessDir(cfg) }
 
 // linkFiled records on each of the report's findings the issue filed for
 // it, so the dashboard can link it and follow the factory's work on it.

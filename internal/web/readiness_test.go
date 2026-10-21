@@ -399,3 +399,37 @@ func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
 		t.Fatalf("ran %q", r)
 	}
 }
+
+// A blocker split into pieces follows its pieces, even once splitting
+// closed its issue. While the repo isn't ready, a piece says it blocks
+// setup (and, for lint that can be baselined, that the baseline is the
+// way), and any other work says it waits for setup.
+func TestSplitBlockerAndWorkWaitingForSetup(t *testing.T) {
+	t.Parallel()
+	base, st, s := readinessServer(t)
+	s.CanBaseline = func(string) bool { return true }
+	s.LintBaseline = func(context.Context, string) (string, error) { return "", nil }
+	ctx := context.Background()
+	lint, _ := st.ItemByIssue(ctx, "o/r", 12)
+	piece, _, _ := st.UpsertItem(ctx, "o/r", 20, "RuboCop: autocorrect app/")
+	if err := st.SetParent(ctx, piece.ID, lint.ID); err != nil {
+		t.Fatal(err)
+	}
+	st.SetStage(ctx, lint.ID, state.Done, "daemon", "its issue was closed")
+	task, _, _ := st.UpsertItem(ctx, "o/r", 30, "Report outdated gems")
+
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitTotal != 1 || f.SplitDone != 0 {
+		t.Fatalf("lint = %+v", f)
+	}
+	var d APIItemDetail
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(piece.ID, 10), &d)
+	if d.Item.Setup != "blocks" || !strings.Contains(d.Item.SetupNote, "Accept today's offenses") {
+		t.Fatalf("piece = %q %q", d.Item.Setup, d.Item.SetupNote)
+	}
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(task.ID, 10), &d)
+	if d.Item.Setup != "held" || !strings.Contains(d.Item.SetupNote, "starts by itself") {
+		t.Fatalf("task = %q %q", d.Item.Setup, d.Item.SetupNote)
+	}
+}

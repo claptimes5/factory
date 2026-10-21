@@ -69,3 +69,29 @@ func TestLoad(t *testing.T) {
 		t.Fatal("a broken report must say so")
 	}
 }
+
+// Work waits for setup unless it fixes a blocker, directly or as a piece
+// of one; a ready, unchecked or unfinished check holds nothing.
+func TestHolds(t *testing.T) {
+	r := &Report{Findings: []Finding{
+		{Level: Blocker, Area: "checks", Title: "lint", Issue: &Issue{Key: "check:lint", Number: 9}},
+		{Level: Blocker, Area: "tests", Title: "flaky", Issue: &Issue{Key: "flaky"}}, // not filed
+		{Level: Gap, Area: "feature map", Title: "map", Issue: &Issue{Key: "feature-map", Number: 11}},
+	}}
+	for _, c := range []struct {
+		issue, parent int
+		held          bool
+	}{{16, 0, true}, {9, 0, false}, {14, 9, false}, {11, 0, true}, {0, 0, true}} {
+		if got := r.Holds(c.issue, c.parent); got != c.held {
+			t.Errorf("Holds(%d, %d) = %v", c.issue, c.parent, got)
+		}
+	}
+	if f := r.Fixes(14, 9); f == nil || f.Issue.Key != "check:lint" {
+		t.Fatalf("Fixes = %+v", f)
+	}
+	for _, r := range []*Report{nil, {Ready: true}, {Incomplete: true}} {
+		if r.Holds(16, 0) {
+			t.Errorf("%+v holds", r)
+		}
+	}
+}
