@@ -9,7 +9,7 @@ import { FoundBy } from "@/components/FoundBy";
 import { Badge } from "@/components/ui/badge";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef, stageName } from "@/lib/utils";
-import { actionText, useReadiness } from "@/screens/Setup";
+import { useReadiness } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type RepoReadiness = components["schemas"]["RepoReadiness"];
@@ -255,7 +255,7 @@ function SetupRunCard({ r }: { r: RepoReadiness }) {
         Setup · {repoName(r.repo) || r.repo}
       </div>
       <Link to="/setup" className="text-body-sm font-semibold after:absolute after:inset-0 hover:underline">
-        {actionText[r.action] ?? "Checking"} {repoName(r.repo) || r.repo}
+        Checking {repoName(r.repo) || r.repo}
       </Link>
       <span className="text-meta text-muted-foreground">{duration(r.checking_since)}</span>
     </article>

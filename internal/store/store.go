@@ -616,6 +616,11 @@ func (s *Store) ClaimJobHolding(ctx context.Context, kinds, harnesses, repos []s
 	return s.claim(ctx, filter, args...)
 }
 
+// ClaimJobKind claims the next queued job of kind, whatever else waits.
+func (s *Store) ClaimJobKind(ctx context.Context, kind string) (*Job, error) {
+	return s.claim(ctx, ` AND kind = ?`, kind)
+}
+
 func toAny(ss []string) []any {
 	out := make([]any, len(ss))
 	for i, s := range ss {

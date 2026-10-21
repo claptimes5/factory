@@ -664,8 +664,10 @@ daemon checks it again by itself within five minutes of its base branch
 moving, or of a lint baseline's pull request being merged or closed. It
 also looks when it starts, and whenever someone has a dashboard page
 open (asking the host at most every 30 seconds), so a merge shows soon.
-**Check again** runs it now, on the base branch as it is, so a fix made
-outside the factory counts too, one repo at a time. While a check runs,
+**Check again** queues it now, on the base branch as it is, so a fix made
+outside the factory counts too. A check is a job like any other, one per
+repo at a time: the daemon runs it, it counts as running work, it's still
+there after a restart, and its steps and outcome stay with the job. While a check runs,
 the step it's checking again lists each command as it goes, with how
 long it took and whether it passed; **What the last run did** keeps the
 list once it's over. Like Settings, Check again needs the dashboard

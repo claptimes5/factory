@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -225,26 +224,15 @@ func baselinedBy(ctx context.Context, st *store.Store, repo string, n int) bool 
 	return err == nil && it.Stage == state.Done
 }
 
-// settleBaseline follows a lint baseline once it's out of review. When
-// the commit checked has it, its pull request is done: the page stops
-// asking for it, the issues lint was split into (for the offenses it now
-// accepts) close, and whatever lint still finds, offenses since, gets an
-// issue of its own, labeled for the factory. Closed without merging, the
-// page stops asking for it, and the offer to make one comes back.
+// settleBaseline follows a lint baseline once the commit checked has it:
+// the issues lint was split into (for the offenses it now accepts) close,
+// a lint issue whose work was the baseline closes, and whatever lint
+// still finds, offenses since, gets an issue of its own, labeled for the
+// factory.
 func settleBaseline(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, r *readiness.Report, filed []github.Issue) []github.Issue {
-	dir := readinessDir(cfg)
-	url := readiness.BaselinePR(dir, r.Repo)
 	if !r.Baselined {
-		if url == "" {
-			return filed
-		}
-		n, _ := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
-		if pr, err := gh.GetPR(ctx, n); err == nil && pr.State != "open" && !pr.Merged {
-			readiness.ClearBaselinePR(dir, r.Repo)
-		}
 		return filed
 	}
-	readiness.ClearBaselinePR(dir, r.Repo)
 	sha := r.SHA
 	if len(sha) > 7 {
 		sha = sha[:7]
@@ -296,28 +284,33 @@ var markerRE = regexp.MustCompile(`<!-- factory-readiness: (\S+) -->`)
 // and once the repo is ready labels the gaps filed for later too. Its
 // containers are named apart from the daemon's jobs, which would
 // otherwise take them for leftovers.
-func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, out io.Writer) error {
+func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, out io.Writer) (string, error) {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
 	r, err := assess(ctx, cfg, pl, repo, out)
 	if err != nil {
-		return err
+		return "", err
 	}
+	sha := r.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	done := fmt.Sprintf("Checked %s at %s.", r.Branch, sha)
 	gh, ok := daemon.GitHubFor(repo).(forge)
 	if !ok {
-		return nil
+		return done, nil
 	}
 	if err := relink(ctx, cfg, gh, daemon.Store, r); err != nil {
 		slog.Warn("readiness", "repo", repo, "err", err)
 	}
 	if r.Incomplete {
-		return nil
+		return done + " It couldn't finish, so it filed nothing.", nil
 	}
+	fmt.Fprintln(out, "filing what a change can fix for the factory")
 	msg, err := fileReport(ctx, cfg, gh, r, true)
 	if err != nil {
-		return fmt.Errorf("filing the factory's work: %w", err)
+		return "", fmt.Errorf("filing the factory's work: %w", err)
 	}
-	fmt.Fprintln(out, strings.ToLower(msg[:1])+msg[1:])
-	return nil
+	return done + " " + strings.ReplaceAll(msg, "\n", " "), nil
 }
 
 // relinkSaved links each saved report to the issues filed for it, without

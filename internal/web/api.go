@@ -868,12 +868,6 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	waiting, _ := s.Store.ListItems(ctx, state.AwaitingHuman)
 	running, _ := s.Store.CountJobs(ctx, state.Running, "")
 	queued, _ := s.Store.CountJobs(ctx, state.Queued, "")
-	// A setup run (a readiness check, a lint baseline) is running work too.
-	s.ready.mu.Lock()
-	if s.ready.repo != "" {
-		running++
-	}
-	s.ready.mu.Unlock()
 	v, err := s.Store.Version(ctx)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())

@@ -92,21 +92,12 @@ function Finding({
 }) {
   const [open, setOpen] = useState(false);
   const here = placed && isAt(placed.next, f) ? placed : undefined;
-  // Lint with a baseline under way is being fixed by that, whatever became of its issue.
-  const baseline = f.key === "check:lint" && f.status !== "done" ? (repo.checking && repo.action === "baseline" ? "making" : repo.baseline_pr ? "waiting" : "") : "";
   const s =
-    baseline === "making"
-      ? { label: "Making the baseline", variant: "default" as const }
-      : baseline === "waiting"
-        ? { label: "Baseline: yours to merge", variant: "warning" as const }
-        : f.status === "split"
-          ? { label: `Split: ${f.split_done} of ${f.split_total} done`, variant: "default" as const }
-          : (statusText[f.status] ?? { label: f.status, variant: "secondary" as const });
-  const hint = baseline
-    ? baseline === "making"
-      ? "The factory is recording today's offenses as a baseline. Once you merge its pull request, lint passes and the issues it was split into close."
-      : "Merge the baseline's pull request: lint then passes, only new offenses fail, and the issues it was split into close."
-    : f.status === "none"
+    f.status === "split"
+      ? { label: `Split: ${f.split_done} of ${f.split_total} done`, variant: "default" as const }
+      : (statusText[f.status] ?? { label: f.status, variant: "secondary" as const });
+  const hint =
+    f.status === "none"
       ? f.level === "blocker"
         ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
         : "The factory doesn't file an issue for this one: the details say what to add."
@@ -129,15 +120,7 @@ function Finding({
         </span>
         {/* The next step on this row says all there is to do; its status and links would only compete. */}
         {!here && f.level !== "good" && (
-          <Badge variant={s.variant}>
-            {baseline === "making" && <Loader2 className="size-3 animate-spin" aria-hidden />}
-            {s.label}
-          </Badge>
-        )}
-        {!here && baseline === "waiting" && (
-          <a href={repo.baseline_pr} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
-            Open the pull request <ExternalLink className="size-3" aria-hidden />
-          </a>
+          <Badge variant={s.variant}>{s.label}</Badge>
         )}
         {!here && f.issue > 0 && (
           <a href={f.issue_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-mono text-xs text-primary hover:underline">
@@ -276,20 +259,10 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const check: NextAction[] = data.can_check && !r.checking ? [{ label: r.state === "unchecked" ? "Check now" : "Check again", primary: true, run: ["/readiness/check", {}] }] : [];
   if (r.checking) {
     const failing = r.steps.find((st) => st.state === "failing");
-    const what: Record<string, [string, string]> = {
-      baseline: [
-        "Making the lint baseline",
-        `It installs ${r.repo}'s dependencies, runs RuboCop's baseline on ${r.branch} and checks lint passes with it, then opens a pull request for you to merge. It takes a few minutes; this updates by itself.`,
-      ],
-    };
-    const [title, body] = what[r.action] ?? [
-      `Checking ${repoName(r.repo) || r.repo}`,
-      `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks, then files what a change can fix for the factory. It takes a few minutes; this updates by itself.`,
-    ];
     return {
       tone: "info",
-      title: `Working on it: ${title.charAt(0).toLowerCase()}${title.slice(1)}`,
-      body,
+      title: `Working on it: checking ${repoName(r.repo) || r.repo}`,
+      body: `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks, then files what a change can fix for the factory. It takes a few minutes; this updates by itself.`,
       actions: [],
       running: true,
       // A check is about what's failing, which it looks at again.
@@ -545,7 +518,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <div className="flex flex-col items-end gap-1.5">
           {r.checking ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
-              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "baseline" ? "Making the lint baseline" : "Checking now"}, started{" "}
+              <Loader2 className="size-4 animate-spin" aria-hidden /> Checking now, started{" "}
               <Ago ts={r.checking_since} />
             </span>
           ) : data.can_check ? (
@@ -589,8 +562,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <NextBox next={next} r={r} busy={busy} run={run} />
       )}
       {!data.can_check && !r.checking && data.check_note && <p className="text-xs text-muted-foreground">{data.check_note}</p>}
-      {/* The baseline's next step on its row says what its result would. */}
-      {r.result && !r.checking && !(placed && r.baseline_pr) && (
+      {r.result && !r.checking && (
         <p role="status" className="text-sm text-success">
           {r.result}
         </p>
@@ -708,21 +680,14 @@ export function SetupScreen() {
   );
 }
 
-export const actionText: Record<string, string> = {
-  check: "Checking",
-  file: "Checking, then filing issues for",
-  queue: "Checking, then filing and starting work on",
-  baseline: "Making the lint baseline for",
-};
 
 /**
  * The setup notice: while a repo isn't ready, or once all are and nothing
- * else has started, or while setup's own check runs (not a job, so the
- * Floor doesn't show it). None on the setup screen itself.
+ * else has started, or while a check runs (a job with no item, so the
+ * line doesn't show it as one). None on the setup screen itself.
  */
 export function useSetupNotice(): Notice | null {
   const { data } = useReadiness();
-  // Home leads with setup itself.
   const path = useLocation().pathname;
   // Home leads with setup itself while a person's part is left.
   const here = path === "/setup" || (path === "/" && !!data?.repos.some(yourPartLeft));
@@ -731,7 +696,7 @@ export function useSetupNotice(): Notice | null {
   const doing = running && (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
-      {actionText[running.action] ?? "Checking"} {repoName(running.repo) || running.repo}, started <Ago ts={running.checking_since} />.
+      Checking {repoName(running.repo) || running.repo}, started <Ago ts={running.checking_since} />.
       <Link to="/setup" className="font-medium underline underline-offset-2">
         Watch it
       </Link>

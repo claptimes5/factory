@@ -156,30 +156,6 @@ func Path(dir, repo string) string {
 	return filepath.Join(dir, strings.ReplaceAll(repo, "/", "__")+".json")
 }
 
-// beside is a file kept next to repo's report in dir.
-func beside(dir, repo, ext string) string {
-	return strings.TrimSuffix(Path(dir, repo), ".json") + "." + ext
-}
-
-// SaveBaselinePR records the pull request a lint baseline opened on repo.
-func SaveBaselinePR(dir, repo, url string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(beside(dir, repo, "baseline"), []byte(url), 0o644)
-}
-
-// ClearBaselinePR forgets the pull request SaveBaselinePR recorded.
-func ClearBaselinePR(dir, repo string) {
-	_ = os.Remove(beside(dir, repo, "baseline"))
-}
-
-// BaselinePR is the pull request SaveBaselinePR recorded, or "".
-func BaselinePR(dir, repo string) string {
-	b, _ := os.ReadFile(beside(dir, repo, "baseline"))
-	return strings.TrimSpace(string(b))
-}
-
 // Load reads repo's latest report from dir; nil, with no error, when it
 // was never checked.
 func Load(dir, repo string) (*Report, error) {

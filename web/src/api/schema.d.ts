@@ -530,108 +530,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run the readiness check on a repo again, in the background
-         * @description Clones the repo's base branch and runs its install and checks, as a
-         *     build's gates do, then saves the report. It files and labels nothing.
-         *     One check runs at a time (409 while one does). Needs the password, or
-         *     a request from this machine, and a daemon that can run it (403 otherwise).
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        /** @description owner/name */
-                        repo: string;
-                    };
-                };
-            };
-            responses: {
-                200: components["responses"]["Action"];
-                400: components["responses"]["Error"];
-                403: components["responses"]["Error"];
-                409: components["responses"]["Action"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/readiness/file": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check a repo again, then file an issue for each gap that has none, in the background
-         * @description Runs the readiness check as /readiness/check does, then files an issue
-         *     for each blocker and gap that has none. With queue they get the intake
-         *     label (only the blockers while the repo has any), and once it is ready
-         *     the issues filed earlier get it too, so the factory starts on them. A
-         *     check that couldn't finish files nothing. Shares the one-at-a-time
-         *     slot with /readiness/check (409 while a run is going). Needs the
-         *     password, or a request from this machine (403 otherwise).
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        /** @description owner/name */
-                        repo: string;
-                        /** @description Give the issues the intake label, so the factory works on them */
-                        queue?: boolean;
-                    };
-                };
-            };
-            responses: {
-                200: components["responses"]["Action"];
-                400: components["responses"]["Error"];
-                403: components["responses"]["Error"];
-                409: components["responses"]["Action"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/readiness/baseline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record a repo's lint offenses on its base branch as a baseline, and open a pull request with it, in the background
-         * @description For a lint check that fails on the base branch (RuboCop for now), runs
-         *     the repo's install and the linter's baseline command on the base
-         *     branch, checks the lint command passes with it, and pushes only the
-         *     linter's files to factory/lint-baseline with a pull request to merge.
-         *     Once merged, lint passes and only new offenses fail a change. Shares
-         *     the one-at-a-time slot with /readiness/check (409 while a run is
-         *     going). Needs the password, or a request from this machine (403
-         *     otherwise).
+         * Queue a readiness check of a repo
+         * @description Queues a readiness job, which the daemon runs like any job: it clones
+         *     the repo's base branch and runs its install and checks, as a build's
+         *     gates do, saves the report, and files an issue for each blocker a
+         *     change can fix, labeled for the factory. One per repo (409 while one
+         *     is queued or running). Needs the password, or a request from this
+         *     machine, and a daemon that can run it (403 otherwise).
          */
         post: {
             parameters: {
@@ -3180,8 +3085,6 @@ export interface components {
             can_check: boolean;
             /** @description Why it can't, or empty */
             check_note: string;
-            /** @description This request may also file issues from here */
-            can_file: boolean;
         };
         RepoReadiness: {
             repo: string;
@@ -3202,31 +3105,18 @@ export interface components {
             work: components["schemas"]["ReadinessFinding"][];
             /** @description Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps */
             extras: components["schemas"]["ReadinessFinding"][];
-            /** @description Issues filed without the intake label */
-            unqueued: number;
-            /** @description Findings that need an issue and have none */
-            unfiled: number;
-            /** @description Filing with the intake label would do something: file what isn't filed, or label what waited for the blockers */
-            can_queue: boolean;
-            /** @description A run started from the dashboard is going */
+            /** @description A check of the repo, a readiness job, is queued or running */
             checking: boolean;
             checking_since: string;
-            /**
-             * @description What that run does: check, file issues, file and start work, or make a lint baseline
-             * @enum {string}
-             */
-            action: "" | "check" | "file" | "queue" | "baseline";
-            /** @description Why the last run started here failed, or empty */
+            /** @description Why the last check failed, or empty */
             check_error: string;
-            /** @description What the last run started here did, when it filed or made a baseline; else empty */
+            /** @description What the last check did, when it worked; else empty */
             result: string;
-            /** @description Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline */
-            can_baseline: boolean;
-            /** @description The pull request the last lint baseline opened, while lint still fails, or empty */
-            baseline_pr: string;
+            /** @description The readiness job of the check going */
+            check_job: number | null;
             /** @description What started the run going, when the factory did by itself; else empty */
             checking_why: string;
-            /** @description What the run going (or the last one started here) has done so far, a step at a time, oldest first */
+            /** @description What the check going (or the last one) has done so far, a step at a time, oldest first */
             progress: components["schemas"]["ReadinessProgress"][];
         };
         ReadinessStep: {

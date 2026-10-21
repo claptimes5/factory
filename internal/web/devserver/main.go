@@ -7,26 +7,29 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/readiness"
@@ -194,11 +197,7 @@ func main() {
 			}
 			return ""
 		},
-		ReadinessDir: reports, IntakeLabel: "factory:ready", CheckReadiness: recheck(reports), FileReadiness: fileIssues(reports),
-		CanBaseline: func(repo string) bool { return repo == "acme/api" },
-		LintBaseline: func(_ context.Context, repo string) (string, error) {
-			return "https://github.com/" + repo + "/pull/120", nil
-		},
+		ReadinessDir: reports, IntakeLabel: "factory:ready", QueueReadiness: queueCheck(st, jobs, reports),
 		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
 		Chat:         &chatter{st: st},
 		Wizard:       newWizard(rs),
@@ -240,7 +239,6 @@ func main() {
 			return cmd, nil
 		},
 	}
-	progress = s.ReadinessLog
 	h, err := s.Handler()
 	if err != nil {
 		log.Fatal(err)
@@ -785,52 +783,48 @@ func seedReadiness(dir string) error {
 	return nil
 }
 
-// progress is where the fake runs say what they do; main sets it.
-var progress = func(string) io.Writer { return io.Discard }
-
-// recheck pretends to check a repo again: it takes a moment, saying what
-// it runs, and finds it as it was.
-func recheck(dir string) func(context.Context, string) error {
-	return func(ctx context.Context, repo string) error {
-		w := progress(repo)
-		for _, step := range []string{"bundle install", "bundle exec rubocop", "bin/rails test"} {
-			fmt.Fprintf(w, "running `%s`\n", step)
-			select {
-			case <-time.After(500 * time.Millisecond):
-			case <-ctx.Done():
-				return ctx.Err()
+// queueCheck pretends to be the daemon running a readiness check: it
+// queues the job and runs it at once, saying what it runs, and finds the
+// repo as it was, so every browser test sees the same report.
+func queueCheck(st *store.Store, jobs, reports string) func(context.Context, string, string) (bool, error) {
+	var mu sync.Mutex
+	return func(_ context.Context, repo, why string) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		ctx := context.Background()
+		b, _ := json.Marshal(pipeline.ReadinessInput{Repo: repo, Why: why})
+		if _, ok, err := st.EnqueueSoleFor(ctx, store.Job{Kind: pipeline.KindReadiness, Input: string(b)}, repo); !ok || err != nil {
+			return ok, err
+		}
+		j, err := st.ClaimJobKind(ctx, pipeline.KindReadiness)
+		if err != nil || j == nil {
+			return true, err
+		}
+		go func() {
+			dir := filepath.Join(jobs, strconv.FormatInt(j.ID, 10))
+			os.MkdirAll(dir, 0o755)
+			f, err := os.Create(filepath.Join(dir, pipeline.ProgressFile))
+			if err != nil {
+				return
 			}
-			fmt.Fprintf(w, "passed `%s` in 1s\n", step)
-		}
-		r, err := readiness.Load(dir, repo)
-		if err != nil || r == nil {
-			return fmt.Errorf("devserver: no report for %s", repo)
-		}
-		r.Started = time.Now().UTC()
-		_, err = readiness.Save(dir, r)
-		return err
-	}
-}
-
-// fileIssues is the check again, then says what it would file. It
-// changes nothing, so every browser test sees the same report.
-func fileIssues(dir string) func(context.Context, string, bool) (string, error) {
-	check := recheck(dir)
-	return func(ctx context.Context, repo string, _ bool) (string, error) {
-		if err := check(ctx, repo); err != nil {
-			return "", err
-		}
-		r, err := readiness.Load(dir, repo)
-		if err != nil || r == nil {
-			return "", fmt.Errorf("devserver: no report for %s", repo)
-		}
-		n := 0
-		for _, f := range r.Findings {
-			if f.Issue != nil && f.Issue.Number == 0 {
-				n++
+			defer f.Close()
+			say := func(text string) {
+				b, _ := json.Marshal(pipeline.ProgressLine{At: store.Now(), Text: text})
+				f.Write(append(b, '\n'))
 			}
-		}
-		return fmt.Sprintf("Opened %d issue(s) on %s.", n, repo), nil
+			for _, step := range []string{"bundle install", "bundle exec rubocop", "bin/rails test"} {
+				say("running `" + step + "`")
+				time.Sleep(500 * time.Millisecond)
+				say("passed `" + step + "` in 1s")
+			}
+			if r, _ := readiness.Load(reports, repo); r != nil {
+				r.Started = time.Now().UTC()
+				readiness.Save(reports, r)
+			}
+			os.WriteFile(filepath.Join(dir, pipeline.ResultFile), []byte("Checked main. Opened 0 issue(s) on "+repo+"."), 0o644)
+			st.FinishJob(ctx, j.ID, store.Result{State: state.Succeeded})
+		}()
+		return true, nil
 	}
 }
 
