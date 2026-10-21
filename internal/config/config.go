@@ -757,9 +757,8 @@ func (c *Config) Validate() error {
 	if _, single := SplitRepo("", c.SingleRepo); c.SingleRepo != "" && (len(c.Repos) != 1 || c.Repos[0].Name != single) {
 		bad("use repo: for one repository or repos: for several, not both")
 	}
-	if len(c.Repos) == 0 {
-		bad("repos needs at least one owner/name")
-	}
+	// No repos yet is a factory not set up: setup and serve's get-started
+	// page ask for them, and the other commands refuse (see NoRepos).
 	checkAutoMerge := func(where string, a *AutoMerge) {
 		if a == nil {
 			return
@@ -1103,6 +1102,9 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(ks)
 	return ks
 }
+
+// NoRepos says no repo is chosen yet, as a new factory.yaml starts.
+func (c *Config) NoRepos() bool { return len(c.Repos) == 0 }
 
 // Primary is the first repo: the one commands use when you name none.
 func (c *Config) Primary() Repo { return c.resolve(c.Repos[0]) }

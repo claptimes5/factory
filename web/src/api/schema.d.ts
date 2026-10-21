@@ -2150,7 +2150,7 @@ export interface paths {
         put?: never;
         /**
          * Use a personal access token for GitHub (for a quick try)
-         * @description Clears the GitHub App settings, then checks access.
+         * @description Clears the GitHub App settings, then checks access. A GitLab token (glpat-...) is refused.
          */
         post: {
             parameters: {
@@ -2166,6 +2166,39 @@ export interface paths {
                     };
                 };
             };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/github/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove the saved GitHub token or app settings
+         * @description Deletes them from factory.env, so another way to connect can be chosen. A variable exported where the factory starts still applies.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
             responses: {
                 200: components["responses"]["WizardResult"];
                 400: components["responses"]["Error"];
@@ -2284,7 +2317,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save the GitLab token, then check access */
+        /**
+         * Save the GitLab token, then check access
+         * @description A GitHub token (ghp_..., github_pat_...) is refused.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2299,6 +2335,39 @@ export interface paths {
                     };
                 };
             };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/gitlab/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove the saved GitLab token
+         * @description Deletes it from factory.env. A GITLAB_TOKEN exported where the factory starts still applies.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
             responses: {
                 200: components["responses"]["WizardResult"];
                 400: components["responses"]["Error"];

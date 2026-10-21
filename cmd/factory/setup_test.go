@@ -541,7 +541,7 @@ func testConfig(t *testing.T, repo string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	y := regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAllString(string(b), "repo: "+repo)
+	y := regexp.MustCompile(`(?m)^(# )?repo: .*$`).ReplaceAllString(string(b), "repo: "+repo)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "factory.yaml")
 	os.WriteFile(path, []byte(y), 0o644)

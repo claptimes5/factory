@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +9,7 @@ import (
 )
 
 func TestPreview(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.example.yaml")
+	b, _ := exampleYAML()
 	y := strings.Replace(string(b), "repo: claptimes5/factory", "repos:\n  - name: o/web\n    preview: {start: npm run dev -- --port $PORT}\n  - o/api", 1)
 	c, err := Parse([]byte(y))
 	if err != nil {

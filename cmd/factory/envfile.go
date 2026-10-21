@@ -158,23 +158,57 @@ func updateEnvFile(path string, set map[string]string, drop []string) ([]string,
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
+	return off, replaceEnvFile(path, mode, out)
+}
+
+// replaceEnvFile writes lines to path through a temporary file, so a
+// crash never leaves it half written.
+func replaceEnvFile(path string, mode os.FileMode, lines []string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".factory-env-*")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
 	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
-		return nil, err
+		return err
 	}
-	if _, err := tmp.WriteString(strings.Join(out, "\n") + "\n"); err != nil {
+	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
 		tmp.Close()
-		return nil, err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return nil, err
+		return err
 	}
-	return off, os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path)
+}
+
+// removeEnvKeys deletes keys from the settings file, commented-out
+// copies included, so a secret removed from the page doesn't stay in it.
+func removeEnvKeys(path string, keys []string) error {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		k, _, ok := strings.Cut(strings.TrimLeft(strings.TrimSpace(line), "#; "), "=")
+		if ok && slices.Contains(keys, strings.TrimSpace(strings.TrimPrefix(k, "export "))) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return replaceEnvFile(path, st.Mode().Perm(), out)
 }
 
 // loadEnvFile sets each variable from the file that the environment does

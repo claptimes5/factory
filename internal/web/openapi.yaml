@@ -660,7 +660,7 @@ paths:
   /setup/github/token:
     post:
       summary: Use a personal access token for GitHub (for a quick try)
-      description: Clears the GitHub App settings, then checks access.
+      description: Clears the GitHub App settings, then checks access. A GitLab token (glpat-...) is refused.
       requestBody:
         required: true
         content:
@@ -670,6 +670,14 @@ paths:
               required: [token]
               properties:
                 token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/github/disconnect:
+    post:
+      summary: Remove the saved GitHub token or app settings
+      description: Deletes them from factory.env, so another way to connect can be chosen. A variable exported where the factory starts still applies.
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -708,6 +716,7 @@ paths:
   /setup/gitlab/token:
     post:
       summary: Save the GitLab token, then check access
+      description: A GitHub token (ghp_..., github_pat_...) is refused.
       requestBody:
         required: true
         content:
@@ -717,6 +726,14 @@ paths:
               required: [token]
               properties:
                 token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/gitlab/disconnect:
+    post:
+      summary: Remove the saved GitLab token
+      description: Deletes it from factory.env. A GITLAB_TOKEN exported where the factory starts still applies.
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }

@@ -46,7 +46,7 @@ test("the get-started page lists each step and opens the first that needs attent
   await openStep(page, "machine");
   await expect(step(page, "machine").getByTestId("machine-finding")).toHaveCount(3);
   await expect(step(page, "machine")).toContainText("sudo apt-get install ttyd");
-  await step(page, "machine").getByRole("button", { name: "Re-check" }).click();
+  await step(page, "machine").getByRole("button", { name: "Check again" }).click();
   await expect(step(page, "machine").getByRole("status")).toContainText("Checked this machine again.");
 
   // A saved secret comes back only masked.
@@ -244,4 +244,77 @@ test("the checks step tries the checks before saving, and shows what failed", as
   await api.getByRole("button", { name: "Try these checks" }).click();
   await expect(result).toContainText("Every one passed on the base branch");
   if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("repositories are chosen by where they're hosted, and added or removed one at a time", async ({ page }, info) => {
+  // Saving plays the server's answer, so the shared sample setup keeps its repos.
+  let sent = "";
+  await page.route(/\/api\/v1\/setup\/repos$/, async (route) => {
+    sent = route.request().postDataJSON().repos;
+    const res = await route.fetch({ url: page.url().replace(/\/app\/.*/, "/api/v1/setup"), method: "GET", headers: {} });
+    const repos = sent.split(", ");
+    await route.fulfill({ json: { message: `Saved ${repos.join(" and ")} to factory.yaml.`, wizard: { ...(await res.json()), repos } } });
+  });
+  await page.goto("/app/get-started");
+  const repos = await openStep(page, "repos");
+  await expect(repos).toContainText("never uses or changes a folder on this computer");
+  await expect(repos.getByTestId("repo")).toHaveCount(2);
+  await expect(repos.getByTestId("repo").first()).toContainText("GitHub");
+  await expect(repos.getByLabel("Repository", { exact: true })).toHaveAttribute("placeholder", "octocat/hello-world");
+
+  // On GitLab, a bare group/project is on the server beside it.
+  await repos.getByText("GitLab", { exact: true }).click();
+  await expect(repos.getByLabel("Server")).toHaveValue("gitlab.com");
+  await repos.getByLabel("Project", { exact: true }).fill("group/sub/project");
+  await repos.getByRole("button", { name: "Add" }).click();
+  expect(sent).toBe("acme/api, acme/web, gitlab.com/group/sub/project");
+  await expect(repos.getByTestId("repo")).toHaveCount(3);
+  await expect(repos.getByTestId("repo").nth(2)).toContainText("GitLab");
+  await expect(repos.getByRole("status")).toContainText("Saved acme/api and acme/web and gitlab.com/group/sub/project");
+  await shot(page, info, "get-started-repos");
+
+  await repos.getByRole("button", { name: "Remove gitlab.com/group/sub/project" }).click();
+  expect(sent).toBe("acme/api, acme/web");
+  await expect(repos.getByTestId("repo")).toHaveCount(2);
+  if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("a token pasted in the wrong host's field says so, and a saved one can be removed", async ({ page }) => {
+  // The server's answers are played here, so the shared sample setup stays as it is.
+  let method = "none";
+  const withGitHub = async (route: import("@playwright/test").Route) => {
+    const res = await route.fetch({ url: page.url().replace(/\/app\/.*/, "/api/v1/setup"), method: "GET", headers: {} });
+    const body = await res.json();
+    return { ...body, github: { ...body.github, method, token: method === "token" ? { set: true, masked: "ghp_…1234" } : { set: false, masked: "" } } };
+  };
+  await page.route(/\/api\/v1\/setup(\?.*)?$/, async (route) => route.fulfill({ json: await withGitHub(route) }));
+  await page.route(/\/api\/v1\/setup\/github\/(token|disconnect)$/, async (route) => {
+    method = route.request().url().endsWith("/token") ? "token" : "none";
+    await route.fulfill({ json: { message: method === "token" ? "Saved the token." : "Removed GitHub's saved credentials from factory.env.", wizard: await withGitHub(route) } });
+  });
+  await page.goto("/app/get-started");
+  const gh = await openStep(page, "github");
+  await gh.getByText(/^Other ways to connect/).click();
+  const field = gh.getByLabel("GitHub token");
+  await field.fill("glpat-abcdefghijklmnop");
+  await expect(gh.getByText("That's a GitLab token.")).toBeVisible();
+  await expect(gh.getByRole("button", { name: "Use this token" })).toBeDisabled();
+
+  await field.fill("ghp_abcdefghijkl1234");
+  await gh.getByRole("button", { name: "Use this token" }).click();
+  await expect(gh).toContainText("Connected with a personal access token ghp_…1234");
+  await gh.getByRole("button", { name: "Remove token" }).click();
+  await expect(gh.getByRole("status").first()).toContainText("Removed GitHub's saved credentials");
+  await expect(gh.getByRole("button", { name: "Remove token" })).toHaveCount(0);
+  await expect(gh.getByRole("button", { name: "Create an app for me" })).toBeVisible();
+});
+
+test("the finish step says what happens next", async ({ page }) => {
+  await page.route(/\/api\/v1\/setup(\?.*)?$/, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), can_finish: true, warnings: [] } });
+  });
+  await page.goto("/app/get-started");
+  const finish = await openStep(page, "finish");
+  await expect(finish.getByRole("region", { name: "What happens next" })).toContainText("Add the factory:ready label to an issue");
 });

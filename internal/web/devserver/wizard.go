@@ -278,8 +278,14 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		if strings.TrimSpace(in.Token) == "" {
 			return "", errors.New("paste the token first")
 		}
+		if strings.HasPrefix(strings.TrimSpace(in.Token), "glpat-") {
+			return "", errors.New("that's a GitLab token (glpat-…), not a GitHub one: add a GitLab project under Repositories, and paste it in the GitLab step")
+		}
 		w.token, w.app, w.installed, w.changed = strings.TrimSpace(in.Token), false, false, true
-		return "Saved the token.", nil
+		return "Saved the token. The factory can reach " + strings.Join(w.repos, " and ") + ".", nil
+	case "github/disconnect":
+		w.token, w.app, w.installed, w.changed = "", false, false, true
+		return "Removed GitHub's saved credentials from factory.env.", nil
 	case "access/check":
 		if !w.reach() {
 			return "Connect the factory to " + strings.Join(w.repos, " and ") + " first.", nil

@@ -1,14 +1,13 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestSources(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.example.yaml")
+	b, _ := exampleYAML()
 	y := string(b)
 	c, err := Parse(b)
 	if err != nil {
@@ -68,7 +67,7 @@ func TestSources(t *testing.T) {
 }
 
 func TestDependabotIsGitHubOnly(t *testing.T) {
-	b, _ := os.ReadFile("../../factory.example.yaml")
+	b, _ := exampleYAML()
 	y := strings.Replace(string(b), "repo: claptimes5/factory", "repos: [o/r, gitlab.com/team/web]", 1)
 	if _, err := Parse([]byte(y)); err != nil {
 		t.Fatal(err)

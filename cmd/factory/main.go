@@ -150,6 +150,10 @@ func run(args []string) error {
 		// Before the database opens, so --data can remove it.
 		return uninstall(context.Background(), os.Stdout, os.Stdin, *cfgPath, cfg, *envPath, fs.Args()[1:])
 	}
+	if cfg.NoRepos() && fs.Arg(0) != "serve" {
+		// serve opens the get-started page, which asks for them.
+		return fmt.Errorf("%s names no repositories yet: run ./factory setup, or ./factory serve and open the get-started page", *cfgPath)
+	}
 	dataDir := cfg.Path(cfg.DataDir)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
@@ -389,6 +393,9 @@ func (e needsSetup) Error() string { return e.err.Error() }
 func (e needsSetup) Unwrap() error { return e.err }
 
 func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
+	if cfg.NoRepos() {
+		return nil, needsSetup{errors.New("no repositories chosen yet")}
+	}
 	// Fail at start, not on the first job, when credentials are missing.
 	for _, repos := range [][]string{githubRepos(cfg), gitlabRepos(cfg)} {
 		if len(repos) == 0 {
