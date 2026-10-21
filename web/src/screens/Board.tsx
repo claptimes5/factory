@@ -83,7 +83,7 @@ export function BoardScreen() {
                   aria-expanded={open === s}
                   onClick={() => setOpen(open === s ? "" : s)}
                   className={cn(
-                    "flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-[13px]",
+                    "flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card text-meta",
                     open === s && "border-foreground",
                   )}
                 >
@@ -175,7 +175,7 @@ function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; 
     <article
       data-testid="card"
       className={cn(
-        "relative flex flex-col gap-2.5 rounded-[10px] border bg-card p-3.5 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary/60",
+        "relative flex flex-col gap-2.5 rounded-control border bg-card p-3.5 transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary/60",
         c.live && "border-live-border bg-live-bg",
         c.stage === "blocked" && "border-destructive/50",
       )}
@@ -187,7 +187,7 @@ function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; 
         </span>
         {c.cost_usd > 0 && <span>{money(c.cost_usd)}</span>}
       </div>
-      <CardLink card={c} className="text-[15px] leading-snug font-semibold" />
+      <CardLink card={c} className="text-body leading-snug font-semibold" />
       {c.live && (
         <div className={cn("flex min-w-0 items-center gap-2 text-xs text-primary-soft", c.activity && "font-mono")}>
           <span title="A job is running" className="pulse size-[7px] shrink-0 rounded-full bg-primary" />
@@ -260,9 +260,9 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
             : [c.complexity && `size ${c.complexity}`, c.estimate_waiting && c.estimate].filter(Boolean).join(" · ")}
         </span>
       </div>
-      <CardLink card={c} className="font-display text-[17px] leading-tight font-semibold" />
+      <CardLink card={c} className="font-display text-title-sm leading-tight font-semibold" />
       {pr ? (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-text-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-2">
           {c.gates_total > 0 && (
             <span className="flex items-center gap-1.5">
               <Dot ok={c.gates_passed === c.gates_total} />
@@ -279,7 +279,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       ) : (
         c.blocked_note && <p className="line-clamp-3 text-sm leading-relaxed text-text-2">“{brief(c.blocked_note)}”</p>
       )}
-      <WaitsFor items={c.waits_for} plan={plan} className="text-[13px]" />
+      <WaitsFor items={c.waits_for} plan={plan} className="text-meta" />
       <div className="mt-auto flex flex-wrap gap-2">
         {pr && c.prs.length > 1
           ? // A change across a workspace: one PR per repo, in the order they merge.

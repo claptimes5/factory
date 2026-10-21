@@ -32,7 +32,7 @@ export function ActivityFeed({ repo, limit = 50, className }: { repo?: string; l
         const body = (
           <>
             {e.actor === "orchestrator" && <span className="text-muted-foreground">Orchestrator{e.ref ? " on " : ": "}</span>}
-            {e.ref && <span className={cn("font-mono text-[13px]", toneColor[e.tone])}>{shortRef(e.ref)}</span>}
+            {e.ref && <span className={cn("font-mono text-meta", toneColor[e.tone])}>{shortRef(e.ref)}</span>}
             {e.ref && " "}
             <span className="text-text-2">{e.text}</span>
           </>
@@ -71,7 +71,7 @@ export function WeekStats({ className }: { className?: string }) {
       {stats.map((s) => (
         <div key={s.l} className="flex flex-col-reverse justify-end">
           <dt className="text-xs leading-tight text-muted-foreground">{s.l}</dt>
-          <dd className="font-display text-[22px] font-semibold">{s.v}</dd>
+          <dd className="font-display text-title font-semibold">{s.v}</dd>
         </div>
       ))}
     </dl>

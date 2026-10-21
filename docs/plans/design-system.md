@@ -1,6 +1,6 @@
 # Plan: Factory's design system and the new home
 
-Status: agreed direction, not started. Mockups:
+Status: phase 0 (foundations) done; phase 1 next. Mockups:
 [Factory design directions](https://claude.ai/artifact/Huz7XkuZKRMnwtdC2ZyYKV),
 round 4 ("All together, with trust and quiet hours").
 
@@ -75,8 +75,8 @@ Factory's own patterns, on top of those:
 | `NoticeArea` | One place for warnings that apply everywhere (main is red, auto-merge paused, setup unfinished), replacing the stacked banners |
 | `Field`, `SecretField`, `CopyCommand`, `EmptyState`, `StatusDot`, `PageHeader` | Shared forms and page parts |
 
-A style guide page in the app (`/app/design`, dev builds only) shows every
-component in light, dark and phone widths. A lint rule refuses arbitrary
+A style guide page in the app (`/app/design`, not in the menus) shows
+every component in light, dark and phone widths. A lint rule refuses arbitrary
 Tailwind values (`text-[13px]`, `rounded-[..]`) outside `components/ui`.
 
 ## Screens

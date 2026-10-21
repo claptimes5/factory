@@ -46,7 +46,7 @@ function Detail({ text }: { text: string }) {
   }
   flush(fence !== "");
   return (
-    <div className="flex flex-col gap-2 text-[13px] leading-relaxed text-text-2">
+    <div className="flex flex-col gap-2 text-meta leading-relaxed text-text-2">
       {blocks.map((b, i) =>
         b.code ? (
           <pre key={i} className="max-h-60 overflow-auto rounded-md bg-muted p-2.5 font-mono text-xs whitespace-pre-wrap">
@@ -139,12 +139,12 @@ function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; lab
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h4 className="text-[15px] font-semibold">
+        <h4 className="text-body font-semibold">
           {n}. {step.title}
         </h4>
-        <p className="text-[13px] text-text-2">{step.why}</p>
-        {step.state === "done" && step.passed && <p className="text-[13px] text-success">{step.passed}</p>}
-        {step.state === "unchecked" && <p className="text-[13px] text-muted-foreground">Not checked yet: the check stopped before this step.</p>}
+        <p className="text-meta text-text-2">{step.why}</p>
+        {step.state === "done" && step.passed && <p className="text-meta text-success">{step.passed}</p>}
+        {step.state === "unchecked" && <p className="text-meta text-muted-foreground">Not checked yet: the check stopped before this step.</p>}
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (

@@ -16,6 +16,9 @@ import { LiveScreen } from "@/screens/Live";
 import { SettingsScreen } from "@/screens/Settings";
 import { SetupScreen } from "@/screens/Setup";
 import { GetStartedScreen } from "@/screens/GetStarted";
+import { DesignScreen } from "@/screens/Design";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./index.css";
 
 const router = createBrowserRouter(
@@ -34,6 +37,7 @@ const router = createBrowserRouter(
         { path: "/settings", element: <SettingsScreen /> },
         { path: "/setup", element: <SetupScreen /> },
         { path: "/get-started", element: <GetStartedScreen /> },
+        { path: "/design", element: <DesignScreen /> },
         { path: "*", element: <NotFound /> },
       ],
     },
@@ -44,7 +48,10 @@ const router = createBrowserRouter(
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <TooltipProvider delayDuration={300}>
+        <RouterProvider router={router} />
+        <Toaster />
+      </TooltipProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

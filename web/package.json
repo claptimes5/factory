@@ -7,13 +7,13 @@
     "gen": "openapi-typescript ../internal/web/openapi.yaml -o src/api/schema.d.ts",
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "npm run gen && tsc --noEmit && vite build",
+    "check-styles": "node scripts/check-styles.mjs",
+    "build": "npm run gen && tsc --noEmit && npm run check-styles && vite build",
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@fontsource-variable/jetbrains-mono": "5.3.0",
-    "@fontsource-variable/space-grotesk": "5.3.0",
-    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
     "@tanstack/react-query": "5.104.1",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
@@ -21,9 +21,11 @@
     "clsx": "2.1.1",
     "diff2html": "3.4.56",
     "lucide-react": "1.50.0",
+    "radix-ui": "1.6.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-router": "7.18.4",
+    "sonner": "2.0.8",
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {

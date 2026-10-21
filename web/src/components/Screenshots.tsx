@@ -53,7 +53,7 @@ function Shot({ s }: { s: PreviewShot }) {
         loading="lazy"
         className="max-h-56 w-full rounded border object-cover object-top group-hover:border-primary"
       />
-      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+      <span className="mt-0.5 block text-caption text-muted-foreground">
         {s.side} · {s.viewport}
       </span>
     </a>

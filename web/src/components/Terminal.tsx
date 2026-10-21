@@ -27,7 +27,7 @@ function LiveTerminal({ jobId }: { jobId: number }) {
   const el = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting");
   useEffect(() => {
-    const term = new XTerm({ convertEol: false, cursorBlink: true, fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace", theme: { background: "#0b0b0e" } });
+    const term = new XTerm({ convertEol: false, cursorBlink: true, fontSize: 12, fontFamily: "\"Geist Mono Variable\", ui-monospace, Menlo, monospace", theme: { background: "#0b0b0e" } });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el.current!);
@@ -59,7 +59,7 @@ function LiveTerminal({ jobId }: { jobId: number }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-1 text-xs text-muted-foreground">Shell in the job's container · {status}</div>
-      <div ref={el} data-testid="terminal" className="min-h-64 flex-1 overflow-hidden rounded-md border bg-[#0b0b0e] p-1" />
+      <div ref={el} data-testid="terminal" className="min-h-64 flex-1 overflow-hidden rounded-md border bg-terminal p-1" />
     </div>
   );
 }

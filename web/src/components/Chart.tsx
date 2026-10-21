@@ -33,7 +33,7 @@ export function Chart({ points, kind = "line", format = (v: number) => v.toFixed
       {[0, 0.5, 1].map((f) => (
         <g key={f}>
           <line x1={pad.l} x2={w - pad.r} y1={y(top * f)} y2={y(top * f)} className="stroke-border" strokeDasharray={f ? "3 3" : undefined} />
-          <text x={pad.l - 6} y={y(top * f) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+          <text x={pad.l - 6} y={y(top * f) + 4} textAnchor="end" className="fill-muted-foreground text-caption">
             {format(top * f)}
           </text>
         </g>
@@ -60,7 +60,7 @@ export function Chart({ points, kind = "line", format = (v: number) => v.toFixed
         )}
       {points.map((p, i) =>
         i % every === 0 ? (
-          <text key={i} x={x(i)} y={h - 6} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+          <text key={i} x={x(i)} y={h - 6} textAnchor="middle" className="fill-muted-foreground text-caption">
             {p.label}
           </text>
         ) : null,
