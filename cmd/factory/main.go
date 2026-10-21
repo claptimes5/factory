@@ -594,6 +594,14 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return pl.LintBaseline(ctx, repo)
 	}
 	go relinkSaved(ctx, cfg, p)
+	srv.BaseSHA = func(ctx context.Context, repo string) (string, error) {
+		gh, ok := p.GitHubFor(repo).(forge)
+		if !ok {
+			return "", fmt.Errorf("no client for %s's host", repo)
+		}
+		return gh.BranchSHA(ctx, repoFor(cfg, repo).BaseBranch)
+	}
+	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p

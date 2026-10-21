@@ -387,6 +387,11 @@ func fileReport(ctx context.Context, cfg *config.Config, gh forge, r *readiness.
 		return "", err
 	}
 	filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
+	if queue && err == nil {
+		// The daemon carries on from here: it checks again as the base
+		// branch moves, and queues the rest once the blockers are fixed.
+		err = readiness.Follow(readinessDir(cfg), r.Repo)
+	}
 	if _, serr := readiness.Save(readinessDir(cfg), r); err == nil {
 		err = serr
 	}
@@ -505,7 +510,7 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		ask := fmt.Sprintf("Label them %s so the factory starts on them when it runs?", cfg.Intake.Label)
 		if !r.Ready {
-			ask = fmt.Sprintf("Label the blockers %s so the factory starts on them when it runs? The rest are filed for later", cfg.Intake.Label)
+			ask = fmt.Sprintf("Have the factory work through them? It labels the blockers %s now, and starts the rest by itself once they pass", cfg.Intake.Label)
 		}
 		queue := p.yes(ask, true)
 		filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
@@ -518,7 +523,11 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		p.say("Opened %d issue(s) on %s.", len(filed), repo)
 		if queue && !r.Ready {
-			p.say("Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", repo)
+			if err := readiness.Follow(readinessDir(cfg), repo); err != nil {
+				p.say("Couldn't save that: %v. Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", err, repo)
+			} else {
+				p.say("The factory takes it from here while it runs: it fixes the blockers, checks %s again as %s changes, and starts the rest once they pass. The Setup screen follows along.", repo, r.Branch)
+			}
 		}
 	}
 }

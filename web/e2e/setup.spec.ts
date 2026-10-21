@@ -48,20 +48,25 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   const flaky = steps.nth(2).getByTestId("readiness-finding");
   await expect(flaky).toContainText("Tests are flaky");
   await expect(flaky).toContainText("Waiting its turn");
-  // Filing is a button, never a command to run.
+  // One next step, and it's a button, never a command to run.
+  const next = api.getByTestId("next-step");
+  await expect(next).toContainText("Next: let the factory work through it");
+  await expect(next).toContainText("starts on the 2 recommended items below by itself");
   await expect(api).not.toContainText("./factory");
-  await expect(api.getByRole("button", { name: "File issues" })).toBeVisible();
-  await expect(api.getByRole("button", { name: "File and start work" })).toBeVisible();
+  await expect(next.getByRole("button", { name: "Only file the issues" })).toBeVisible();
+  await expect(next.getByRole("button", { name: "File and start work" })).toBeVisible();
 
-  // A gap that isn't needed to start waits under Worth doing later.
-  await api.getByText("Worth doing later (2)").click();
-  await expect(api).toContainText("Filed, not queued");
-  await expect(api).toContainText("No issue yet");
+  // What isn't needed to start is recommended, in plain view.
+  const recommended = api.getByRole("region", { name: "Recommended" });
+  await expect(recommended).toContainText("Recommended (2)");
+  await expect(recommended).toContainText("No feature map");
+  await expect(recommended).toContainText("Filed, not queued");
+  await expect(recommended).toContainText("No issue yet");
 
   const web = page.getByRole("region", { name: "Setup of acme/web" });
   await expect(web).toContainText("3 of 3 setup steps done");
-  await expect(web).toContainText("Ready: add the factory:ready label to issues to start.");
-  await expect(web).toContainText("1 issue the check filed for later isn't labeled yet");
+  await expect(web.getByTestId("next-step")).toContainText("Ready. Next: start the recommended work");
+  await expect(web.getByTestId("next-step").getByRole("button", { name: "File and start work" })).toBeVisible();
   await shot(page, info, "setup");
   if (phone(info)) await noSidewaysScroll(page);
 
@@ -115,23 +120,35 @@ test("without leave to file, the setup screen names no buttons it doesn't show",
   });
   await page.goto("/app/setup");
   const api = page.getByRole("region", { name: "Setup of acme/api" });
-  await api.getByText("Worth doing later (2)").click();
   await expect(api).toContainText("No issue yet");
   await expect(api).not.toContainText("File issues");
+  await expect(api).not.toContainText("Only file the issues");
   await expect(api).not.toContainText("File and start work");
   await expect(api.getByRole("button", { name: /File/ })).toHaveCount(0);
   await expect(api).toContainText("Checking from here needs a dashboard password.");
 });
 
-test("lint failing on main offers a baseline, and making it says where its pull request is", async ({ page }) => {
+test("lint failing on main offers a baseline, and making it keeps its pull request on the page", async ({ page }) => {
+  // The devserver keeps the pull request once either project makes it, so
+  // until this one has, the page sees none.
+  let made = false;
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    if (!made) for (const r of body.repos) r.baseline_pr = "";
+    await route.fulfill({ response: res, json: body });
+  });
   await page.goto("/app/setup");
   const api = page.getByRole("region", { name: "Setup of acme/api" });
   const offer = api.getByTestId("baseline");
   await expect(offer).toContainText("Lint fails on main today");
   await expect(offer).toContainText("rubocop --auto-gen-config");
+  made = true;
   await offer.getByRole("button", { name: "Accept today's offenses" }).click();
   await expect(api.getByRole("status").filter({ hasText: "baseline" }).first()).toBeVisible();
-  await expect(api).toContainText("https://github.com/acme/api/pull/120", { timeout: 10_000 });
+  const pr = api.getByTestId("baseline").getByRole("link", { name: "Open the pull request" });
+  await expect(pr).toHaveAttribute("href", "https://github.com/acme/api/pull/120", { timeout: 10_000 });
+  await expect(api).toContainText("Once you merge it, the factory checks again by itself.");
 });
 
 test("a setup run in progress shows above every screen, with its time counting", async ({ page }) => {

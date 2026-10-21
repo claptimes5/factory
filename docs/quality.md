@@ -605,8 +605,11 @@ Each one comes with an issue written for the factory's builder, so the
 first thing the factory does on a new repo can be making it verifiable.
 While a repo has blockers, `-queue` labels only those for the factory,
 since every other job would fail until they're fixed. The gaps are filed
-for later, and the next `-queue` run after the blockers are fixed labels
-them too.
+for later. `-queue` also hands the rest to the daemon: while the repo
+isn't ready, `factory serve` checks it again by itself whenever its base
+branch moves (a fix merged, by the factory or a person), and once the
+blockers are fixed that run labels the gaps too. The choice is kept as
+`data/readiness/<owner>__<name>.follow`; delete that file to stop it.
 
 Issues it files carry `factory:readiness`. Running it again skips a gap
 whose issue is still open or was closed as not planned, and files it again
@@ -626,20 +629,29 @@ every time. Each step says whether it passes and why the factory needs it,
 and lists its blockers, each linked to its issue and to the factory's item
 for it: waiting its turn, being built, needs you or done. A blocker with
 no issue yet, or one only you can fix (a missing service in `factory.yaml`),
-says so. Gaps are listed apart as worth doing later. While a repo has
-blockers, a line above every screen links there; once every repo is
-ready, it says to add the `factory:ready` label to issues to start.
+says so. Gaps follow as **Recommended**, each with the same status, and
+tips under **Nice to have**. Above the steps, one **Next** box says the
+one thing to do now and holds its button: check the repo, answer an item
+that needs you, let the factory work through it, merge the lint
+baseline, fix a blocker only you can, or, once ready, start the
+recommended work and add the `factory:ready` label to issues. While a
+repo has blockers, a line above every screen links there; once every
+repo is ready, it says to add the `factory:ready` label to issues to
+start.
 `factory status` prints the same summary.
 
 A blocker the factory fixed stays on the report until the check runs
-again, since only a fresh run proves it. **Check again** on that screen
+again, since only a fresh run proves it. While a repo isn't ready, the
+daemon checks it again by itself within five minutes of its base branch
+moving. **Check again** on that screen
 runs it in the background on the base branch as it is now, so a fix made
 outside the factory counts too. It runs the repo's install and checks the
 way a build's gates do and files nothing, one repo at a time.
-**File issues** checks again, then files an issue for each gap that has
-none, as `factory readiness -file` does. **File and start work** also
-adds the intake label, as `-queue` does: to the blockers while there are
-any, and once the repo is ready to the issues filed earlier too. Like
+**Only file the issues** checks again, then files an issue for each gap
+that has none, as `factory readiness -file` does. **File and start work**
+also adds the intake label, as `-queue` does: to the blockers while there
+are any, and once the repo is ready to the issues filed earlier too. Like
+`-queue`, it hands the rest to the daemon, so you press it once. Like
 Settings, these need the dashboard password or a browser on the
 factory's own machine.
 
@@ -668,9 +680,10 @@ pieces that each pass a whole-repo lint. When the linter is RuboCop
    comment the baseline made redundant. If lint still fails, it pushes
    nothing;
 4. pushes only those two files to `factory/lint-baseline` and opens a
-   pull request for you to review and merge.
+   pull request for you to review and merge. The Setup screen keeps a
+   link to it until lint passes, and says so if making it failed.
 
-Once it's merged, **Check again**: lint passes, the issue filed for it
+Once it's merged, the daemon checks again by itself: lint passes, the issue filed for it
 and any issues it was split into are closed, and only new offenses fail
 a change. Pay the old ones down later by deleting a cop's entry from
 `.rubocop_todo.yml` and fixing what it flags, a cop at a time. Running it

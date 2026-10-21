@@ -120,6 +120,41 @@ func Path(dir, repo string) string {
 	return filepath.Join(dir, strings.ReplaceAll(repo, "/", "__")+".json")
 }
 
+// beside is a file kept next to repo's report in dir.
+func beside(dir, repo, ext string) string {
+	return strings.TrimSuffix(Path(dir, repo), ".json") + "." + ext
+}
+
+// Follow records that a person asked the factory to work through repo's
+// setup by itself (File and start work): it checks the repo again as its
+// base branch moves, and starts the next issues once they can pass.
+func Follow(dir, repo string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(beside(dir, repo, "follow"), nil, 0o644)
+}
+
+// Followed says whether Follow was called for repo.
+func Followed(dir, repo string) bool {
+	_, err := os.Stat(beside(dir, repo, "follow"))
+	return err == nil
+}
+
+// SaveBaselinePR records the pull request a lint baseline opened on repo.
+func SaveBaselinePR(dir, repo, url string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(beside(dir, repo, "baseline"), []byte(url), 0o644)
+}
+
+// BaselinePR is the pull request SaveBaselinePR recorded, or "".
+func BaselinePR(dir, repo string) string {
+	b, _ := os.ReadFile(beside(dir, repo, "baseline"))
+	return strings.TrimSpace(string(b))
+}
+
 // Load reads repo's latest report from dir; nil, with no error, when it
 // was never checked.
 func Load(dir, repo string) (*Report, error) {

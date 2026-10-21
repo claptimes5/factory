@@ -3220,6 +3220,10 @@ export interface components {
             result: string;
             /** @description Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline */
             can_baseline: boolean;
+            /** @description The pull request the last lint baseline opened, while lint still fails, or empty */
+            baseline_pr: string;
+            /** @description File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass */
+            following: boolean;
         };
         ReadinessStep: {
             /** @enum {string} */

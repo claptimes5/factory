@@ -69,6 +69,13 @@ type APIRepoReadiness struct {
 	// CanBaseline: lint fails on the base branch, and its linter can
 	// record today's offenses as a baseline (POST readiness/baseline).
 	CanBaseline bool `json:"can_baseline"`
+	// BaselinePR is the pull request the last lint baseline opened, while
+	// lint still fails: merging it is what's left.
+	BaselinePR string `json:"baseline_pr"`
+	// Following: a person chose File and start work, so the factory checks
+	// the repo again as its base branch moves and starts the recommended
+	// work once the setup steps pass.
+	Following bool `json:"following"`
 }
 
 // APIReadinessStep is one setup step.
@@ -184,7 +191,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			for _, f := range st.Blockers {
 				as.Blockers = append(as.Blockers, find(f))
 				if f.Issue != nil && f.Issue.Key == "check:lint" && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
-					rr.CanBaseline = true
+					rr.CanBaseline, rr.BaselinePR = true, readiness.BaselinePR(s.ReadinessDir, repo)
 				}
 			}
 			rr.Steps = append(rr.Steps, as)
@@ -197,7 +204,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		if rep.Incomplete {
 			rr.Unfiled = 0
 		}
-		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0)
+		// While it isn't ready, it also turns following on.
+		rr.Following = readiness.Followed(s.ReadinessDir, repo)
+		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0 || !rep.Ready && !rr.Following)
 		out.Repos = append(out.Repos, rr)
 	}
 	switch {
@@ -297,7 +306,10 @@ func (s *Server) apiLintBaseline(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return "", err
 		}
-		return "Opened the lint baseline for review: " + url + " . Merge it, then check again.", nil
+		if err := readiness.SaveBaselinePR(s.ReadinessDir, repo, url); err != nil {
+			return "", err
+		}
+		return "Opened the lint baseline for review. Once you merge it, the factory checks again by itself.", nil
 	})
 }
 
@@ -337,22 +349,37 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action s
 		return
 	}
 	repo := s.Repos[i]
+	if action == "file" && in.Queue {
+		action = "queue"
+	}
+	if busy := s.beginReadiness(repo, action, func(ctx context.Context) (string, error) {
+		return run(ctx, repo, in.Queue)
+	}); busy != "" {
+		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
+		return
+	}
 	msg := "Checking " + repo + ". It takes a few minutes, and this page updates when it's done."
 	switch action {
-	case "file":
+	case "file", "queue":
 		msg = "Checking " + repo + " again, then filing its issues. It takes a few minutes, and this page updates when it's done."
-		if in.Queue {
-			action = "queue"
-		}
 	case "baseline":
 		msg = "Recording " + repo + "'s lint offenses as a baseline. It installs and runs the linter, so it takes a few minutes; this page updates when it's done."
 	}
+	s.act(w, nil, msg)
+}
+
+// failedAs is how a failed run of each action is told on the page.
+var failedAs = map[string]string{"check": "The last check failed: ", "file": "Filing its issues failed: ", "queue": "Filing its issues failed: ",
+	"baseline": "Making the lint baseline failed (nothing was pushed): "}
+
+// beginReadiness starts run for repo in the background, as action, unless
+// a run is going; then it returns the repo that one is for.
+func (s *Server) beginReadiness(repo, action string, run func(ctx context.Context) (string, error)) (busy string) {
 	s.ready.mu.Lock()
 	if s.ready.repo != "" {
 		busy := s.ready.repo
 		s.ready.mu.Unlock()
-		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
-		return
+		return busy
 	}
 	s.ready.repo, s.ready.action, s.ready.since = repo, action, time.Now()
 	if s.ready.errs == nil {
@@ -362,15 +389,62 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action s
 	delete(s.ready.results, repo)
 	s.ready.mu.Unlock()
 	go func() {
-		res, err := run(context.WithoutCancel(r.Context()), repo, in.Queue)
+		res, err := run(context.Background())
 		s.ready.mu.Lock()
 		defer s.ready.mu.Unlock()
 		s.ready.repo, s.ready.action = "", ""
 		if err != nil {
-			s.ready.errs[repo] = err.Error()
+			s.ready.errs[repo] = failedAs[action] + err.Error()
 		} else if res != "" {
 			s.ready.results[repo] = res
 		}
 	}()
-	s.act(w, nil, msg)
+	return ""
+}
+
+// FollowReadiness checks each repo that isn't ready again whenever its
+// base branch moves (a fix merged, by the factory or a person), every
+// interval until ctx ends. A repo someone chose File and start work for
+// is filed and queued as well, so once its setup steps pass the factory
+// starts on the rest by itself.
+func (s *Server) FollowReadiness(ctx context.Context, every time.Duration) {
+	if s.BaseSHA == nil || s.CheckReadiness == nil || s.ReadinessDir == "" {
+		return
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		for _, repo := range s.Repos {
+			s.followOnce(ctx, repo)
+		}
+	}
+}
+
+func (s *Server) followOnce(ctx context.Context, repo string) {
+	rep, err := readiness.Load(s.ReadinessDir, repo)
+	// An incomplete check is the factory's setup, not the repo: a new
+	// commit wouldn't change it.
+	if err != nil || rep == nil || rep.Ready || rep.Incomplete {
+		return
+	}
+	sha, err := s.BaseSHA(ctx, repo)
+	if err != nil || sha == "" || sha == rep.SHA {
+		return
+	}
+	why := rep.Branch + " changed, so the factory checked again by itself. "
+	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {
+		s.beginReadiness(repo, "queue", func(ctx context.Context) (string, error) {
+			res, err := s.FileReadiness(ctx, repo, true)
+			return why + res, err
+		})
+		return
+	}
+	s.beginReadiness(repo, "check", func(ctx context.Context) (string, error) {
+		return why + "Its steps below are up to date.", s.CheckReadiness(ctx, repo)
+	})
 }

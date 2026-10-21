@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -197,7 +198,7 @@ func TestReadinessCheckAgain(t *testing.T) {
 		t.Fatalf("check o/s = %d", code)
 	}
 	wait()
-	if got.Repos[1].CheckError != "cloning o/s: no access" || got.Repos[1].State != "unchecked" {
+	if got.Repos[1].CheckError != "The last check failed: cloning o/s: no access" || got.Repos[1].State != "unchecked" {
 		t.Fatalf("o/s = %+v", got.Repos[1])
 	}
 	// Real work hides the banner.
@@ -341,7 +342,60 @@ func TestReadinessLintBaseline(t *testing.T) {
 			t.Fatal("the baseline never finished")
 		}
 	}
-	if !strings.Contains(got.Repos[0].Result, "https://github.com/o/r/pull/7") {
-		t.Fatalf("result = %q (error %q)", got.Repos[0].Result, got.Repos[0].CheckError)
+	// The pull request stays on the page until lint passes, whatever runs next.
+	if got.Repos[0].BaselinePR != "https://github.com/o/r/pull/7" || !strings.Contains(got.Repos[0].Result, "merge it") {
+		t.Fatalf("result = %q, PR %q (error %q)", got.Repos[0].Result, got.Repos[0].BaselinePR, got.Repos[0].CheckError)
+	}
+}
+
+// A repo that isn't ready is checked again once its base branch moves;
+// once someone chose File and start work, it's filed and queued instead.
+func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
+	t.Parallel()
+	_, _, s := readinessServer(t)
+	sha := "abc1234" // what the report saw
+	s.BaseSHA = func(context.Context, string) (string, error) { return sha, nil }
+	ran := make(chan string, 4)
+	s.CheckReadiness = func(_ context.Context, repo string) error { ran <- "check " + repo; return nil }
+	s.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		ran <- fmt.Sprintf("file %s queue=%v", repo, queue)
+		return "Opened 1 issue(s).", nil
+	}
+	next := func() string {
+		select {
+		case r := <-ran:
+			for busy := true; busy; time.Sleep(5 * time.Millisecond) { // the run's result lands
+				s.ready.mu.Lock()
+				busy = s.ready.repo != ""
+				s.ready.mu.Unlock()
+			}
+			return r
+		case <-time.After(2 * time.Second):
+			return ""
+		}
+	}
+	ctx := context.Background()
+	s.followOnce(ctx, "o/r")
+	s.followOnce(ctx, "o/s") // never checked: nothing to follow
+	if r := next(); r != "" {
+		t.Fatalf("ran %q with nothing changed", r)
+	}
+	sha = "def5678"
+	s.followOnce(ctx, "o/r")
+	if r := next(); r != "check o/r" {
+		t.Fatalf("ran %q", r)
+	}
+	s.ready.mu.Lock()
+	res := s.ready.results["o/r"]
+	s.ready.mu.Unlock()
+	if !strings.Contains(res, "main changed") {
+		t.Fatalf("result = %q", res)
+	}
+	if err := readiness.Follow(s.ReadinessDir, "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	s.followOnce(ctx, "o/r")
+	if r := next(); r != "file o/r queue=true" {
+		t.Fatalf("ran %q", r)
 	}
 }
