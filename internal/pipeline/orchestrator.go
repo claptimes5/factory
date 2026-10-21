@@ -812,7 +812,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				}
 				return "ok", p.closeSplit(ctx, it, kids, actor, a.Reason)
 			})},
-		{Name: "park", Description: "Park an item for a human, with the reason they will read.",
+		{Name: "park", Description: "Park an item for a human, with the reason they will read: at most two short, plain sentences saying what stopped it and what they can do about it.",
 			InputSchema: schema(`"item":{"type":"integer"},`+reasonProp, "item", "reason"),
 			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a itemArgs

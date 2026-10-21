@@ -15,9 +15,11 @@ const extras: [number, string][] = [
  * What a person can do next with a job that ended: Continue (when its work
  * was kept), Retry, Tier up and Park, each saying what it does and which
  * model it runs on. Every press goes through the daemon's own checks.
- * Compact shows the explanations on request; otherwise they are listed.
+ * Compact shows the explanations on request, or right away for one button;
+ * otherwise they are listed. Inverse is for the ink card; children go at
+ * the end of the button row.
  */
-export function Choices({ jobId, itemId, choices, compact }: { jobId: number; itemId?: number; choices: Choice[]; compact?: boolean }) {
+export function Choices({ jobId, itemId, choices, compact, inverse, children }: { jobId: number; itemId?: number; choices: Choice[]; compact?: boolean; inverse?: boolean; children?: React.ReactNode }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -52,11 +54,11 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
   // aren't offered with why, so it never reads as more buttons than there are.
   const hidden = choices.filter((c) => !shown.includes(c));
   const help = (
-    <div className="space-y-1.5 text-xs text-muted-foreground" data-testid="choice-help">
+    <div className={cn("space-y-1.5 text-xs", inverse ? "text-ink-muted" : "text-muted-foreground")} data-testid="choice-help">
       <ul className="space-y-1.5">
         {shown.map((c) => (
           <li key={c.action}>
-            <span className="font-medium text-foreground">{c.label}</span>
+            <span className={cn("font-medium", inverse ? "text-ink-foreground" : "text-foreground")}>{c.label}</span>
             {c.model && <span className="font-mono"> ({c.model})</span>}: {c.available ? c.explain : c.why || c.explain}
           </li>
         ))}
@@ -82,16 +84,18 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
         {shown.map((c) => (
           <Button
             key={c.action}
-            size="sm"
-            variant={c.action === "continue" ? "default" : "outline"}
+            size={inverse ? "default" : "sm"}
+            variant={c.action === "continue" ? (inverse ? "inverse" : "default") : inverse ? "inverse-outline" : "outline"}
             disabled={!!busy || !c.available}
             title={(c.available ? c.explain : c.why) + (c.model ? ` Model: ${c.model}.` : "")}
             aria-expanded={c.action === "continue" ? continuing : undefined}
             onClick={() => run(c)}
           >
             {c.label}
+            {c.model && c.available && <span className="font-normal opacity-75">on {c.model.split("/").pop()}</span>}
           </Button>
         ))}
+        {children}
       </div>
       {continuing && (
         <form
@@ -127,9 +131,9 @@ export function Choices({ jobId, itemId, choices, compact }: { jobId: number; it
           </Button>
         </form>
       )}
-      {compact ? (
+      {compact && shown.length > 1 ? (
         <details className="text-xs">
-          <summary className="cursor-pointer text-muted-foreground">What do these do?</summary>
+          <summary className={cn("cursor-pointer", inverse ? "text-ink-muted" : "text-muted-foreground")}>What do these do?</summary>
           <div className="mt-1.5">{help}</div>
         </details>
       ) : (

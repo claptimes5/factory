@@ -724,7 +724,30 @@ export function useSetupNotice(): Notice | null {
   const many = data.repos.length > 1;
   // Only the factory's fixes left: new tasks wait for them, and that's all.
   if (!behind.some(yourPartLeft)) {
-    const n = behind.reduce((k, r) => k + r.work.length, 0);
+    const n = behind.reduce((k, r) => k + r.work.filter((f) => f.status !== "needs_you").length, 0);
+    // Fixes waiting on you lead Home already; elsewhere they're said as yours, not the factory's.
+    if (n === 0) {
+      const w = behind.reduce((k, r) => k + r.work.length, 0);
+      if (path === "/" || w === 0) return doing ? { key: "setup", label: "Setup", tone: "info", body: doing } : null;
+      return {
+        key: "setup",
+        label: "Setup",
+        tone: "attention",
+        body: (
+          <span className="flex flex-col gap-1">
+            <span className="min-w-0 break-words">
+              {w === 1 ? "A fix" : `${w} fixes`} for what fails on{" "}
+              {behind.length > 1 ? "the repos' base branches" : `${many ? repoName(behind[0].repo) + "'s " : ""}${behind[0].branch}`}{" "}
+              {w === 1 ? "waits" : "wait"} on you; new tasks wait until {w === 1 ? "it's" : "they're"} merged.{" "}
+              <Link to="/" className="font-medium underline underline-offset-2">
+                See {w === 1 ? "it" : "them"}
+              </Link>
+            </span>
+            {doing}
+          </span>
+        ),
+      };
+    }
     return {
       key: "setup",
       label: "Setup",

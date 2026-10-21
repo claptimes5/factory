@@ -172,7 +172,7 @@ test("an item's page shows its build's screenshots, before and after", async ({ 
 
 test("buttons go through the daemon and show its answer", async ({ page }) => {
   await page.goto("/app/items/1");
-  await page.getByTestId("pr-panel").getByRole("button", { name: "Retry", exact: true }).click();
+  await page.getByTestId("pr-panel").getByRole("button", { name: /^Retry on / }).click();
   await expect(page.getByRole("status")).toContainText("devserver: would retry job");
 });
 
@@ -212,9 +212,9 @@ test("a build that ran out of turns waits for you, and Continue picks it up with
   const card = needs.getByTestId("card").filter({ hasText: "Add SSO sign-in" }).filter({ visible: true });
   await expect(card).toContainText("Your call");
   await expect(card).toContainText("ran out of turns (80 of 80)");
-  await expect(card.getByRole("button", { name: "Retry", exact: true })).toHaveAttribute("title", /from scratch.*claude\/sonnet/);
+  await expect(card.getByRole("button", { name: /^Retry on / })).toHaveAttribute("title", /from scratch.*claude\/sonnet/);
   await expect(card.getByRole("button", { name: "Tier up" })).toHaveAttribute("title", /claude\/opus/);
-  await card.getByRole("button", { name: "Continue", exact: true }).click();
+  await card.getByRole("button", { name: /^Continue on / }).click();
   await card.getByText("+50%").click();
   await card.getByLabel(/A note for the builder/).fill("Finish sign-out only; leave the settings page.");
   await card.getByRole("button", { name: "Continue from here" }).click();
@@ -319,7 +319,7 @@ test("inbox lists what needs you", async ({ page }, info) => {
   // A stopped build's choices are right in the inbox.
   const stopped = inbox.getByRole("listitem").filter({ hasText: "#112" });
   await expect(stopped).toContainText("ran out of turns");
-  await expect(stopped.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await expect(stopped.getByRole("button", { name: /^Continue on / })).toBeVisible();
   await shot(page, info, "inbox");
   if (phone(info)) await noSidewaysScroll(page);
 });

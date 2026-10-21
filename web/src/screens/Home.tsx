@@ -96,7 +96,6 @@ export function HomeScreen() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6" data-testid="home">
-      <CatchUp />
       {unready.length > 0 && readiness ? (
         <>
           <SetupLead r={unready[0]} data={readiness} more={unready.length - 1} />
@@ -138,6 +137,8 @@ export function HomeScreen() {
           <p className="text-body text-text-2">Nothing needs you. You'll hear from the factory when a change is ready for your OK.</p>
         </section>
       )}
+
+      <CatchUp />
 
       <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => r.checking) ? 1 : 0} />
 
@@ -217,6 +218,11 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
       ? [c.gates_total > 0 && `${c.gates_passed} of ${c.gates_total} checks passed`, c.model && `built by ${c.model}`, c.cost_usd > 0 && money(c.cost_usd)]
       : [c.complexity && `size ${c.complexity}`, kind === "cost" && c.estimate];
   const why = kind === "review" ? "" : c.blocked_note ? brief(c.blocked_note) : "";
+  const later = onLater && (
+    <Button variant="inverse-outline" onClick={onLater}>
+      Later
+    </Button>
+  );
   const prs = c.prs.length > 1 ? c.prs : c.pr_url ? [{ url: c.pr_url, ref: `PR #${c.prs[0]?.number ?? c.pr_number}` }] : [];
   return (
     <div className={cn("relative", stacked && "pb-4")}>
@@ -234,45 +240,44 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
         <Link to={`/items/${c.id}`} className="text-title-sm font-semibold hover:underline md:text-title">
           {c.title}
         </Link>
-        {why && <p className="line-clamp-4 text-body-sm text-ink-muted">“{why}”</p>}
+        {why && <p className="text-body-sm text-ink-muted">“{why}”</p>}
         {meta.some(Boolean) && <p className="text-body-sm text-ink-muted">{meta.filter(Boolean).join(" · ")}</p>}
         {c.live && <p className="text-body-sm text-ink-muted">{c.activity || "The factory is still working on it"} · {duration(c.live_since)}</p>}
         <WaitsFor items={c.waits_for} plan={c.plan_waiting} className="text-meta text-ink-muted" />
-        <div className="mt-1 flex flex-wrap gap-2">
-          {kind === "review" &&
-            prs.map((p, i) => (
-              <Button key={p.url} variant={i === 0 ? "inverse" : "inverse-outline"} asChild>
-                <a href={p.url} target="_blank" rel="noreferrer">
-                  {prs.length > 1 ? `${i + 1}. Review ${p.ref}` : "Review the change"} <ExternalLink aria-hidden />
+        {kind === "choice" ? (
+          <div className="mt-1">
+            <Choices jobId={c.choice_job_id!} itemId={c.id} choices={c.choices} compact inverse>
+              {later}
+            </Choices>
+          </div>
+        ) : (
+          <div className="mt-1 flex flex-wrap gap-2">
+            {kind === "review" &&
+              prs.map((p, i) => (
+                <Button key={p.url} variant={i === 0 ? "inverse" : "inverse-outline"} asChild>
+                  <a href={p.url} target="_blank" rel="noreferrer">
+                    {prs.length > 1 ? `${i + 1}. Review ${p.ref}` : "Review the change"} <ExternalLink aria-hidden />
+                  </a>
+                </Button>
+              ))}
+            {kind === "review" && (
+              <Button variant="inverse-outline" asChild>
+                <Link to={`/items/${c.id}/diff`}>See the diff</Link>
+              </Button>
+            )}
+            {(kind === "plan" || kind === "cost") && (
+              <Button variant="inverse" asChild>
+                <Link to={`/items/${c.id}`}>{kind === "plan" ? "Read the plan" : "See the estimate"}</Link>
+              </Button>
+            )}
+            {kind === "question" && c.issue_url && (
+              <Button variant="inverse" asChild>
+                <a href={c.issue_url} target="_blank" rel="noreferrer">
+                  Answer on the issue <ExternalLink aria-hidden />
                 </a>
               </Button>
-            ))}
-          {kind === "review" && (
-            <Button variant="inverse-outline" asChild>
-              <Link to={`/items/${c.id}/diff`}>See the diff</Link>
-            </Button>
-          )}
-          {(kind === "plan" || kind === "cost") && (
-            <Button variant="inverse" asChild>
-              <Link to={`/items/${c.id}`}>{kind === "plan" ? "Read the plan" : "See the estimate"}</Link>
-            </Button>
-          )}
-          {kind === "question" && c.issue_url && (
-            <Button variant="inverse" asChild>
-              <a href={c.issue_url} target="_blank" rel="noreferrer">
-                Answer on the issue <ExternalLink aria-hidden />
-              </a>
-            </Button>
-          )}
-          {onLater && (
-            <Button variant="inverse-outline" onClick={onLater}>
-              Later
-            </Button>
-          )}
-        </div>
-        {kind === "choice" && (
-          <div className="rounded-control bg-ink-foreground p-3 text-foreground">
-            <Choices jobId={c.choice_job_id!} itemId={c.id} choices={c.choices} compact />
+            )}
+            {later}
           </div>
         )}
       </article>
