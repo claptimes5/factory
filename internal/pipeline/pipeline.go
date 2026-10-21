@@ -1500,6 +1500,12 @@ func (p *Pipeline) result(ctx context.Context, j *store.Job, run agentRun, st st
 	if run.res != nil {
 		r.TokensIn, r.TokensOut = run.res.TokensIn, run.res.TokensOut
 	}
+	// A run on a subscription costs no dollars: the plan's usage windows
+	// are its limit, not the daily cap. (Codex reports nothing to begin
+	// with; Claude reports what it would cost at API prices.)
+	if p.onPlan(j.Harness) {
+		r.CostUSD = 0
+	}
 	// Claude enforces the cap itself (--max-budget-usd); Codex reports usage
 	// only at the end, so an overrun is recorded for the control room.
 	if run.cost > j.BudgetUSD {

@@ -526,6 +526,7 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 	if !o.short {
 		t.WriteString("| Job | Kind | Harness | Model | Skills | Attempt | State | Cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	}
+	billed := false // a job ran on an API key, so the total means something
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := jobs[i]
 		total += j.CostUSD
@@ -533,14 +534,23 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 		if sk == "" {
 			sk = "-"
 		}
+		// A run on a subscription costs no dollars: its plan's usage counts.
+		cost := "plan"
+		if !p.onPlan(j.Harness) {
+			cost, billed = fmt.Sprintf("$%.2f", j.CostUSD), true
+		}
 		if !o.short {
-			fmt.Fprintf(&t, "| %d | %s | %s | %s | %s | %d | %s | $%.2f |\n", j.ID, j.Kind, j.Harness, j.ModelLabel(), sk, j.Attempt, j.State, j.CostUSD)
+			fmt.Fprintf(&t, "| %d | %s | %s | %s | %s | %d | %s | %s |\n", j.ID, j.Kind, j.Harness, j.ModelLabel(), sk, j.Attempt, j.State, cost)
 		}
 	}
 	if o.short {
 		fmt.Fprintf(&t, "%d jobs; the dashboard lists them.\n", len(jobs))
 	}
-	fmt.Fprintf(&t, "\n**Total cost:** $%.2f\n\n", total)
+	if billed {
+		fmt.Fprintf(&t, "\n**Total cost:** $%.2f\n\n", total)
+	} else {
+		t.WriteString("\nEvery job ran on a subscription plan, so it cost no dollars.\n\n")
+	}
 	for _, j := range jobs {
 		if o.noVerdict {
 			break

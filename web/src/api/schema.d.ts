@@ -2919,6 +2919,8 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend */
+            plans_only: boolean;
             /** @description Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped */
             auto_merge: components["schemas"]["Breaker"][];
             /** @description Each repo's base branch CI, as main health last read it; empty while it's off */

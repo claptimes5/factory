@@ -126,7 +126,10 @@ type Server struct {
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the
 	// percent of a window that holds their jobs.
-	Plans        []string
+	Plans []string
+	// PlansOnly: every harness in use runs on a plan, so no job costs
+	// dollars and the dashboard shows plan usage, not spend.
+	PlansOnly    bool
 	PauseAtUsage float64
 	// Chat is the chat with the orchestrator's model (nil for none), and
 	// Orchestrator what the dashboard says about the orchestrator.

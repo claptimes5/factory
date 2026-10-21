@@ -909,8 +909,9 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only]
       properties:
+        plans_only: { type: boolean, description: "Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend" }
         auto_merge:
           type: array
           description: Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped

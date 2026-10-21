@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ChevronDown, ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split } from "@/api/client";
+import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split, useOverview } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Empty, ErrorBox, Inline, JobStateBadge, Loading, PageHeader, StageBadge, WaitsFor } from "@/components/common";
 import { FoundBy } from "@/components/FoundBy";
@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ago, cn, duration, money } from "@/lib/utils";
 
 export function ItemScreen() {
+  const plansOnly = !!useOverview().data?.plans_only;
   const id = Number(useParams().id);
   const { data, error, isLoading } = useItem(id);
   if (isLoading) return <Loading />;
@@ -148,7 +149,7 @@ export function ItemScreen() {
                         <th className="py-1 pr-3 font-medium">Job</th>
                         <th className="pr-3 font-medium">State</th>
                         <th className="pr-3 font-medium">Model</th>
-                        <th className="pr-3 font-medium">Cost</th>
+                        {!plansOnly && <th className="pr-3 font-medium">Cost</th>}
                         <th className="font-medium">Time</th>
                       </tr>
                     </thead>
@@ -167,7 +168,7 @@ export function ItemScreen() {
                           <td className="pr-3 text-xs">
                             {j.harness}/{j.model}
                           </td>
-                          <td className="pr-3">{money(j.cost_usd)}</td>
+                          {!plansOnly && <td className="pr-3">{money(j.cost_usd)}</td>}
                           <td className="text-xs text-muted-foreground">{j.started_at ? duration(j.started_at, j.finished_at || undefined) : "queued"}</td>
                         </tr>
                       ))}

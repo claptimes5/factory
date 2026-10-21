@@ -155,7 +155,7 @@ test("plan usage shows as percentages, and dollar costs say they're API-price es
 
   await page.goto("/app/items/1");
   const note = page.getByTestId("plan-cost-note");
-  await expect(note).toContainText("Claude runs on your Claude subscription: its dollar figures are an estimate at API prices");
+  await expect(note).toContainText("Claude runs on your Claude subscription, so its jobs cost no dollars here");
   await expect(note).toContainText("Codex runs on your ChatGPT plan, so its jobs cost no dollars here");
   await expect(note).toContainText("No reading yet: Codex reports usage");
   await shot(page, info, "plan-usage");
@@ -241,4 +241,24 @@ test("a token that can't open pull requests comes first, on Setup and Home, befo
   await expect(api.getByTestId("setup-step").first()).toContainText("1. The factory's token can do its job");
   await page.goto("/app/");
   await expect(page.getByTestId("setup-lead")).toContainText("Give the factory's token the permissions it needs");
+});
+
+test("on subscription plans only, no dollars show: plan usage instead", async ({ page }, info) => {
+  await page.route(/\/api\/v1\/overview$/, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), plans_only: true } });
+  });
+  await page.goto("/app/metrics");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Usage and metrics");
+  await expect(page.getByText("Cost per merged PR")).toHaveCount(0);
+  await expect(page.getByText("Daily spend (30 days)")).toHaveCount(0);
+  await expect(page.getByText("Spend by model (all time)")).toHaveCount(0);
+  if (!phone(info)) {
+    const main = page.getByRole("navigation", { name: "Main" });
+    await expect(main.getByRole("link", { name: "Usage" })).toBeVisible();
+    await expect(page.getByTitle("Spent today (UTC) of the daily cap")).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Plan usage" }).filter({ visible: true }).first()).toContainText("5-hour: 42% used");
+  }
+  await page.goto("/app/items/1");
+  await expect(page.getByRole("columnheader", { name: "Cost" })).toHaveCount(0);
 });

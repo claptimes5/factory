@@ -217,7 +217,7 @@ function FullLayout() {
               }
             >
               <Icon className="size-4 shrink-0" aria-hidden />
-              <span className="flex-1">{label}</span>
+              <span className="flex-1">{to === "/metrics" && o?.plans_only ? "Usage" : label}</span>
               {to === "/notifications" && inbox > 0 && <Count n={inbox} label={`${inbox} need you`} />}
             </NavLink>
           ))}
@@ -236,7 +236,8 @@ function FullLayout() {
         {repos.length > 1 && <RepoChips repos={repos} repo={repo} wrap />}
         <div className="mt-auto flex flex-col gap-4 border-t px-2.5 pt-4">
           {o && <Running o={o} />}
-          {o && <SpendMeter o={o} />}
+          {/* On plans, no job costs dollars: their usage meters say what counts. */}
+          {o && !o.plans_only && <SpendMeter o={o} />}
           <PlanUsageMeter stacked />
           <div className="-mx-2.5 flex items-center gap-1">
             <ThemeButton />

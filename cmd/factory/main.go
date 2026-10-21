@@ -493,6 +493,17 @@ func planHarnesses(cfg *config.Config, billed map[string]bool) []string {
 	return out
 }
 
+// onlyPlans says every harness the routing uses runs on a subscription
+// plan: no job costs dollars, so the dashboard shows plan usage instead.
+func onlyPlans(cfg *config.Config, billed map[string]bool) bool {
+	for _, r := range cfg.Routing {
+		if !billed[r.Harness] {
+			return false
+		}
+	}
+	return len(cfg.Routing) > 0
+}
+
 // noReadingLines are status's lines on each harness on a plan that has
 // reported no usage yet, so its dollar spend isn't mistaken for the limit.
 func noReadingLines(plans []string, limits []store.Limit) []string {
@@ -578,6 +589,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	}
 	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
+	srv.PlansOnly = onlyPlans(cfg, p.PlanBilled)
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
 	srv.Orchestrator = web.OrchestratorInfo{On: cfg.Orchestrator.On, Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),

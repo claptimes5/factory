@@ -59,9 +59,13 @@ show each plan's usage windows ("5-hour: 42% used, resets 6:06pm",
 "Weekly: 18% used"), since on a plan those limit the work, not dollars.
 Until a harness reports a reading it says so: Claude Code only includes a
 percentage once a window gets close to its limit, and Codex reports after
-each job on the Docker runner. Job and item pages say that on a plan the
-dollar figures are estimates at API prices. With API keys there's no line,
-and dollars are what count.
+each job on the Docker runner. A job on a plan costs no dollars: it
+records none, so it never counts toward `budgets.daily_total` (the plan's
+windows and `budgets.pause_at_usage` are its limit), and job and item
+pages say so. When every harness in use is on a plan, the dashboard shows
+no dollars at all: the sidebar shows plan usage only, Spend becomes
+**Usage**, and PR descriptions mark each job "plan". With API keys,
+dollars are what count.
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
