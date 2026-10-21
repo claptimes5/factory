@@ -129,8 +129,11 @@ type Server struct {
 	CanBaseline  func(repo string) bool
 	// BaseSHA is a repo's base branch head on its host, for
 	// FollowReadiness to see when it moves.
-	BaseSHA     func(ctx context.Context, repo string) (string, error)
-	IntakeLabel string
+	BaseSHA func(ctx context.Context, repo string) (string, error)
+	// BaselineOpen says whether the lint baseline's pull request at url
+	// is still open on repo's host.
+	BaselineOpen func(ctx context.Context, repo, url string) (bool, error)
+	IntakeLabel  string
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the
 	// percent of a window that holds their jobs.

@@ -433,3 +433,54 @@ func TestSplitBlockerAndWorkWaitingForSetup(t *testing.T) {
 		t.Fatalf("task = %q %q", d.Item.Setup, d.Item.SetupNote)
 	}
 }
+
+// A lint baseline merged (or closed) since the last check has the repo
+// checked again, though its branch hasn't moved since: once per baseline.
+func TestFollowReadinessSettlesABaselineOutOfReview(t *testing.T) {
+	t.Parallel()
+	_, _, s := readinessServer(t)
+	s.BaseSHA = func(context.Context, string) (string, error) { return "abc1234", nil } // unmoved
+	open := true
+	asked := 0
+	s.BaselineOpen = func(context.Context, string, string) (bool, error) { asked++; return open, nil }
+	ran := make(chan string, 4)
+	s.CheckReadiness = func(_ context.Context, repo string) error { ran <- repo; return nil }
+	wait := func() string {
+		select {
+		case r := <-ran:
+			for busy := true; busy; time.Sleep(5 * time.Millisecond) {
+				s.ready.mu.Lock()
+				busy = s.ready.repo != ""
+				s.ready.mu.Unlock()
+			}
+			return r
+		case <-time.After(time.Second):
+			return ""
+		}
+	}
+	ctx := context.Background()
+	s.followOnce(ctx, "o/r") // no baseline recorded: nothing to ask
+	if asked != 0 || wait() != "" {
+		t.Fatal("asked about a baseline there isn't")
+	}
+	readiness.SaveBaselinePR(s.ReadinessDir, "o/r", "https://gitlab.com/o/r/-/merge_requests/7")
+	s.followOnce(ctx, "o/r")
+	if asked != 1 || wait() != "" {
+		t.Fatal("checked again while the baseline is still open")
+	}
+	open = false
+	s.followOnce(ctx, "o/r")
+	if r := wait(); r != "o/r" {
+		t.Fatalf("ran %q once it merged", r)
+	}
+	s.ready.mu.Lock()
+	res := s.ready.results["o/r"]
+	s.ready.mu.Unlock()
+	if !strings.Contains(res, "the lint baseline's pull request isn't open any more") {
+		t.Fatalf("result = %q", res)
+	}
+	s.followOnce(ctx, "o/r") // the same baseline: not again
+	if r := wait(); r != "" {
+		t.Fatal("checked again for the same baseline")
+	}
+}

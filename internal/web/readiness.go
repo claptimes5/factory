@@ -122,6 +122,10 @@ type readinessRun struct {
 	since   time.Time
 	errs    map[string]string // repo -> why its last run failed
 	results map[string]string // repo -> what its last run did
+
+	nudge    chan struct{}     // a page asked: follow now, not at the next tick
+	nudgedAt time.Time         // when a page last did, to ask the host at most so often
+	settling map[string]string // repo -> the baseline a check was started for, once
 }
 
 func (s *Server) routesReadiness(mux *http.ServeMux) {
@@ -132,7 +136,27 @@ func (s *Server) routesReadiness(mux *http.ServeMux) {
 }
 
 func (s *Server) apiReadiness(w http.ResponseWriter, r *http.Request) {
+	s.nudgeFollow()
 	writeJSON(w, http.StatusOK, s.readiness(r))
+}
+
+// followNudge is how often a page being looked at can have the host asked
+// about each repo's base branch and baseline.
+const followNudge = 30 * time.Second
+
+// nudgeFollow has FollowReadiness look now, as someone is looking: a
+// baseline merged since shows as checked again soon, not at the next tick.
+func (s *Server) nudgeFollow() {
+	s.ready.mu.Lock()
+	defer s.ready.mu.Unlock()
+	if s.ready.nudge == nil || time.Since(s.ready.nudgedAt) < followNudge {
+		return
+	}
+	s.ready.nudgedAt = time.Now()
+	select {
+	case s.ready.nudge <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Server) readiness(r *http.Request) APIReadiness {
@@ -298,6 +322,15 @@ func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, strin
 	return "blocks", "Fixes a setup blocker (" + strings.ReplaceAll(f.Title, "`", "") + "). Nothing else runs on " + it.Repo + " until the blockers are fixed."
 }
 
+// prName is what a pull request is called on repo's host: a GitLab repo
+// is named host/path.
+func prName(repo string) string {
+	if strings.Count(repo, "/") > 1 {
+		return "merge request"
+	}
+	return "pull request"
+}
+
 // workedBeyondSetup says whether the factory has an item that isn't for
 // one of the issues the readiness check filed: once it has, nobody needs
 // telling how to start.
@@ -447,13 +480,22 @@ func (s *Server) FollowReadiness(ctx context.Context, every time.Duration) {
 	if s.BaseSHA == nil || s.CheckReadiness == nil || s.ReadinessDir == "" {
 		return
 	}
+	nudge := make(chan struct{}, 1)
+	s.ready.mu.Lock()
+	s.ready.nudge = nudge
+	s.ready.mu.Unlock()
 	t := time.NewTicker(every)
 	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+	// Once at the start too: a baseline merged while the factory was
+	// stopped doesn't wait for the base branch to move again.
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			case <-nudge:
+			}
 		}
 		for _, repo := range s.Repos {
 			s.followOnce(ctx, repo)
@@ -468,15 +510,41 @@ func (s *Server) followOnce(ctx context.Context, repo string) {
 	if err != nil || rep == nil || rep.Ready || rep.Incomplete {
 		return
 	}
-	sha, err := s.BaseSHA(ctx, repo)
-	if err != nil || sha == "" || sha == rep.SHA {
-		return
-	}
 	short := func(s string) string {
 		if len(s) > 7 {
 			return s[:7]
 		}
 		return s
+	}
+	sha, err := s.BaseSHA(ctx, repo)
+	if err != nil || sha == "" {
+		return
+	}
+	if sha == rep.SHA {
+		// The branch hasn't moved, but a baseline out of review is news:
+		// checking again settles it (see settleBaseline). Once per baseline,
+		// so one that can't be settled doesn't check on every tick.
+		url := readiness.BaselinePR(s.ReadinessDir, repo)
+		if url == "" || s.BaselineOpen == nil {
+			return
+		}
+		s.ready.mu.Lock()
+		tried := s.ready.settling[repo] == url
+		s.ready.mu.Unlock()
+		if open, err := s.BaselineOpen(ctx, repo, url); tried || err != nil || open {
+			return
+		}
+		s.ready.mu.Lock()
+		if s.ready.settling == nil {
+			s.ready.settling = map[string]string{}
+		}
+		s.ready.settling[repo] = url
+		s.ready.mu.Unlock()
+		s.beginReadiness(repo, "check", func(ctx context.Context) (string, error) {
+			return fmt.Sprintf("Checked again by itself at %s UTC: the lint baseline's %s isn't open any more. The steps below are as of %s.",
+				time.Now().UTC().Format("15:04"), prName(repo), short(sha)), s.CheckReadiness(ctx, repo)
+		})
+		return
 	}
 	why := fmt.Sprintf("Checked again by itself at %s UTC: %s moved from %s to %s. ", time.Now().UTC().Format("15:04"), rep.Branch, short(rep.SHA), short(sha))
 	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {

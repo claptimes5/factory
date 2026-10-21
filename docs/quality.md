@@ -665,7 +665,9 @@ start.
 A blocker the factory fixed stays on the report until the check runs
 again, since only a fresh run proves it. While a repo isn't ready, the
 daemon checks it again by itself within five minutes of its base branch
-moving. **Check again** on that screen
+moving, or of a lint baseline's pull request being merged or closed. It
+also looks when it starts, and whenever someone has a dashboard page
+open (asking the host at most every 30 seconds), so a merge shows soon. **Check again** on that screen
 runs it in the background on the base branch as it is now, so a fix made
 outside the factory counts too. It runs the repo's install and checks the
 way a build's gates do and files nothing, one repo at a time.

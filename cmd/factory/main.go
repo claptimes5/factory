@@ -611,6 +611,21 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		}
 		return gh.BranchSHA(ctx, repoFor(cfg, repo).BaseBranch)
 	}
+	srv.BaselineOpen = func(ctx context.Context, repo, url string) (bool, error) {
+		gh, ok := p.GitHubFor(repo).(forge)
+		if !ok {
+			return false, fmt.Errorf("no client for %s's host", repo)
+		}
+		n, err := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
+		if err != nil {
+			return false, fmt.Errorf("no pull request number in %s", url)
+		}
+		pr, err := gh.GetPR(ctx, n)
+		if err != nil {
+			return false, err
+		}
+		return pr.State == "open" && !pr.Merged, nil
+	}
 	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]
