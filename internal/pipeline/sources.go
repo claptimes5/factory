@@ -445,8 +445,20 @@ func (p *Pipeline) fileFindings(ctx context.Context, src, repo string, tracked [
 		if err := p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "source_filed", Reason: repo, Data: string(data)}); err != nil {
 			return err
 		}
-		// The title is untrusted, so the notice leaves it out.
-		p.notify(ctx, fmt.Sprintf("Filed %s from %s. It waits for you: add `%s` to build it.", p.ref(repo, num), sourceFrom(src), p.Cfg.Intake.Label))
+		// At trust level 6 it starts on its own. The title is untrusted,
+		// so the notices leave it out.
+		started, why, err := p.selfStart(ctx, repo, num, f.Title, src)
+		if err != nil {
+			return err
+		}
+		switch {
+		case started:
+			p.notify(ctx, fmt.Sprintf("Filed %s from %s and started it, as trust level 6 lets the factory.", p.ref(repo, num), sourceFrom(src)))
+		case why != "":
+			p.notify(ctx, fmt.Sprintf("Filed %s from %s. It waits for you, as %s: add `%s` to build it.", p.ref(repo, num), sourceFrom(src), why, p.Cfg.Intake.Label))
+		default:
+			p.notify(ctx, fmt.Sprintf("Filed %s from %s. It waits for you: add `%s` to build it.", p.ref(repo, num), sourceFrom(src), p.Cfg.Intake.Label))
+		}
 	}
 	if pr.held > 0 {
 		return p.capHeld(ctx, src, repo, pr.held)

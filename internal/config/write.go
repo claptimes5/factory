@@ -123,10 +123,12 @@ func WriteFile(path string, out []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// SetRepoAutoMerge gives repo its own auto_merge in the config file, as
-// the dashboard's trust screen sets it: up_to and max_size from a, the
-// merge method and breaker as the repo has them now.
-func SetRepoAutoMerge(path, repo string, a *AutoMerge) error {
+// SetRepoTrust gives repo its own auto_merge and self_start in the config
+// file, as the dashboard's trust screen sets a level: up_to and max_size
+// from a, the merge method and breaker as the repo has them now; self_start
+// as s, keeping the repo's own sources and limits if it has them, or none
+// for s nil.
+func SetRepoTrust(path, repo string, a *AutoMerge, s *SelfStart) error {
 	cfg, err := Load(path)
 	if err != nil {
 		return err
@@ -144,6 +146,12 @@ func SetRepoAutoMerge(path, repo string, a *AutoMerge) error {
 			next.MaxSize = ""
 		}
 		repos[i].AutoMerge = &next
+		switch {
+		case s == nil:
+			repos[i].SelfStart = nil
+		case r.SelfStart == nil || len(r.SelfStart.Sources) == 0:
+			repos[i].SelfStart = s
+		}
 		return WriteRepos(path, repos)
 	}
 	return fmt.Errorf("%s isn't in %s", repo, path)

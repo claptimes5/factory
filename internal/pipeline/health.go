@@ -632,13 +632,6 @@ func (p *Pipeline) startHealthFix(ctx context.Context, repo string, n int, title
 	return p.enqueueTriage(ctx, it, 1, "")
 }
 
-// healthApproved says whether the item's only approval is main health's
-// own: then no human read its issue, and it waits for one to merge it.
-func (p *Pipeline) healthApproved(ctx context.Context, it *store.WorkItem) bool {
-	a, err := p.Store.ItemApproval(ctx, it.ID)
-	return err != nil || a != nil && a.ApprovedBy == HealthApprover
-}
-
 // healthTitle is the issue's title, which also finds it again.
 func healthTitle(kind, check string) string {
 	if kind == store.HealthFlaky {

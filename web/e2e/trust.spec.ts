@@ -12,8 +12,11 @@ test("Trust shows each repo on the ladder toward full automation, with the level
   await expect(levels).toHaveCount(7);
   // The sample's auto_merge (low risk, up to size S) is level 3.
   await expect(page.locator('[data-testid="level"][aria-current="step"]')).toContainText("Merge small, low-risk changes");
-  await expect(levels.nth(5)).toContainText("Not built yet");
+  await expect(levels.nth(5)).toContainText("Pick its own work");
+  await expect(levels.nth(5)).toContainText("Practice run: of the 0 issues it filed from its own findings");
+  await expect(levels.nth(5)).not.toContainText("Not built yet");
   await expect(levels.nth(6)).toContainText("Ship");
+  await expect(levels.nth(6)).toContainText("Not built yet");
   await expect(page.getByRole("region", { name: "Guard rails" })).toContainText("Always asks you: migrations, new dependencies, auth code, deleted tests");
   await shot(page, info, "trust");
   // acme/web's breaker tripped: it stepped back.

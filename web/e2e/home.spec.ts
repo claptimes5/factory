@@ -52,6 +52,20 @@ test("Home says what went live since you looked, until you dismiss it", async ({
   await expect(since).toHaveCount(0);
 });
 
+test("work the factory found and started itself says so, on Home and the line", async ({ page }) => {
+  await page.route(/\/api\/v1\/board$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const col of body.columns) for (const c of col.cards) if (c.title.startsWith("Parser drops")) c.self_started = "dependabot";
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/app/");
+  await expect(page.getByTestId("decision")).toContainText("Found by the factory · Dependabot");
+  await page.goto("/app/line");
+  const card = page.getByRole("region", { name: "Needs you" }).getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true });
+  await expect(card.getByTestId("found-by")).toHaveText("Found by the factory · Dependabot");
+});
+
 test("Home's Ask box opens Ask", async ({ page }) => {
   await page.goto("/app/");
   await page.getByRole("button", { name: "Ask, or hand over a task…" }).click();

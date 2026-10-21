@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router";
 import { useBoard, useOverview } from "@/api/client";
 import { ActivityFeed, WeekStats } from "@/components/Activity";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";
+import { FoundBy } from "@/components/FoundBy";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRepo } from "@/lib/repo";
 import { ago, money, shortRef } from "@/lib/utils";
@@ -55,7 +56,10 @@ function Done({ repo }: { repo: string }) {
         <li key={c.id}>
           <Link to={`/items/${c.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-accent">
             <span className="font-mono text-caption text-success">{shortRef(c.ref)}</span>
-            <span className="min-w-0 flex-1 truncate text-body-sm">{c.title}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-body-sm">{c.title}</span>
+              <FoundBy source={c.self_started} className="text-muted-foreground" />
+            </span>
             {c.cost_usd > 0 && <span className="font-mono text-caption text-muted-foreground">{money(c.cost_usd)}</span>}
             <span className="shrink-0 text-caption text-muted-foreground">{ago(c.updated_at)}</span>
           </Link>

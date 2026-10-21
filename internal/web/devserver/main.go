@@ -205,8 +205,8 @@ func main() {
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
 		Push:         devPush(),
 		// Trust levels are written to the sample config as the factory writes them.
-		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge) error {
-			return config.SetRepoAutoMerge(cfgPath, repo, a)
+		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error {
+			return config.SetRepoTrust(cfgPath, repo, a, s)
 		},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{

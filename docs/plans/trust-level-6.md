@@ -1,6 +1,6 @@
 # Plan: trust level 6, the factory picks its own work
 
-Status: proposed. Follows [the design system plan](design-system.md),
+Status: built, with the owner's answers to the decisions below (all three as recommended). Follows [the design system plan](design-system.md),
 phase 4 (Trust), and docs/using.md, "Trust".
 
 ## Where things stand

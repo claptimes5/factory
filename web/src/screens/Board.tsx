@@ -5,6 +5,7 @@ import { useBoard, useOverview, type Card as CardT } from "@/api/client";
 import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
+import { FoundBy } from "@/components/FoundBy";
 import { Badge } from "@/components/ui/badge";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, shortRef, stageName } from "@/lib/utils";
@@ -189,6 +190,7 @@ function FloorCard({ card: c, next, showStage }: { card: CardT; next?: boolean; 
         {c.cost_usd > 0 && <span>{money(c.cost_usd)}</span>}
       </div>
       <CardLink card={c} className="text-body leading-snug font-semibold" />
+      <FoundBy source={c.self_started} className="text-muted-foreground" />
       {c.live && (
         <div className={cn("flex min-w-0 items-center gap-2 text-xs text-primary-soft", c.activity && "font-mono")}>
           <span title="A job is running" className="pulse size-[7px] shrink-0 rounded-full bg-primary" />
@@ -260,6 +262,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
         </span>
       </div>
       <CardLink card={c} className="text-title-sm leading-tight font-semibold" />
+      <FoundBy source={c.self_started} className="text-muted-foreground" />
       {pr ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-2">
           {c.gates_total > 0 && (

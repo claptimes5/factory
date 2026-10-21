@@ -176,6 +176,9 @@ type Repo struct {
 	// AutoMerge replaces the top level's for this repo; up_to: none
 	// turns it off.
 	AutoMerge *AutoMerge `yaml:"auto_merge,omitempty"`
+	// SelfStart is trust level 6: the factory's own findings in this repo
+	// start without a label (see SelfStart). Unset, they wait for you.
+	SelfStart *SelfStart `yaml:"self_start,omitempty"`
 	// Instructions are added to this repo's prompts, by step: triage,
 	// implement, review or critic.
 	Instructions map[string]string `yaml:"instructions,omitempty"`
@@ -223,7 +226,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.Files == nil && r.Preview == nil && r.ConfirmOver == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.SelfStart == nil && r.Files == nil && r.Preview == nil && r.ConfirmOver == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -765,6 +768,11 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Notify.QuietHours.check(); err != nil {
 		errs = append(errs, err)
+	}
+	for _, r := range c.Repos {
+		if err := r.SelfStart.check(r.Name); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	// No repos yet is a factory not set up: setup and serve's get-started
 	// page ask for them, and the other commands refuse (see NoRepos).
