@@ -670,7 +670,11 @@ also looks when it starts, and whenever someone has a dashboard page
 open (asking the host at most every 30 seconds), so a merge shows soon. **Check again** on that screen
 runs it in the background on the base branch as it is now, so a fix made
 outside the factory counts too. It runs the repo's install and checks the
-way a build's gates do and files nothing, one repo at a time.
+way a build's gates do and files nothing, one repo at a time. While it
+runs, the step it's checking again lists each command as it goes, with
+how long it took and whether it passed; **What the last run did** keeps
+the list once it's over. A lint baseline shows its steps the same way.
+Steps that are done fold to a line each.
 **Only file the issues** checks again, then files an issue for each gap
 that has none, as `factory readiness -file` does. **File and start work**
 also adds the intake label, as `-queue` does: to the blockers while there
