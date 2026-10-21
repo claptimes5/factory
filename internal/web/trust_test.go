@@ -29,7 +29,9 @@ func trustSetup(t *testing.T, sizes []string) (string, *Server, *store.Store, st
 	path := filepath.Join(t.TempDir(), "factory.yaml")
 	os.WriteFile(path, src, 0o640)
 	s.ConfigPath, s.Listen, s.StartedConfig = path, "127.0.0.1:0", ConfigVersion(src)
-	s.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge) error { return config.SetRepoAutoMerge(path, repo, a) }
+	s.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge) error {
+		return config.SetRepoAutoMerge(path, repo, a)
+	}
 	ctx := context.Background()
 	for i, size := range sizes {
 		risk := "low"
