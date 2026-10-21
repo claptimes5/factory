@@ -236,7 +236,7 @@ function FullLayout() {
             to={to}
             end={end}
             className={({ isActive }) =>
-              cn("relative flex h-16 flex-col items-center justify-center gap-1 text-[11px]", isActive ? "text-foreground" : "text-muted-foreground")
+              cn("relative flex h-16 flex-col items-center justify-center gap-1 text-caption", isActive ? "text-foreground" : "text-muted-foreground")
             }
           >
             <Icon className="size-5" aria-hidden />
@@ -257,7 +257,7 @@ function RepoChips({ repos, repo }: { repos: string[]; repo: string }) {
       aria-pressed={repo === value}
       onClick={() => setRepo(value)}
       className={cn(
-        "h-9 shrink-0 cursor-pointer rounded-full border px-3 text-[13px] font-medium whitespace-nowrap lg:h-8",
+        "h-9 shrink-0 cursor-pointer rounded-full border px-3 text-meta font-medium whitespace-nowrap lg:h-8",
         value && "font-mono",
         repo === value ? "border-foreground bg-foreground text-background" : "text-text-2 hover:border-muted-foreground",
       )}
@@ -279,7 +279,7 @@ function Running({ o, className }: { o: Overview; className?: string }) {
       title="Jobs running and queued"
       className={cn(
         className,
-        "flex h-8 items-center gap-2 rounded-full px-3 text-[13px] font-medium whitespace-nowrap",
+        "flex h-8 items-center gap-2 rounded-full px-3 text-meta font-medium whitespace-nowrap",
         o.running > 0 ? "bg-primary/10 text-primary-soft" : "bg-muted text-muted-foreground",
       )}
     >
@@ -309,7 +309,7 @@ function SpendMeter({ o, className }: { o: Overview; className?: string }) {
 
 function Count({ n, className }: { n: number; className?: string }) {
   return (
-    <span className={cn("flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-fill px-1 text-[11px] font-bold text-warning-ink", className)}>
+    <span className={cn("flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-fill px-1 text-caption font-bold text-warning-ink", className)}>
       {n}
     </span>
   );

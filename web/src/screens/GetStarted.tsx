@@ -270,12 +270,12 @@ function StepCard({
           <StepIcon state={step.state} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              <span className="font-display text-[15px] font-semibold">
+              <span className="font-display text-body font-semibold">
                 {n}. {step.title}
               </span>
               <Badge variant={variant}>{label}</Badge>
             </span>
-            <span className="text-[13px] break-words text-text-2">{step.summary}</span>
+            <span className="text-meta break-words text-text-2">{step.summary}</span>
           </span>
           <ChevronDown aria-hidden className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
         </button>

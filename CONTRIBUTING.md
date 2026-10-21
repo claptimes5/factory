@@ -13,6 +13,10 @@ Thanks for helping. Issues and pull requests are both welcome.
     `internal/web/openapi.yaml`: `cd web && npm ci && npm run build`, then
     commit the regenerated files under `internal/web/app` and
     `web/src/api`. Then run `npm run e2e` (Playwright, desktop and phone).
+    The build also runs `npm run check-styles`, which keeps screens on the
+    design system ([docs/plans/design-system.md](docs/plans/design-system.md)):
+    no font sizes, radii or colors outside the tokens; the components and
+    tokens are shown at `/app/design`.
 - Run `gofmt -w` on the Go files you changed.
 - Update the docs under `docs/` when you change what a user sees or runs.
 
