@@ -203,7 +203,7 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 			{Level: readiness.Gap, Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests"}},
 		}}, nil
 	}
-	msg, err := fileReadiness(context.Background(), cfg, p, "o/r", true)
+	msg, err := fileReadiness(context.Background(), cfg, p, "o/r", true, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 
 	f.issues, f.labeled = nil, nil
 	incomplete = true
-	if msg, err := fileReadiness(context.Background(), cfg, p, "o/r", false); err != nil || !strings.Contains(msg, "nothing was filed") || len(f.issues) != 0 {
+	if msg, err := fileReadiness(context.Background(), cfg, p, "o/r", false, io.Discard); err != nil || !strings.Contains(msg, "nothing was filed") || len(f.issues) != 0 {
 		t.Fatalf("msg %q, err %v, issues %v", msg, err, f.issues)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -142,6 +143,9 @@ type Pipeline struct {
 	// Secrets maps a harness name to the env vars injected into its jobs.
 	Secrets map[string]map[string]string
 	Log     *slog.Logger
+	// Progress, when set, is told what a long setup run (a readiness
+	// check, a lint baseline) is doing, a line at a time.
+	Progress io.Writer
 	// GateExec runs one gate command against a checkout. Defaults to
 	// running it in the job image through Runner.
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)

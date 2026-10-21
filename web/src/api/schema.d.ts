@@ -3224,6 +3224,8 @@ export interface components {
             baseline_pr: string;
             /** @description File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass */
             following: boolean;
+            /** @description What the run going (or the last one started here) has done so far, a step at a time, oldest first */
+            progress: components["schemas"]["ReadinessProgress"][];
         };
         ReadinessStep: {
             /** @enum {string} */
@@ -3236,6 +3238,12 @@ export interface components {
             /** @description What the check saw when it's done, or empty */
             passed: string;
             blockers: components["schemas"]["ReadinessFinding"][];
+        };
+        ReadinessProgress: {
+            /** @description When it was said */
+            at: string;
+            /** @description A step: running `bundle install`, passed `bundle install` in 2m14s */
+            text: string;
         };
         ReadinessFinding: {
             /** @description What it's about across checks (check:lint, flaky), or empty with nothing to file */

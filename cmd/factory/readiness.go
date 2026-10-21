@@ -60,10 +60,10 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err != nil {
 		return nil, err
 	}
+	p.Progress = out
 	in := readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
 		Exec: func(ctx context.Context, dir, cmd string, install bool) (int, string, error) {
-			fmt.Fprintf(out, "  running %s\n", cmd)
-			return p.Exec(ctx, repo, dir, cmd, install)
+			return p.ExecSaying(ctx, repo, dir, cmd, install)
 		}}
 	in.AccessChecked, in.Denied = missingAccess(ctx, p.GitHubFor(repo))
 	if in.FilesSet = rc.Files != nil; !in.FilesSet {
@@ -272,9 +272,9 @@ var markerRE = regexp.MustCompile(`<!-- factory-readiness: (\S+) -->`)
 // repo's base branch, with its issues linked. It only reads: it files
 // and labels nothing. Its containers are named apart from the daemon's
 // jobs, which would otherwise take them for leftovers.
-func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string) error {
+func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, out io.Writer) error {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
-	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	r, err := assess(ctx, cfg, pl, repo, out)
 	if err != nil {
 		return err
 	}
@@ -493,9 +493,9 @@ func fileReport(ctx context.Context, cfg *config.Config, gh forge, r *readiness.
 // fileReadiness is the dashboard's File issues (and with queue, File and
 // start work): the check again on repo, then its issues filed as
 // `factory readiness -file` (or -queue) does.
-func fileReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, queue bool) (string, error) {
+func fileReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, queue bool, out io.Writer) (string, error) {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
-	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	r, err := assess(ctx, cfg, pl, repo, out)
 	if err != nil {
 		return "", err
 	}

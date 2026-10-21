@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -73,10 +74,20 @@ type APIRepoReadiness struct {
 	// BaselinePR is the pull request the last lint baseline opened, while
 	// lint still fails: merging it is what's left.
 	BaselinePR string `json:"baseline_pr"`
+	// Progress is what the run going (or the last one started here) has
+	// done so far, a step at a time, oldest first.
+	Progress []APIProgress `json:"progress"`
 	// Following: a person chose File and start work, so the factory checks
 	// the repo again as its base branch moves and starts the recommended
 	// work once the setup steps pass.
 	Following bool `json:"following"`
+}
+
+// APIProgress is one step of a setup run: "running `bundle install`",
+// "passed `bundle install` in 2m14s", and when it was said.
+type APIProgress struct {
+	At   string `json:"at"`
+	Text string `json:"text"`
 }
 
 // APIReadinessStep is one setup step.
@@ -123,9 +134,40 @@ type readinessRun struct {
 	errs    map[string]string // repo -> why its last run failed
 	results map[string]string // repo -> what its last run did
 
-	nudge    chan struct{}     // a page asked: follow now, not at the next tick
-	nudgedAt time.Time         // when a page last did, to ask the host at most so often
-	settling map[string]string // repo -> the baseline a check was started for, once
+	nudge    chan struct{}            // a page asked: follow now, not at the next tick
+	nudgedAt time.Time                // when a page last did, to ask the host at most so often
+	settling map[string]string        // repo -> the baseline a check was started for, once
+	log      map[string][]APIProgress // repo -> its run's steps so far
+}
+
+// maxProgress is how many of a run's steps are kept.
+const maxProgress = 40
+
+// ReadinessLog is where a setup run on repo says what it's doing, a line
+// at a time, for the page to show as it goes.
+func (s *Server) ReadinessLog(repo string) io.Writer { return progressLog{s, repo} }
+
+type progressLog struct {
+	s    *Server
+	repo string
+}
+
+func (l progressLog) Write(b []byte) (int, error) {
+	at := time.Now().UTC().Format(store.TimeFormat)
+	l.s.ready.mu.Lock()
+	defer l.s.ready.mu.Unlock()
+	if l.s.ready.log == nil {
+		l.s.ready.log = map[string][]APIProgress{}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			l.s.ready.log[l.repo] = append(l.s.ready.log[l.repo], APIProgress{At: at, Text: line})
+		}
+	}
+	if n := len(l.s.ready.log[l.repo]); n > maxProgress {
+		l.s.ready.log[l.repo] = l.s.ready.log[l.repo][n-maxProgress:]
+	}
+	return len(b), nil
 }
 
 func (s *Server) routesReadiness(mux *http.ServeMux) {
@@ -170,12 +212,13 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	s.ready.mu.Lock()
 	running, action, since := s.ready.repo, s.ready.action, s.ready.since
 	errs, results := maps.Clone(s.ready.errs), maps.Clone(s.ready.results)
+	logs := maps.Clone(s.ready.log)
 	s.ready.mu.Unlock()
 	linked := map[int64]bool{}
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
 		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Extras: []APIReadinessFinding{},
-			CheckError: errs[repo], Result: results[repo]}
+			CheckError: errs[repo], Result: results[repo], Progress: append([]APIProgress{}, logs[repo]...)}
 		if strings.EqualFold(running, repo) {
 			rr.Checking, rr.CheckingSince, rr.Action = true, since.UTC().Format(store.TimeFormat), action
 		}
@@ -456,6 +499,7 @@ func (s *Server) beginReadiness(repo, action string, run func(ctx context.Contex
 	}
 	delete(s.ready.errs, repo)
 	delete(s.ready.results, repo)
+	delete(s.ready.log, repo)
 	s.ready.mu.Unlock()
 	go func() {
 		res, err := run(context.Background())

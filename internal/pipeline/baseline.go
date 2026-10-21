@@ -98,6 +98,7 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 	defer os.RemoveAll(dir)
 	g := p.git(repo)
 	// A fresh branch off the base, with a clean clone to commit from.
+	p.progress("cloning %s's %s", repo, rc.BaseBranch)
 	ws, err := g.Prepare(ctx, dir, rc.BaseBranch, BaselineBranch, true, true)
 	if err != nil {
 		return "", fmt.Errorf("cloning %s: %w", repo, err)
@@ -112,11 +113,11 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 		return "", err
 	}
 	if rc.Gates.Install != "" {
-		if code, out, err := p.Exec(ctx, repo, export, rc.Gates.Install, true); err != nil || code != 0 {
+		if code, out, err := p.ExecSaying(ctx, repo, export, rc.Gates.Install, true); err != nil || code != 0 {
 			return "", runErr("install", code, out, err)
 		}
 	}
-	if code, out, err := p.Exec(ctx, repo, export, l.cmd, false); err != nil || code > 1 {
+	if code, out, err := p.ExecSaying(ctx, repo, export, l.cmd, false); err != nil || code > 1 {
 		return "", runErr(l.name+"'s baseline", code, out, err) // 1 is "offenses found", as it records them
 	}
 	if err := p.closeGaps(ctx, repo, export, l, lint); err != nil {
@@ -141,6 +142,7 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 	if !changed {
 		return "", fmt.Errorf("the baseline is already on %s", rc.BaseBranch)
 	}
+	p.progress("pushing %s", BaselineBranch)
 	if err := g.Push(ctx, ws.Repo, sha, BaselineBranch, true); err != nil {
 		return "", fmt.Errorf("pushing %s: %w", BaselineBranch, err)
 	}
@@ -148,6 +150,7 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 	if pr, err := gh.FindPR(ctx, BaselineBranch); err == nil && pr != nil {
 		return pr.URL, nil // the push updated it
 	}
+	p.progress("opening its pull request")
 	pr, err := gh.CreatePR(ctx, "Accept today's "+l.name+" offenses as a baseline", baselineBody(l, lint, rc.BaseBranch), BaselineBranch, rc.BaseBranch, false)
 	if err != nil {
 		return "", fmt.Errorf("it pushed the baseline to %s, but couldn't open the pull request: %w. Open one from that branch yourself, or give the factory's token leave to and accept again", BaselineBranch, err)
@@ -181,7 +184,7 @@ func runErr(what string, code int, out string, err error) error {
 // redundant, is added to the baseline file by file. Then lint must pass.
 func (p *Pipeline) closeGaps(ctx context.Context, repo, dir string, l *linter, lint string) error {
 	passes := func() (bool, error) {
-		code, out, err := p.Exec(ctx, repo, dir, lint, false)
+		code, out, err := p.ExecSaying(ctx, repo, dir, lint, false)
 		if err != nil || code > 1 {
 			return false, runErr("lint", code, out, err)
 		}
@@ -204,7 +207,7 @@ func (p *Pipeline) closeGaps(ctx context.Context, repo, dir string, l *linter, l
 			return err
 		}
 	}
-	code, out, err := p.Exec(ctx, repo, dir, l.runner+" --format json", false)
+	code, out, err := p.ExecSaying(ctx, repo, dir, l.runner+" --format json", false)
 	if err != nil || code > 1 {
 		return runErr("listing what still fails", code, out, err)
 	}
@@ -215,7 +218,7 @@ func (p *Pipeline) closeGaps(ctx context.Context, repo, dir string, l *linter, l
 	if err := addExcludes(filepath.Join(dir, ".rubocop_todo.yml"), left); err != nil {
 		return err
 	}
-	if code, out, err := p.Exec(ctx, repo, dir, lint, false); err != nil || code != 0 {
+	if code, out, err := p.ExecSaying(ctx, repo, dir, lint, false); err != nil || code != 0 {
 		return fmt.Errorf("`%s` still fails with the baseline, so nothing was pushed: %w", lint, runErr("lint", code, out, err))
 	}
 	return nil

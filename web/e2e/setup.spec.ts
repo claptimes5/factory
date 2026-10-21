@@ -82,6 +82,9 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   await expect(api.getByRole("status").first()).toContainText(/[Cc]hecking/);
   await expect(api.getByRole("button", { name: "Check again" })).toBeVisible({ timeout: 15_000 });
   await expect(api).toContainText(/Checked \d+s ago/);
+  // What it ran, and how each went, stays to look at.
+  await api.getByText("What the last run did").click();
+  await expect(api.getByRole("list", { name: "What it has done" })).toContainText("Passed bin/rails test in 1s");
 
   // File and start work checks again, then files; the page follows it. The
   // devserver changes nothing, so the other project sees the same report.

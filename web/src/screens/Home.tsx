@@ -9,7 +9,7 @@ import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
-import { NextActions, nextStep, useReadiness, useReadinessRun } from "@/screens/Setup";
+import { NextActions, nextStep, RunProgress, useReadiness, useReadinessRun } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type Readiness = components["schemas"]["Readiness"];
@@ -306,7 +306,12 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
           {title.charAt(0).toUpperCase() + title.slice(1)}
         </p>
         <p className="text-body-sm text-ink-muted">{next.body}</p>
-        {next.running && <p className="text-body-sm text-ink-muted">Started {duration(r.checking_since)} ago.</p>}
+        {next.running && (
+          <div className="flex flex-col gap-1 text-body-sm text-ink-muted">
+            <p>Started {duration(r.checking_since)} ago.</p>
+            <RunProgress r={r} last />
+          </div>
+        )}
         <div className="mt-1 flex flex-wrap gap-2">
           <NextActions next={next} busy={busy} run={run} inverse />
           <Button size="sm" variant="inverse-outline" asChild>

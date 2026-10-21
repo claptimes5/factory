@@ -198,6 +198,26 @@ function StepRow({
   offersFile: boolean;
   placed: Placed;
 }) {
+  // A step that's done is a line; what it checked opens from it.
+  if (step.state === "done") {
+    return (
+      <li data-testid="setup-step" className="py-2">
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-3 text-sm">
+            <StepIcon state={step.state} />
+            <span className="min-w-0 flex-1">
+              {n}. {step.title}
+            </span>
+            <span className="text-xs text-muted-foreground group-open:hidden">Details ▾</span>
+          </summary>
+          <div className="mt-1 flex flex-col gap-1 pl-8">
+            <p className="text-meta text-text-2">{step.why}</p>
+            {step.passed && <p className="text-meta text-success">{step.passed}</p>}
+          </div>
+        </details>
+      </li>
+    );
+  }
   return (
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
@@ -206,7 +226,7 @@ function StepRow({
           {n}. {step.title}
         </h4>
         <p className="text-meta text-text-2">{step.why}</p>
-        {step.state === "done" && step.passed && <p className="text-meta text-success">{step.passed}</p>}
+        {isAtStep(placed.next, step) && <NextBox next={placed.next} r={repo} busy={placed.busy} run={placed.run} id={placed.id} />}
         {step.state === "unchecked" && <p className="text-meta text-muted-foreground">Not checked yet: the check stopped before this step.</p>}
         {step.blockers.length > 0 && (
           <ul className="divide-y">
@@ -230,7 +250,7 @@ export type Next = {
   body: string;
   actions: NextAction[];
   running?: boolean;
-  /** The finding it's about, by key or "area:name": Setup shows it there. */
+  /** What it's about, by finding key, "area:name" or "step:key": Setup shows it there. */
   at?: string;
   /** Only a person can do it: the factory waits on them. */
   human?: boolean;
@@ -238,6 +258,9 @@ export type Next = {
 
 /** Whether next step n is about finding f. */
 const isAt = (n: Next, f: FindingT) => !!n.at && (n.at.startsWith("area:") ? f.area === n.at.slice(5) : f.key === n.at);
+
+/** Whether next step n is about a whole setup step: a check running again, say. */
+const isAtStep = (n: Next, s: Step) => n.at === `step:${s.key}`;
 
 /** What a pull request is called on the repo's host: a GitLab repo is named host/path. */
 export const prWord = (r: RepoReadiness) => (r.repo.split("/").length > 2 ? "merge request" : "pull request");
@@ -268,6 +291,7 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
     ...(r.unfiled > 0 ? [{ label: "Only file the issues", run: ["/readiness/file", { queue: false }] as [string, Record<string, unknown>] }] : []),
   ];
   if (r.checking) {
+    const failing = r.steps.find((st) => st.state === "failing");
     const what: Record<string, [string, string]> = {
       baseline: [
         "Making the lint baseline",
@@ -289,7 +313,8 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       body,
       actions: [],
       running: true,
-      at: r.action === "baseline" ? "check:lint" : undefined,
+      // A baseline is about lint; a check is about what's failing, which it looks at again.
+      at: r.action === "baseline" ? "check:lint" : failing ? `step:${failing.key}` : undefined,
     };
   }
   if (r.state === "unchecked") {
@@ -479,6 +504,41 @@ export function NextActions({ next, busy, run, inverse }: { next: Next; busy: bo
   );
 }
 
+/** A setup run's steps so far: each command's outcome and time, and what it's doing now. */
+export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
+  // A command that finished says so; its "running" line goes.
+  const steps = r.progress.filter((p, i) => !p.text.startsWith("running ") || i === r.progress.length - 1);
+  if (steps.length === 0) return null;
+  return (
+    <ol aria-label="What it has done" className="flex flex-col gap-1 text-meta">
+      {(last ? steps.slice(-1) : steps).map((p, i, all) => {
+        const now = i === all.length - 1 && r.checking;
+        const bad = p.text.startsWith("failed ") || p.text.startsWith("couldn't ");
+        return (
+          <li key={i} className="flex items-start gap-2">
+            {now ? (
+              <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" aria-label="Doing now" />
+            ) : bad ? (
+              <XCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" aria-label="Failed" />
+            ) : (
+              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-label="Done" />
+            )}
+            <span className="min-w-0 break-words">
+              <Inline text={p.text.charAt(0).toUpperCase() + p.text.slice(1)} />
+              {now && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  · since <Ago ts={p.at} />
+                </span>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; id?: string }) {
   return (
     <div
@@ -500,6 +560,7 @@ function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; bus
         </p>
       )}
       <p className="text-text-2">{next.body}</p>
+      {next.running && <RunProgress r={r} />}
       <NextActions next={next} busy={busy} run={run} />
     </div>
   );
@@ -519,7 +580,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
   const offersFile = next.actions.some((a) => a.run?.[0] === "/readiness/file");
   // A next step about one finding sits on that finding's row; the top
   // only points there, so the action is next to what it fixes.
-  const stepAt = r.steps.findIndex((st) => st.blockers.some((f) => isAt(next, f)));
+  const stepAt = r.steps.findIndex((st) => isAtStep(next, st) || st.blockers.some((f) => isAt(next, f)));
   const placed = stepAt >= 0 || r.extras.some((f) => isAt(next, f));
   const boxId = `next-${r.repo.replace(/[^a-z0-9]+/gi, "-")}`;
   const placedNext = { next, busy, run, id: boxId };
@@ -603,6 +664,14 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <p role="alert" className="text-sm text-destructive">
           {r.check_error}
         </p>
+      )}
+      {!r.checking && r.progress.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">What the last run did</summary>
+          <div className="mt-1.5">
+            <RunProgress r={r} />
+          </div>
+        </details>
       )}
       {msg && (
         <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>

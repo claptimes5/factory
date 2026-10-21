@@ -581,7 +581,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 			return err
 		}
 		defer done()
-		return recheckReadiness(ctx, cfg, p, repo)
+		return recheckReadiness(ctx, cfg, p, repo, srv.ReadinessLog(repo))
 	}
 	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
 		done, err := readinessRun()
@@ -589,7 +589,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 			return "", err
 		}
 		defer done()
-		return fileReadiness(ctx, cfg, p, repo, queue)
+		return fileReadiness(ctx, cfg, p, repo, queue, srv.ReadinessLog(repo))
 	}
 	// A lint baseline runs the repo's install and linter like a check, in
 	// containers named apart from the daemon's jobs.
@@ -601,6 +601,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		}
 		defer done()
 		pl := &pipeline.Pipeline{Cfg: cfg, Runner: p.Runner, JobPrefix: readinessPrefix(), ClientsFor: p.ClientsFor}
+		pl.Progress = srv.ReadinessLog(repo)
 		return pl.LintBaseline(ctx, repo)
 	}
 	go relinkSaved(ctx, cfg, p)

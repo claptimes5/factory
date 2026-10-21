@@ -1100,7 +1100,7 @@ components:
         can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1126,6 +1126,10 @@ components:
         can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
         baseline_pr: { type: string, description: "The pull request the last lint baseline opened, while lint still fails, or empty" }
         following: { type: boolean, description: "File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass" }
+        progress:
+          type: array
+          description: What the run going (or the last one started here) has done so far, a step at a time, oldest first
+          items: { $ref: "#/components/schemas/ReadinessProgress" }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]
@@ -1136,6 +1140,12 @@ components:
         state: { type: string, enum: [done, failing, unchecked] }
         passed: { type: string, description: "What the check saw when it's done, or empty" }
         blockers: { type: array, items: { $ref: "#/components/schemas/ReadinessFinding" } }
+    ReadinessProgress:
+      type: object
+      required: [at, text]
+      properties:
+        at: { type: string, description: When it was said }
+        text: { type: string, description: "A step: running `bundle install`, passed `bundle install` in 2m14s" }
     ReadinessFinding:
       type: object
       required: [key, level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
