@@ -43,6 +43,8 @@ sh scripts/install.sh
 
 The first run makes `factory.yaml` from `factory.example.yaml`. It's
 yours: git ignores it, so `git pull` never conflicts with your settings.
+It names no repository yet, whatever folder you start the factory from:
+setup asks which repos to work on, and the factory clones each one itself.
 (A checkout from before this tracked `factory.yaml`; to update one, keep
 yours aside first: `cp factory.yaml factory.yaml.mine && git checkout --
 factory.yaml && git pull && mv factory.yaml.mine factory.yaml`.)
@@ -74,7 +76,7 @@ checks. `.github/CODEOWNERS` makes you the owner of `.github/`,
 
 ## Setting up in the browser
 
-Until the factory can reach your repos, `./factory serve` doesn't stop with
+Until you've chosen your repos and the factory can reach them, `./factory serve` doesn't stop with
 an error: it starts the dashboard with only its get-started page, prints
 
 ```
@@ -82,24 +84,34 @@ Open http://127.0.0.1:8080/app/get-started to finish setup.
 ```
 
 and every other screen leads there. The page is a list of steps, each
-marked done, needing attention, or optional, with the next one open:
+marked done, needing attention, or optional, with the next one open and
+a bar showing how many of the required ones are done. A step finished
+while open stays open, with a button to the next one that needs you.
 
 1. **This machine:** the same checks as `./factory doctor` runs on the
-   machine, each problem with its fix, and a Re-check button.
+   machine, each problem with its fix, and a Check again button.
 2. **Repositories:** which repos the factory works on, saved in
-   `factory.yaml`.
+   `factory.yaml`. Pick where each is hosted, GitHub or GitLab (with the
+   server, for a self-hosted one), and add it as `owner/name` or
+   `group/project`, or paste its link or clone address. These are repos on
+   GitHub or GitLab, not folders on your computer: the factory clones each
+   into its data folder. The steps that follow are for the hosts your
+   repos are on.
 3. **GitHub:** "Create an app for me" sends you to GitHub with a new app
    filled in, with only the permissions the factory needs. Click "Create
    GitHub App" and GitHub brings you back; the app's key is saved next to
    `factory.env`. Then install it from the link the page shows and press
    Check. You can use an app you already made (its ID and the path of its
    key on the factory's machine) or, for a quick try, a personal access
-   token. The page then checks it can reach each repo, says when a repo's
+   token. A GitLab token pasted here is refused, and the other way round.
+   **Remove token** (or **Disconnect**, for an app) deletes the saved
+   credentials from `factory.env`, so you can choose another way. The
+   page then checks it can reach each repo, says when a repo's
    default branch differs from the one the factory uses, and shows which of
    the factory's labels each repo is missing, with a button that creates
    just those.
 4. **GitLab** (with GitLab repos): links to make a legacy or fine-grained
-   token, and the same access and label checks.
+   token, the same access and label checks, and **Remove token**.
 5. **Checks:** what every change in each repo must pass. Once the factory
    can reach a repo it reads its files and suggests the install, the
    checks and the job image's base. A test or lint command the repo's
@@ -123,14 +135,16 @@ marked done, needing attention, or optional, with the next one open:
    20 minutes ends the sign-in. The page says when you're
    signed in. Only someone who may save settings sees the code.
 7. **Notifications** and **Sentry** (both optional), with a button that
-   sends a test notification.
+   sends a test notification. **Make a private topic** fills in a new
+   ntfy topic nobody would guess, to subscribe to in the ntfy app.
 8. **Job images:** which are built, and a Build button that builds the
    missing ones while you watch the log. A build `factory serve` started
    on its own shows here too, and the two never run at once.
 9. **Finish**, once the factory can reach every repo, and not while an
    image builds or a Codex sign-in runs. If something won't
-   work yet (no model key, say), it says what. Finish restarts the factory
-   with the new settings and the page opens the dashboard when it's up.
+   work yet (no model key, say), it says what, and what happens once the
+   factory runs. Finish restarts the factory with the new settings and the
+   page opens the dashboard when it's up.
 
 The page reads the settings as the factory will run with them: a
 variable exported where the factory starts wins over the one saved in

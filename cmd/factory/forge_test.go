@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -149,5 +150,45 @@ func TestWriteReposQuotesOneRepo(t *testing.T) {
 		if err != nil || strings.Join(cfg.RepoNames(), ",") != name {
 			t.Fatalf("%s: %v %v", name, cfg.RepoNames(), err)
 		}
+	}
+}
+
+// A repo pasted the way GitHub or GitLab shows it is taken: a clone
+// address over SSH, or a link to a page inside the repo.
+func TestParseRepoListTakesWhatYouPaste(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:octocat/hello-world.git":           "octocat/hello-world",
+		"https://github.com/octocat/hello-world/tree/main": "octocat/hello-world",
+		"github.com/octocat/hello-world/pull/3":            "octocat/hello-world",
+		"git@gitlab.com:group/sub/project.git":             "gitlab.com/group/sub/project",
+		"ssh://git@gitlab.example.com:2222/g/p.git":        "gitlab.example.com/g/p",
+		"https://gitlab.com/group/project/-/tree/main":     "gitlab.com/group/project",
+	} {
+		names, err := parseRepoList(in)
+		if err != nil || strings.Join(names, ",") != want {
+			t.Errorf("%s: %v %v, want %s", in, names, err, want)
+		}
+	}
+}
+
+// A new factory.yaml names no repo: the first one chosen takes the place
+// of the example's commented-out line.
+func TestWriteReposIntoANewConfig(t *testing.T) {
+	path := testConfig(t, "o/x")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "repo: o/x\n", "# repo: octocat/hello-world  # an example\n", 1)), 0o644)
+	if cfg, err := config.Load(path); err != nil || !cfg.NoRepos() {
+		t.Fatalf("the new config names %v, %v", cfg.RepoNames(), err)
+	}
+	if err := writeRepos(path, []config.Repo{{Name: "o/r"}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(path)
+	if !strings.Contains(string(b), "\nrepo: o/r\n") || strings.Contains(string(b), "# repo:") {
+		t.Fatalf("factory.yaml:\n%s", b)
+	}
+	cfg, err := config.Load(path)
+	if err != nil || strings.Join(cfg.RepoNames(), ",") != "o/r" {
+		t.Fatalf("%v %v", cfg.RepoNames(), err)
 	}
 }

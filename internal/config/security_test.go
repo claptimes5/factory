@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -112,7 +111,7 @@ func TestSecurityConfigIsChecked(t *testing.T) {
 
 func TestSecurityBlockParses(t *testing.T) {
 	t.Parallel()
-	y, err := os.ReadFile("../../factory.example.yaml")
+	y, err := exampleYAML()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +132,7 @@ func TestSecurityPathsNone(t *testing.T) {
 	if _, ok := none.SecurityMatch("go.mod"); ok {
 		t.Fatal("paths: [] still matched a default")
 	}
-	y, err := os.ReadFile("../../factory.example.yaml")
+	y, err := exampleYAML()
 	if err != nil {
 		t.Fatal(err)
 	}

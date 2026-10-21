@@ -1,14 +1,13 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestPlanFor(t *testing.T) {
 	t.Parallel()
-	b, _ := os.ReadFile("../../factory.example.yaml")
+	b, _ := exampleYAML()
 	parse := func(plan string) (*Config, error) { return Parse(append(append([]byte{}, b...), []byte("\n"+plan)...)) }
 	c, err := parse("")
 	if err != nil {

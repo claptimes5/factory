@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -10,7 +9,7 @@ import (
 
 func repoYAML(t *testing.T) ([]byte, string) {
 	t.Helper()
-	b, err := os.ReadFile("../../factory.example.yaml")
+	b, err := exampleYAML()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +281,7 @@ func TestSettings(t *testing.T) {
 }
 
 func TestReviewSettingsAreEditable(t *testing.T) {
-	src, _ := os.ReadFile("../../factory.example.yaml")
+	src, _ := exampleYAML()
 	groups, err := Settings(src)
 	if err != nil {
 		t.Fatal(err)

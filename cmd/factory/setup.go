@@ -847,7 +847,8 @@ func checkBaseBranches(ctx context.Context, p *prompter, cfgPath string, cfg *co
 func parseRepoList(in string) ([]string, error) {
 	var names []string
 	seen := map[string]bool{}
-	for _, f := range strings.FieldsFunc(in, func(r rune) bool { return r == ',' || r == ' ' }) {
+	for _, f := range strings.FieldsFunc(in, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' }) {
+		f = repoAddress(f)
 		host, name := config.SplitRepo("", f)
 		path := strings.TrimPrefix(name, host+"/")
 		if host != "" {
@@ -867,6 +868,33 @@ func parseRepoList(in string) ([]string, error) {
 		return nil, errors.New("name at least one repository, as owner/name")
 	}
 	return names, nil
+}
+
+// repoAddress turns what a person may paste for a repo into the form
+// SplitRepo takes: a clone address over SSH (git@host:group/project.git)
+// becomes host/group/project, and a link to a page inside the repo (a
+// branch, a file, an issue) becomes the repo's own.
+func repoAddress(f string) string {
+	if after, ok := strings.CutPrefix(f, "ssh://"); ok {
+		if _, rest, ok := strings.Cut(after, "@"); ok {
+			after = rest
+		}
+		host, path, _ := strings.Cut(after, "/")
+		host, _, _ = strings.Cut(host, ":") // SSH's port, not the web's
+		f = host + "/" + path
+	} else if user, rest, ok := strings.Cut(f, "@"); ok && !strings.ContainsAny(user, "/:") {
+		f = strings.Replace(rest, ":", "/", 1) // git@host:group/project
+	}
+	if before, _, ok := strings.Cut(f, "/-/"); ok {
+		f = before // GitLab: /-/tree/main, /-/issues/3
+	}
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(f, "https://"), "http://")
+	if host, path, ok := strings.Cut(trimmed, "/"); ok && (strings.EqualFold(host, "github.com") || strings.EqualFold(host, "www.github.com")) {
+		if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) > 2 {
+			f = host + "/" + parts[0] + "/" + parts[1] // GitHub: /tree/main, /pull/3
+		}
+	}
+	return f
 }
 
 // The names a repo may have, checked before they go in factory.yaml: a
@@ -953,7 +981,31 @@ func writeRepos(path string, repos []config.Repo) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%s has no repo: line to update", path)
+		// A new factory.yaml names none: the block takes the place of the
+		// example's commented-out repo: line, or goes before the first key.
+		out.Reset()
+		at := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "# repo:") || strings.HasPrefix(l, "#repo:") })
+		if at < 0 {
+			at = slices.IndexFunc(lines, func(l string) bool {
+				t := strings.TrimSpace(l)
+				return t != "" && !strings.HasPrefix(t, "#")
+			})
+		}
+		if at < 0 {
+			at = len(lines)
+		}
+		for i, l := range lines {
+			if i == at {
+				out.WriteString(block)
+				if strings.HasPrefix(l, "#") && strings.Contains(l, "repo:") {
+					continue
+				}
+			}
+			out.WriteString(l)
+		}
+		if at == len(lines) {
+			out.WriteString(block)
+		}
 	}
 	return writeConfig(path, []byte(out.String()))
 }

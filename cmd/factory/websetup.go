@@ -331,7 +331,11 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 		out.MachineCheckedAt = w.machineAt.UTC().Format(time.RFC3339)
 		step("machine", "This machine", "done", "Everything the factory needs is here")
 	}
-	step("repos", "Repositories", "done", joinAnd(cfg.RepoNames()))
+	if cfg.NoRepos() {
+		step("repos", "Repositories", "attention", "Choose the repos the factory works on")
+	} else {
+		step("repos", "Repositories", "done", joinAnd(cfg.RepoNames()))
+	}
 
 	// Each repo's access, in config order.
 	reach := map[string]int{} // host: repos reached
@@ -419,7 +423,7 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 		out.GitLab = g
 		forgeStep("gitlab", "GitLab", repos, g.Token.Set)
 	}
-	out.CanFinish = reach["github"]+reach["gitlab"] == len(cfg.Repos)
+	out.CanFinish = !cfg.NoRepos() && reach["github"]+reach["gitlab"] == len(cfg.Repos)
 
 	// Each repo's checks, saved or suggested: what every change must pass.
 	var unsaved, disagree []string
@@ -533,6 +537,8 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 		out.Warnings = append(out.Warnings, "This machine has "+plural(fails, "problem", "problems")+" that can stop jobs.")
 	}
 	switch {
+	case cfg.NoRepos():
+		step("finish", "Finish", "attention", "Once you've chosen your repos and connected to them")
 	case !out.CanFinish:
 		step("finish", "Finish", "attention", "Once the factory can reach every repo")
 	case len(out.Warnings) > 0:
@@ -768,6 +774,9 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		if t == "" {
 			return "", errors.New("paste the token first")
 		}
+		if strings.HasPrefix(t, "glpat-") {
+			return "", errors.New("that's a GitLab token (glpat-…), not a GitHub one: add a GitLab project under Repositories, and paste it in the GitLab step")
+		}
 		if err := w.save(map[string]string{"GITHUB_TOKEN": t}, githubAppKeys...); err != nil {
 			return "", err
 		}
@@ -780,10 +789,15 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 			return "Saved the token, but the GITHUB_TOKEN exported where the factory starts wins, so the factory uses that one. This check is of that one: " + w.accessMessage(), nil
 		}
 		return "Saved the token. " + w.accessMessage(), nil
+	case "github/disconnect":
+		return w.disconnect([]string{"GITHUB_TOKEN"}, githubAppKeys, "GitHub")
 	case "gitlab/token":
 		t := strings.TrimSpace(in.Token)
 		if t == "" {
 			return "", errors.New("paste the token first")
+		}
+		if githubTokenRE.MatchString(t) {
+			return "", errors.New("that's a GitHub token, not a GitLab one: paste it in the GitHub step")
 		}
 		if err := w.save(map[string]string{"GITLAB_TOKEN": t}); err != nil {
 			return "", err
@@ -791,6 +805,8 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		w.credentialsChanged()
 		w.checkAccess(ctx)
 		return "Saved the token. " + w.accessMessage(), nil
+	case "gitlab/disconnect":
+		return w.disconnect([]string{"GITLAB_TOKEN"}, nil, "GitLab")
 	case "base-branch":
 		return w.useBranch(ctx, cfg, in.Repo, in.Branch)
 	case "checks/save":
@@ -837,6 +853,32 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return w.finishSetup(ctx)
 	}
 	return "", fmt.Errorf("unknown action %q", action)
+}
+
+// githubTokenRE is how GitHub's tokens start: personal (classic and
+// fine-grained), OAuth, app installation and user-to-server.
+var githubTokenRE = regexp.MustCompile(`^(ghp_|github_pat_|gho_|ghs_|ghu_)`)
+
+// disconnect deletes a host's saved credentials from factory.env, and
+// forgets what was checked with them.
+func (w *wizard) disconnect(keys, more []string, host string) (string, error) {
+	if err := removeEnvKeys(w.envPath, append(slices.Clone(keys), more...)); err != nil {
+		return "", err
+	}
+	w.mu.Lock()
+	w.missing, w.instErr = nil, ""
+	w.mu.Unlock()
+	w.credentialsChanged()
+	var still []string
+	for _, k := range append(slices.Clone(keys), more...) {
+		if _, ok := w.exported[k]; ok {
+			still = append(still, k)
+		}
+	}
+	if len(still) > 0 {
+		return "Removed " + host + "'s saved credentials, but " + joinAnd(still) + " is exported where the factory starts, so it still uses that. Unset it there too.", nil
+	}
+	return "Removed " + host + "'s saved credentials from " + filepath.Base(w.envPath) + ".", nil
 }
 
 // accessMessage sums up the last access check.

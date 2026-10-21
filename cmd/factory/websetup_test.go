@@ -923,3 +923,70 @@ func TestWizardTriesAndSavesServices(t *testing.T) {
 		t.Fatal("a service the page didn't show was saved")
 	}
 }
+
+// A new factory names no repo: the page asks for them first, shows no
+// host until one is chosen, and can't finish.
+func TestWizardStartsWithNoRepos(t *testing.T) {
+	w := testWizard(t, &fakeGitHub{}, "o/r", true, noDocker)
+	b, _ := os.ReadFile(w.cfgPath)
+	os.WriteFile(w.cfgPath, []byte(strings.Replace(string(b), "repo: o/r\n", "# repo: octocat/hello-world\n", 1)), 0o644)
+	if err := w.reload(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	st := w.State(ctx, false)
+	if s := step(st, "repos"); s.State != "attention" || st.GitHub != nil || st.GitLab != nil || st.CanFinish || len(st.Repos) != 0 {
+		t.Fatalf("repos %+v, github %v, gitlab %v, finish %v", s, st.GitHub, st.GitLab, st.CanFinish)
+	}
+	if _, err := w.Do(ctx, "finish", web.WizardInput{}); err == nil {
+		t.Fatal("finish with no repos must be refused")
+	}
+	if _, err := w.Do(ctx, "repos", web.WizardInput{Repos: "https://gitlab.com/g/p"}); err != nil {
+		t.Fatal(err)
+	}
+	// Saving repos checks the machine again in the background: let it end before the test does.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		w.mu.Lock()
+		checked := !w.machineAt.IsZero()
+		w.mu.Unlock()
+		if checked || time.Now().After(deadline) {
+			break
+		}
+	}
+	if st = w.State(ctx, false); st.GitLab == nil || st.GitHub != nil || step(st, "repos").State != "done" {
+		t.Fatalf("after choosing a GitLab project: github %v, gitlab %v", st.GitHub, st.GitLab)
+	}
+}
+
+// A token pasted in the wrong host's field is refused, and Remove takes
+// a saved token out of factory.env altogether.
+func TestWizardRemovesAToken(t *testing.T) {
+	w := testWizard(t, &fakeGitHub{labels: map[string]bool{}}, "o/r", true, noDocker)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "github/token", web.WizardInput{Token: "glpat-abcdefghijklmnop"}); err == nil || !strings.Contains(err.Error(), "GitLab token") {
+		t.Fatalf("a GitLab token in GitHub's field: %v", err)
+	}
+	if _, err := w.Do(ctx, "gitlab/token", web.WizardInput{Token: "github_pat_abcdefghij"}); err == nil || !strings.Contains(err.Error(), "GitHub token") {
+		t.Fatalf("a GitHub token in GitLab's field: %v", err)
+	}
+	if _, err := w.Do(ctx, "github/token", web.WizardInput{Token: "ghp_secret_token_1234"}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := w.Do(ctx, "github/disconnect", web.WizardInput{})
+	if err != nil || !strings.Contains(msg, "Removed GitHub's saved credentials") {
+		t.Fatalf("disconnect: %q %v", msg, err)
+	}
+	b, _ := os.ReadFile(w.envPath)
+	if strings.Contains(string(b), "ghp_secret_token_1234") {
+		t.Fatalf("the token is still in factory.env:\n%s", b)
+	}
+	st := w.State(ctx, false)
+	if st.GitHub.Method != "none" || st.Access[0].State != "unchecked" || step(st, "github").State != "attention" {
+		t.Fatalf("after disconnect: %+v %+v", st.GitHub, st.Access)
+	}
+	// One exported where the factory starts still wins: the message says so.
+	w.exported = map[string]string{"GITHUB_TOKEN": "ghp_exported"}
+	if msg, _ := w.Do(ctx, "github/disconnect", web.WizardInput{}); !strings.Contains(msg, "GITHUB_TOKEN is exported") {
+		t.Fatalf("disconnect with an exported token: %q", msg)
+	}
+}

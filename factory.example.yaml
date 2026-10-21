@@ -1,7 +1,10 @@
 # Factory configuration. Version-controlled; agents may not edit it.
 # See SPEC.md "Harness adapters and model routing" and "Budgets".
 
-repo: claptimes5/factory     # or a repos: list; see docs/configuration.md#several-repositories
+# The repos the factory works on. Setup asks for them (./factory setup, or
+# the get-started page of ./factory serve): GitHub's owner/name, or a GitLab
+# project's URL. The factory clones each itself; no checkout here is used.
+# repo: octocat/hello-world  # or a repos: list; see docs/configuration.md#several-repositories
 base_branch: main
 data_dir: ./data              # SQLite db, job logs, scratch workdirs
 

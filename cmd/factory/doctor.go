@@ -451,6 +451,9 @@ func codexStage(cfg *config.Config) string {
 // serve does before it starts; nothing is sent to the host.
 func (d *doctor) forges(context.Context) []finding {
 	var out []finding
+	if d.cfg.NoRepos() {
+		return one(finding{fail, "No repositories yet: the factory doesn't know which repos to work on", "./factory setup, or the get-started page of ./factory serve"})
+	}
 	if repos := githubRepos(d.cfg); len(repos) > 0 {
 		switch _, err := tokens(d.cfg, repos[0]); {
 		case err != nil:

@@ -1,7 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Circle, ExternalLink, Loader2, XCircle } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  Copy,
+  ExternalLink,
+  Loader2,
+  PartyPopper,
+  Plus,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import {
   getJSON,
   machineCheckStalled,
@@ -75,6 +90,62 @@ function A({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
+/** A command to run on the factory's machine, with a button that copies it. */
+function CopyCommand({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* no clipboard, as on a plain http address: the command is there to select */
+    }
+  };
+  return (
+    <span className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md border bg-muted py-0.5 pr-0.5 pl-2 align-middle">
+      <code className="min-w-0 font-mono text-xs break-all">{cmd}</code>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? "Copied" : `Copy ${cmd}`}
+        className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {copied ? <Check className="size-3.5 text-success" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+      </button>
+    </span>
+  );
+}
+
+/** Which host a pasted token is for, from how it starts; "" when it doesn't say. */
+function tokenHost(t: string): "github" | "gitlab" | "" {
+  const v = t.trim();
+  if (v.startsWith("glpat-")) return "gitlab";
+  if (/^(ghp_|github_pat_|gho_|ghs_|ghu_)/.test(v)) return "github";
+  return "";
+}
+
+/** "a", "a and b", "a, b and c". */
+function joinAnd(s: string[]) {
+  return s.length <= 1 ? (s[0] ?? "") : `${s.slice(0, -1).join(", ")} and ${s[s.length - 1]}`;
+}
+
+/** A GitLab repo's name starts with its server (gitlab.com/group/project); a GitHub one is owner/name. */
+const onGitLab = (repo: string) => repo.split("/")[0].includes(".");
+
+/** How the factory is connected to a host, with a button that removes it. */
+function Connection({ children, remove, onRemove, ro }: { children: ReactNode; remove: string; onRemove: () => void; ro: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+      <CheckCircle2 aria-hidden className="size-4 shrink-0 text-success" />
+      <span className="min-w-0 flex-1 break-words">{children}</span>
+      <Button size="sm" variant="ghost" disabled={ro} onClick={onRemove}>
+        {remove}
+      </Button>
+    </div>
+  );
+}
+
 /** A secret's field: what was typed goes up once and never comes back, so it shows only whether one is saved. */
 function SecretField({
   id,
@@ -84,6 +155,7 @@ function SecretField({
   set,
   disabled,
   placeholder,
+  hint,
 }: {
   id: string;
   label: string;
@@ -92,6 +164,8 @@ function SecretField({
   set: (v: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** A warning about what was typed, such as another host's token. */
+  hint?: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -107,8 +181,16 @@ function SecretField({
         value={value}
         disabled={disabled}
         placeholder={saved?.set ? `Saved: ${saved.masked}. Paste a new one to replace it.` : placeholder}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(e) => set(e.target.value)}
       />
+      {hint ? (
+        <span id={`${id}-hint`} className="text-xs text-warning">
+          {hint}
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">Saved to factory.env on the factory's machine. This page never shows it again.</span>
+      )}
     </div>
   );
 }
@@ -153,10 +235,31 @@ function StepIcon({ state }: { state: string }) {
   return <Circle aria-hidden className="size-5 shrink-0 text-muted-foreground" />;
 }
 
-function StepCard({ step, n, open, toggle, children }: { step: WizardStep; n: number; open: boolean; toggle: () => void; children: ReactNode }) {
+function StepCard({
+  step,
+  n,
+  open,
+  toggle,
+  next,
+  children,
+}: {
+  step: WizardStep;
+  n: number;
+  open: boolean;
+  toggle: () => void;
+  /** The next step that needs something, offered once this one is done. */
+  next?: { n: number; step: WizardStep; go: () => void };
+  children: ReactNode;
+}) {
   const [label, variant] = stateText[step.state] ?? [step.state, "secondary"];
   return (
-    <li data-testid="wizard-step" data-key={step.key} data-state={step.state} className="rounded-xl border bg-card">
+    <li
+      id={`card-${step.key}`}
+      data-testid="wizard-step"
+      data-key={step.key}
+      data-state={step.state}
+      className={cn("scroll-mt-4 rounded-xl border bg-card transition-colors", open && step.state === "attention" && "border-primary/40")}
+    >
       <h2>
         <button
           aria-expanded={open}
@@ -180,6 +283,13 @@ function StepCard({ step, n, open, toggle, children }: { step: WizardStep; n: nu
       {open && (
         <div id={`step-${step.key}`} className="flex min-w-0 flex-col gap-3 border-t px-4 pt-3 pb-4">
           {children}
+          {step.state !== "attention" && next && (
+            <div className="flex justify-end border-t pt-3">
+              <Button size="sm" variant="outline" onClick={next.go}>
+                Next: {next.n}. {next.step.title} <ArrowRight aria-hidden />
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </li>
@@ -192,11 +302,38 @@ const findingIcon = {
   fail: <XCircle aria-label="To fix" className="size-4 shrink-0 text-destructive" />,
 };
 
+function MachineFinding({ f, w, ro, busy, run }: { f: Wizard["machine"][number]; w: Wizard; ro: boolean; busy: string; run: (a: string) => void }) {
+  return (
+    <li data-testid="machine-finding" className="flex min-w-0 gap-2 text-sm">
+      <span className="mt-0.5">{findingIcon[f.status]}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="break-words">{f.what}</span>
+        {f.status !== "pass" && f.fix && (
+          <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-all">{f.fix}</pre>
+        )}
+        {f.status !== "pass" && f.action === "build_images" && (
+          <span>
+            <Button size="sm" variant="outline" disabled={ro || !!busy || !!w.images?.building} onClick={() => run("images/build")}>
+              {w.images?.building ? "Building…" : "Build"}
+            </Button>
+          </span>
+        )}
+      </span>
+    </li>
+  );
+}
+
 function MachineStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const { busy, msg, run } = useAction();
+  const todo = w.machine.filter((f) => f.status !== "pass");
+  const fine = w.machine.filter((f) => f.status === "pass");
+  const fails = todo.filter((f) => f.status === "fail").length;
   return (
     <>
-      <p className="text-sm text-text-2">What the factory needs on this machine. Fix the red lines, then check again.</p>
+      <p className="text-sm text-text-2">
+        The factory runs its jobs on this machine, so this checks what's installed here.{" "}
+        {fails > 0 ? "Fix the red lines, then check again." : todo.length > 0 ? "The yellow lines are optional." : ""}
+      </p>
       {w.machine_checked_at === "" && machineCheckStalled() ? (
         <p role="alert" className="text-sm text-destructive">The machine check didn't finish. Docker may be hung; check again.</p>
       ) : w.machine_checked_at === "" ? (
@@ -204,30 +341,31 @@ function MachineStep({ w, ro }: { w: Wizard; ro: boolean }) {
           <Loader2 className="size-4 animate-spin" aria-hidden /> Checking…
         </p>
       ) : (
-        <ul className="flex flex-col gap-2" aria-label="Checks of this machine">
-          {w.machine.map((f) => (
-            <li key={f.what} data-testid="machine-finding" className="flex min-w-0 gap-2 text-sm">
-              <span className="mt-0.5">{findingIcon[f.status]}</span>
-              <span className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="break-words">{f.what}</span>
-                {f.status !== "pass" && f.fix && (
-                  <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-all">{f.fix}</pre>
-                )}
-                {f.status !== "pass" && f.action === "build_images" && (
-                  <span>
-                    <Button size="sm" variant="outline" disabled={ro || !!busy || !!w.images?.building} onClick={() => run("images/build")}>
-                      {w.images?.building ? "Building…" : "Build"}
-                    </Button>
-                  </span>
-                )}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="flex flex-col gap-2" aria-label="Checks of this machine" role="group">
+          {todo.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {todo.map((f) => (
+                <MachineFinding key={f.what} f={f} w={w} ro={ro} busy={busy} run={run} />
+              ))}
+            </ul>
+          )}
+          {fine.length > 0 && (
+            <details open={todo.length === 0 || undefined}>
+              <summary className="flex cursor-pointer items-center gap-2 text-sm">
+                {findingIcon.pass} {fine.length === 1 ? "1 check passed" : `${fine.length} checks passed`}
+              </summary>
+              <ul className="mt-2 flex flex-col gap-2 pl-6">
+                {fine.map((f) => (
+                  <MachineFinding key={f.what} f={f} w={w} ro={ro} busy={busy} run={run} />
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
       )}
       <div>
         <Button size="sm" variant="outline" disabled={ro || !!busy} onClick={() => run("machine/check")}>
-          {busy === "machine/check" ? "Checking…" : "Re-check"}
+          {busy === "machine/check" ? "Checking…" : "Check again"}
         </Button>
       </div>
       <Message msg={msg} />
@@ -236,25 +374,102 @@ function MachineStep({ w, ro }: { w: Wizard; ro: boolean }) {
 }
 
 function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
-  const [v, setV] = useState(w.repos.join(", "));
   const { busy, msg, run } = useAction();
+  const [host, setHost] = useState<"github" | "gitlab">(w.repos.length > 0 && w.repos.every(onGitLab) ? "gitlab" : "github");
+  const [name, setName] = useState("");
+  const [server, setServer] = useState(() => w.repos.find(onGitLab)?.split("/")[0] ?? "gitlab.com");
+  const save = (repos: string[]) => run("repos", { repos: repos.join(", ") });
+  const add = async () => {
+    let v = name.trim();
+    if (!v) return;
+    // A bare group/project is on the GitLab server named beside it; a link or clone address says its own.
+    if (host === "gitlab" && !/[:@]/.test(v) && !onGitLab(v)) v = `${server.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || "gitlab.com"}/${v}`;
+    if (await save([...w.repos, v])) setName("");
+  };
+  const hosts = [
+    { key: "github", label: "GitHub" },
+    { key: "gitlab", label: "GitLab" },
+  ] as const;
   return (
     <>
-      <p className="text-sm text-text-2">The factory can work on several repos, each on its own. They are saved in factory.yaml.</p>
-      <TextField
-        id="wizard-repos"
-        label="Repositories"
-        value={v}
-        set={setV}
-        disabled={ro}
-        placeholder="octocat/hello-world"
-        help="owner/name for GitHub, and the project's URL for GitLab (https://gitlab.com/group/project). Separate them with commas."
-      />
-      <div>
-        <Button size="sm" disabled={ro || !!busy} onClick={() => run("repos", { repos: v })}>
-          {busy ? "Saving…" : "Save"}
-        </Button>
-      </div>
+      <p className="text-sm text-text-2">
+        Which repositories should the factory work on? It clones each one from GitHub or GitLab into a workspace of its own, makes its changes on a
+        branch, and opens a pull request for you to review. It never uses or changes a folder on this computer, including the one you started it from.
+      </p>
+      {w.repos.length > 0 && (
+        <ul aria-label="Chosen repositories" className="flex flex-col divide-y rounded-lg border">
+          {w.repos.map((r) => (
+            <li key={r} data-testid="repo" className="flex min-w-0 items-center gap-2.5 py-1.5 pr-1.5 pl-3">
+              <Badge variant="secondary" className="w-14 justify-center">
+                {onGitLab(r) ? "GitLab" : "GitHub"}
+              </Badge>
+              <span className="min-w-0 flex-1 font-mono text-sm break-all">{r}</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label={`Remove ${r}`}
+                title={w.repos.length === 1 ? "Add another repository first: the factory needs at least one" : `Remove ${r}`}
+                disabled={ro || !!busy || w.repos.length === 1}
+                onClick={() => save(w.repos.filter((x) => x !== r))}
+              >
+                <Trash2 aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="flex flex-col gap-3 rounded-lg border p-3"
+        aria-label="Add a repository"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void add();
+        }}
+      >
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="mb-1.5 text-sm font-medium">{w.repos.length === 0 ? "Add your first repository. Where is it hosted?" : "Add another. Where is it hosted?"}</legend>
+          <div className="inline-flex w-fit rounded-md border bg-muted p-0.5">
+            {hosts.map((h) => (
+              <label
+                key={h.key}
+                className={cn(
+                  "cursor-pointer rounded px-3 py-1 text-sm font-medium text-muted-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+                  host === h.key && "bg-card text-foreground shadow-sm",
+                )}
+              >
+                <input type="radio" name="repo-host" className="sr-only" checked={host === h.key} onChange={() => setHost(h.key)} disabled={ro} />
+                {h.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end">
+          {host === "gitlab" && (
+            <div className="sm:w-44">
+              <TextField id="wizard-gitlab-server" label="Server" value={server} set={setServer} disabled={ro} placeholder="gitlab.com" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <TextField
+              id="wizard-repos"
+              label={host === "github" ? "Repository" : "Project"}
+              value={name}
+              set={setName}
+              disabled={ro}
+              placeholder={host === "github" ? "octocat/hello-world" : "group/project"}
+            />
+          </div>
+          <Button type="submit" disabled={ro || !!busy || name.trim() === ""}>
+            {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Plus aria-hidden />} Add
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {host === "github"
+            ? "owner/name, as in github.com/owner/name. Or paste the repo's link or clone address."
+            : "The project's path, subgroups included. Or paste its link or clone address. For a self-hosted GitLab, change the server."}
+        </p>
+      </form>
       <Message msg={msg} />
     </>
   );
@@ -393,39 +608,50 @@ function GitHubStep({ w, ro }: { w: Wizard; ro: boolean }) {
       setStarting(false);
     }
   };
+  const off = useAction();
   const installed = g.method === "app" && g.installation_id !== "" && g.missing.length === 0;
+  const repos = w.access.filter((a) => a.host === "github").map((a) => a.repo);
+  const disconnect = () => {
+    if (g.method === "app" && !window.confirm(`Disconnect the app ${g.app_slug || g.app_id}? It stays on GitHub, and its key file stays on this machine, so you can use it again under Other ways to connect.`)) return;
+    void off.run("github/disconnect");
+  };
   return (
     <>
       <p className="text-sm text-text-2">
-        The factory acts on GitHub through a GitHub App limited to {w.access.filter((a) => a.host === "github").length > 1 ? "your repos" : "your repo"}. It
-        can read and write code, issues and pull requests, and read checks and workflow runs. Nothing else.
+        The factory needs to reach {joinAnd(repos)} on GitHub: to read the code, push its branches, open pull requests and read the checks they run.
       </p>
       {g.method === "app" ? (
-        <p className="text-sm">
-          Using the app <span className="font-mono break-all">{g.app_slug || g.app_id}</span>
+        <Connection remove="Disconnect" onRemove={disconnect} ro={ro || !!off.busy}>
+          Connected through the GitHub App <span className="font-mono break-all">{g.app_slug || g.app_id}</span>
           {g.key_path && (
             <>
-              {" "}
-              with the key <span className="font-mono break-all">{g.key_path}</span>
+              , with the key <span className="font-mono break-all">{g.key_path}</span>
             </>
           )}
           .
-        </p>
+        </Connection>
       ) : g.method === "token" ? (
-        <p className="text-sm">Using a personal access token ({g.token.masked}). An app is safer for everyday use.</p>
+        <Connection remove="Remove token" onRemove={() => off.run("github/disconnect")} ro={ro || !!off.busy}>
+          Connected with a personal access token <Code>{g.token.masked}</Code>. Fine for a try; an app is safer for everyday use.
+        </Connection>
       ) : null}
+      <Message msg={off.msg} />
       {g.method !== "app" && (
-        <div className="flex flex-col gap-1.5">
+        <section aria-label="Create a GitHub App" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+            Create a GitHub App <Badge>Recommended</Badge>
+          </h3>
+          <p className="text-sm text-text-2">
+            It takes about a minute, and the factory gets only the repos you install it on, nothing else. GitHub shows a form already filled in for{" "}
+            {g.app_owner}: click "Create GitHub App" at the bottom, and GitHub brings you back here to install it.
+          </p>
           <div>
             <Button disabled={ro || starting} onClick={create}>
               {starting ? "Opening GitHub…" : "Create an app for me"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            GitHub shows a form with everything filled in, for the account {g.app_owner}. Click "Create GitHub App" at the bottom, and GitHub brings you back here.
-          </p>
           <Message msg={msg} />
-        </div>
+        </section>
       )}
       {g.method === "app" && !installed && (
         <section aria-label="Install the app" className="flex flex-col gap-2 rounded-lg border border-warning-border bg-warning-bg p-3 text-sm">
@@ -465,9 +691,10 @@ function Alternatives({ w, ro }: { w: Wizard; ro: boolean }) {
   const [token, setToken] = useState("");
   const app = useAction();
   const tok = useAction();
+  const wrongHost = tokenHost(token) === "gitlab";
   return (
     <details className="rounded-lg border p-3" open={g.method === "token" || undefined}>
-      <summary className="cursor-pointer text-sm font-medium">Other ways to connect</summary>
+      <summary className="cursor-pointer text-sm font-medium">Other ways to connect: an app you already made, or a personal access token</summary>
       <div className="mt-3 flex flex-col gap-4">
         <section aria-label="Use an app I already made" className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">Use an app I already made</h3>
@@ -491,17 +718,26 @@ function Alternatives({ w, ro }: { w: Wizard; ro: boolean }) {
           <Message msg={app.msg} />
         </section>
         <section aria-label="Use a personal access token" className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Use a personal access token (only for a quick try)</h3>
+          <h3 className="text-sm font-semibold">Use a GitHub personal access token (quickest, for a try)</h3>
           <p className="text-sm text-text-2">
-            Make a fine-grained token at <A href={g.token_url}>{g.token_url}</A> for your repos only, with Contents, Issues and Pull requests set to Read and
-            write.
+            Make a fine-grained token at <A href={g.token_url}>{g.token_url}</A>. Under Repository access, choose Only select repositories and pick yours;
+            under Permissions, set Contents, Issues and Pull requests to Read and write.
           </p>
-          <SecretField id="wizard-github-token" label="Token" saved={g.token} value={token} set={setToken} disabled={ro} placeholder="github_pat_…" />
+          <SecretField
+            id="wizard-github-token"
+            label="GitHub token"
+            saved={g.token}
+            value={token}
+            set={setToken}
+            disabled={ro}
+            placeholder="github_pat_…"
+            hint={wrongHost && "That's a GitLab token. Add your GitLab project under Repositories, and its GitLab step takes this token."}
+          />
           <div>
             <Button
               size="sm"
               variant="outline"
-              disabled={ro || !!tok.busy || token.trim() === ""}
+              disabled={ro || !!tok.busy || token.trim() === "" || wrongHost}
               onClick={async () => {
                 if (await tok.run("github/token", { token })) setToken("");
               }}
@@ -521,12 +757,19 @@ function GitLabStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const [kind, setKind] = useState<"legacy" | "fine">("legacy");
   const [token, setToken] = useState("");
   const { busy, msg, run } = useAction();
+  const repos = w.access.filter((a) => a.host === "gitlab").map((a) => a.repo);
+  const wrongHost = tokenHost(token) === "github";
   return (
     <>
       <p className="text-sm text-text-2">
-        The factory acts on GitLab with an access token. Its owner needs the Developer role on each project (Maintainer if the base branch is protected from
-        Developers).
+        The factory reaches {joinAnd(repos)} with a GitLab access token. Whoever owns the token (you, or a bot account) needs the Developer role on each
+        project, or Maintainer if the base branch is protected from Developers.
       </p>
+      {g.token.set && (
+        <Connection remove="Remove token" onRemove={() => run("gitlab/disconnect")} ro={ro || !!busy}>
+          Connected with the token <Code>{g.token.masked}</Code>.
+        </Connection>
+      )}
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-1 text-sm font-medium">Which kind of token will you make?</legend>
         <label className="flex items-start gap-2 text-sm">
@@ -563,11 +806,20 @@ function GitLabStep({ w, ro }: { w: Wizard; ro: boolean }) {
           <p>On the User tab, User: Read. On the Global tab, Metadata: Read.</p>
         </div>
       )}
-      <SecretField id="wizard-gitlab-token" label="GitLab token" saved={g.token} value={token} set={setToken} disabled={ro} placeholder="glpat-…" />
+      <SecretField
+        id="wizard-gitlab-token"
+        label="GitLab token"
+        saved={g.token}
+        value={token}
+        set={setToken}
+        disabled={ro}
+        placeholder="glpat-…"
+        hint={wrongHost && "That's a GitHub token. It goes in the GitHub step, which shows once a GitHub repo is under Repositories."}
+      />
       <div>
         <Button
           size="sm"
-          disabled={ro || !!busy || token.trim() === ""}
+          disabled={ro || !!busy || token.trim() === "" || wrongHost}
           onClick={async () => {
             if (await run("gitlab/token", { token })) setToken("");
           }}
@@ -587,9 +839,12 @@ function ChecksStep({ w, ro }: { w: Wizard; ro: boolean }) {
   return (
     <>
       <p className="text-sm text-text-2">
-        Every change must pass these checks before review, so each must pass on the base branch first. The factory suggests them from each repo's
-        files, and takes the test and lint commands from its AGENTS.md or CLAUDE.md when they name one. Check them: a wrong test command can pass
-        without running a test.
+        These are the commands every change must pass before you're asked to review it: an install, then types, lint, test and build. Leave one empty to
+        skip it. The factory suggested them from each repo's files, and from its AGENTS.md or CLAUDE.md where that names one.
+      </p>
+      <p className="text-sm text-text-2">
+        Try them before you save: each must pass on the base branch as it is today, or every change would fail. And check the test command really runs
+        the tests: a wrong one can pass without running any.
       </p>
       {w.checks.map((c) => (
         // Remounted once its files are read, so the fields take the suggestion; not on each save, which would drop its message.
@@ -764,10 +1019,17 @@ function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
   };
   return (
     <>
-      <p className="text-sm text-text-2">
-        Claude writes the code. Paste an API key from <A href="https://console.anthropic.com/settings/keys">console.anthropic.com</A>, or, to use a Claude
-        subscription, run <Code>claude setup-token</Code> and paste the token it prints.
-      </p>
+      <p className="text-sm text-text-2">Claude writes the code. It can use either of these:</p>
+      <ul className="flex flex-col gap-2 text-sm">
+        <li className="rounded-lg border p-3">
+          <span className="font-medium">A Claude subscription</span> (Pro or Max), using the plan's limits. Run <CopyCommand cmd="claude setup-token" /> in a
+          terminal and paste the token it prints.
+        </li>
+        <li className="rounded-lg border p-3">
+          <span className="font-medium">An API key</span>, billed per use. Make one at{" "}
+          <A href="https://console.anthropic.com/settings/keys">console.anthropic.com</A>.
+        </li>
+      </ul>
       <SecretField id="wizard-claude" label="API key or subscription token" saved={c.key} value={key} set={setKey} disabled={ro} placeholder="sk-ant-…" />
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={ro || !!busy || key.trim() === ""} onClick={() => save(false)}>
@@ -919,16 +1181,43 @@ function CodexSignIn({ c, ro }: { c: NonNullable<Wizard["codex"]>; ro: boolean }
   );
 }
 
+/** A topic on ntfy.sh nobody would guess: anyone who knows a topic's name can read it. */
+function newTopic() {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return "https://ntfy.sh/factory-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 function NotifyStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const [url, setUrl] = useState("");
   const save = useAction();
   const test = useAction();
+  const topic = url.startsWith("https://ntfy.sh/factory-") ? url : "";
   return (
     <>
       <p className="text-sm text-text-2">
-        Get a message on your phone when something needs you. Use an ntfy topic address (https://ntfy.sh/your-topic), or a Slack or Discord webhook address.
+        Get a message on your phone when the factory needs you: a question about an issue, a pull request ready for review, a budget running out. Use an
+        ntfy topic, or a Slack or Discord webhook address.
       </p>
-      <SecretField id="wizard-notify" label="Notification address" saved={w.notify} value={url} set={setUrl} disabled={ro} placeholder="https://ntfy.sh/…" />
+      {!w.notify.set && (
+        <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
+          <p>
+            <span className="font-medium">Quickest: ntfy</span>, free and with no account. Make a private topic, install the ntfy app (
+            <A href="https://ntfy.sh/docs/subscribe/phone/">iPhone or Android</A>) and subscribe to it there.
+          </p>
+          <div>
+            <Button size="sm" variant="outline" disabled={ro} onClick={() => setUrl(newTopic())}>
+              Make a private topic
+            </Button>
+          </div>
+          {topic && (
+            <p className="text-text-2">
+              In the app, subscribe to <CopyCommand cmd={topic.replace("https://ntfy.sh/", "")} />, then save and send a test.
+            </p>
+          )}
+        </div>
+      )}
+      <SecretField id="wizard-notify" label="Notification address" saved={w.notify} value={url} set={setUrl} disabled={ro} placeholder="https://ntfy.sh/… or a webhook address" />
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
@@ -993,7 +1282,10 @@ function ImagesStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const missing = im.images.filter((i) => !i.built).length;
   return (
     <>
-      <p className="text-sm text-text-2">Jobs run in Docker images built from deploy/job-image. Building takes a few minutes per image.</p>
+      <p className="text-sm text-text-2">
+        Each job runs in a Docker image with the tools it needs, built on this machine from deploy/job-image. The first build takes a few minutes per
+        image; it runs in the background, so carry on with the other steps meanwhile.
+      </p>
       <ul className="flex flex-col gap-1.5 text-sm" aria-label="Job images">
         {im.images.map((i) => (
           <li key={i.tag} data-testid="job-image" className="flex min-w-0 items-start gap-2">
@@ -1094,9 +1386,12 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
     const r = await run("finish");
     if (r && setup) setStarted(true);
   };
+  const label = w.label_names[0] ?? "factory:ready";
   return (
     <>
-      {!w.can_finish ? (
+      {w.repos.length === 0 ? (
+        <p className="text-sm text-text-2">Finish once you've chosen your repositories and the factory can reach them.</p>
+      ) : !w.can_finish ? (
         <p className="text-sm text-text-2">Finish once the factory can reach every repo.</p>
       ) : w.warnings.length > 0 ? (
         <div className="flex flex-col gap-1.5 text-sm">
@@ -1108,7 +1403,25 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
           </ul>
         </div>
       ) : (
-        <p className="text-sm text-text-2">Everything is in place.</p>
+        <p className="flex items-center gap-2 text-sm font-medium text-success">
+          <PartyPopper className="size-4" aria-hidden /> Everything is in place.
+        </p>
+      )}
+      {w.can_finish && (
+        <section aria-label="What happens next" className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+          <h3 className="font-semibold">What happens next</h3>
+          <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-text-2">
+            <li>
+              On the Setup screen, check each repo: the factory clones it, installs it and runs its checks twice, to be sure they give the same answer
+              every time. It says what's in the way, and can fix most of it itself.
+            </li>
+            <li>
+              Add the <Code>{label}</Code> label to an issue. The factory picks it up within a minute or two, writes the change and runs the checks on it.
+            </li>
+            <li>Once a reviewer model has checked the change, you get a pull request to review and merge. The Floor shows each job as it goes.</li>
+          </ol>
+          <p className="text-xs text-muted-foreground">Start with a small, clear issue: a bug with steps to reproduce, or a change to copy or config.</p>
+        </section>
       )}
       {!setup && w.restart_pending ? (
         <p role="status" className="text-sm text-text-2">
@@ -1135,9 +1448,12 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
           {failed}
         </p>
       )}
-      {!setup && !started && (
+      {!setup && !started && w.can_finish && (
         <p className="text-sm text-text-2">
-          Then add the label to an issue to hand it to the factory. <Link to="/setup" className="text-primary hover:underline">See how ready each repo is</Link>.
+          <Link to="/setup" className="text-primary hover:underline">
+            See how ready each repo is
+          </Link>
+          .
         </p>
       )}
     </>
@@ -1168,25 +1484,74 @@ export function GetStartedScreen() {
   useEffect(() => {
     if (params.has("github") || params.has("github_error")) setParams({}, { replace: true });
   }, [params, setParams]);
-  // null follows the first step that needs attention; a key is one the person opened.
-  const [open, setOpen] = useState<string | null>(back || backErr ? "github" : null);
+  // The first step that needs something is open; toggled are the ones the person opened or closed.
+  const [toggled, setToggled] = useState<Record<string, boolean>>(back || backErr ? { github: true } : {});
+  const first = data ? (data.steps.find((s) => s.state === "attention")?.key ?? "finish") : "";
+  // A step finished while open stays open, so what it did stays in view, and the next one opens below it.
+  const prevFirst = useRef("");
+  useEffect(() => {
+    if (!first) return;
+    const p = prevFirst.current;
+    if (p && p !== first) setToggled((t) => (p in t ? t : { ...t, [p]: true }));
+    prevFirst.current = first;
+  }, [first]);
   if (isLoading) return <Loading what="Reading the setup" />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
   const w = data;
   const ro = !w.writable;
-  const first = w.steps.find((s) => s.state === "attention")?.key ?? "finish";
-  const current = open ?? first;
+  const isOpen = (key: string) => toggled[key] ?? key === first;
+  const goTo = (key: string) => {
+    setToggled((t) => ({ ...t, [key]: true }));
+    requestAnimationFrame(() => document.getElementById(`card-${key}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  const required = w.steps.filter((s) => s.state !== "optional" && s.key !== "finish");
+  const doneCount = required.filter((s) => s.state === "done").length;
   return (
     <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-4" data-testid="get-started">
       <div>
         <PageTitle>Get started</PageTitle>
-        <p className="-mt-2 text-sm text-text-2">
-          {w.mode === "setup"
-            ? "The factory needs a few things before it can start. Each step is saved as you go, to factory.yaml and factory.env on the factory's machine."
-            : "Change what setup saved. Each step is saved as you go; the factory uses the changes once it restarts."}{" "}
-          The terminal version is <Code>./factory setup</Code>.
-        </p>
+        <div className="-mt-2 flex flex-col gap-2 text-sm text-text-2">
+          {w.mode === "setup" ? (
+            <p>
+              The factory needs a few things before it can start. Give it your repos and a way to reach them, and it turns the issues you label into pull
+              requests, each one checked and reviewed before it reaches you.
+            </p>
+          ) : (
+            <p>Change what setup saved. The factory uses the changes once it restarts.</p>
+          )}
+          <p>
+            Each step saves as you go, so you can stop and come back. Optional steps can wait. Prefer a terminal? Run <CopyCommand cmd="./factory setup" />.
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5" data-testid="wizard-progress">
+        <div className="flex items-baseline justify-between gap-2 text-sm">
+          <span className="font-medium">
+            {doneCount === required.length ? "Every required step is done" : `${doneCount} of ${required.length} required steps done`}
+          </span>
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">Where it's saved</summary>
+            <p className="mt-1 break-all">
+              Settings: <span className="font-mono">{w.config_path}</span>
+              <br />
+              Keys and tokens: <span className="font-mono">{w.env_path}</span>
+            </p>
+          </details>
+        </div>
+        <div
+          className="h-1.5 rounded-full bg-border"
+          role="progressbar"
+          aria-label="Setup progress"
+          aria-valuenow={doneCount}
+          aria-valuemin={0}
+          aria-valuemax={required.length}
+        >
+          <div
+            className={cn("h-1.5 rounded-full transition-all", doneCount === required.length ? "bg-success-fill" : "bg-primary")}
+            style={{ width: `${required.length ? (doneCount / required.length) * 100 : 0}%` }}
+          />
+        </div>
       </div>
       {ro && (
         <div role="note" className="rounded-md border border-warning-border bg-warning-bg p-3 text-sm text-warning">
@@ -1204,11 +1569,21 @@ export function GetStartedScreen() {
         </p>
       )}
       <ol className="flex flex-col gap-3" aria-label="Setup steps">
-        {w.steps.map((s, i) => (
-          <StepCard key={s.key} step={s} n={i + 1} open={current === s.key} toggle={() => setOpen(current === s.key ? "" : s.key)}>
-            {bodies[s.key]?.({ w, ro })}
-          </StepCard>
-        ))}
+        {w.steps.map((s, i) => {
+          const j = w.steps.findIndex((x, k) => k > i && x.state === "attention");
+          return (
+            <StepCard
+              key={s.key}
+              step={s}
+              n={i + 1}
+              open={isOpen(s.key)}
+              toggle={() => setToggled((t) => ({ ...t, [s.key]: !isOpen(s.key) }))}
+              next={j >= 0 ? { n: j + 1, step: w.steps[j], go: () => goTo(w.steps[j].key) } : undefined}
+            >
+              {bodies[s.key]?.({ w, ro })}
+            </StepCard>
+          );
+        })}
       </ol>
     </div>
   );
