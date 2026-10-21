@@ -457,9 +457,10 @@ func TestShutdownKeepsABuildsWork(t *testing.T) {
 	e.claude.builds = []func(string) error{shutdown(halfBuild), shutdown(func(string) error { return nil }), finishBuild}
 	e.codex.reviews = []string{pass}
 	for range 2 {
-		var jctx context.Context
-		jctx, cut = context.WithCancel(ctx)
+		jctx, c := context.WithCancel(ctx)
+		cut = c
 		e.p.Drain(jctx)
+		c()
 		e.p.stopping.Store(false)
 	}
 	it := e.item(t, 129)
