@@ -1,10 +1,11 @@
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { ExternalLink, Scissors } from "lucide-react";
+import { ChevronDown, ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { act, APIError, getJSON, postJSON, useItem, type Estimate, type Event, type Happened, type Item, type Plan, type Split } from "@/api/client";
 import type { components } from "@/api/schema";
-import { Empty, ErrorBox, Inline, JobStateBadge, Loading, StageBadge, WaitsFor } from "@/components/common";
+import { Empty, ErrorBox, Inline, JobStateBadge, Loading, PageHeader, StageBadge, WaitsFor } from "@/components/common";
+import { FoundBy } from "@/components/FoundBy";
 import { Choices } from "@/components/Choices";
 import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
@@ -27,33 +28,23 @@ export function ItemScreen() {
   return (
     <div className="space-y-4">
       <div>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Link to="/line" className="hover:text-foreground">
-            The line
-          </Link>
-          <span>/</span>
-          <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
-            {it.ref} <ExternalLink className="size-3" />
-          </a>
-          {it.parent_id != null && (
-            <>
-              <span>/</span>
-              <Link to={`/items/${it.parent_id}`} className="hover:text-foreground">
-                Part of item {it.parent_id}
-              </Link>
-            </>
-          )}
-        </div>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-title font-semibold tracking-tight">
-          {it.title} <StageBadge stage={it.stage} />
-        </h1>
-        <div className="mt-3">
+        <PageHeader
+          crumbs={[
+            { label: "The line", to: "/line" },
+            ...(it.parent_id != null ? [{ label: `Part of item ${it.parent_id}`, to: `/items/${it.parent_id}` }] : []),
+            { label: it.ref, href: it.issue_url },
+          ]}
+          title={it.title}
+          badges={<StageBadge stage={it.stage} />}
+          meta={<FoundBy source={it.self_started} />}
+        />
+        <div className="mt-4">
           <StationStamps it={it} jobs={jobs} />
         </div>
         <WaitsFor items={it.waits_for} plan={it.plan_waiting} className="mt-1 text-sm" />
         {/* One card for where it stands and what you can do: what happened, then the buttons, with the raw error out of the way. */}
         {(happened || note || choices) && (
-          <Card className="mt-3 border-warning/60" data-testid="status">
+          <Card className="mt-4 border-warning-border bg-warning-bg/60" data-testid="status">
             <CardContent className="space-y-3 pt-4">
               {happened ? <HappenedCard h={happened} /> : note && <p className="text-sm">{note}</p>}
               {split && !choices && <SplitButton split={split} />}
@@ -104,8 +95,8 @@ export function ItemScreen() {
             <CardContent>
               {issue_body ? <p className="text-sm whitespace-pre-wrap">{issue_body}</p> : <Empty>The issue text could not be read.</Empty>}
               {spec && (
-                <div className="mt-3 rounded-md bg-muted p-3 text-sm">
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Spec (triage)</div>
+                <div className="mt-3 rounded-control bg-muted p-3 text-sm">
+                  <div className="label mb-1">Spec (triage)</div>
                   <p className="whitespace-pre-wrap">{spec}</p>
                 </div>
               )}
@@ -148,7 +139,7 @@ export function ItemScreen() {
             </CardHeader>
             <CardContent>
               {jobs.length === 0 ? (
-                <Empty>No jobs yet.</Empty>
+                <Empty inline>No jobs yet.</Empty>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -187,17 +178,21 @@ export function ItemScreen() {
               )}
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Audit trail</CardTitle>
-              <Link to={`/orchestrator?tab=decisions&item=${it.id}`} className="text-xs text-primary hover:underline">
-                Orchestrator decisions
-              </Link>
-            </CardHeader>
-            <CardContent>
+          {/* Folded away: it's the record, for when something needs explaining. */}
+          <details className="group rounded-card border bg-card" data-testid="audit-trail">
+            <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-body-sm font-semibold">
+              <span>
+                Audit trail <span className="font-normal text-muted-foreground">· {events.length === 1 ? "1 event" : `${events.length} events`}</span>
+              </span>
+              <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
+            </summary>
+            <div className="flex flex-col gap-3 border-t px-4 pt-3 pb-4">
               <Trail events={events} />
-            </CardContent>
-          </Card>
+              <Link to={`/history?tab=decisions&item=${it.id}`} className="text-meta text-primary hover:underline">
+                The orchestrator's decisions about it
+              </Link>
+            </div>
+          </details>
         </div>
         <div className="min-w-0">
           <div className="space-y-4">
@@ -233,7 +228,7 @@ function EstimateCard({ itemId, e, waiting, planWaiting }: { itemId: number; e: 
   };
   const status = statusText[e.status] + (e.status === "approved" && e.approved_by ? ` by ${e.approved_by}.` : e.status === "approved" ? "." : "");
   return (
-    <Card data-testid="estimate" className={cn(waiting && "border-warning/60")}>
+    <Card data-testid="estimate" className={cn(waiting && "border-warning-border")}>
       <CardHeader>
         <CardTitle>Cost estimate</CardTitle>
         {e.threshold_usd > 0 && <span className="text-xs text-muted-foreground">limit {money(e.threshold_usd)}</span>}
@@ -298,18 +293,18 @@ function PlanCard({ item: it, plan: p, estimate, flat }: { item: Item; plan: Pla
     </a>
   );
   return (
-    <Card data-testid="plan" className={cn(p.waiting && "border-warning/60", flat && "rounded-none border-0 shadow-none")}>
+    <Card data-testid="plan" className={cn(p.waiting && "border-warning-border", flat && "rounded-none border-0 shadow-none")}>
       <CardHeader>
         <CardTitle>{p.waiting ? "Plan: waiting for your OK" : "Plan"}</CardTitle>
         {p.replan_of && <span className="text-xs text-muted-foreground">the new plan {p.replan_of} asked for</span>}
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {p.waiting && <PlanAsk size={it.complexity} ask={p.ask} />}
-        {p.waiting && <div className="text-xs font-semibold text-muted-foreground uppercase">The plan</div>}
+        {p.waiting && <div className="label">The plan</div>}
         <p className="whitespace-pre-wrap">{p.approach}</p>
         {p.files.length > 0 && (
           <div>
-            <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Files</div>
+            <div className="label mb-1">Files</div>
             <ul className="list-disc space-y-0.5 pl-4 font-mono text-xs">
               {p.files.map((f) => (
                 <li key={f}>{f}</li>
@@ -319,7 +314,7 @@ function PlanCard({ item: it, plan: p, estimate, flat }: { item: Item; plan: Pla
         )}
         {p.risks.length > 0 && (
           <div>
-            <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Risks</div>
+            <div className="label mb-1">Risks</div>
             <ul className="list-disc space-y-0.5 pl-4">
               {p.risks.map((r) => (
                 <li key={r}>{r}</li>
@@ -328,12 +323,12 @@ function PlanCard({ item: it, plan: p, estimate, flat }: { item: Item; plan: Pla
           </div>
         )}
         <div>
-          <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Tests</div>
+          <div className="label mb-1">Tests</div>
           <p className="whitespace-pre-wrap">{p.tests}</p>
         </div>
         {!p.waiting && p.approved_by && <p className="text-muted-foreground">Approved {p.approved_by}.</p>}
         {p.waiting && (
-          <div className="space-y-3 rounded-md bg-warning/10 p-3">
+          <div className="space-y-3 rounded-control bg-warning-bg p-3">
             <p className="font-medium">Nothing is built until someone approves this plan.</p>
             {estimate && (
               <p>
@@ -372,7 +367,7 @@ function PlanCard({ item: it, plan: p, estimate, flat }: { item: Item; plan: Pla
                       value={ask}
                       onChange={(e) => setAsk(e.target.value)}
                       rows={4}
-                      className="w-full min-w-0 rounded-md border bg-card p-2.5 text-base text-foreground placeholder:text-muted-foreground/70 md:text-sm"
+                      className="w-full min-w-0 rounded-control border bg-surface p-2.5 text-base text-foreground placeholder:text-muted-foreground/70 md:text-body-sm"
                       placeholder="For example: keep the database tables in the monolith, and add a feature flag for the switch-over."
                     />
                     <Button size="sm" type="submit" disabled={busy || ask.trim() === ""}>
@@ -418,17 +413,17 @@ function Meta({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 }
 
 export function Trail({ events }: { events: Event[] }) {
-  if (events.length === 0) return <Empty>Nothing recorded yet.</Empty>;
+  if (events.length === 0) return <Empty inline>Nothing recorded yet.</Empty>;
   return (
-    <ol className="space-y-2 text-sm">
+    <ol className="flex flex-col gap-2.5 text-body-sm">
       {[...events].reverse().map((e) => (
-        <li key={e.id} className="flex gap-3">
-          <span className="w-16 shrink-0 text-xs text-muted-foreground" title={e.at}>
-            {ago(e.at)}
+        <li key={e.id} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
+          <span className="flex shrink-0 gap-2 text-meta text-muted-foreground sm:w-44">
+            <span title={e.at}>{ago(e.at)}</span>
+            <span className="truncate font-medium text-text-2">{e.actor}</span>
           </span>
-          <span className="w-24 shrink-0 truncate text-xs font-medium">{e.actor}</span>
-          <span className="min-w-0">
-            <span className="font-mono text-xs">{e.type}</span>
+          <span className="min-w-0 break-words">
+            <span className="font-mono text-meta">{e.type}</span>
             {e.reason && <span className="text-muted-foreground"> · {e.reason}</span>}
           </span>
         </li>
@@ -444,7 +439,7 @@ function DiffRisk({ reasons, person }: { reasons: string[]; person: string[] }) 
     <div className="mt-3 space-y-2 text-xs">
       {reasons.length > 0 && (
         <div>
-          <div className="mb-1 font-semibold text-muted-foreground uppercase">Risk from the diff</div>
+          <div className="label mb-1">Risk from the diff</div>
           <ul className="list-disc space-y-0.5 pl-4">
             {reasons.map((r) => (
               <li key={r}>{r}</li>
@@ -453,7 +448,7 @@ function DiffRisk({ reasons, person }: { reasons: string[]; person: string[] }) 
         </div>
       )}
       {person.length > 0 && (
-        <p className="rounded-md bg-warning/10 p-2 text-warning">
+        <p className="rounded-control bg-warning-bg p-2 text-warning">
           Needs you whatever its risk, so it won't merge itself: it {person.join("; ")}.
         </p>
       )}
@@ -471,7 +466,7 @@ const endsSentence = (h: Happened) => {
 function HappenedCard({ h }: { h: Happened }) {
   return (
     <div className="text-sm" data-testid="happened">
-      <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">What happened</div>
+      <div className="label mb-1">What happened</div>
       <p>
         {h.steps.map((st, i) => (
           <Fragment key={i}>
@@ -571,7 +566,7 @@ const sizeName: Record<string, string> = { XS: "extra small", S: "small", M: "me
 /** Why a plan waits for a person, and what they are deciding, ahead of the plan itself. */
 function PlanAsk({ size, ask }: { size: string; ask: string }) {
   return (
-    <div className="space-y-2 rounded-md bg-warning/10 p-3" data-testid="plan-ask">
+    <div className="space-y-2 rounded-control bg-warning-bg p-3" data-testid="plan-ask">
       <p>
         <span className="font-medium">Why you're asked:</span>{" "}
         {size ? `triage sized this ${sizeName[size] ?? size} (${size}), and` : ""} a big build's plan waits for a person, so a wrong approach is
