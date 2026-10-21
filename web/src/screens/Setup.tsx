@@ -557,6 +557,7 @@ function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; bus
       {next.running && (
         <p className="text-meta text-muted-foreground">
           Started <Ago ts={r.checking_since} />
+          {r.checking_why && `. ${r.checking_why.replace(/^Started by itself: /, "The factory started it: ")}`}
         </p>
       )}
       <p className="text-text-2">{next.body}</p>
@@ -640,13 +641,10 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <button
           data-testid="next-pointer"
           onClick={() => document.getElementById(boxId)?.scrollIntoView({ behavior: "smooth", block: "center" })}
-          className={cn(
-            "flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-control border px-3 py-2 text-left text-sm hover:bg-accent",
-            next.tone === "attention" ? "border-warning/40" : "border-primary/40",
-          )}
+          className="flex w-fit cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 text-left text-xs text-muted-foreground hover:text-foreground"
         >
-          {next.running && <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden />}
-          <span className="font-semibold">{next.title}</span>
+          {next.running && <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" aria-hidden />}
+          <span className="font-medium text-foreground">{next.title}</span>
           {next.human && <NeedsYou />}
           <span className="text-muted-foreground">{stepAt >= 0 ? `in step ${stepAt + 1} ↓` : "below ↓"}</span>
         </button>

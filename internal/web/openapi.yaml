@@ -1100,7 +1100,7 @@ components:
         can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress, checking_why]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1125,6 +1125,7 @@ components:
         result: { type: string, description: "What the last run started here did, when it filed or made a baseline; else empty" }
         can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
         baseline_pr: { type: string, description: "The pull request the last lint baseline opened, while lint still fails, or empty" }
+        checking_why: { type: string, description: "What started the run going, when the factory did by itself; else empty" }
         following: { type: boolean, description: "File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass" }
         progress:
           type: array

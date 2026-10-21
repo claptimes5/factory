@@ -280,7 +280,12 @@ func Assess(ctx context.Context, in Input) *Report {
 				Detail: filesDetail(in, include) + "\n\n" + fence(x.Output)})
 		} else if !x.Passed {
 			allPassed = false
-			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + name + "` fails on " + r.Branch,
+			title := "`" + name + "` fails on " + r.Branch
+			if name == "lint" && r.Baselined {
+				// Not the old offenses again: what came after the baseline.
+				title += ": " + sinceBaseline(x.Output)
+			}
+			r.add(Finding{Level: Blocker, Area: "checks", Title: title,
 				Detail: "Every change would fail this check, whatever it does.\n\n" + fence(x.Output),
 				Issue: &Issue{Key: "check:" + name, Title: fmt.Sprintf("Make the %s check pass on %s", name, r.Branch),
 					Body: fmt.Sprintf("The factory runs `%s` as a required check, and it fails on `%s` before any change:\n\n%s\n"+
@@ -377,6 +382,21 @@ func Assess(ctx context.Context, in Input) *Report {
 	return r.finish()
 }
 
+// offenses is RuboCop's count of what it found.
+var offenses = regexp.MustCompile(`(\d+) offenses? detected`)
+
+// sinceBaseline says what lint found, with a baseline in: new offenses.
+func sinceBaseline(out string) string {
+	m := offenses.FindStringSubmatch(out)
+	switch {
+	case m == nil:
+		return "new offenses since the baseline"
+	case m[1] == "1":
+		return "1 new offense since the baseline"
+	}
+	return m[1] + " new offenses since the baseline"
+}
+
 // worktreeInclude are the paths dir's .worktreeinclude names, as written
 // there less a leading or trailing /, or none.
 func worktreeInclude(dir string) []string {
@@ -396,9 +416,16 @@ func worktreeInclude(dir string) []string {
 
 // mentioned is the first of paths that out names, or "": a check that
 // says it lacks config/master.key needs that file, not a code change.
+// Some failures don't name the file they lack: Rails without its master
+// key reads its credentials as empty, and fails where they're used.
 func mentioned(out string, paths []string) string {
 	for _, p := range paths {
 		if !strings.ContainsAny(p, "*?[") && strings.Contains(out, p) {
+			return p
+		}
+	}
+	for _, p := range paths {
+		if strings.HasSuffix(p, "master.key") && (strings.Contains(out, "Rails.application.credentials") || strings.Contains(out, "EncryptedConfiguration")) {
 			return p
 		}
 	}

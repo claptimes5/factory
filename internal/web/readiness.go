@@ -64,6 +64,9 @@ type APIRepoReadiness struct {
 	Checking      bool   `json:"checking"`
 	CheckingSince string `json:"checking_since"`
 	Action        string `json:"action"`
+	// CheckingWhy says what started it, when the factory did by itself
+	// ("Started by itself: master moved from f410faf to f736f54."), or "".
+	CheckingWhy string `json:"checking_why"`
 	// CheckError is why the last run started here failed, or "", and
 	// Result what it did when it worked.
 	CheckError string `json:"check_error"`
@@ -131,6 +134,7 @@ type readinessRun struct {
 	repo    string
 	action  string
 	since   time.Time
+	why     string            // what started the run going, when the factory did
 	errs    map[string]string // repo -> why its last run failed
 	results map[string]string // repo -> what its last run did
 
@@ -210,7 +214,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	out.CanCheck, out.CheckNote = s.canCheckReadiness(r)
 	out.CanFile = out.CanCheck && s.FileReadiness != nil
 	s.ready.mu.Lock()
-	running, action, since := s.ready.repo, s.ready.action, s.ready.since
+	running, action, since, why := s.ready.repo, s.ready.action, s.ready.since, s.ready.why
 	errs, results := maps.Clone(s.ready.errs), maps.Clone(s.ready.results)
 	logs := maps.Clone(s.ready.log)
 	s.ready.mu.Unlock()
@@ -220,7 +224,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Extras: []APIReadinessFinding{},
 			CheckError: errs[repo], Result: results[repo], Progress: append([]APIProgress{}, logs[repo]...)}
 		if strings.EqualFold(running, repo) {
-			rr.Checking, rr.CheckingSince, rr.Action = true, since.UTC().Format(store.TimeFormat), action
+			rr.Checking, rr.CheckingSince, rr.Action, rr.CheckingWhy = true, since.UTC().Format(store.TimeFormat), action, why
 		}
 		rep, err := readiness.Load(s.ReadinessDir, repo)
 		if err != nil && rr.CheckError == "" {
@@ -261,7 +265,8 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			as := APIReadinessStep{Key: st.Key, Title: st.Title, Why: st.Why, State: st.State, Passed: st.Passed, Blockers: []APIReadinessFinding{}}
 			for _, f := range st.Blockers {
 				as.Blockers = append(as.Blockers, find(f))
-				if f.Issue != nil && f.Issue.Key == "check:lint" && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
+				// Once a baseline is in, lint failing is offenses since: no second one.
+				if f.Issue != nil && f.Issue.Key == "check:lint" && !rep.Baselined && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
 					rr.CanBaseline, rr.BaselinePR = true, readiness.BaselinePR(s.ReadinessDir, repo)
 				}
 			}
@@ -464,7 +469,7 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action s
 	if action == "file" && in.Queue {
 		action = "queue"
 	}
-	if busy := s.beginReadiness(repo, action, func(ctx context.Context) (string, error) {
+	if busy := s.beginReadiness(repo, action, "", func(ctx context.Context) (string, error) {
 		return run(ctx, repo, in.Queue)
 	}); busy != "" {
 		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
@@ -486,14 +491,15 @@ var failedAs = map[string]string{"check": "The last check failed: ", "file": "Fi
 
 // beginReadiness starts run for repo in the background, as action, unless
 // a run is going; then it returns the repo that one is for.
-func (s *Server) beginReadiness(repo, action string, run func(ctx context.Context) (string, error)) (busy string) {
+// why, for a run the factory started by itself, says what started it.
+func (s *Server) beginReadiness(repo, action, why string, run func(ctx context.Context) (string, error)) (busy string) {
 	s.ready.mu.Lock()
 	if s.ready.repo != "" {
 		busy := s.ready.repo
 		s.ready.mu.Unlock()
 		return busy
 	}
-	s.ready.repo, s.ready.action, s.ready.since = repo, action, time.Now()
+	s.ready.repo, s.ready.action, s.ready.since, s.ready.why = repo, action, time.Now(), why
 	if s.ready.errs == nil {
 		s.ready.errs, s.ready.results = map[string]string{}, map[string]string{}
 	}
@@ -584,21 +590,24 @@ func (s *Server) followOnce(ctx context.Context, repo string) {
 		}
 		s.ready.settling[repo] = url
 		s.ready.mu.Unlock()
-		s.beginReadiness(repo, "check", func(ctx context.Context) (string, error) {
-			return fmt.Sprintf("Checked again by itself at %s UTC: the lint baseline's %s isn't open any more. The steps below are as of %s.",
-				time.Now().UTC().Format("15:04"), prName(repo), short(sha)), s.CheckReadiness(ctx, repo)
+		because := fmt.Sprintf("the lint baseline's %s isn't open any more", prName(repo))
+		s.beginReadiness(repo, "check", "Started by itself: "+because+".", func(ctx context.Context) (string, error) {
+			return fmt.Sprintf("Checked again by itself at %s UTC: %s. The steps below are as of %s.",
+				time.Now().UTC().Format("15:04"), because, short(sha)), s.CheckReadiness(ctx, repo)
 		})
 		return
 	}
-	why := fmt.Sprintf("Checked again by itself at %s UTC: %s moved from %s to %s. ", time.Now().UTC().Format("15:04"), rep.Branch, short(rep.SHA), short(sha))
+	moved := fmt.Sprintf("%s moved from %s to %s", rep.Branch, short(rep.SHA), short(sha))
+	started := "Started by itself: " + moved + "."
+	why := fmt.Sprintf("Checked again by itself at %s UTC: %s. ", time.Now().UTC().Format("15:04"), moved)
 	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {
-		s.beginReadiness(repo, "queue", func(ctx context.Context) (string, error) {
+		s.beginReadiness(repo, "queue", started, func(ctx context.Context) (string, error) {
 			res, err := s.FileReadiness(ctx, repo, true)
 			return why + res, err
 		})
 		return
 	}
-	s.beginReadiness(repo, "check", func(ctx context.Context) (string, error) {
+	s.beginReadiness(repo, "check", started, func(ctx context.Context) (string, error) {
 		return why + "The steps below are as of " + short(sha) + ".", s.CheckReadiness(ctx, repo)
 	})
 }

@@ -3222,6 +3222,8 @@ export interface components {
             can_baseline: boolean;
             /** @description The pull request the last lint baseline opened, while lint still fails, or empty */
             baseline_pr: string;
+            /** @description What started the run going, when the factory did by itself; else empty */
+            checking_why: string;
             /** @description File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass */
             following: boolean;
             /** @description What the run going (or the last one started here) has done so far, a step at a time, oldest first */
