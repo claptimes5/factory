@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/runner"
@@ -128,6 +129,30 @@ func (p *Pipeline) Check(ctx context.Context, repo, dir, command string) (int, s
 		}
 	}
 	return p.gateExec(ctx, 0, dir, command, gateRun{repo: repo})
+}
+
+// progress tells p.Progress what a setup run is doing.
+func (p *Pipeline) progress(format string, a ...any) {
+	if p.Progress != nil {
+		fmt.Fprintf(p.Progress, format+"\n", a...)
+	}
+}
+
+// ExecSaying is Exec that tells p.Progress what it runs and how it went.
+func (p *Pipeline) ExecSaying(ctx context.Context, repo, dir, command string, install bool) (int, string, error) {
+	p.progress("running `%s`", command)
+	start := time.Now()
+	code, out, err := p.Exec(ctx, repo, dir, command, install)
+	took := time.Since(start).Round(time.Second)
+	switch {
+	case err != nil:
+		p.progress("couldn't finish `%s` (%s)", command, took)
+	case code == 0:
+		p.progress("passed `%s` in %s", command, took)
+	default:
+		p.progress("failed `%s` in %s (exit %d)", command, took, code)
+	}
+	return code, out, err
 }
 
 // Exec runs one command on a repo's export the way gates do. With install

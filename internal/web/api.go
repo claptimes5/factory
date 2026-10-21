@@ -68,6 +68,12 @@ type APIItem struct {
 	// WaitsFor are the items it depends on that aren't done: it isn't
 	// built until they are, whatever is approved.
 	WaitsFor []APIItemRef `json:"waits_for"`
+	// Setup is how it stands to its repo's setup while the readiness
+	// check has found blockers: "blocks" when it fixes one (nothing else
+	// runs on the repo until they're fixed), "held" when it waits for
+	// them, else "". SetupNote says so in a sentence.
+	Setup     string `json:"setup"`
+	SetupNote string `json:"setup_note"`
 }
 
 // APIItemRef names another item.
@@ -551,6 +557,7 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}
+	a.Setup, a.SetupNote = s.setupOf(ctx, it)
 	a.Choices = []APIChoice{}
 	if it.Stage == state.Parked {
 		a.ChoiceJobID, a.Choices = s.itemChoices(ctx, it.ID)
@@ -861,6 +868,12 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	waiting, _ := s.Store.ListItems(ctx, state.AwaitingHuman)
 	running, _ := s.Store.CountJobs(ctx, state.Running, "")
 	queued, _ := s.Store.CountJobs(ctx, state.Queued, "")
+	// A setup run (a readiness check, a lint baseline) is running work too.
+	s.ready.mu.Lock()
+	if s.ready.repo != "" {
+		running++
+	}
+	s.ready.mu.Unlock()
 	v, err := s.Store.Version(ctx)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())

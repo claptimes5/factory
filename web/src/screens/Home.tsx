@@ -8,7 +8,12 @@ import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
-import { brief, cn, duration, money, shortRef } from "@/lib/utils";
+import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
+import { NextActions, nextStep, RunProgress, useReadiness, useReadinessRun } from "@/screens/Setup";
+import type { components } from "@/api/schema";
+
+type Readiness = components["schemas"]["Readiness"];
+type RepoReadiness = components["schemas"]["RepoReadiness"];
 
 // Home: what needs you first, one decision at a time; the line for work
 // that's moving; what went live since you looked; and Ask. Everything
@@ -34,6 +39,11 @@ const kindLabel: Record<Kind, string> = { review: "Review", plan: "Approve a pla
 
 /** Reviews first (they're finished work), then plans and costs (work waiting to start), then questions. */
 const kindOrder: Record<Kind, number> = { review: 0, plan: 1, cost: 2, choice: 3, question: 4 };
+
+/** While a repo's setup isn't done, what fixes it comes first and what waits for it last. */
+const setupOrder = (c: CardT) => (c.setup === "blocks" ? 0 : c.setup === "held" ? 2 : 1);
+
+const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Waits for setup" };
 
 /** A decision's one-line ask, for the "next" list. */
 function ask(c: CardT): string {
@@ -62,6 +72,8 @@ export function HomeScreen() {
   });
   const repos = useOverview().data?.repos ?? [];
   const repo = useRepo(repos);
+  const readiness = useReadiness().data;
+  const unready = (readiness?.repos ?? []).filter((r) => (r.state === "not_ready" || r.state === "incomplete") && (!repo || r.repo === repo));
   const [later, setLater] = useState<number[]>([]);
   const cols = useMemo(() => {
     const m = new Map<string, CardT[]>();
@@ -72,7 +84,9 @@ export function HomeScreen() {
   if (error) return <ErrorBox error={error} />;
 
   const held = (cols.get("blocked") ?? []).filter((k) => k.estimate_waiting || k.plan_waiting);
-  const needs = [...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])].sort((a, b) => kindOrder[kindOf(a)] - kindOrder[kindOf(b)]);
+  const needs = [...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])].sort(
+    (a, b) => setupOrder(a) - setupOrder(b) || kindOrder[kindOf(a)] - kindOrder[kindOf(b)],
+  );
   // "Later" sends a decision to the back of the queue, for this visit.
   const queue = [...needs.filter((c) => !later.includes(c.id)), ...later.flatMap((id) => needs.filter((c) => c.id === id))];
   const top = queue[0];
@@ -82,7 +96,24 @@ export function HomeScreen() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6" data-testid="home">
       <CatchUp />
-      {top ? (
+      {unready.length > 0 && readiness ? (
+        <>
+          <SetupLead r={unready[0]} data={readiness} more={unready.length - 1} />
+          {needs.length > 0 && (
+            <section aria-label="Needs you" className="flex flex-col gap-2">
+              <h2 className="text-body font-semibold">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h2>
+              {needs.some((c) => c.setup === "held") && (
+                <p className="text-body-sm text-muted-foreground">What waits for setup can't pass its checks until setup is done; it starts by itself then.</p>
+              )}
+              <ol className="flex flex-col divide-y rounded-card border bg-surface">
+                {needs.map((c) => (
+                  <NeedRow key={c.id} c={c} />
+                ))}
+              </ol>
+            </section>
+          )}
+        </>
+      ) : top ? (
         <section aria-label="Needs you" className="flex flex-col gap-3">
           <div className="flex items-baseline justify-between gap-3">
             <h1 className="text-display font-semibold tracking-tight">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h1>
@@ -107,7 +138,7 @@ export function HomeScreen() {
         </section>
       )}
 
-      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} />
+      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => r.checking) ? 1 : 0} />
 
       <Earned />
 
@@ -248,16 +279,97 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
   );
 }
 
+/**
+ * Home's lead while a repo isn't set up: its one next step, as the main
+ * card. Every job on it would fail until then, so nothing else leads.
+ */
+function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more: number }) {
+  const { busy, msg, run } = useReadinessRun(r);
+  const next = nextStep(r, data);
+  const title = next.title.replace(/^(Ready\. )?Next: |^Working on it: /, "");
+  return (
+    <section aria-label="Setup" className="flex flex-col gap-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
+        {r.total > 0 && (
+          <span className="shrink-0 text-body-sm text-muted-foreground">
+            {r.done} of {r.total} steps done
+          </span>
+        )}
+      </div>
+      <article data-testid="setup-lead" className="flex flex-col gap-3 rounded-card bg-ink p-5 text-ink-foreground md:p-6">
+        <div className="text-meta font-semibold text-ink-attention">
+          {next.running ? "Setup · working on it now" : next.human ? "Setup · needs you · new tasks wait until it's done" : "Setup · new tasks wait until it's done"}
+        </div>
+        <p className="flex items-center gap-2.5 text-title-sm font-semibold md:text-title">
+          {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
+          {title.charAt(0).toUpperCase() + title.slice(1)}
+        </p>
+        <p className="text-body-sm text-ink-muted">{next.body}</p>
+        {next.running && (
+          <div className="flex flex-col gap-1 text-body-sm text-ink-muted">
+            <p>Started {duration(r.checking_since)} ago.</p>
+            <RunProgress r={r} last />
+          </div>
+        )}
+        <div className="mt-1 flex flex-wrap gap-2">
+          <NextActions next={next} busy={busy} run={run} inverse />
+          <Button size="sm" variant="inverse-outline" asChild>
+            <Link to="/setup">See every step</Link>
+          </Button>
+        </div>
+        {msg && <p className="text-body-sm text-ink-muted">{msg.text}</p>}
+        {!msg && !r.checking && (r.check_error || r.result) && <p className="text-body-sm text-ink-muted">{r.check_error || r.result}</p>}
+      </article>
+      {more > 0 && (
+        <p className="px-1 text-body-sm text-muted-foreground">
+          {more === 1 ? "1 more repo isn't" : `${more} more repos aren't`} set up yet.{" "}
+          <Link to="/setup" className="font-medium text-primary hover:underline">
+            See setup
+          </Link>
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** One decision in the list under the setup lead: what it asks, and how it stands to setup. */
+function NeedRow({ c }: { c: CardT }) {
+  return (
+    <li className="flex flex-col gap-1 p-3 md:px-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-meta font-semibold text-muted-foreground">{kindLabel[kindOf(c)]}</span>
+        <span className="font-mono text-meta text-muted-foreground">{shortRef(c.ref)}</span>
+        {c.setup && (
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-meta font-medium",
+              c.setup === "blocks" ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground",
+            )}
+          >
+            {setupLabel[c.setup]}
+          </span>
+        )}
+      </div>
+      <Link to={`/items/${c.id}`} className="text-body font-medium hover:underline">
+        {c.title}
+      </Link>
+      {c.setup === "blocks" && c.setup_note && <p className="text-body-sm text-text-2">{c.setup_note}</p>}
+    </li>
+  );
+}
+
 /** The line at a glance: how many jobs are at each station, you being the last. */
-function LineStrip({ moving, you, stuck }: { moving: { key: string; label: string; cards: CardT[] }[]; you: number; stuck: number }) {
-  const working = moving.reduce((n, s) => n + s.cards.filter((c) => c.live).length, 0);
+function LineStrip({ moving, you, stuck, setup }: { moving: { key: string; label: string; cards: CardT[] }[]; you: number; stuck: number; setup: number }) {
+  // A setup run (a check, a lint baseline) is work too.
+  const working = moving.reduce((n, s) => n + s.cards.filter((c) => c.live).length, 0) + setup;
   return (
     <section aria-label="The line" className="flex flex-col gap-4 rounded-card border bg-surface p-4 md:p-5">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-body-sm font-semibold">On the line</h2>
         <span className="text-meta text-muted-foreground">
           {working === 0 ? "Nothing running" : `${working} working`}
-          {stuck > 0 ? `, ${stuck} stuck` : ", nothing stuck"}
+          {stuck > 0 ? `, ${stuck} stuck` : you > 0 ? `, ${you} waiting on you` : ", nothing stuck"}
         </span>
       </div>
       <ol className="grid grid-cols-4 gap-2">

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
@@ -59,22 +60,43 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err != nil {
 		return nil, err
 	}
-	r := readiness.Assess(ctx, readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
+	p.Progress = out
+	in := readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
 		Exec: func(ctx context.Context, dir, cmd string, install bool) (int, string, error) {
-			fmt.Fprintf(out, "  running %s\n", cmd)
-			return p.Exec(ctx, repo, dir, cmd, install)
-		}})
+			return p.ExecSaying(ctx, repo, dir, cmd, install)
+		}}
+	in.AccessChecked, in.Denied = missingAccess(ctx, p.GitHubFor(repo))
+	in.Last, _ = readiness.Load(readinessDir(cfg), repo)
+	if in.FilesSet = rc.Files != nil; !in.FilesSet {
+		in.Checkout = findCheckout(rc)
+	}
+	r := readiness.Assess(ctx, in)
 	if _, err := readiness.Save(readinessDir(cfg), r); err != nil {
 		return r, err
 	}
 	return r, nil
 }
 
+// missingAccess asks the repo's host what the factory's token may not do
+// there; checked is false when it couldn't ask.
+func missingAccess(ctx context.Context, gh any) (checked bool, denied []readiness.Denied) {
+	pr, ok := gh.(pipeline.AccessProber)
+	if !ok {
+		return false, nil
+	}
+	ds, err := pr.MissingAccess(ctx)
+	if err != nil {
+		return false, nil
+	}
+	for _, d := range ds {
+		denied = append(denied, readiness.Denied{What: d.What, Says: d.Says})
+	}
+	return true, denied
+}
+
 // readinessDir holds each repo's latest report, which the dashboard and
 // status read.
-func readinessDir(cfg *config.Config) string {
-	return filepath.Join(cfg.Path(cfg.DataDir), "readiness")
-}
+func readinessDir(cfg *config.Config) string { return pipeline.ReadinessDir(cfg) }
 
 // linkFiled records on each of the report's findings the issue filed for
 // it, so the dashboard can link it and follow the factory's work on it.
@@ -116,6 +138,7 @@ func relink(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, 
 	if err != nil {
 		return fmt.Errorf("reading the issues it filed: %w", err)
 	}
+	filed = settleBaseline(ctx, cfg, gh, st, r, filed)
 	closeFixed(ctx, gh, st, r, filed)
 	linkFiled(r, filed)
 	_, err = readiness.Save(readinessDir(cfg), r)
@@ -159,28 +182,88 @@ func closeFixed(ctx context.Context, gh forge, st *store.Store, r *readiness.Rep
 		if err := gh.Comment(ctx, o.Number, "**Factory:** "+why+", so this is done."); err != nil {
 			slog.Warn("readiness", "repo", r.Repo, "comment", o.Number, "err", err)
 		}
-		if st == nil {
+		closeSplit(ctx, gh, st, r.Repo, o.Number, fmt.Sprintf("closed with #%d: %s.", o.Number, why))
+	}
+}
+
+// closeSplit closes the open issues the issue n was split into, saying
+// why. The factory stops working on their items when it sees them closed.
+func closeSplit(ctx context.Context, gh forge, st *store.Store, repo string, n int, why string) {
+	closer, ok := gh.(interface {
+		CloseIssue(ctx context.Context, n int) error
+	})
+	if st == nil || !ok {
+		return
+	}
+	it, err := st.ItemByIssue(ctx, repo, n)
+	if err != nil {
+		return
+	}
+	items, _ := st.ListItems(ctx)
+	for _, c := range items {
+		if c.ParentID == nil || *c.ParentID != it.ID || c.Stage == state.Done {
 			continue
 		}
-		it, err := st.ItemByIssue(ctx, r.Repo, o.Number)
-		if err != nil {
+		if is, err := gh.GetIssue(ctx, c.IssueNumber); err != nil || is.State != "open" {
 			continue
 		}
-		items, _ := st.ListItems(ctx)
-		for _, c := range items {
-			if c.ParentID == nil || *c.ParentID != it.ID || c.Stage == state.Done {
-				continue
-			}
-			if is, err := gh.GetIssue(ctx, c.IssueNumber); err != nil || is.State != "open" {
-				continue
-			}
-			if err := closer.CloseIssue(ctx, c.IssueNumber); err != nil {
-				slog.Warn("readiness", "repo", r.Repo, "close", c.IssueNumber, "err", err)
-				continue
-			}
-			_ = gh.Comment(ctx, c.IssueNumber, fmt.Sprintf("**Factory:** closed with #%d: %s.", o.Number, why))
+		if err := closer.CloseIssue(ctx, c.IssueNumber); err != nil {
+			slog.Warn("readiness", "repo", repo, "close", c.IssueNumber, "err", err)
+			continue
+		}
+		_ = gh.Comment(ctx, c.IssueNumber, "**Factory:** "+why)
+	}
+}
+
+// settleBaseline follows a lint baseline once it's out of review. When
+// the commit checked has it, its pull request is done: the page stops
+// asking for it, the issues lint was split into (for the offenses it now
+// accepts) close, and whatever lint still finds, offenses since, gets an
+// issue of its own, labeled for the factory. Closed without merging, the
+// page stops asking for it, and the offer to make one comes back.
+func settleBaseline(ctx context.Context, cfg *config.Config, gh forge, st *store.Store, r *readiness.Report, filed []github.Issue) []github.Issue {
+	dir := readinessDir(cfg)
+	url := readiness.BaselinePR(dir, r.Repo)
+	if !r.Baselined {
+		if url == "" {
+			return filed
+		}
+		n, _ := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
+		if pr, err := gh.GetPR(ctx, n); err == nil && pr.State != "open" && !pr.Merged {
+			readiness.ClearBaselinePR(dir, r.Repo)
+		}
+		return filed
+	}
+	readiness.ClearBaselinePR(dir, r.Repo)
+	sha := r.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	open := false
+	for _, o := range filed {
+		if m := markerRE.FindStringSubmatch(o.Body); m != nil && m[1] == "check:lint" {
+			open = open || o.State == "open"
+			closeSplit(ctx, gh, st, r.Repo, o.Number, fmt.Sprintf("the lint baseline is on `%s` now (at %s), so the offenses this piece was for are accepted, and only new ones fail lint.", r.Branch, sha))
 		}
 	}
+	var lint *readiness.Finding
+	for i, f := range r.Findings {
+		if f.Issue != nil && f.Issue.Key == "check:lint" {
+			lint = &r.Findings[i]
+		}
+	}
+	// Lint passes (closeFixed closes its issue), or what's left has one.
+	if lint == nil || r.Incomplete || open {
+		return filed
+	}
+	title := "Fix the lint offenses on " + r.Branch + " since the baseline"
+	body := lint.Issue.Body + "\n\n---\nFiled by the factory's readiness check of `" + r.Branch + "` at " + r.SHA + ", once the lint baseline was in.\n" + marker("check:lint")
+	n, err := gh.CreateIssue(ctx, title, body, []string{pipeline.LabelReadiness, cfg.Intake.Label})
+	if err != nil {
+		slog.Warn("readiness", "repo", r.Repo, "file lint since the baseline", err)
+		return filed
+	}
+	return append(filed, github.Issue{Number: n, Title: title, Body: body, State: "open"})
 }
 
 // markerRE finds the key in an issue the check filed.
@@ -190,9 +273,9 @@ var markerRE = regexp.MustCompile(`<!-- factory-readiness: (\S+) -->`)
 // repo's base branch, with its issues linked. It only reads: it files
 // and labels nothing. Its containers are named apart from the daemon's
 // jobs, which would otherwise take them for leftovers.
-func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string) error {
+func recheckReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, out io.Writer) error {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
-	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	r, err := assess(ctx, cfg, pl, repo, out)
 	if err != nil {
 		return err
 	}
@@ -387,6 +470,11 @@ func fileReport(ctx context.Context, cfg *config.Config, gh forge, r *readiness.
 		return "", err
 	}
 	filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
+	if queue && err == nil {
+		// The daemon carries on from here: it checks again as the base
+		// branch moves, and queues the rest once the blockers are fixed.
+		err = readiness.Follow(readinessDir(cfg), r.Repo)
+	}
 	if _, serr := readiness.Save(readinessDir(cfg), r); err == nil {
 		err = serr
 	}
@@ -406,9 +494,9 @@ func fileReport(ctx context.Context, cfg *config.Config, gh forge, r *readiness.
 // fileReadiness is the dashboard's File issues (and with queue, File and
 // start work): the check again on repo, then its issues filed as
 // `factory readiness -file` (or -queue) does.
-func fileReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, queue bool) (string, error) {
+func fileReadiness(ctx context.Context, cfg *config.Config, daemon *pipeline.Pipeline, repo string, queue bool, out io.Writer) (string, error) {
 	pl := &pipeline.Pipeline{Cfg: cfg, Runner: daemon.Runner, JobPrefix: readinessPrefix(), ClientsFor: daemon.ClientsFor}
-	r, err := assess(ctx, cfg, pl, repo, io.Discard)
+	r, err := assess(ctx, cfg, pl, repo, out)
 	if err != nil {
 		return "", err
 	}
@@ -506,7 +594,7 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		ask := fmt.Sprintf("Label them %s so the factory starts on them when it runs?", cfg.Intake.Label)
 		if !r.Ready {
-			ask = fmt.Sprintf("Label the blockers %s so the factory starts on them when it runs? The rest are filed for later", cfg.Intake.Label)
+			ask = fmt.Sprintf("Have the factory work through them? It labels the blockers %s now, and starts the rest by itself once they pass", cfg.Intake.Label)
 		}
 		queue := p.yes(ask, true)
 		filed, err := fileIssues(ctx, gh, r, todo, cfg.Intake.Label, queue)
@@ -519,7 +607,11 @@ func setupReadiness(ctx context.Context, p *prompter, cfg *config.Config, client
 		}
 		p.say("Opened %d issue(s) on %s.", len(filed), repo)
 		if queue && !r.Ready {
-			p.say("Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", repo)
+			if err := readiness.Follow(readinessDir(cfg), repo); err != nil {
+				p.say("Couldn't save that: %v. Once the blockers are fixed, run ./factory readiness -queue %s to queue the rest.", err, repo)
+			} else {
+				p.say("The factory takes it from here while it runs: it fixes the blockers, checks %s again as %s changes, and starts the rest once they pass. The Setup screen follows along.", repo, r.Branch)
+			}
 		}
 	}
 }

@@ -203,7 +203,7 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 			{Level: readiness.Gap, Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests"}},
 		}}, nil
 	}
-	msg, err := fileReadiness(context.Background(), cfg, p, "o/r", true)
+	msg, err := fileReadiness(context.Background(), cfg, p, "o/r", true, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 
 	f.issues, f.labeled = nil, nil
 	incomplete = true
-	if msg, err := fileReadiness(context.Background(), cfg, p, "o/r", false); err != nil || !strings.Contains(msg, "nothing was filed") || len(f.issues) != 0 {
+	if msg, err := fileReadiness(context.Background(), cfg, p, "o/r", false, io.Discard); err != nil || !strings.Contains(msg, "nothing was filed") || len(f.issues) != 0 {
 		t.Fatalf("msg %q, err %v, issues %v", msg, err, f.issues)
 	}
 }
@@ -306,5 +306,72 @@ func TestFirstConfig(t *testing.T) {
 	firstConfig(path)
 	if b, _ := os.ReadFile(path); string(b) != "repo: me/mine\n" {
 		t.Fatalf("an existing config was overwritten: %q", b)
+	}
+}
+
+// baselineForge is closingForge that files issues and knows one pull request.
+type baselineForge struct {
+	closingForge
+	pr      *github.PR
+	created []string // title and labels of each issue filed
+}
+
+func (f *baselineForge) GetPR(context.Context, int) (*github.PR, error) { return f.pr, nil }
+func (f *baselineForge) CreateIssue(_ context.Context, title, _ string, labels []string) (int, error) {
+	f.created = append(f.created, title+" "+strings.Join(labels, ","))
+	return 30, nil
+}
+
+// Once the commit checked has the lint baseline, the page stops asking to
+// merge it, the pieces lint was split into close, and what lint still
+// finds gets an issue of its own for the factory, once. Closed without
+// merging, the page stops asking for it too.
+func TestSettleBaseline(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{DataDir: t.TempDir()}
+	cfg.Intake.Label = "factory:ready"
+	dir := readinessDir(cfg)
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	lint, _, _ := st.UpsertItem(ctx, "o/r", 9, "Make the lint check pass on master")
+	for _, n := range []int{12, 13} {
+		c, _, _ := st.UpsertItem(ctx, "o/r", n, "RuboCop piece")
+		st.SetParent(ctx, c.ID, lint.ID)
+	}
+	f := &baselineForge{closingForge: closingForge{open: map[int]bool{12: true, 13: true}, comments: map[int]string{}}}
+	filed := []github.Issue{{Number: 9, State: "closed", Body: "x\n<!-- factory-readiness: check:lint -->"}}
+	lintFails := readiness.Finding{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on master",
+		Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on master", Body: "1 offense"}}
+	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/42")
+
+	// Not on master yet, and still open: nothing changes.
+	f.pr = &github.PR{Number: 42, State: "open"}
+	r := &readiness.Report{Repo: "o/r", Branch: "master", SHA: "c0ffee1234", Findings: []readiness.Finding{lintFails}}
+	if got := settleBaseline(ctx, cfg, f, st, r, filed); len(got) != 1 || readiness.BaselinePR(dir, "o/r") == "" || len(f.closed) != 0 {
+		t.Fatalf("before the merge: filed %v, closed %v", got, f.closed)
+	}
+
+	r.Baselined = true
+	got := settleBaseline(ctx, cfg, f, st, r, filed)
+	if readiness.BaselinePR(dir, "o/r") != "" {
+		t.Fatal("still asks to merge a baseline that's in")
+	}
+	if fmt.Sprint(f.closed) != "[12 13]" || !strings.Contains(f.comments[12], "lint baseline is on `master` now (at c0ffee1)") {
+		t.Fatalf("closed %v, comments %v", f.closed, f.comments)
+	}
+	if len(got) != 2 || got[1].State != "open" || strings.Join(f.created, "|") != "Fix the lint offenses on master since the baseline factory:readiness,factory:ready" {
+		t.Fatalf("filed %v, created %v", got, f.created)
+	}
+	// It has its issue now: checking again files no other.
+	settleBaseline(ctx, cfg, f, st, r, got)
+	if len(f.created) != 1 {
+		t.Fatalf("filed again: %v", f.created)
+	}
+
+	// A baseline closed without merging stops being asked for.
+	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/43")
+	f.pr = &github.PR{Number: 43, State: "closed"}
+	settleBaseline(ctx, cfg, f, st, &readiness.Report{Repo: "o/r", Findings: []readiness.Finding{lintFails}}, filed)
+	if readiness.BaselinePR(dir, "o/r") != "" {
+		t.Fatal("still asks to merge a closed baseline")
 	}
 }

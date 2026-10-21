@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -62,6 +64,9 @@ type APIRepoReadiness struct {
 	Checking      bool   `json:"checking"`
 	CheckingSince string `json:"checking_since"`
 	Action        string `json:"action"`
+	// CheckingWhy says what started it, when the factory did by itself
+	// ("Started by itself: master moved from 1a2b3c4 to 5d6e7f8."), or "".
+	CheckingWhy string `json:"checking_why"`
 	// CheckError is why the last run started here failed, or "", and
 	// Result what it did when it worked.
 	CheckError string `json:"check_error"`
@@ -69,6 +74,23 @@ type APIRepoReadiness struct {
 	// CanBaseline: lint fails on the base branch, and its linter can
 	// record today's offenses as a baseline (POST readiness/baseline).
 	CanBaseline bool `json:"can_baseline"`
+	// BaselinePR is the pull request the last lint baseline opened, while
+	// lint still fails: merging it is what's left.
+	BaselinePR string `json:"baseline_pr"`
+	// Progress is what the run going (or the last one started here) has
+	// done so far, a step at a time, oldest first.
+	Progress []APIProgress `json:"progress"`
+	// Following: a person chose File and start work, so the factory checks
+	// the repo again as its base branch moves and starts the recommended
+	// work once the setup steps pass.
+	Following bool `json:"following"`
+}
+
+// APIProgress is one step of a setup run: "running `bundle install`",
+// "passed `bundle install` in 2m14s", and when it was said.
+type APIProgress struct {
+	At   string `json:"at"`
+	Text string `json:"text"`
 }
 
 // APIReadinessStep is one setup step.
@@ -84,6 +106,9 @@ type APIReadinessStep struct {
 // APIReadinessFinding is one thing the check found, with the issue filed
 // for it and the factory's item for that issue.
 type APIReadinessFinding struct {
+	// Key names what it's about across checks ("check:lint", "flaky"),
+	// or "" for a finding with nothing to file.
+	Key      string `json:"key"`
 	Level    string `json:"level"` // blocker, gap, tip, good
 	Area     string `json:"area"`
 	Title    string `json:"title"`
@@ -109,8 +134,44 @@ type readinessRun struct {
 	repo    string
 	action  string
 	since   time.Time
+	why     string            // what started the run going, when the factory did
 	errs    map[string]string // repo -> why its last run failed
 	results map[string]string // repo -> what its last run did
+
+	nudge    chan struct{}            // a page asked: follow now, not at the next tick
+	nudgedAt time.Time                // when a page last did, to ask the host at most so often
+	settling map[string]string        // repo -> the baseline a check was started for, once
+	log      map[string][]APIProgress // repo -> its run's steps so far
+}
+
+// maxProgress is how many of a run's steps are kept.
+const maxProgress = 40
+
+// ReadinessLog is where a setup run on repo says what it's doing, a line
+// at a time, for the page to show as it goes.
+func (s *Server) ReadinessLog(repo string) io.Writer { return progressLog{s, repo} }
+
+type progressLog struct {
+	s    *Server
+	repo string
+}
+
+func (l progressLog) Write(b []byte) (int, error) {
+	at := time.Now().UTC().Format(store.TimeFormat)
+	l.s.ready.mu.Lock()
+	defer l.s.ready.mu.Unlock()
+	if l.s.ready.log == nil {
+		l.s.ready.log = map[string][]APIProgress{}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			l.s.ready.log[l.repo] = append(l.s.ready.log[l.repo], APIProgress{At: at, Text: line})
+		}
+	}
+	if n := len(l.s.ready.log[l.repo]); n > maxProgress {
+		l.s.ready.log[l.repo] = l.s.ready.log[l.repo][n-maxProgress:]
+	}
+	return len(b), nil
 }
 
 func (s *Server) routesReadiness(mux *http.ServeMux) {
@@ -121,7 +182,27 @@ func (s *Server) routesReadiness(mux *http.ServeMux) {
 }
 
 func (s *Server) apiReadiness(w http.ResponseWriter, r *http.Request) {
+	s.nudgeFollow()
 	writeJSON(w, http.StatusOK, s.readiness(r))
+}
+
+// followNudge is how often a page being looked at can have the host asked
+// about each repo's base branch and baseline.
+const followNudge = 30 * time.Second
+
+// nudgeFollow has FollowReadiness look now, as someone is looking: a
+// baseline merged since shows as checked again soon, not at the next tick.
+func (s *Server) nudgeFollow() {
+	s.ready.mu.Lock()
+	defer s.ready.mu.Unlock()
+	if s.ready.nudge == nil || time.Since(s.ready.nudgedAt) < followNudge {
+		return
+	}
+	s.ready.nudgedAt = time.Now()
+	select {
+	case s.ready.nudge <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Server) readiness(r *http.Request) APIReadiness {
@@ -133,16 +214,17 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	out.CanCheck, out.CheckNote = s.canCheckReadiness(r)
 	out.CanFile = out.CanCheck && s.FileReadiness != nil
 	s.ready.mu.Lock()
-	running, action, since := s.ready.repo, s.ready.action, s.ready.since
+	running, action, since, why := s.ready.repo, s.ready.action, s.ready.since, s.ready.why
 	errs, results := maps.Clone(s.ready.errs), maps.Clone(s.ready.results)
+	logs := maps.Clone(s.ready.log)
 	s.ready.mu.Unlock()
 	linked := map[int64]bool{}
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
 		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Extras: []APIReadinessFinding{},
-			CheckError: errs[repo], Result: results[repo]}
+			CheckError: errs[repo], Result: results[repo], Progress: append([]APIProgress{}, logs[repo]...)}
 		if strings.EqualFold(running, repo) {
-			rr.Checking, rr.CheckingSince, rr.Action = true, since.UTC().Format(store.TimeFormat), action
+			rr.Checking, rr.CheckingSince, rr.Action, rr.CheckingWhy = true, since.UTC().Format(store.TimeFormat), action, why
 		}
 		rep, err := readiness.Load(s.ReadinessDir, repo)
 		if err != nil && rr.CheckError == "" {
@@ -183,8 +265,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			as := APIReadinessStep{Key: st.Key, Title: st.Title, Why: st.Why, State: st.State, Passed: st.Passed, Blockers: []APIReadinessFinding{}}
 			for _, f := range st.Blockers {
 				as.Blockers = append(as.Blockers, find(f))
-				if f.Issue != nil && f.Issue.Key == "check:lint" && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
-					rr.CanBaseline = true
+				// Once a baseline is in, lint failing is offenses since: no second one.
+				if f.Issue != nil && f.Issue.Key == "check:lint" && !rep.Baselined && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
+					rr.CanBaseline, rr.BaselinePR = true, readiness.BaselinePR(s.ReadinessDir, repo)
 				}
 			}
 			rr.Steps = append(rr.Steps, as)
@@ -197,7 +280,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		if rep.Incomplete {
 			rr.Unfiled = 0
 		}
-		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0)
+		// While it isn't ready, it also turns following on.
+		rr.Following = readiness.Followed(s.ReadinessDir, repo)
+		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0 || !rep.Ready && !rr.Following)
 		out.Repos = append(out.Repos, rr)
 	}
 	switch {
@@ -217,6 +302,7 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 	if f.Issue == nil {
 		return a
 	}
+	a.Key = f.Issue.Key
 	if f.Issue.Number == 0 {
 		a.Status = "not_filed"
 		return a
@@ -232,17 +318,21 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 	}
 	linked[it.ID] = true
 	a.ItemID, a.ItemStage = &it.ID, string(it.Stage)
+	// Split work is done when its pieces are, whatever became of the
+	// issue it was split from (splitting can close it).
+	kids := s.children(ctx, it.ID)
 	switch item := s.apiItem(ctx, it); {
-	case it.Stage == state.Done:
-		a.Status = "done"
-	case it.Stage == state.Epic:
+	case len(kids) > 0 || it.Stage == state.Epic:
 		a.Status = "split"
-		for _, c := range s.children(ctx, it.ID) {
+		for _, c := range kids {
+			linked[c.ID] = true
 			a.SplitTotal++
 			if c.Stage == state.Done {
 				a.SplitDone++
 			}
 		}
+	case it.Stage == state.Done:
+		a.Status = "done"
 	case item.NeedsYou:
 		a.Status = "needs_you"
 	case it.Stage == state.Implementing || it.Stage == state.Reviewing:
@@ -251,6 +341,42 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 		a.Status = "waiting"
 	}
 	return a
+}
+
+// setupOf says how item it stands to its repo's setup (see
+// APIItem.Setup), and why.
+func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, string) {
+	if s.ReadinessDir == "" || it.Stage == state.Done {
+		return "", ""
+	}
+	r, _ := readiness.Load(s.ReadinessDir, it.Repo)
+	if r == nil || r.Ready || r.Incomplete {
+		return "", ""
+	}
+	parent := 0
+	if it.ParentID != nil {
+		if p, err := s.Store.GetItem(ctx, *it.ParentID); err == nil {
+			parent = p.IssueNumber
+		}
+	}
+	f := r.Fixes(it.IssueNumber, parent)
+	if f == nil {
+		return "held", "Waits for setup: every job on " + it.Repo + " would fail until its setup steps pass, so it starts by itself once they do."
+	}
+	if f.Issue.Key == "check:lint" && parent != 0 && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(it.Repo) {
+		return "blocks", "A piece of making lint pass on " + r.Branch + ". Lint is checked across the whole repo, so no piece can pass on its own while the rest still fails. " +
+			"Accept today's offenses on the Setup screen instead: once that's merged, lint passes and the factory closes these pieces."
+	}
+	return "blocks", "Fixes a setup blocker (" + strings.ReplaceAll(f.Title, "`", "") + "). Nothing else runs on " + it.Repo + " until the blockers are fixed."
+}
+
+// prName is what a pull request is called on repo's host: a GitLab repo
+// is named host/path.
+func prName(repo string) string {
+	if strings.Count(repo, "/") > 1 {
+		return "merge request"
+	}
+	return "pull request"
 }
 
 // workedBeyondSetup says whether the factory has an item that isn't for
@@ -297,7 +423,10 @@ func (s *Server) apiLintBaseline(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return "", err
 		}
-		return "Opened the lint baseline for review: " + url + " . Merge it, then check again.", nil
+		if err := readiness.SaveBaselinePR(s.ReadinessDir, repo, url); err != nil {
+			return "", err
+		}
+		return "Opened the lint baseline for review. Once you merge it, the factory checks again by itself.", nil
 	})
 }
 
@@ -337,40 +466,148 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action s
 		return
 	}
 	repo := s.Repos[i]
+	if action == "file" && in.Queue {
+		action = "queue"
+	}
+	if busy := s.beginReadiness(repo, action, "", func(ctx context.Context) (string, error) {
+		return run(ctx, repo, in.Queue)
+	}); busy != "" {
+		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
+		return
+	}
 	msg := "Checking " + repo + ". It takes a few minutes, and this page updates when it's done."
 	switch action {
-	case "file":
+	case "file", "queue":
 		msg = "Checking " + repo + " again, then filing its issues. It takes a few minutes, and this page updates when it's done."
-		if in.Queue {
-			action = "queue"
-		}
 	case "baseline":
 		msg = "Recording " + repo + "'s lint offenses as a baseline. It installs and runs the linter, so it takes a few minutes; this page updates when it's done."
 	}
+	s.act(w, nil, msg)
+}
+
+// failedAs is how a failed run of each action is told on the page.
+var failedAs = map[string]string{"check": "The last check failed: ", "file": "Filing its issues failed: ", "queue": "Filing its issues failed: ",
+	"baseline": "Making the lint baseline failed: "}
+
+// beginReadiness starts run for repo in the background, as action, unless
+// a run is going; then it returns the repo that one is for.
+// why, for a run the factory started by itself, says what started it.
+func (s *Server) beginReadiness(repo, action, why string, run func(ctx context.Context) (string, error)) (busy string) {
 	s.ready.mu.Lock()
 	if s.ready.repo != "" {
 		busy := s.ready.repo
 		s.ready.mu.Unlock()
-		writeJSON(w, http.StatusConflict, APIActionResult{Message: "Already checking " + busy + ". One check runs at a time; try again when it's done."})
-		return
+		return busy
 	}
-	s.ready.repo, s.ready.action, s.ready.since = repo, action, time.Now()
+	s.ready.repo, s.ready.action, s.ready.since, s.ready.why = repo, action, time.Now(), why
 	if s.ready.errs == nil {
 		s.ready.errs, s.ready.results = map[string]string{}, map[string]string{}
 	}
 	delete(s.ready.errs, repo)
 	delete(s.ready.results, repo)
+	delete(s.ready.log, repo)
 	s.ready.mu.Unlock()
 	go func() {
-		res, err := run(context.WithoutCancel(r.Context()), repo, in.Queue)
+		res, err := run(context.Background())
 		s.ready.mu.Lock()
 		defer s.ready.mu.Unlock()
 		s.ready.repo, s.ready.action = "", ""
 		if err != nil {
-			s.ready.errs[repo] = err.Error()
+			s.ready.errs[repo] = failedAs[action] + err.Error()
 		} else if res != "" {
 			s.ready.results[repo] = res
 		}
 	}()
-	s.act(w, nil, msg)
+	return ""
+}
+
+// FollowReadiness checks each repo that isn't ready again whenever its
+// base branch moves (a fix merged, by the factory or a person), every
+// interval until ctx ends. A repo someone chose File and start work for
+// is filed and queued as well, so once its setup steps pass the factory
+// starts on the rest by itself.
+func (s *Server) FollowReadiness(ctx context.Context, every time.Duration) {
+	if s.BaseSHA == nil || s.CheckReadiness == nil || s.ReadinessDir == "" {
+		return
+	}
+	nudge := make(chan struct{}, 1)
+	s.ready.mu.Lock()
+	s.ready.nudge = nudge
+	s.ready.mu.Unlock()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	// Once at the start too: a baseline merged while the factory was
+	// stopped doesn't wait for the base branch to move again.
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			case <-nudge:
+			}
+		}
+		for _, repo := range s.Repos {
+			s.followOnce(ctx, repo)
+		}
+	}
+}
+
+func (s *Server) followOnce(ctx context.Context, repo string) {
+	rep, err := readiness.Load(s.ReadinessDir, repo)
+	// An incomplete check is the factory's setup, not the repo: a new
+	// commit wouldn't change it.
+	if err != nil || rep == nil || rep.Ready || rep.Incomplete {
+		return
+	}
+	short := func(s string) string {
+		if len(s) > 7 {
+			return s[:7]
+		}
+		return s
+	}
+	sha, err := s.BaseSHA(ctx, repo)
+	if err != nil || sha == "" {
+		return
+	}
+	if sha == rep.SHA {
+		// The branch hasn't moved, but a baseline out of review is news:
+		// checking again settles it (see settleBaseline). Once per baseline,
+		// so one that can't be settled doesn't check on every tick.
+		url := readiness.BaselinePR(s.ReadinessDir, repo)
+		if url == "" || s.BaselineOpen == nil {
+			return
+		}
+		s.ready.mu.Lock()
+		tried := s.ready.settling[repo] == url
+		s.ready.mu.Unlock()
+		if open, err := s.BaselineOpen(ctx, repo, url); tried || err != nil || open {
+			return
+		}
+		s.ready.mu.Lock()
+		if s.ready.settling == nil {
+			s.ready.settling = map[string]string{}
+		}
+		s.ready.settling[repo] = url
+		s.ready.mu.Unlock()
+		because := fmt.Sprintf("the lint baseline's %s isn't open any more", prName(repo))
+		s.beginReadiness(repo, "check", "Started by itself: "+because+".", func(ctx context.Context) (string, error) {
+			return fmt.Sprintf("Checked again by itself at %s UTC: %s. The steps below are as of %s.",
+				time.Now().UTC().Format("15:04"), because, short(sha)), s.CheckReadiness(ctx, repo)
+		})
+		return
+	}
+	moved := fmt.Sprintf("%s moved from %s to %s", rep.Branch, short(rep.SHA), short(sha))
+	started := "Started by itself: " + moved + "."
+	why := fmt.Sprintf("Checked again by itself at %s UTC: %s. ", time.Now().UTC().Format("15:04"), moved)
+	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {
+		s.beginReadiness(repo, "queue", started, func(ctx context.Context) (string, error) {
+			res, err := s.FileReadiness(ctx, repo, true)
+			return why + res, err
+		})
+		return
+	}
+	s.beginReadiness(repo, "check", started, func(ctx context.Context) (string, error) {
+		return why + "The steps below are as of " + short(sha) + ".", s.CheckReadiness(ctx, repo)
+	})
 }

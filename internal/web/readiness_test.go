@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -197,7 +198,7 @@ func TestReadinessCheckAgain(t *testing.T) {
 		t.Fatalf("check o/s = %d", code)
 	}
 	wait()
-	if got.Repos[1].CheckError != "cloning o/s: no access" || got.Repos[1].State != "unchecked" {
+	if got.Repos[1].CheckError != "The last check failed: cloning o/s: no access" || got.Repos[1].State != "unchecked" {
 		t.Fatalf("o/s = %+v", got.Repos[1])
 	}
 	// Real work hides the banner.
@@ -341,7 +342,145 @@ func TestReadinessLintBaseline(t *testing.T) {
 			t.Fatal("the baseline never finished")
 		}
 	}
-	if !strings.Contains(got.Repos[0].Result, "https://github.com/o/r/pull/7") {
-		t.Fatalf("result = %q (error %q)", got.Repos[0].Result, got.Repos[0].CheckError)
+	// The pull request stays on the page until lint passes, whatever runs next.
+	if got.Repos[0].BaselinePR != "https://github.com/o/r/pull/7" || !strings.Contains(got.Repos[0].Result, "merge it") {
+		t.Fatalf("result = %q, PR %q (error %q)", got.Repos[0].Result, got.Repos[0].BaselinePR, got.Repos[0].CheckError)
+	}
+}
+
+// A repo that isn't ready is checked again once its base branch moves;
+// once someone chose File and start work, it's filed and queued instead.
+func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
+	t.Parallel()
+	_, _, s := readinessServer(t)
+	sha := "abc1234" // what the report saw
+	s.BaseSHA = func(context.Context, string) (string, error) { return sha, nil }
+	ran := make(chan string, 4)
+	s.CheckReadiness = func(_ context.Context, repo string) error { ran <- "check " + repo; return nil }
+	s.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
+		ran <- fmt.Sprintf("file %s queue=%v", repo, queue)
+		return "Opened 1 issue(s).", nil
+	}
+	next := func() string {
+		select {
+		case r := <-ran:
+			for busy := true; busy; time.Sleep(5 * time.Millisecond) { // the run's result lands
+				s.ready.mu.Lock()
+				busy = s.ready.repo != ""
+				s.ready.mu.Unlock()
+			}
+			return r
+		case <-time.After(2 * time.Second):
+			return ""
+		}
+	}
+	ctx := context.Background()
+	s.followOnce(ctx, "o/r")
+	s.followOnce(ctx, "o/s") // never checked: nothing to follow
+	if r := next(); r != "" {
+		t.Fatalf("ran %q with nothing changed", r)
+	}
+	sha = "def5678"
+	s.followOnce(ctx, "o/r")
+	if r := next(); r != "check o/r" {
+		t.Fatalf("ran %q", r)
+	}
+	s.ready.mu.Lock()
+	res := s.ready.results["o/r"]
+	s.ready.mu.Unlock()
+	if !strings.Contains(res, "main moved from abc1234 to def5678") {
+		t.Fatalf("result = %q", res)
+	}
+	if err := readiness.Follow(s.ReadinessDir, "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	s.followOnce(ctx, "o/r")
+	if r := next(); r != "file o/r queue=true" {
+		t.Fatalf("ran %q", r)
+	}
+}
+
+// A blocker split into pieces follows its pieces, even once splitting
+// closed its issue. While the repo isn't ready, a piece says it blocks
+// setup (and, for lint that can be baselined, that the baseline is the
+// way), and any other work says it waits for setup.
+func TestSplitBlockerAndWorkWaitingForSetup(t *testing.T) {
+	t.Parallel()
+	base, st, s := readinessServer(t)
+	s.CanBaseline = func(string) bool { return true }
+	s.LintBaseline = func(context.Context, string) (string, error) { return "", nil }
+	ctx := context.Background()
+	lint, _ := st.ItemByIssue(ctx, "o/r", 12)
+	piece, _, _ := st.UpsertItem(ctx, "o/r", 20, "RuboCop: autocorrect app/")
+	if err := st.SetParent(ctx, piece.ID, lint.ID); err != nil {
+		t.Fatal(err)
+	}
+	st.SetStage(ctx, lint.ID, state.Done, "daemon", "its issue was closed")
+	task, _, _ := st.UpsertItem(ctx, "o/r", 30, "Report outdated gems")
+
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitTotal != 1 || f.SplitDone != 0 {
+		t.Fatalf("lint = %+v", f)
+	}
+	var d APIItemDetail
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(piece.ID, 10), &d)
+	if d.Item.Setup != "blocks" || !strings.Contains(d.Item.SetupNote, "Accept today's offenses") {
+		t.Fatalf("piece = %q %q", d.Item.Setup, d.Item.SetupNote)
+	}
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(task.ID, 10), &d)
+	if d.Item.Setup != "held" || !strings.Contains(d.Item.SetupNote, "starts by itself") {
+		t.Fatalf("task = %q %q", d.Item.Setup, d.Item.SetupNote)
+	}
+}
+
+// A lint baseline merged (or closed) since the last check has the repo
+// checked again, though its branch hasn't moved since: once per baseline.
+func TestFollowReadinessSettlesABaselineOutOfReview(t *testing.T) {
+	t.Parallel()
+	_, _, s := readinessServer(t)
+	s.BaseSHA = func(context.Context, string) (string, error) { return "abc1234", nil } // unmoved
+	open := true
+	asked := 0
+	s.BaselineOpen = func(context.Context, string, string) (bool, error) { asked++; return open, nil }
+	ran := make(chan string, 4)
+	s.CheckReadiness = func(_ context.Context, repo string) error { ran <- repo; return nil }
+	wait := func() string {
+		select {
+		case r := <-ran:
+			for busy := true; busy; time.Sleep(5 * time.Millisecond) {
+				s.ready.mu.Lock()
+				busy = s.ready.repo != ""
+				s.ready.mu.Unlock()
+			}
+			return r
+		case <-time.After(time.Second):
+			return ""
+		}
+	}
+	ctx := context.Background()
+	s.followOnce(ctx, "o/r") // no baseline recorded: nothing to ask
+	if asked != 0 || wait() != "" {
+		t.Fatal("asked about a baseline there isn't")
+	}
+	readiness.SaveBaselinePR(s.ReadinessDir, "o/r", "https://gitlab.com/o/r/-/merge_requests/7")
+	s.followOnce(ctx, "o/r")
+	if asked != 1 || wait() != "" {
+		t.Fatal("checked again while the baseline is still open")
+	}
+	open = false
+	s.followOnce(ctx, "o/r")
+	if r := wait(); r != "o/r" {
+		t.Fatalf("ran %q once it merged", r)
+	}
+	s.ready.mu.Lock()
+	res := s.ready.results["o/r"]
+	s.ready.mu.Unlock()
+	if !strings.Contains(res, "the lint baseline's pull request isn't open any more") {
+		t.Fatalf("result = %q", res)
+	}
+	s.followOnce(ctx, "o/r") // the same baseline: not again
+	if r := wait(); r != "" {
+		t.Fatal("checked again for the same baseline")
 	}
 }

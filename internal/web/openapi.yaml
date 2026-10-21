@@ -1100,7 +1100,7 @@ components:
         can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress, checking_why]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1124,6 +1124,13 @@ components:
         check_error: { type: string, description: "Why the last run started here failed, or empty" }
         result: { type: string, description: "What the last run started here did, when it filed or made a baseline; else empty" }
         can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
+        baseline_pr: { type: string, description: "The pull request the last lint baseline opened, while lint still fails, or empty" }
+        checking_why: { type: string, description: "What started the run going, when the factory did by itself; else empty" }
+        following: { type: boolean, description: "File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass" }
+        progress:
+          type: array
+          description: What the run going (or the last one started here) has done so far, a step at a time, oldest first
+          items: { $ref: "#/components/schemas/ReadinessProgress" }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]
@@ -1134,10 +1141,17 @@ components:
         state: { type: string, enum: [done, failing, unchecked] }
         passed: { type: string, description: "What the check saw when it's done, or empty" }
         blockers: { type: array, items: { $ref: "#/components/schemas/ReadinessFinding" } }
+    ReadinessProgress:
+      type: object
+      required: [at, text]
+      properties:
+        at: { type: string, description: When it was said }
+        text: { type: string, description: "A step: running `bundle install`, passed `bundle install` in 2m14s" }
     ReadinessFinding:
       type: object
-      required: [level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
+      required: [key, level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
       properties:
+        key: { type: string, description: "What it's about across checks (check:lint, flaky), or empty with nothing to file" }
         level: { type: string, enum: [blocker, gap, tip, good] }
         area: { type: string }
         title: { type: string, description: "Markdown: code spans in backticks" }
@@ -1174,7 +1188,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for, setup, setup_note]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -1211,6 +1225,8 @@ components:
           type: array
           description: "The items it depends on that aren't done: it isn't built until they are, whatever is approved"
           items: { $ref: "#/components/schemas/ItemRef" }
+        setup: { type: string, enum: ["", blocks, held], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty" }
+        setup_note: { type: string, description: "Why, in a sentence" }
     ItemRef:
       type: object
       required: [id, ref]

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/harness"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -141,6 +143,9 @@ type Pipeline struct {
 	// Secrets maps a harness name to the env vars injected into its jobs.
 	Secrets map[string]map[string]string
 	Log     *slog.Logger
+	// Progress, when set, is told what a long setup run (a readiness
+	// check, a lint baseline) is doing, a line at a time.
+	Progress io.Writer
 	// GateExec runs one gate command against a checkout. Defaults to
 	// running it in the job image through Runner.
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
@@ -221,6 +226,11 @@ type Pipeline struct {
 
 	restart atomic.Bool  // a restart was asked for: claim nothing more
 	held    atomic.Int32 // Hold calls not yet released: start nothing
+
+	stopping atomic.Bool   // shutting down and cutting jobs short: builds keep their work
+	nowOnce  sync.Once     // makes now
+	nowDone  sync.Once     // closes now
+	now      chan struct{} // closed by StopNow
 
 	previewMu sync.Mutex // a build's post and a sweep's removal, one at a time
 }
@@ -485,22 +495,35 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			// Stop claiming; give running jobs a grace period, then kill them.
-			// Killed jobs are requeued on the next start.
+			// Stop claiming; give running jobs a grace period (or until
+			// StopNow), then cut them short. A build cut short keeps its
+			// work and continues on the next start; any other job is
+			// requeued and runs again.
 			p.closeChat()
 			done := make(chan struct{})
 			go func() { p.wg.Wait(); close(done) }()
 			p.log().Info("shutting down", "grace", ShutdownGrace)
 			select {
 			case <-done:
+			case <-p.nowCh():
 			case <-time.After(ShutdownGrace):
-				cancelJobs()
-				<-done
 			}
+			p.stopping.Store(true)
+			cancelJobs()
+			<-done
 			return nil
 		case <-t.C:
 		}
 	}
+}
+
+// StopNow ends a shutdown's grace period: running jobs are cut short
+// now. Builds keep their work and continue on the next start.
+func (p *Pipeline) StopNow() { p.nowDone.Do(func() { close(p.nowCh()) }) }
+
+func (p *Pipeline) nowCh() chan struct{} {
+	p.nowOnce.Do(func() { p.now = make(chan struct{}) })
+	return p.now
 }
 
 // Tick polls GitHub when due and starts as many queued jobs as the caps
@@ -605,7 +628,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos()); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -623,7 +646,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos())
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -632,7 +655,50 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos())
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+}
+
+// ReadinessDir is where the readiness check keeps each repo's report.
+func ReadinessDir(cfg *config.Config) string {
+	return filepath.Join(cfg.Path(cfg.DataDir), "readiness")
+}
+
+// heldForSetup are the items with queued jobs that wait for their repo's
+// setup (see readiness.Report.Holds): every job would fail on its
+// blockers, so only the work fixing them runs. They start once a check
+// finds the repo ready.
+func (p *Pipeline) heldForSetup(ctx context.Context) []int64 {
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{State: state.Queued})
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	for _, j := range jobs {
+		if j.ItemID == nil || slices.Contains(out, *j.ItemID) {
+			continue
+		}
+		if it, err := p.Store.GetItem(ctx, *j.ItemID); err == nil && p.SetupHolds(ctx, it) {
+			out = append(out, it.ID)
+		}
+	}
+	return out
+}
+
+// SetupHolds says whether item it waits for its repo's setup.
+func (p *Pipeline) SetupHolds(ctx context.Context, it *store.WorkItem) bool {
+	r, _ := readiness.Load(ReadinessDir(p.Cfg), it.Repo)
+	return r.Holds(it.IssueNumber, p.parentIssue(ctx, it))
+}
+
+// parentIssue is the issue of the epic it was split from, or 0.
+func (p *Pipeline) parentIssue(ctx context.Context, it *store.WorkItem) int {
+	if it.ParentID == nil {
+		return 0
+	}
+	if parent, err := p.Store.GetItem(ctx, *it.ParentID); err == nil {
+		return parent.IssueNumber
+	}
+	return 0
 }
 
 // heldRepos are the repos whose job image is being built, with the repos

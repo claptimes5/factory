@@ -107,6 +107,9 @@ With the factory set up for the repo (`./factory setup` adds it):
 ./factory readiness you/new-repo
 ```
 
-Fix every ✗. Then run `./factory readiness -queue you/new-repo` to hand
-the remaining gaps to the factory as issues, and start filing feature
-issues labeled `factory:ready`.
+Then run `./factory readiness -queue you/new-repo` (or press **File and
+start work** on the dashboard's Setup screen). The factory fixes the ✗s
+it can, checks again by itself as the base branch moves, and once they
+pass starts on the remaining gaps, the feature map among them. Fix any ✗
+it says is yours, then start filing feature issues labeled
+`factory:ready`.

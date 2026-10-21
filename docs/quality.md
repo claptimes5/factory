@@ -583,9 +583,16 @@ run it again any time:
 ./factory readiness -queue       # open them labeled for the factory to work
 ```
 
-It clones the base branch, runs the install step and every required check
-(the tests twice, to catch flakiness), and looks for tests, end-to-end
-tests, a feature map, a lockfile and CI. It prints a score and what's
+It first asks the repo's host what the factory's token may do there,
+without changing anything: it sends empty requests to open a pull
+request, an issue and a label (and on GitLab to update them and
+comment), which the host refuses with a 403 when the token lacks the
+permission and with a "field missing" error when it has it. A token that
+can't open pull requests is a blocker, the first setup step, since every
+change ends in one. Then it clones the base branch, runs the install step
+and every required check (the tests twice, to catch flakiness, or once if
+a check in the last day ran the same test command twice and both passed), and looks
+for tests, end-to-end tests, a feature map, a lockfile and CI. It prints a score and what's
 missing:
 
 ```
@@ -601,12 +608,21 @@ you/api at main (4f2c1a9): 59/100, not ready yet: fix the blockers first
   tests that fail on the base branch, flaky tests, no tests at all.
 - A **gap** means jobs work but less of what they change is verified.
 
+While a repo's latest report has blockers, only the work fixing them
+runs there: the issues filed for the blockers, and the pieces any of them
+was split into. Every other task on that repo waits in the queue,
+untouched, and starts by itself once a check finds the repo ready. (A
+repo never checked, or whose check couldn't finish, holds nothing.)
+
 Each one comes with an issue written for the factory's builder, so the
 first thing the factory does on a new repo can be making it verifiable.
 While a repo has blockers, `-queue` labels only those for the factory,
 since every other job would fail until they're fixed. The gaps are filed
-for later, and the next `-queue` run after the blockers are fixed labels
-them too.
+for later. `-queue` also hands the rest to the daemon: while the repo
+isn't ready, `factory serve` checks it again by itself whenever its base
+branch moves (a fix merged, by the factory or a person), and once the
+blockers are fixed that run labels the gaps too. The choice is kept as
+`data/readiness/<owner>__<name>.follow`; delete that file to stop it.
 
 Issues it files carry `factory:readiness`. Running it again skips a gap
 whose issue is still open or was closed as not planned, and files it again
@@ -624,22 +640,47 @@ each repo's latest report as setup steps: dependencies install, every
 required check passes on the base branch, and there are tests that pass
 every time. Each step says whether it passes and why the factory needs it,
 and lists its blockers, each linked to its issue and to the factory's item
-for it: waiting its turn, being built, needs you or done. A blocker with
+for it: waiting its turn, being built, needs you or done. A blocker split
+into smaller issues shows how many of them are done, even once splitting
+closed its own issue. A blocker with
 no issue yet, or one only you can fix (a missing service in `factory.yaml`),
-says so. Gaps are listed apart as worth doing later. While a repo has
-blockers, a line above every screen links there; once every repo is
-ready, it says to add the `factory:ready` label to issues to start.
+says so. Gaps follow as **Recommended**, each with the same status, and
+tips under **Nice to have**. One **Next** box says the one thing to do now and holds its button. When
+it's about one finding (a token, lint, a missing file), it sits on that
+finding's row, in place of its status and links, and a line at the top
+points to it; anything only a person can do is marked **Needs you**. In
+order, most pressing first: check the
+repo, check again once a fix merged, merge the lint baseline, accept
+today's lint offenses (lint that fails across the repo can't be fixed in
+pieces), answer an item that needs you, let the factory work through it,
+fix a blocker only you can, or, once ready, start the recommended work
+and add the `factory:ready` label to issues. While a repo isn't ready,
+Home leads with the same next step, and lists what needs you under it:
+the work fixing setup first, marked **Blocks setup**, and what waits for
+it last, marked **Waits for setup**. While a
+repo has blockers, a line above every screen links there; once every
+repo is ready, it says to add the `factory:ready` label to issues to
+start.
 `factory status` prints the same summary.
 
 A blocker the factory fixed stays on the report until the check runs
-again, since only a fresh run proves it. **Check again** on that screen
+again, since only a fresh run proves it. While a repo isn't ready, the
+daemon checks it again by itself within five minutes of its base branch
+moving, or of a lint baseline's pull request being merged or closed. It
+also looks when it starts, and whenever someone has a dashboard page
+open (asking the host at most every 30 seconds), so a merge shows soon. **Check again** on that screen
 runs it in the background on the base branch as it is now, so a fix made
 outside the factory counts too. It runs the repo's install and checks the
-way a build's gates do and files nothing, one repo at a time.
-**File issues** checks again, then files an issue for each gap that has
-none, as `factory readiness -file` does. **File and start work** also
-adds the intake label, as `-queue` does: to the blockers while there are
-any, and once the repo is ready to the issues filed earlier too. Like
+way a build's gates do and files nothing, one repo at a time. While it
+runs, the step it's checking again lists each command as it goes, with
+how long it took and whether it passed; **What the last run did** keeps
+the list once it's over. A lint baseline shows its steps the same way.
+Steps that are done fold to a line each.
+**Only file the issues** checks again, then files an issue for each gap
+that has none, as `factory readiness -file` does. **File and start work**
+also adds the intake label, as `-queue` does: to the blockers while there
+are any, and once the repo is ready to the issues filed earlier too. Like
+`-queue`, it hands the rest to the daemon, so you press it once. Like
 Settings, these need the dashboard password or a browser on the
 factory's own machine.
 
@@ -668,11 +709,21 @@ pieces that each pass a whole-repo lint. When the linter is RuboCop
    comment the baseline made redundant. If lint still fails, it pushes
    nothing;
 4. pushes only those two files to `factory/lint-baseline` and opens a
-   pull request for you to review and merge.
+   pull request for you to review and merge. The Setup screen keeps a
+   link to it until lint passes, and says so if making it failed.
 
-Once it's merged, **Check again**: lint passes, the issue filed for it
+It asks the host first whether the token may open a pull request, and
+starts nothing if it may not.
+
+Once it's merged, the daemon checks again by itself: lint passes, the issue filed for it
 and any issues it was split into are closed, and only new offenses fail
-a change. Pay the old ones down later by deleting a cop's entry from
+a change. The check knows the baseline is in from the commit it checked
+(its `.rubocop_todo.yml` says RuboCop generated it), not from timing. If
+lint still finds offenses there, ones that landed after the baseline was
+made, the issues lint was split into close anyway (the offenses they were
+for are accepted), and the leftovers get one new issue, labeled for the
+factory. A baseline pull request closed without merging stops being
+asked for, and the offer to make one comes back. Pay the old ones down later by deleting a cop's entry from
 `.rubocop_todo.yml` and fixing what it flags, a cop at a time. Running it
 again before the pull request is merged updates the same pull request.
 

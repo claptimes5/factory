@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -469,16 +470,16 @@ func TestClaimHoldsReposBeingBuilt(t *testing.T) {
 	learn, _ := s.EnqueueJob(ctx, Job{Kind: "learn", Harness: "claude", Model: "m", BudgetUSD: 1, Input: `{"repo":"o/web"}`})
 	orch, _ := s.EnqueueJob(ctx, Job{Kind: "orchestrate", Harness: "claude", Model: "m", BudgetUSD: 1})
 	// o/web's image is building: only the job for no repo starts.
-	j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web"})
+	j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web"}, nil)
 	if err != nil || j == nil || j.ID != orch {
 		t.Fatalf("claimed %+v, %v; want the orchestrator's job %d", j, err, orch)
 	}
-	if j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web", ""}); err != nil || j != nil {
+	if j, err := s.ClaimJobHolding(ctx, nil, nil, []string{"o/web", ""}, nil); err != nil || j != nil {
 		t.Fatalf("claimed %+v, %v while every image builds", j, err)
 	}
 	got := map[int64]bool{}
 	for {
-		j, err := s.ClaimJobHolding(ctx, nil, nil, nil)
+		j, err := s.ClaimJobHolding(ctx, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -489,5 +490,31 @@ func TestClaimHoldsReposBeingBuilt(t *testing.T) {
 	}
 	if !got[web] || !got[learn] {
 		t.Fatalf("after the build: %v", got)
+	}
+}
+
+// Held items' jobs wait; jobs with no item, and other items', start.
+func TestClaimJobHoldingItems(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _ := openTest(t)
+	held, _, _ := s.UpsertItem(ctx, "o/api", 16, "outdated gems")
+	fix, _, _ := s.UpsertItem(ctx, "o/api", 9, "make lint pass")
+	s.EnqueueJob(ctx, Job{ItemID: &held.ID, Kind: "implement", Harness: "claude", Model: "m", BudgetUSD: 1, Priority: 9})
+	fixJob, _ := s.EnqueueJob(ctx, Job{ItemID: &fix.ID, Kind: "implement", Harness: "claude", Model: "m", BudgetUSD: 1})
+	orch, _ := s.EnqueueJob(ctx, Job{Kind: "orchestrate", Harness: "claude", Model: "m", BudgetUSD: 1})
+	var got []int64
+	for {
+		j, err := s.ClaimJobHolding(ctx, nil, nil, nil, []int64{held.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j == nil {
+			break
+		}
+		got = append(got, j.ID)
+	}
+	if !slices.Equal(got, []int64{fixJob, orch}) {
+		t.Fatalf("claimed %v, want %d and %d", got, fixJob, orch)
 	}
 }

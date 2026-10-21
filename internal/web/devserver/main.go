@@ -13,6 +13,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -239,6 +240,7 @@ func main() {
 			return cmd, nil
 		},
 	}
+	progress = s.ReadinessLog
 	h, err := s.Handler()
 	if err != nil {
 		log.Fatal(err)
@@ -783,14 +785,22 @@ func seedReadiness(dir string) error {
 	return nil
 }
 
-// recheck pretends to check a repo again: it takes a moment and finds
-// it as it was.
+// progress is where the fake runs say what they do; main sets it.
+var progress = func(string) io.Writer { return io.Discard }
+
+// recheck pretends to check a repo again: it takes a moment, saying what
+// it runs, and finds it as it was.
 func recheck(dir string) func(context.Context, string) error {
 	return func(ctx context.Context, repo string) error {
-		select {
-		case <-time.After(1500 * time.Millisecond):
-		case <-ctx.Done():
-			return ctx.Err()
+		w := progress(repo)
+		for _, step := range []string{"bundle install", "bundle exec rubocop", "bin/rails test"} {
+			fmt.Fprintf(w, "running `%s`\n", step)
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			fmt.Fprintf(w, "passed `%s` in 1s\n", step)
 		}
 		r, err := readiness.Load(dir, repo)
 		if err != nil || r == nil {

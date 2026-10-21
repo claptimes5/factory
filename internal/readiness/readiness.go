@@ -91,6 +91,14 @@ type Report struct {
 	// Filed are the numbers of every issue the check has filed on the
 	// repo, as last read, fixed or not.
 	Filed []int `json:"filed,omitempty"`
+	// Baselined: the commit checked has a lint baseline RuboCop wrote
+	// (.rubocop_todo.yml from --auto-gen-config), so lint failing there
+	// is offenses since, not the old ones.
+	Baselined bool `json:"baselined,omitempty"`
+	// StableSince is when the tests, run by TestCommand, last passed
+	// twice in a row, by this check or one it trusted; zero if not.
+	StableSince time.Time `json:"stable_since,omitzero"`
+	TestCommand string    `json:"test_command,omitempty"`
 }
 
 // Exec runs a command on the export the way gates do; install marks the
@@ -107,15 +115,91 @@ type Input struct {
 	// Claude says Claude Code builds for the repo, so its CLAUDE.md
 	// should load AGENTS.md.
 	Claude bool
+	// AccessChecked says the repo's host was asked what the factory's
+	// token may do there, and Denied is what it may not.
+	AccessChecked bool
+	Denied        []Denied
+	// FilesSet says the repo's files setting is set, so its untracked
+	// files are copied in; Checkout, when it isn't, is a checkout of the
+	// repo on this machine they could come from, or "".
+	FilesSet bool
+	Checkout string
+	// Last is the repo's previous report, or nil: tests it proved pass
+	// twice in a row, recently, run once now (see stableSince).
+	Last *Report
 }
+
+// stableFor is how long tests that passed twice in a row are trusted not
+// to be flaky, so a check runs them once.
+const stableFor = 24 * time.Hour
+
+// stableSince is when last's tests, run by cmd, were proved to pass twice
+// in a row, if within stableFor; zero otherwise. The proof is the run
+// that did it, not one that trusted it, so it ends stableFor after.
+func stableSince(last *Report, cmd string) time.Time {
+	if last == nil || last.TestCommand != cmd || last.StableSince.IsZero() || time.Since(last.StableSince) > stableFor {
+		return time.Time{}
+	}
+	return last.StableSince
+}
+
+// Denied is something the factory does on the repo that its token may
+// not, and what the host said about it.
+type Denied struct{ What, Says string }
 
 // slowTests is when a test run starts to hold up every job.
 const slowTests = 15 * time.Minute
+
+// access reports what the factory's token may not do on the repo: every
+// change ends with a pull request, so a token that can't open one fails
+// every job at its end, after the work and its cost.
+func (r *Report) access(in Input) {
+	if !in.AccessChecked {
+		return
+	}
+	pr := "pull requests"
+	if in.Repo.GitLab() {
+		pr = "merge requests"
+	}
+	if len(in.Denied) == 0 {
+		r.add(Finding{Level: Good, Area: "access", Title: "The factory's token can open " + pr + ", issues and labels"})
+		return
+	}
+	var what []string
+	var b strings.Builder
+	b.WriteString("Every change ends with the factory opening a " + strings.TrimSuffix(pr, "s") + ", and it labels and comments on issues as it works, so without these every job would fail at its end. Give the token leave to:\n\n")
+	for _, d := range in.Denied {
+		what = append(what, d.What)
+		b.WriteString("- " + d.What)
+		if d.Says != "" {
+			b.WriteString(" (it says: " + strings.TrimSpace(d.Says) + ")")
+		}
+		b.WriteString("\n")
+	}
+	if in.Repo.GitLab() {
+		b.WriteString("\nOn GitLab, edit the token under your user settings, Access tokens: a fine-grained token needs each permission GitLab names above, or make a token with the `api` scope. Put a new one in the factory's env file (GITLAB_TOKEN), restart the factory, then check again.")
+	} else {
+		b.WriteString("\nOn GitHub, give the factory's GitHub App (or token) read and write access to pull requests, issues and contents, then check again.")
+	}
+	r.add(Finding{Level: Blocker, Area: "access", Title: "The factory's token can't " + joinAnd(what), Detail: b.String()})
+}
+
+// joinAnd lists words as a person would: "a, b and c".
+func joinAnd(s []string) string {
+	if len(s) < 2 {
+		return strings.Join(s, "")
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
+}
 
 // Assess runs the repo's install and checks on its base branch (the tests
 // twice, to catch flakiness) and inspects its files.
 func Assess(ctx context.Context, in Input) *Report {
 	r := &Report{Repo: in.Repo.Name, SHA: in.SHA, Branch: in.Repo.BaseBranch, Started: time.Now().UTC()}
+	r.access(in)
+	if b, err := os.ReadFile(filepath.Join(in.Dir, ".rubocop_todo.yml")); err == nil {
+		r.Baselined = strings.Contains(string(b), "--auto-gen-config")
+	}
 	g := in.Repo.Gates
 	files := listFiles(in.Dir)
 	// run runs one command. When the command couldn't be run at all, it
@@ -130,7 +214,7 @@ func Assess(ctx context.Context, in Input) *Report {
 			if err != nil {
 				out += "\n" + err.Error()
 			}
-			x.Output = tail(out, 3000)
+			x.Output = excerpt(out, 3000)
 		}
 		r.Runs = append(r.Runs, x)
 		switch {
@@ -175,6 +259,14 @@ func Assess(ctx context.Context, in Input) *Report {
 				Body: "Generate and commit the lockfile for this repo's package manager (package-lock.json, pnpm-lock.yaml, yarn.lock, Gemfile.lock, uv.lock, poetry.lock or Cargo.lock) so installs are reproducible. Don't change dependency versions beyond what the lockfile pins today."}})
 	}
 
+	// Files the repo's .worktreeinclude names (a master key, a .env)
+	// aren't in a fresh clone; a check that fails for one is the factory's
+	// setup to fix, not a builder's.
+	var include []string
+	if !in.FilesSet {
+		include = worktreeInclude(in.Dir)
+	}
+	filesHit := false
 	// Every required check must pass on the base branch, or every job fails.
 	var testRun *Run
 	allPassed := installed && len(g.Required) > 0
@@ -203,9 +295,18 @@ func Assess(ctx context.Context, in Input) *Report {
 			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "services", Title: "`" + name + "` can't reach a service it needs",
 				Detail: hint + "\n\n" + fence(x.Output)})
+		} else if missing := mentioned(x.Output, include); !x.Passed && missing != "" {
+			allPassed, filesHit = false, true
+			r.add(Finding{Level: Blocker, Area: "files", Title: "`" + name + "` fails without " + missing + ", which git doesn't track",
+				Detail: filesDetail(in, include) + "\n\n" + fence(x.Output)})
 		} else if !x.Passed {
 			allPassed = false
-			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + name + "` fails on " + r.Branch,
+			title := "`" + name + "` fails on " + r.Branch
+			if name == "lint" && r.Baselined {
+				// Not the old offenses again: what came after the baseline.
+				title += ": " + sinceBaseline(x.Output)
+			}
+			r.add(Finding{Level: Blocker, Area: "checks", Title: title,
 				Detail: "Every change would fail this check, whatever it does.\n\n" + fence(x.Output),
 				Issue: &Issue{Key: "check:" + name, Title: fmt.Sprintf("Make the %s check pass on %s", name, r.Branch),
 					Body: fmt.Sprintf("The factory runs `%s` as a required check, and it fails on `%s` before any change:\n\n%s\n"+
@@ -214,6 +315,9 @@ func Assess(ctx context.Context, in Input) *Report {
 	}
 	if allPassed {
 		r.add(Finding{Level: Good, Area: "checks", Title: "Every required check passes on " + r.Branch + ": " + strings.Join(orderGates(g.Required), ", ")})
+	}
+	if len(include) > 0 && !filesHit {
+		r.add(Finding{Level: Gap, Area: "files", Title: "The factory doesn't copy the files .worktreeinclude lists", Detail: filesDetail(in, include)})
 	}
 	for _, want := range []struct{ gate, why string }{
 		{"test", "Nothing checks that a change works."},
@@ -242,6 +346,11 @@ func Assess(ctx context.Context, in Input) *Report {
 		r.add(Finding{Level: Blocker, Area: "tests", Title: "`test` passes without running any tests",
 			Detail: fmt.Sprintf("Its output says no tests ran, though the repo has %d test files, so every change would pass it untested. "+
 				"The command is probably for another framework, such as RSpec on a Minitest suite: fix `test` under the repo's gates in factory.yaml.\n\n%s", tests, fence(testRun.Output))})
+	case testRun != nil && testRun.Passed && !stableSince(in.Last, testRun.Command).IsZero():
+		// A recent check ran them twice, passing: once is enough now.
+		r.StableSince, r.TestCommand = stableSince(in.Last, testRun.Command), testRun.Command
+		r.add(Finding{Level: Good, Area: "tests", Title: fmt.Sprintf("%d test files, passing (twice in a row on the check of %s, so once now)",
+			tests, r.StableSince.UTC().Format("Jan 2 15:04 UTC"))})
 	case testRun != nil && testRun.Passed:
 		// Run them again: a suite that passes and fails at random makes every
 		// gate result a coin flip.
@@ -258,6 +367,7 @@ func Assess(ctx context.Context, in Input) *Report {
 					Body: fmt.Sprintf("`%s` passed once and then failed on the same commit of `%s`:\n\n%s\n"+
 						"Find the tests that depend on order, time, randomness, shared state or the network, and make them deterministic. Don't delete or skip them.", testRun.Command, r.Branch, fence(again.Output))}})
 		} else {
+			r.StableSince, r.TestCommand = r.Started, testRun.Command
 			r.add(Finding{Level: Good, Area: "tests", Title: fmt.Sprintf("%d test files, passing twice in a row", tests)})
 		}
 		if testRun.Duration > slowTests {
@@ -297,6 +407,72 @@ func Assess(ctx context.Context, in Input) *Report {
 	}
 
 	return r.finish()
+}
+
+// offenses is RuboCop's count of what it found.
+var offenses = regexp.MustCompile(`(\d+) offenses? detected`)
+
+// sinceBaseline says what lint found, with a baseline in: new offenses.
+func sinceBaseline(out string) string {
+	m := offenses.FindStringSubmatch(out)
+	switch {
+	case m == nil:
+		return "new offenses since the baseline"
+	case m[1] == "1":
+		return "1 new offense since the baseline"
+	}
+	return m[1] + " new offenses since the baseline"
+}
+
+// worktreeInclude are the paths dir's .worktreeinclude names, as written
+// there less a leading or trailing /, or none.
+func worktreeInclude(dir string) []string {
+	b, err := os.ReadFile(filepath.Join(dir, ".worktreeinclude"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		l = strings.Trim(strings.TrimSpace(l), "/")
+		if l != "" && !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "!") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// mentioned is the first of paths that out names, or "": a check that
+// says it lacks config/master.key needs that file, not a code change.
+// Some failures don't name the file they lack: Rails without its master
+// key reads its credentials as empty, and fails where they're used.
+func mentioned(out string, paths []string) string {
+	for _, p := range paths {
+		if !strings.ContainsAny(p, "*?[") && strings.Contains(out, p) {
+			return p
+		}
+	}
+	for _, p := range paths {
+		if strings.HasSuffix(p, "master.key") && (strings.Contains(out, "Rails.application.credentials") || strings.Contains(out, "EncryptedConfiguration")) {
+			return p
+		}
+	}
+	return ""
+}
+
+// filesDetail says how to have the factory copy what .worktreeinclude
+// names into its checkouts.
+func filesDetail(in Input, include []string) string {
+	from := in.Checkout
+	where := "Point it at a checkout of the repo on this machine"
+	if from != "" {
+		where = "There's a checkout of the repo at " + from + ", so"
+	} else {
+		from = "/path/to/your/checkout"
+	}
+	return "A fresh copy of the repo doesn't have files git doesn't track, and this repo's .worktreeinclude lists some it needs (" + strings.Join(include, ", ") + "). " +
+		where + " add this to the repo in factory.yaml:\n\n" +
+		fence("repos:\n  - name: "+in.Repo.Name+"\n    files:\n      from: "+from) +
+		"\nThe factory then copies what .worktreeinclude picks into every job's checkout, as Claude Code does for its worktrees, except folders an install makes, like node_modules. They're never committed. Restart the factory, then check again."
 }
 
 // reviewGuide looks for a REVIEW.md, which tells the factory's reviewers
@@ -670,11 +846,15 @@ func fence(s string) string {
 	return f + "\n" + s + "\n" + f + "\n"
 }
 
-func tail(s string, n int) string {
+// excerpt keeps about n bytes of a command's output: its start, where an
+// error usually says what went wrong (a stack trace's message comes before
+// its frames), and its end, where a summary is.
+func excerpt(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return "…" + s[len(s)-n:]
+	head, end := n/3, n-n/3
+	return strings.ToValidUTF8(s[:head], "") + "\n…\n" + strings.ToValidUTF8(s[len(s)-end:], "")
 }
 
 // Save writes the report as JSON next to the factory's data.

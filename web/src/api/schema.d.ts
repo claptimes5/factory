@@ -3220,6 +3220,14 @@ export interface components {
             result: string;
             /** @description Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline */
             can_baseline: boolean;
+            /** @description The pull request the last lint baseline opened, while lint still fails, or empty */
+            baseline_pr: string;
+            /** @description What started the run going, when the factory did by itself; else empty */
+            checking_why: string;
+            /** @description File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass */
+            following: boolean;
+            /** @description What the run going (or the last one started here) has done so far, a step at a time, oldest first */
+            progress: components["schemas"]["ReadinessProgress"][];
         };
         ReadinessStep: {
             /** @enum {string} */
@@ -3233,7 +3241,15 @@ export interface components {
             passed: string;
             blockers: components["schemas"]["ReadinessFinding"][];
         };
+        ReadinessProgress: {
+            /** @description When it was said */
+            at: string;
+            /** @description A step: running `bundle install`, passed `bundle install` in 2m14s */
+            text: string;
+        };
         ReadinessFinding: {
+            /** @description What it's about across checks (check:lint, flaky), or empty with nothing to file */
+            key: string;
             /** @enum {string} */
             level: "blocker" | "gap" | "tip" | "good";
             area: string;
@@ -3316,6 +3332,13 @@ export interface components {
             choices: components["schemas"]["Choice"][];
             /** @description The items it depends on that aren't done: it isn't built until they are, whatever is approved */
             waits_for: components["schemas"]["ItemRef"][];
+            /**
+             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty
+             * @enum {string}
+             */
+            setup: "" | "blocks" | "held";
+            /** @description Why, in a sentence */
+            setup_note: string;
         };
         ItemRef: {
             id: number;

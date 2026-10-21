@@ -26,10 +26,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/claptimes5/factory/internal/compare"
-	"github.com/claptimes5/factory/internal/metrics"
-	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/push"
+	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
 
@@ -127,7 +127,13 @@ type Server struct {
 	// whether its linter can.
 	LintBaseline func(ctx context.Context, repo string) (string, error)
 	CanBaseline  func(repo string) bool
-	IntakeLabel   string
+	// BaseSHA is a repo's base branch head on its host, for
+	// FollowReadiness to see when it moves.
+	BaseSHA func(ctx context.Context, repo string) (string, error)
+	// BaselineOpen says whether the lint baseline's pull request at url
+	// is still open on repo's host.
+	BaselineOpen func(ctx context.Context, repo, url string) (bool, error)
+	IntakeLabel  string
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the
 	// percent of a window that holds their jobs.

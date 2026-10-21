@@ -172,6 +172,7 @@ type fakeGitHub struct {
 	gone     bool                // the app was uninstalled
 	slow     string              // a repo whose requests never get an answer
 	denied   string              // a repo whose requests get a 401
+	noPulls  bool                // the token may not open pull requests
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +187,18 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// As GitHub does, a create with nothing in it is refused for the
+	// missing fields: it's how the factory asks what it may do.
+	if f.noPulls && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls") {
+		w.WriteHeader(403)
+		w.Write([]byte(`{"message":"Resource not accessible by personal access token"}`))
+		return
+	}
+	if r.Method == "POST" && (strings.HasSuffix(r.URL.Path, "/issues") || strings.HasSuffix(r.URL.Path, "/labels") || strings.HasSuffix(r.URL.Path, "/pulls")) && r.ContentLength <= 2 {
+		w.WriteHeader(422)
+		w.Write([]byte(`{"message":"Validation Failed"}`))
+		return
+	}
 	f.auth = append(f.auth, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
 	if repo, path, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/repos/"), "/contents/"); ok && f.files[repo] != nil {
 		fakeContents(w, f.files[repo], path)

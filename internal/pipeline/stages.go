@@ -309,6 +309,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
 	}
+	if ctx.Err() != nil && p.stopping.Load() && p.shutDown(ctx, j, run, parts, in) {
+		return nil
+	}
 	reached = true
 	if st, msg, bad := runFailure(run); bad {
 		if run.err == nil && !run.timeout && run.res != nil && run.res.Stopped != "" {

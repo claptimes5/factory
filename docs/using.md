@@ -23,7 +23,7 @@ with push notifications (see [Notifications](#notifications)).
 
 | Screen | What it shows |
 | --- | --- |
-| **Home** | What needs you, one decision at a time: a PR to review, a plan or a cost to OK, a question or your call on a parked item, each with its buttons. Reviews come first; **Later** sends one to the back, and the next two are listed. Below, the line at a glance (Queue, Build, Review, and You as the last station), a line when a repo has [earned more trust](#trust), "since you looked": what went live since Home was last marked seen (kept by the factory, so a phone and a desk agree), and a box that opens Ask. |
+| **Home** | While a repo isn't set up, its one next step leads (see [How ready a repo is](quality.md#how-ready-a-repo-is)), with what needs you listed under it, the work that fixes setup first. Otherwise, what needs you, one decision at a time: a PR to review, a plan or a cost to OK, a question or your call on a parked item, each with its buttons. Reviews come first; **Later** sends one to the back, and the next two are listed. Below, the line at a glance (Queue, Build, Review, and You as the last station), a line when a repo has [earned more trust](#trust), "since you looked": what went live since Home was last marked seen (kept by the factory, so a phone and a desk agree), and a box that opens Ask. |
 | **Ask the factory** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model from any screen, with suggestions to start from: beside the screen on a wide desk, a sheet over it on a laptop or phone. |
 | **The line** | The old Floor: what needs you, with each item's buttons, then a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
@@ -37,7 +37,7 @@ with push notifications (see [Notifications](#notifications)).
 | **Inbox** | Every item waiting on you in one list, and budget alerts. "Notify me in this browser" shows them while a dashboard tab is open. |
 | **When to tell you** | Push notifications on this device and the list of devices with them on, a test, and [quiet hours](#quiet-hours). |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, quiet hours, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
-| **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): "2 of 3 setup steps done", each step passing or not and why it matters, and each blocker linked to its issue and the factory's item for it (waiting its turn, being built, needs you, done). **Check again** runs the check on the repo as it is now, so blockers fixed outside the factory show as fixed. **File issues** and **File and start work** check again, then file what has no issue yet, as `factory readiness -file` and `-queue` do. |
+| **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): "2 of 3 setup steps done", each step passing or not and why it matters, and each blocker linked to its issue and the factory's item for it (waiting its turn, being built, needs you, done). **Check again** runs the check on the repo as it is now, so blockers fixed outside the factory show as fixed. A **Next** box says the one thing to do now, with its button. **Only file the issues** and **File and start work** check again, then file what has no issue yet, as `factory readiness -file` and `-queue` do; File and start work also lets the factory carry on by itself, checking again as the base branch moves and starting the **Recommended** work (a feature map, end-to-end tests…) once the setup steps pass. |
 | **Design** | `/app/design`, not in the menus: the dashboard's colors, type and components, for anyone changing it. |
 
 Warnings that apply to every screen sit in one notice area above it; the
@@ -321,6 +321,20 @@ the command name to use other files.
 
 With several repos, name an issue as `owner/name#12`. With one, `12` or
 `#12` is enough.
+
+### Stopping the factory
+
+Ctrl-C (or SIGTERM) on `factory serve` stops it starting new jobs and
+says how many are running. They get up to 10 minutes to finish.
+
+- **Ctrl-C again** stops them now. A build cut short keeps its checkout,
+  as one that [runs out of turns](#when-a-build-runs-out-of-turns-or-budget)
+  does, and is queued again to continue from it when the factory starts:
+  its job says "Cut short when the factory shut down. Its work is kept".
+  Any other job (triage, a review) runs again from the start.
+- **Ctrl-C a third time** quits at once. A build cut off then starts over
+  on the next start, as after a crash; its item's history says "the
+  factory stopped while it ran, so it runs again from the start".
 
 ## Taking over an item: `factory pull`
 

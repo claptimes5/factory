@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -275,6 +276,7 @@ func run(args []string) error {
 			}
 			healthCheck(ctx, cfg, p, builder)
 			slog.Info("factory serving", "repos", strings.Join(cfg.RepoNames(), ","), "runner", cfg.Runner.Kind, "control_room", "http://"+cfg.Web.Listen)
+			go stopping(ctx, os.Stderr, p)
 			return p.Serve(ctx)
 		}
 		if err := p.Recover(ctx); err != nil {
@@ -284,6 +286,26 @@ func run(args []string) error {
 	default:
 		return usage()
 	}
+}
+
+// stopping tells the person at the terminal what a Ctrl-C does once the
+// first has stopped the daemon claiming jobs: a second cuts running jobs
+// short, keeping builds' work for the next start, and a third quits at
+// once.
+func stopping(ctx context.Context, w io.Writer, p *pipeline.Pipeline) {
+	<-ctx.Done()
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	if n := p.Running(); n > 0 {
+		fmt.Fprintf(w, "\nStopping: no new jobs will start. Waiting up to %s for %d running %s to finish.\n"+
+			"Press Ctrl-C again to stop now: a build keeps its work and picks up where it left off when the factory starts again; any other job runs again from the start.\n",
+			pipeline.ShutdownGrace, n, plural(n, "job", "jobs"))
+	}
+	<-sig
+	fmt.Fprintln(w, "\nStopping running jobs now and keeping builds' work. Press Ctrl-C again to quit at once (a build cut off then starts over).")
+	p.StopNow()
+	<-sig
+	os.Exit(130)
 }
 
 func envOr(k, def string) string {
@@ -559,7 +581,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 			return err
 		}
 		defer done()
-		return recheckReadiness(ctx, cfg, p, repo)
+		return recheckReadiness(ctx, cfg, p, repo, srv.ReadinessLog(repo))
 	}
 	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
 		done, err := readinessRun()
@@ -567,7 +589,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 			return "", err
 		}
 		defer done()
-		return fileReadiness(ctx, cfg, p, repo, queue)
+		return fileReadiness(ctx, cfg, p, repo, queue, srv.ReadinessLog(repo))
 	}
 	// A lint baseline runs the repo's install and linter like a check, in
 	// containers named apart from the daemon's jobs.
@@ -579,9 +601,33 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		}
 		defer done()
 		pl := &pipeline.Pipeline{Cfg: cfg, Runner: p.Runner, JobPrefix: readinessPrefix(), ClientsFor: p.ClientsFor}
+		pl.Progress = srv.ReadinessLog(repo)
 		return pl.LintBaseline(ctx, repo)
 	}
 	go relinkSaved(ctx, cfg, p)
+	srv.BaseSHA = func(ctx context.Context, repo string) (string, error) {
+		gh, ok := p.GitHubFor(repo).(forge)
+		if !ok {
+			return "", fmt.Errorf("no client for %s's host", repo)
+		}
+		return gh.BranchSHA(ctx, repoFor(cfg, repo).BaseBranch)
+	}
+	srv.BaselineOpen = func(ctx context.Context, repo, url string) (bool, error) {
+		gh, ok := p.GitHubFor(repo).(forge)
+		if !ok {
+			return false, fmt.Errorf("no client for %s's host", repo)
+		}
+		n, err := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
+		if err != nil {
+			return false, fmt.Errorf("no pull request number in %s", url)
+		}
+		pr, err := gh.GetPR(ctx, n)
+		if err != nil {
+			return false, err
+		}
+		return pr.State == "open" && !pr.Merged, nil
+	}
+	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p

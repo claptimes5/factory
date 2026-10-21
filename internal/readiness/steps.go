@@ -35,10 +35,12 @@ var steps = []struct {
 	key, title, why string
 	areas           []string
 }{
+	{"access", "The factory's token can do its job",
+		"Every change ends with the factory opening a pull request, and it labels and comments on issues as it works.", []string{"access"}},
 	{"install", "Dependencies install from a clean checkout",
 		"Every job starts by installing dependencies on a fresh copy of {branch}.", []string{"install"}},
 	{"checks", "Every required check passes on {branch}",
-		"Every change runs these checks. One that already fails on {branch} fails every change, whatever it does.", []string{"checks", "services"}},
+		"Every change runs these checks. One that already fails on {branch} fails every change, whatever it does.", []string{"checks", "services", "files"}},
 	{"tests", "There are tests, and they pass every time",
 		"The factory proves each change with the tests, so there must be some, and they must give the same answer on every run.", []string{"tests"}},
 }
@@ -65,7 +67,9 @@ func (r *Report) Steps() []Step {
 				seen = true
 			}
 		}
-		if g.key == "install" && !seen {
+		// Shown when they were looked at: a repo with no install command,
+		// or a host that couldn't be asked, skips them.
+		if (g.key == "install" || g.key == "access") && !seen {
 			continue
 		}
 		switch {
@@ -115,9 +119,72 @@ func (r *Report) Extras() []Finding {
 	return out
 }
 
+// Fixes is the blocker that work on issue fixes, or nil: the blocker
+// filed as issue, or as parent, the epic issue was split from (0 for
+// none).
+func (r *Report) Fixes(issue, parent int) *Finding {
+	if r == nil {
+		return nil
+	}
+	for i, f := range r.Findings {
+		if f.Level == Blocker && f.Issue != nil && f.Issue.Number != 0 && (f.Issue.Number == issue || f.Issue.Number == parent) {
+			return &r.Findings[i]
+		}
+	}
+	return nil
+}
+
+// Holds says whether work on issue waits for the repo's setup: the check
+// found blockers, so every job would fail on them, and the work isn't
+// fixing one. An unchecked repo, or a check that couldn't finish, holds
+// nothing.
+func (r *Report) Holds(issue, parent int) bool {
+	return r != nil && !r.Ready && !r.Incomplete && r.Fixes(issue, parent) == nil
+}
+
 // Path is where Save keeps repo's latest report in dir.
 func Path(dir, repo string) string {
 	return filepath.Join(dir, strings.ReplaceAll(repo, "/", "__")+".json")
+}
+
+// beside is a file kept next to repo's report in dir.
+func beside(dir, repo, ext string) string {
+	return strings.TrimSuffix(Path(dir, repo), ".json") + "." + ext
+}
+
+// Follow records that a person asked the factory to work through repo's
+// setup by itself (File and start work): it checks the repo again as its
+// base branch moves, and starts the next issues once they can pass.
+func Follow(dir, repo string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(beside(dir, repo, "follow"), nil, 0o644)
+}
+
+// Followed says whether Follow was called for repo.
+func Followed(dir, repo string) bool {
+	_, err := os.Stat(beside(dir, repo, "follow"))
+	return err == nil
+}
+
+// SaveBaselinePR records the pull request a lint baseline opened on repo.
+func SaveBaselinePR(dir, repo, url string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(beside(dir, repo, "baseline"), []byte(url), 0o644)
+}
+
+// ClearBaselinePR forgets the pull request SaveBaselinePR recorded.
+func ClearBaselinePR(dir, repo string) {
+	_ = os.Remove(beside(dir, repo, "baseline"))
+}
+
+// BaselinePR is the pull request SaveBaselinePR recorded, or "".
+func BaselinePR(dir, repo string) string {
+	b, _ := os.ReadFile(beside(dir, repo, "baseline"))
+	return strings.TrimSpace(string(b))
 }
 
 // Load reads repo's latest report from dir; nil, with no error, when it

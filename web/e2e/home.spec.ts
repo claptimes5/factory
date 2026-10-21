@@ -6,7 +6,50 @@ async function shot(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 }
 
+/** Every repo set up, so Home shows its usual flow and nothing waits for setup. */
+async function allSetUp(page: Page) {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const r of body.repos) r.state = "ready";
+    body.banner = "";
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.route(/\/api\/v1\/board$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const col of body.columns) for (const c of col.cards) c.setup = c.setup_note = "";
+    await route.fulfill({ response: res, json: body });
+  });
+}
+
+test("while a repo isn't set up, Home leads with its next step and ranks the rest by what blocks it", async ({ page }, info) => {
+  await page.goto("/app/");
+  const lead = page.getByRole("region", { name: "Setup", exact: true });
+  await expect(lead.getByRole("heading", { level: 1 })).toHaveText("Finish setting up api");
+  const card = lead.getByTestId("setup-lead");
+  await expect(card).toContainText("new tasks wait until it's done");
+  await expect(card).toContainText("Accept today's lint offenses");
+  await expect(card.getByRole("button", { name: "Accept today's offenses" })).toBeVisible();
+  await expect(card.getByRole("link", { name: "See every step" })).toHaveAttribute("href", /\/app\/setup$/);
+  // One lead: no setup banner repeating it, and the decisions are a list under it.
+  await expect(page.getByRole("group", { name: "Notices" }).getByRole("region", { name: "Setup", exact: true })).toHaveCount(0);
+  const needs = page.getByRole("region", { name: "Needs you" });
+  await expect(needs.getByRole("heading", { level: 2 })).toHaveText("7 things need you");
+  await expect(needs.getByTestId("decision")).toHaveCount(0);
+  const rows = needs.getByRole("listitem");
+  await expect(rows.first()).toContainText("Parser drops the last token");
+  await expect(rows.last()).toContainText("Waits for setup");
+  await expect(needs).toContainText("it starts by itself then");
+  await shot(page, info, "home-setup");
+  if (phone(info)) {
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(over).toBeLessThanOrEqual(0);
+  }
+});
+
 test("Home shows what needs you one decision at a time, reviews first, with the rest next", async ({ page }, info) => {
+  await allSetUp(page);
   await page.goto("/app/");
   const needs = page.getByRole("region", { name: "Needs you" });
   await expect(needs.getByRole("heading", { level: 1 })).toHaveText("7 things need you");
@@ -53,6 +96,7 @@ test("Home says what went live since you looked, until you dismiss it", async ({
 });
 
 test("work the factory found and started itself says so, on Home and the line", async ({ page }) => {
+  await allSetUp(page);
   await page.route(/\/api\/v1\/board$/, async (route) => {
     const res = await route.fetch();
     const body = await res.json();
