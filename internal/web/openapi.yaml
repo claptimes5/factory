@@ -1100,7 +1100,7 @@ components:
         can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress, checking_why]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, progress, checking_why]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1111,6 +1111,10 @@ components:
         done: { type: integer, description: Setup steps that pass }
         total: { type: integer, description: Setup steps in all }
         steps: { type: array, items: { $ref: "#/components/schemas/ReadinessStep" } }
+        work:
+          type: array
+          description: "The blockers the factory fixes, each filed as an issue: until they're merged, new tasks on the repo wait"
+          items: { $ref: "#/components/schemas/ReadinessFinding" }
         extras:
           type: array
           description: "Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps"
@@ -1126,7 +1130,6 @@ components:
         can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
         baseline_pr: { type: string, description: "The pull request the last lint baseline opened, while lint still fails, or empty" }
         checking_why: { type: string, description: "What started the run going, when the factory did by itself; else empty" }
-        following: { type: boolean, description: "File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass" }
         progress:
           type: array
           description: What the run going (or the last one started here) has done so far, a step at a time, oldest first
@@ -1135,7 +1138,7 @@ components:
       type: object
       required: [key, title, why, state, passed, blockers]
       properties:
-        key: { type: string, enum: [install, checks, tests] }
+        key: { type: string, enum: [access, run] }
         title: { type: string }
         why: { type: string, description: What the factory needs it for }
         state: { type: string, enum: [done, failing, unchecked] }

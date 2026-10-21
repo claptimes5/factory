@@ -48,9 +48,12 @@ type APIRepoReadiness struct {
 	SHA       string `json:"sha"`
 	Score     int    `json:"score"`
 	// Done of Total setup steps pass.
-	Done   int                   `json:"done"`
-	Total  int                   `json:"total"`
-	Steps  []APIReadinessStep    `json:"steps"`
+	Done  int                `json:"done"`
+	Total int                `json:"total"`
+	Steps []APIReadinessStep `json:"steps"`
+	// Work are the blockers the factory fixes, each filed as an issue:
+	// until they're merged, new tasks on the repo wait.
+	Work   []APIReadinessFinding `json:"work"`
 	Extras []APIReadinessFinding `json:"extras"`
 	// Unqueued counts issues filed but not labeled for the factory, and
 	// Unfiled the findings that need an issue and have none.
@@ -80,10 +83,6 @@ type APIRepoReadiness struct {
 	// Progress is what the run going (or the last one started here) has
 	// done so far, a step at a time, oldest first.
 	Progress []APIProgress `json:"progress"`
-	// Following: a person chose File and start work, so the factory checks
-	// the repo again as its base branch moves and starts the recommended
-	// work once the setup steps pass.
-	Following bool `json:"following"`
 }
 
 // APIProgress is one step of a setup run: "running `bundle install`",
@@ -221,7 +220,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	linked := map[int64]bool{}
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
-		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Extras: []APIReadinessFinding{},
+		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Work: []APIReadinessFinding{}, Extras: []APIReadinessFinding{},
 			CheckError: errs[repo], Result: results[repo], Progress: append([]APIProgress{}, logs[repo]...)}
 		if strings.EqualFold(running, repo) {
 			rr.Checking, rr.CheckingSince, rr.Action, rr.CheckingWhy = true, since.UTC().Format(store.TimeFormat), action, why
@@ -265,12 +264,15 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			as := APIReadinessStep{Key: st.Key, Title: st.Title, Why: st.Why, State: st.State, Passed: st.Passed, Blockers: []APIReadinessFinding{}}
 			for _, f := range st.Blockers {
 				as.Blockers = append(as.Blockers, find(f))
-				// Once a baseline is in, lint failing is offenses since: no second one.
-				if f.Issue != nil && f.Issue.Key == "check:lint" && !rep.Baselined && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
-					rr.CanBaseline, rr.BaselinePR = true, readiness.BaselinePR(s.ReadinessDir, repo)
-				}
 			}
 			rr.Steps = append(rr.Steps, as)
+		}
+		for _, f := range rep.Work() {
+			rr.Work = append(rr.Work, find(f))
+			// Once a baseline is in, lint failing is offenses since: no second one.
+			if f.Issue.Key == "check:lint" && !rep.Baselined && s.CanBaseline != nil && s.LintBaseline != nil && s.CanBaseline(repo) {
+				rr.CanBaseline, rr.BaselinePR = true, readiness.BaselinePR(s.ReadinessDir, repo)
+			}
 		}
 		for _, f := range rep.Extras() {
 			rr.Extras = append(rr.Extras, find(f))
@@ -280,9 +282,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 		if rep.Incomplete {
 			rr.Unfiled = 0
 		}
-		// While it isn't ready, it also turns following on.
-		rr.Following = readiness.Followed(s.ReadinessDir, repo)
-		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0 || !rep.Ready && !rr.Following)
+		rr.CanQueue = !rep.Incomplete && (rr.Unfiled > 0 || rep.Ready && rr.Unqueued > 0)
 		out.Repos = append(out.Repos, rr)
 	}
 	switch {
@@ -600,13 +600,6 @@ func (s *Server) followOnce(ctx context.Context, repo string) {
 	moved := fmt.Sprintf("%s moved from %s to %s", rep.Branch, short(rep.SHA), short(sha))
 	started := "Started by itself: " + moved + "."
 	why := fmt.Sprintf("Checked again by itself at %s UTC: %s. ", time.Now().UTC().Format("15:04"), moved)
-	if readiness.Followed(s.ReadinessDir, repo) && s.FileReadiness != nil {
-		s.beginReadiness(repo, "queue", started, func(ctx context.Context) (string, error) {
-			res, err := s.FileReadiness(ctx, repo, true)
-			return why + res, err
-		})
-		return
-	}
 	s.beginReadiness(repo, "check", started, func(ctx context.Context) (string, error) {
 		return why + "The steps below are as of " + short(sha) + ".", s.CheckReadiness(ctx, repo)
 	})

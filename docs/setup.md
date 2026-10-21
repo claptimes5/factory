@@ -65,9 +65,10 @@ CGO_ENABLED=0 go build -o factory ./cmd/factory
 ```
 
 Once setup is done the dashboard is at http://127.0.0.1:8080/app/. If setup's
-readiness check found blockers, the dashboard's **Setup** screen shows what
-each repo still needs and follows the factory's work on it; once it says
-the repo is ready, label an issue `factory:ready`.
+readiness check found blockers, the dashboard's **Setup** screen shows
+what only you can fix, and the factory files the rest as its own issues
+and fixes them, on Home and the line like any work; once it says the repo
+is ready, label an issue `factory:ready`.
 
 One thing setup can't do for you: **protect `main`**. In the repo's
 settings, require a pull request with your review and the `test` and `web`

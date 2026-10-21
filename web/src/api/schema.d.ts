@@ -3198,6 +3198,8 @@ export interface components {
             /** @description Setup steps in all */
             total: number;
             steps: components["schemas"]["ReadinessStep"][];
+            /** @description The blockers the factory fixes, each filed as an issue: until they're merged, new tasks on the repo wait */
+            work: components["schemas"]["ReadinessFinding"][];
             /** @description Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps */
             extras: components["schemas"]["ReadinessFinding"][];
             /** @description Issues filed without the intake label */
@@ -3224,14 +3226,12 @@ export interface components {
             baseline_pr: string;
             /** @description What started the run going, when the factory did by itself; else empty */
             checking_why: string;
-            /** @description File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass */
-            following: boolean;
             /** @description What the run going (or the last one started here) has done so far, a step at a time, oldest first */
             progress: components["schemas"]["ReadinessProgress"][];
         };
         ReadinessStep: {
             /** @enum {string} */
-            key: "install" | "checks" | "tests";
+            key: "access" | "run";
             title: string;
             /** @description What the factory needs it for */
             why: string;

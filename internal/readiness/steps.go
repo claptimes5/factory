@@ -16,8 +16,11 @@ const (
 	StepUnchecked = "unchecked" // an earlier step failed, or the check stopped first
 )
 
-// Step is one thing a repo must get right before the factory can work on
-// it: the blockers, grouped the way a person fixes them.
+// Step is one thing a person must get right before the factory can work
+// on a repo: the blockers only they can fix (a token, a service, a file
+// git doesn't track), grouped the way they fix them. Blockers a change
+// can fix (lint failing, flaky tests) are the factory's work instead: see
+// Work.
 type Step struct {
 	Key   string `json:"key"`
 	Title string `json:"title"`
@@ -37,19 +40,14 @@ var steps = []struct {
 }{
 	{"access", "The factory's token can do its job",
 		"Every change ends with the factory opening a pull request, and it labels and comments on issues as it works.", []string{"access"}},
-	{"install", "Dependencies install from a clean checkout",
-		"Every job starts by installing dependencies on a fresh copy of {branch}.", []string{"install"}},
-	{"checks", "Every required check passes on {branch}",
-		"Every change runs these checks. One that already fails on {branch} fails every change, whatever it does.", []string{"checks", "services", "files"}},
-	{"tests", "There are tests, and they pass every time",
-		"The factory proves each change with the tests, so there must be some, and they must give the same answer on every run.", []string{"tests"}},
+	{"run", "The factory can install the repo and run its checks",
+		"Every job installs a fresh copy of {branch} and runs the repo's checks there, with the services and files they need.", []string{"install", "checks", "services", "files", "tests"}},
 }
 
-// Steps are the setup steps the report covers, in order. The install
-// step is left out when the repo has no install command.
+// Steps are the setup steps the report covers, in order: what a person
+// must do. The access step is left out when the host couldn't be asked.
 func (r *Report) Steps() []Step {
 	var out []Step
-	stuck := r.Incomplete
 	for _, g := range steps {
 		s := Step{Key: g.key, Title: strings.ReplaceAll(g.title, "{branch}", r.Branch), Why: strings.ReplaceAll(g.why, "{branch}", r.Branch), Blockers: []Finding{}}
 		var passed []string
@@ -58,32 +56,43 @@ func (r *Report) Steps() []Step {
 			if !slices.Contains(g.areas, f.Area) {
 				continue
 			}
-			switch f.Level {
-			case Blocker:
+			switch {
+			case f.Level == Blocker && f.Issue != nil:
+				seen = true // the factory's to fix: see Work
+			case f.Level == Blocker:
 				s.Blockers = append(s.Blockers, f)
 				seen = true
-			case Good:
+			case f.Level == Good:
 				passed = append(passed, f.Title)
 				seen = true
 			}
 		}
-		// Shown when they were looked at: a repo with no install command,
-		// or a host that couldn't be asked, skips them.
-		if (g.key == "install" || g.key == "access") && !seen {
+		// Shown when it was looked at: a host that couldn't be asked skips it.
+		if g.key == "access" && !seen {
 			continue
 		}
 		switch {
 		case len(s.Blockers) > 0:
 			s.State = StepFailing
-		case len(passed) > 0 || !stuck:
+		case len(passed) > 0 || !r.Incomplete:
 			s.State = StepDone
 			s.Passed = strings.Join(passed, "; ")
 		default:
 			s.State = StepUnchecked
 		}
-		// A failed install means nothing after it ran.
-		stuck = stuck || g.key == "install" && s.State == StepFailing
 		out = append(out, s)
+	}
+	return out
+}
+
+// Work are the blockers a change can fix, so the factory does, each
+// filed as an issue: until they're merged, every other job would fail.
+func (r *Report) Work() []Finding {
+	out := []Finding{}
+	for _, f := range r.Findings {
+		if f.Level == Blocker && f.Issue != nil {
+			out = append(out, f)
+		}
 	}
 	return out
 }
@@ -150,22 +159,6 @@ func Path(dir, repo string) string {
 // beside is a file kept next to repo's report in dir.
 func beside(dir, repo, ext string) string {
 	return strings.TrimSuffix(Path(dir, repo), ".json") + "." + ext
-}
-
-// Follow records that a person asked the factory to work through repo's
-// setup by itself (File and start work): it checks the repo again as its
-// base branch moves, and starts the next issues once they can pass.
-func Follow(dir, repo string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(beside(dir, repo, "follow"), nil, 0o644)
-}
-
-// Followed says whether Follow was called for repo.
-func Followed(dir, repo string) bool {
-	_, err := os.Stat(beside(dir, repo, "follow"))
-	return err == nil
 }
 
 // SaveBaselinePR records the pull request a lint baseline opened on repo.

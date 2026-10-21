@@ -83,15 +83,11 @@ function Finding({
   f,
   label,
   repo,
-  canFile,
-  offersFile,
   placed,
 }: {
   f: FindingT;
   label: string;
   repo: RepoReadiness;
-  canFile: boolean;
-  offersFile: boolean;
   placed?: Placed;
 }) {
   const [open, setOpen] = useState(false);
@@ -115,11 +111,11 @@ function Finding({
         ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
         : "The factory doesn't file an issue for this one: the details say what to add."
       : f.status === "not_filed"
-        ? canFile &&
-          repo.unfiled > 0 &&
-          (offersFile ? "No issue yet: File and start work files one." : "No issue yet: it's filed when you get to File and start work, after the next step above.")
+        ? "No issue yet: the factory files one on its next check."
         : f.status === "not_queued"
-          ? `Add the ${label} label on the issue so the factory works on it.`
+          ? f.level === "blocker"
+            ? `Filed without the ${label} label: the factory adds it on its next check.`
+            : "Filed for later: the factory starts on it once its setup fixes are merged."
           : f.status === "split"
             ? `Split into ${f.split_total} smaller issues: See the work for each one's progress. ${f.level === "blocker" ? "Once all are merged, Check again to confirm it." : ""}`
             : f.status === "done" && f.level === "blocker"
@@ -186,16 +182,12 @@ function StepRow({
   n,
   label,
   repo,
-  canFile,
-  offersFile,
   placed,
 }: {
   step: Step;
   n: number;
   label: string;
   repo: RepoReadiness;
-  canFile: boolean;
-  offersFile: boolean;
   placed: Placed;
 }) {
   // A step that's done is a line; what it checked opens from it.
@@ -231,7 +223,7 @@ function StepRow({
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} offersFile={offersFile} placed={placed} />
+              <Finding key={f.title} f={f} label={label} repo={repo} placed={placed} />
             ))}
           </ul>
         )}
@@ -275,21 +267,13 @@ export function NeedsYou({ className }: { className?: string }) {
   );
 }
 
-/** The one thing to do next on a repo, most pressing first. */
+/** The one thing to do next on a repo, most pressing first: the person's part (the setup steps), then the factory's (its work). */
 export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const label = data.intake_label;
-  const blockers = r.steps.flatMap((s) => s.blockers);
-  const merged = blockers.filter((f) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total)).length;
-  const lintFails = blockers.some((f) => f.key === "check:lint" && f.status !== "done");
-  const needsYou = [...blockers, ...r.extras].filter((f) => f.status === "needs_you").length;
-  const yours = blockers.filter((f) => f.status === "none").length;
-  const recommended = r.extras.filter((f) => f.level === "gap" && f.status !== "done").length;
-  const canStart = data.can_file && !r.checking && r.can_queue;
+  const yours = r.steps.flatMap((s) => s.blockers);
+  const settled = (f: FindingT) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total);
+  const merged = r.work.filter(settled);
   const check: NextAction[] = data.can_check && !r.checking ? [{ label: r.state === "unchecked" ? "Check now" : "Check again", primary: true, run: ["/readiness/check", {}] }] : [];
-  const start: NextAction[] = [
-    { label: "File and start work", primary: true, run: ["/readiness/file", { queue: true }] },
-    ...(r.unfiled > 0 ? [{ label: "Only file the issues", run: ["/readiness/file", { queue: false }] as [string, Record<string, unknown>] }] : []),
-  ];
   if (r.checking) {
     const failing = r.steps.find((st) => st.state === "failing");
     const what: Record<string, [string, string]> = {
@@ -297,15 +281,10 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
         "Making the lint baseline",
         `It installs ${r.repo}'s dependencies, runs RuboCop's baseline on ${r.branch} and checks lint passes with it, then opens a pull request for you to merge. It takes a few minutes; this updates by itself.`,
       ],
-      file: ["Checking again, then filing issues", "It runs the install and checks on a fresh copy first, then files an issue for each gap that has none. It takes a few minutes."],
-      queue: [
-        "Checking again, then handing the work to the factory",
-        "It runs the install and checks on a fresh copy first, then files and labels the issues so the factory starts on them. It takes a few minutes.",
-      ],
     };
     const [title, body] = what[r.action] ?? [
       `Checking ${repoName(r.repo) || r.repo}`,
-      `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks twice to catch flaky tests. It takes a few minutes; this updates by itself.`,
+      `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks, then files what a change can fix for the factory. It takes a few minutes; this updates by itself.`,
     ];
     return {
       tone: "info",
@@ -313,15 +292,15 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       body,
       actions: [],
       running: true,
-      // A baseline is about lint; a check is about what's failing, which it looks at again.
-      at: r.action === "baseline" ? "check:lint" : failing ? `step:${failing.key}` : undefined,
+      // A check is about what's failing, which it looks at again.
+      at: failing ? `step:${failing.key}` : undefined,
     };
   }
   if (r.state === "unchecked") {
     return {
       tone: "info",
       title: `Next: check ${repoName(r.repo) || r.repo}`,
-      body: `The check clones ${r.repo}, installs it and runs its checks twice to catch flaky tests. It takes a few minutes and changes nothing.`,
+      body: `The check clones ${r.repo}, installs it and runs its checks, to see what the factory needs first. It takes a few minutes and changes nothing in the repo.`,
       actions: check,
     };
   }
@@ -331,16 +310,17 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       title: "Next: fix what stopped the check, then check again",
       body: "The check stopped early, so this says nothing about the repo past that point. It's usually the factory's setup or a command in factory.yaml, not the repo's code.",
       actions: check,
+      human: true,
     };
   }
-  const access = blockers.find((f) => f.area === "access");
+  const access = yours.find((f) => f.area === "access");
   if (access) {
     // A GitLab repo is named host/path; its tokens are in the user's settings there.
     const host = r.repo.split("/").length > 2 ? r.repo.split("/")[0] : "";
     return {
       tone: "attention",
       title: "Next: give the factory's token the permissions it needs",
-      body: `${access.title.replace(/^The factory's token/, "Its token")}. Every change ends with the factory opening a pull request, so until it can, every job would fail at its end and nothing else starts. The first step below says what's missing and where to set it; once the new token is in place and the factory restarted, check again.`,
+      body: `${access.title.replace(/^The factory's token/, "Its token")}. Every change ends with the factory opening a pull request, so until it can, every job would fail at its end and nothing else starts. Details says what's missing; once the new token is in place and the factory restarted, check again.`,
       actions: [
         ...(host ? [{ label: "Open your access tokens", primary: true, href: `https://${host}/-/user_settings/personal_access_tokens` }] : []),
         ...check.map((a) => ({ ...a, primary: !host })),
@@ -349,7 +329,7 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       human: true,
     };
   }
-  const files = blockers.find((f) => f.area === "files");
+  const files = yours.find((f) => f.area === "files");
   if (files) {
     return {
       tone: "attention",
@@ -360,95 +340,52 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       human: true,
     };
   }
-  if (r.state === "not_ready" && merged > 0) {
-    const fixed = blockers.find((f) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total));
+  if (yours.length > 0) {
+    return {
+      tone: "attention",
+      title: `Next: ${yours[0].title.replace(/`/g, "")}`,
+      body: "The factory can't change this one: the fix is in factory.yaml or the factory's setup. Details says what it saw; fix it, then check again.",
+      actions: check,
+      at: yours[0].key ? yours[0].key : `area:${yours[0].area}`,
+      human: true,
+    };
+  }
+  const waiting = r.work.find((f) => f.status === "needs_you");
+  if (waiting) {
+    const review = waiting.item_stage === "awaiting_human";
+    return {
+      tone: "attention",
+      title: review ? `Next: review the factory's fix: ${waiting.title.replace(/`/g, "")}` : `Next: the factory needs your call on ${waiting.title.replace(/`/g, "")}`,
+      body: review
+        ? `Its pull request is ready. Merge it, and the factory checks ${r.branch} again by itself; new tasks start once its fixes are in.`
+        : "It stopped and is waiting for you. See the work to answer it.",
+      actions: waiting.item_id != null ? [{ label: review ? "Review it" : "See the work", primary: true, to: `/items/${waiting.item_id}` }] : [],
+      at: waiting.key || undefined,
+      human: true,
+    };
+  }
+  if (r.state === "not_ready" && merged.length > 0) {
     return {
       tone: "info",
       title: "Next: check again to confirm the fix",
-      body: `The factory's fix for ${merged === 1 ? "a blocker is" : `${merged} blockers are`} merged, but only a fresh check proves it. The factory checks again by itself within a few minutes of ${r.branch} changing.`,
+      body: `The factory's fix for ${merged.length === 1 ? "a blocker is" : `${merged.length} blockers are`} merged, but only a fresh check proves it. The factory checks again by itself within a few minutes of ${r.branch} changing.`,
       actions: check,
-      at: merged === 1 && fixed?.key ? fixed.key : undefined,
-    };
-  }
-  if (r.state === "not_ready" && r.baseline_pr) {
-    const pr = prWord(r);
-    return {
-      tone: "attention",
-      title: `Next: open and merge the lint baseline's ${pr}`,
-      body: `The factory can't merge it for you. It changes only .rubocop_todo.yml and .rubocop.yml; once it's merged, lint passes on ${r.branch} and only new offenses fail a change. The factory checks again by itself after you merge.`,
-      actions: [{ label: `Open the ${pr} to merge it`, primary: true, href: r.baseline_pr }],
-      at: "check:lint",
-      human: true,
-    };
-  }
-  if (r.state === "not_ready" && r.can_baseline && lintFails) {
-    return {
-      tone: "attention",
-      title: "Next: accept today's lint offenses",
-      body: `Lint fails across all of ${r.branch}, and the factory can't fix that in pieces: each piece is checked against the whole repo. This opens a pull request that records today's offenses in .rubocop_todo.yml. Once you merge it, lint passes and only new offenses fail; fix the old ones later, a cop at a time.`,
-      actions: data.can_check && !r.checking ? [{ label: "Accept today's offenses", primary: true, run: ["/readiness/baseline", {}] }] : [],
-      at: "check:lint",
-      human: true,
-    };
-  }
-  if (needsYou > 0) {
-    const waiting = [...blockers, ...r.extras].find((f) => f.status === "needs_you");
-    return {
-      tone: "attention",
-      title: `Next: ${needsYou === 1 ? "one of these needs" : `${needsYou} of these need`} you`,
-      body: "The factory stopped on it and is waiting for your call. See the work to answer it.",
-      actions: waiting?.item_id != null ? [{ label: "See the work", primary: true, to: `/items/${waiting.item_id}` }] : [],
-      at: needsYou === 1 && waiting?.key ? waiting.key : undefined,
-      human: true,
-    };
-  }
-  if (r.state === "not_ready" && canStart) {
-    return {
-      tone: "info",
-      title: "Next: let the factory work through it",
-      body: `File and start work files an issue for each blocker and labels them ${label}, so the factory fixes them. Once every step passes it starts on the ${recommended > 0 ? `${recommended} recommended ${recommended === 1 ? "item" : "items"}` : "recommended work"} below by itself, checking again whenever ${r.branch} changes. You review every pull request; nothing merges without you.`,
-      actions: start,
-    };
-  }
-  if (r.state === "not_ready" && r.can_queue && !data.can_file) {
-    return {
-      tone: "info",
-      title: "Next: hand the blockers to the factory",
-      body: `Filing their issues from this page needs leave to change settings (see below). Once filed with the ${label} label, the factory fixes them.`,
-      actions: [],
-    };
-  }
-  if (r.state === "not_ready" && yours > 0) {
-    return {
-      tone: "attention",
-      human: true,
-      title: `Next: ${yours === 1 ? "one blocker is" : `${yours} blockers are`} yours to fix`,
-      body: `The factory can't change ${yours === 1 ? "it" : "them"}: the fix is in factory.yaml or the factory's setup. The factory is working on the rest${r.following ? `, and checks again by itself when ${r.branch} changes` : ""}.`,
-      actions: [],
+      at: merged.length === 1 && merged[0].key ? merged[0].key : undefined,
     };
   }
   if (r.state === "not_ready") {
+    const n = r.work.length;
     return {
       tone: "info",
-      title: "Nothing for you right now: the factory is fixing the blockers",
-      body: r.following
-        ? `It checks again by itself whenever ${r.branch} changes, and starts the recommended work once every step passes. You'll review each fix as a pull request.`
-        : "You'll review each fix as a pull request. Once they're merged, check again.",
-      actions: [],
-    };
-  }
-  if (canStart) {
-    return {
-      tone: "success",
-      title: "Ready. Next: start the recommended work",
-      body: `Every setup step passes, so you can add the ${label} label to real issues now. File and start work also hands the recommended ${recommended === 1 ? "item" : "items"} below to the factory, so it can prove more of what it changes.`,
-      actions: start,
+      title: `Your part is done. The factory is fixing ${n === 1 ? "one thing" : `${n} things`} first`,
+      body: `What fails on ${r.branch} today would fail every change, so new tasks on ${repoName(r.repo) || r.repo} wait until ${n === 1 ? "this fix is" : "these fixes are"} merged. You'll review each as a pull request, like any of the factory's work.`,
+      actions: [{ label: "See them on the line", to: "/line" }],
     };
   }
   return {
     tone: "success",
     title: `Ready: add the ${label} label to issues to start`,
-    body: "Every setup step passes, so the factory's changes can be checked. It picks up each issue with that label.",
+    body: "Every check passes, so the factory's changes can be proved. It picks up each issue with that label, and the recommended work below is queued for it too.",
     actions: [],
   };
 }
@@ -578,11 +515,11 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
   const { busy, msg, run } = useReadinessRun(r);
   const check = () => run("/readiness/check", {});
   const next = nextStep(r, data);
-  const offersFile = next.actions.some((a) => a.run?.[0] === "/readiness/file");
   // A next step about one finding sits on that finding's row; the top
   // only points there, so the action is next to what it fixes.
   const stepAt = r.steps.findIndex((st) => isAtStep(next, st) || st.blockers.some((f) => isAt(next, f)));
-  const placed = stepAt >= 0 || r.extras.some((f) => isAt(next, f));
+  const inWork = r.work.some((f) => isAt(next, f));
+  const placed = stepAt >= 0 || inWork || r.extras.some((f) => isAt(next, f));
   const boxId = `next-${r.repo.replace(/[^a-z0-9]+/gi, "-")}`;
   const placedNext = { next, busy, run, id: boxId };
   const [badge, variant] = stateBadge[r.state] ?? [r.state, "secondary"];
@@ -608,7 +545,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
         <div className="flex flex-col items-end gap-1.5">
           {r.checking ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
-              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "check" ? "Checking now" : r.action === "baseline" ? "Making the lint baseline" : "Checking, then filing issues"}, started{" "}
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.action === "baseline" ? "Making the lint baseline" : "Checking now"}, started{" "}
               <Ago ts={r.checking_since} />
             </span>
           ) : data.can_check ? (
@@ -646,7 +583,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           {next.running && <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" aria-hidden />}
           <span className="font-medium text-foreground">{next.title}</span>
           {next.human && <NeedsYou />}
-          <span className="text-muted-foreground">{stepAt >= 0 ? `in step ${stepAt + 1} ↓` : "below ↓"}</span>
+          <span className="text-muted-foreground">{stepAt >= 0 ? `in step ${stepAt + 1} ↓` : inWork ? "in the factory's work ↓" : "below ↓"}</span>
         </button>
       ) : (
         <NextBox next={next} r={r} busy={busy} run={run} />
@@ -680,27 +617,35 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.steps.length > 0 && (
         <ol aria-label="Setup steps" className="divide-y border-y">
           {r.steps.map((s, i) => (
-            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
+            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} placed={placedNext} />
           ))}
         </ol>
       )}
 
+      {r.work.length > 0 && (
+        <section aria-label="The factory's work" className="flex flex-col gap-1">
+          <h3 className="text-body font-semibold">The factory is fixing these first ({r.work.length})</h3>
+          <p className="text-meta text-text-2">
+            Each fails on {r.branch} today, so it would fail every change. The factory fixes them as issues, like any of its work, and you review each as a pull
+            request. New tasks on {repoName(r.repo) || r.repo} wait until they're merged.
+          </p>
+          <ul className="divide-y">
+            {r.work.map((f) => (
+              <Finding key={f.title} f={f} label={label} repo={r} placed={placedNext} />
+            ))}
+          </ul>
+        </section>
+      )}
       {gaps.length > 0 && (
         <section aria-label="Recommended" className="flex flex-col gap-1">
           <h3 className="text-body font-semibold">Recommended ({gaps.length})</h3>
           <p className="text-meta text-text-2">
             Not needed to start, but each lets the factory prove more of what it changes, so fewer of its mistakes reach you.{" "}
-            {r.following && r.state !== "ready"
-              ? "The factory starts on these by itself once every step above passes."
-              : !data.can_file
-                ? ""
-                : r.state === "ready"
-                ? "File and start work hands them to the factory."
-                : "File and start work hands them to the factory once every step above passes."}
+            {r.state === "ready" ? "The factory works on them like any issue." : "The factory files them, and starts on them once its fixes above are merged."}
           </p>
           <ul className="divide-y">
             {gaps.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
+              <Finding key={f.title} f={f} label={label} repo={r} placed={placedNext} />
             ))}
           </ul>
         </section>
@@ -710,7 +655,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           <summary className="cursor-pointer text-sm font-medium">Nice to have ({tips.length})</summary>
           <ul className="divide-y">
             {tips.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} placed={placedNext} />
+              <Finding key={f.title} f={f} label={label} repo={r} placed={placedNext} />
             ))}
           </ul>
         </details>
@@ -779,7 +724,8 @@ export function useSetupNotice(): Notice | null {
   const { data } = useReadiness();
   // Home leads with setup itself.
   const path = useLocation().pathname;
-  const here = path === "/setup" || path === "/";
+  // Home leads with setup itself while a person's part is left.
+  const here = path === "/setup" || (path === "/" && !!data?.repos.some(yourPartLeft));
   if (!data || here) return null;
   const running = data.repos.find((r) => r.checking);
   const doing = running && (
@@ -810,6 +756,29 @@ export function useSetupNotice(): Notice | null {
     };
   }
   const behind = data.repos.filter((r) => r.state === "not_ready" || r.state === "incomplete");
+  const many = data.repos.length > 1;
+  // Only the factory's fixes left: new tasks wait for them, and that's all.
+  if (!behind.some(yourPartLeft)) {
+    const n = behind.reduce((k, r) => k + r.work.length, 0);
+    return {
+      key: "setup",
+      label: "Setup",
+      tone: "info",
+      body: (
+        <span className="flex flex-col gap-1">
+          <span className="min-w-0 break-words">
+            The factory is fixing {n === 1 ? "one thing" : `${n} things`} that fail on{" "}
+            {behind.length > 1 ? "the repos' base branches" : `${many ? repoName(behind[0].repo) + "'s " : ""}${behind[0].branch}`} today; new tasks wait until{" "}
+            {n === 1 ? "it's" : "they're"} merged.{" "}
+            <Link to="/line" className="font-medium underline underline-offset-2">
+              See the work
+            </Link>
+          </span>
+          {doing}
+        </span>
+      ),
+    };
+  }
   return {
     key: "setup",
     label: "Setup",
@@ -819,16 +788,14 @@ export function useSetupNotice(): Notice | null {
         <span className="min-w-0 break-words">
           <span className="font-medium text-warning">Setup isn't finished.</span>{" "}
           {behind
+            .filter(yourPartLeft)
             .map((r) =>
               r.state === "incomplete"
-                ? `${data.repos.length > 1 ? repoName(r.repo) + ": the" : "The"} check couldn't finish`
-                : `${data.repos.length > 1 ? repoName(r.repo) + ": " : ""}${r.done} of ${r.total} setup steps done`,
+                ? `${many ? repoName(r.repo) + ": the" : "The"} check couldn't finish`
+                : `${many ? repoName(r.repo) + ": " : ""}${r.done} of ${r.total} setup steps done`,
             )
             .join("; ")}
-          .{" "}
-          {behind.every((r) => r.following && r.state === "not_ready")
-            ? "The factory is working through it; new tasks wait until it's done."
-            : "New tasks wait until it's done."}{" "}
+          . New tasks wait until it's done.{" "}
           <Link to="/setup" className="font-medium underline underline-offset-2">
             See what's missing
           </Link>
@@ -838,3 +805,6 @@ export function useSetupNotice(): Notice | null {
     ),
   };
 }
+
+/** Whether a person's part of a repo's setup is left: its steps, or a check that hasn't run or couldn't finish. */
+export const yourPartLeft = (r: RepoReadiness) => r.state === "unchecked" || r.state === "incomplete" || (r.state === "not_ready" && r.done < r.total);

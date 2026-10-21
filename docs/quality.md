@@ -635,32 +635,27 @@ that isn't installed, a timeout), it stops there and files nothing. The
 report is saved to `data/readiness/<owner>__<name>.json`, with the number of
 the issue filed for each gap.
 
-**Following it on the dashboard.** The dashboard's **Setup** screen shows
-each repo's latest report as setup steps: dependencies install, every
-required check passes on the base branch, and there are tests that pass
-every time. Each step says whether it passes and why the factory needs it,
-and lists its blockers, each linked to its issue and to the factory's item
-for it: waiting its turn, being built, needs you or done. A blocker split
-into smaller issues shows how many of them are done, even once splitting
-closed its own issue. A blocker with
-no issue yet, or one only you can fix (a missing service in `factory.yaml`),
-says so. Gaps follow as **Recommended**, each with the same status, and
-tips under **Nice to have**. One **Next** box says the one thing to do now and holds its button. When
-it's about one finding (a token, lint, a missing file), it sits on that
-finding's row, in place of its status and links, and a line at the top
-points to it; anything only a person can do is marked **Needs you**. In
-order, most pressing first: check the
-repo, check again once a fix merged, merge the lint baseline, accept
-today's lint offenses (lint that fails across the repo can't be fixed in
-pieces), answer an item that needs you, let the factory work through it,
-fix a blocker only you can, or, once ready, start the recommended work
-and add the `factory:ready` label to issues. While a repo isn't ready,
-Home leads with the same next step, and lists what needs you under it:
-the work fixing setup first, marked **Blocks setup**, and what waits for
-it last, marked **Waits for setup**. While a
-repo has blockers, a line above every screen links there; once every
-repo is ready, it says to add the `factory:ready` label to issues to
-start.
+**Following it on the dashboard.** Setup is split in two. **Your part**
+is what only you can fix, as the dashboard's **Setup** screen's steps: the
+factory's token can do its job, and the factory can install the repo and
+run its checks (the services, the files git doesn't track, a command in
+`factory.yaml` that won't run). **The factory's part** is every blocker a
+change can fix (lint failing, tests failing or flaky, no tests): each
+check files an issue for each, labeled for the factory, so they run
+through the factory like any work, on Home and the line, tagged **Blocks
+setup**, and you review each as a pull request. New tasks on the repo
+wait ("Waits for setup") until they're merged. Gaps follow as
+**Recommended**: filed too, and labeled once the repo is ready; tips
+under **Nice to have**.
+
+One **Next** box says the one thing to do now, with its button. When it's
+about one finding (a token, a missing file, the factory's fix waiting for
+your review), it sits on that finding's row, and a line at the top
+points to it; anything only a person can do is marked **Needs you**.
+While your part is left, Home leads with it, and the decisions waiting on
+you are listed under it, the factory's setup fixes first. Once your part
+is done, Home is Home again, and a line above every screen says what new
+tasks are waiting for. Steps that are done fold to a line each.
 `factory status` prints the same summary.
 
 A blocker the factory fixed stays on the report until the check runs
@@ -668,21 +663,13 @@ again, since only a fresh run proves it. While a repo isn't ready, the
 daemon checks it again by itself within five minutes of its base branch
 moving, or of a lint baseline's pull request being merged or closed. It
 also looks when it starts, and whenever someone has a dashboard page
-open (asking the host at most every 30 seconds), so a merge shows soon. **Check again** on that screen
-runs it in the background on the base branch as it is now, so a fix made
-outside the factory counts too. It runs the repo's install and checks the
-way a build's gates do and files nothing, one repo at a time. While it
-runs, the step it's checking again lists each command as it goes, with
-how long it took and whether it passed; **What the last run did** keeps
-the list once it's over. A lint baseline shows its steps the same way.
-Steps that are done fold to a line each.
-**Only file the issues** checks again, then files an issue for each gap
-that has none, as `factory readiness -file` does. **File and start work**
-also adds the intake label, as `-queue` does: to the blockers while there
-are any, and once the repo is ready to the issues filed earlier too. Like
-`-queue`, it hands the rest to the daemon, so you press it once. Like
-Settings, these need the dashboard password or a browser on the
-factory's own machine.
+open (asking the host at most every 30 seconds), so a merge shows soon.
+**Check again** runs it now, on the base branch as it is, so a fix made
+outside the factory counts too, one repo at a time. While a check runs,
+the step it's checking again lists each command as it goes, with how
+long it took and whether it passed; **What the last run did** keeps the
+list once it's over. Like Settings, Check again needs the dashboard
+password or a browser on the factory's own machine.
 
 When a check the factory filed an issue for passes on the base branch,
 the next check closes that issue with a comment, and the issues it was
@@ -692,9 +679,11 @@ split into too; the factory then stops working on their items.
 
 A repo with years of lint debt fails `lint` on its base branch, so every
 change fails it, and a fix too big for one build can't be split into
-pieces that each pass a whole-repo lint. When the linter is RuboCop
-(`bundle exec rubocop` or `bin/rubocop`), the Setup screen offers
-**Accept today's offenses**. The factory then, without a model:
+pieces that each pass a whole-repo lint. So when the linter is RuboCop
+(`bundle exec rubocop` or `bin/rubocop`), lint finds more than 50
+offenses and there's no baseline yet, the issue the check filed for lint
+is fixed with a baseline: when the factory picks it up, instead of
+triaging it, it, without a model:
 
 1. clones the base branch and runs the repo's install;
 2. runs `rubocop --auto-gen-config --no-exclude-limit --no-offense-counts
@@ -709,8 +698,9 @@ pieces that each pass a whole-repo lint. When the linter is RuboCop
    comment the baseline made redundant. If lint still fails, it pushes
    nothing;
 4. pushes only those two files to `factory/lint-baseline` and opens a
-   pull request for you to review and merge. The Setup screen keeps a
-   link to it until lint passes, and says so if making it failed.
+   pull request: the item's, for you to review and merge like any of
+   the factory's work. If making it fails, the item waits for you with
+   why.
 
 It asks the host first whether the token may open a pull request, and
 starts nothing if it may not.

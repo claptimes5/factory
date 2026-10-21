@@ -16,42 +16,45 @@ func TestSteps(t *testing.T) {
 		}
 		return out
 	}
-	// A failed install means the checks never ran; no tests at all shows
-	// without them.
+	// What a person must fix is a step; what a change can fix (it comes
+	// with an issue) is the factory's work, whatever its area.
 	r := (&Report{Branch: "main"})
-	r.add(Finding{Level: Blocker, Area: "install", Title: "Install fails on main"})
-	r.add(Finding{Level: Blocker, Area: "tests", Title: "No tests"})
+	r.add(Finding{Level: Blocker, Area: "services", Title: "`test` can't reach a service it needs"})
+	r.add(Finding{Level: Blocker, Area: "checks", Title: "`lint` fails on main", Issue: &Issue{Key: "check:lint"}})
+	r.add(Finding{Level: Blocker, Area: "tests", Title: "Tests are flaky", Issue: &Issue{Key: "flaky"}})
 	r.add(Finding{Level: Gap, Area: "install", Title: "No lockfile"})
 	r.add(Finding{Level: Good, Area: "ci", Title: "CI runs on the repo"})
 	r.finish()
-	if got := state(r); len(got) != 3 || got[0] != "install:failing" || got[1] != "checks:unchecked" || got[2] != "tests:failing" {
-		t.Fatalf("steps %v", got)
+	steps := r.Steps()
+	if got := state(r); len(got) != 1 || got[0] != "run:failing" || len(steps[0].Blockers) != 1 {
+		t.Fatalf("steps %v %+v", got, steps)
 	}
-	if done, total := r.Progress(); done != 0 || total != 3 {
+	if w := r.Work(); len(w) != 2 || w[0].Title != "`lint` fails on main" || w[1].Title != "Tests are flaky" {
+		t.Fatalf("work %+v", w)
+	}
+	if done, total := r.Progress(); done != 0 || total != 1 {
 		t.Fatalf("progress %d/%d", done, total)
 	}
 	if ex := r.Extras(); len(ex) != 2 || ex[0].Title != "No lockfile" || ex[1].Title != "CI runs on the repo" {
 		t.Fatalf("extras %+v", ex)
 	}
 
-	// No install command: no install step. A check that couldn't run
-	// leaves what comes after it unchecked.
+	// Only the factory's work left: the person's part is done, though the
+	// repo isn't ready.
+	r = &Report{Branch: "main"}
+	r.add(Finding{Level: Good, Area: "install", Title: "Installs from a clean checkout"})
+	r.add(Finding{Level: Blocker, Area: "checks", Title: "`lint` fails on main", Issue: &Issue{Key: "check:lint"}})
+	r.finish()
+	if got := state(r); len(got) != 1 || got[0] != "run:done" || r.Ready || r.Steps()[0].Passed != "Installs from a clean checkout" {
+		t.Fatalf("steps %v, ready %v", got, r.Ready)
+	}
+
+	// A check that couldn't run is the person's to fix.
 	r = &Report{Branch: "main", Incomplete: true}
 	r.add(Finding{Level: Blocker, Area: "checks", Title: "Couldn't run `test`"})
 	r.finish()
-	if got := state(r); len(got) != 2 || got[0] != "checks:failing" || got[1] != "tests:unchecked" {
+	if got := state(r); len(got) != 1 || got[0] != "run:failing" {
 		t.Fatalf("steps %v", got)
-	}
-
-	// All in place.
-	r = &Report{Branch: "main"}
-	r.add(Finding{Level: Good, Area: "install", Title: "Installs from a clean checkout"})
-	r.add(Finding{Level: Good, Area: "checks", Title: "Every required check passes on main: test"})
-	r.add(Finding{Level: Good, Area: "tests", Title: "3 test files, passing twice in a row"})
-	r.finish()
-	s := r.Steps()
-	if done, total := r.Progress(); done != 3 || total != 3 || s[1].Title != "Every required check passes on main" || s[2].Passed != "3 test files, passing twice in a row" {
-		t.Fatalf("progress %d/%d, steps %+v", done, total, s)
 	}
 }
 
@@ -108,7 +111,7 @@ func TestAccessStep(t *testing.T) {
 	r.access(Input{Repo: gitlab, AccessChecked: true, Denied: []Denied{{What: "open merge requests", Says: "requires [Merge Request: Create]"}}})
 	r.finish()
 	steps := r.Steps()
-	if len(steps) != 3 || steps[0].Key != "access" || steps[0].State != StepFailing || r.Ready {
+	if len(steps) != 2 || steps[0].Key != "access" || steps[0].State != StepFailing || r.Ready {
 		t.Fatalf("steps %+v, ready %v", steps, r.Ready)
 	}
 	f := steps[0].Blockers[0]

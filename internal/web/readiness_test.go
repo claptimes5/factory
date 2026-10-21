@@ -89,25 +89,26 @@ func TestReadinessLinksBlockersToTheirWork(t *testing.T) {
 	if s.State != "unchecked" || s.CanQueue || len(s.Steps) != 0 {
 		t.Fatalf("o/s = %+v", s)
 	}
-	// Install passed; the checks and the tests fail.
-	if r.State != "not_ready" || r.Done != 1 || r.Total != 3 || len(r.Steps) != 3 || r.SHA != "abc1234" {
+	// The person's part: a missing service. The factory's: lint and flaky
+	// tests, each with its issue and the work on it.
+	if r.State != "not_ready" || r.Done != 0 || r.Total != 1 || len(r.Steps) != 1 || r.SHA != "abc1234" {
 		t.Fatalf("o/r = %+v", r)
 	}
-	if st := r.Steps[0]; st.Key != "install" || st.State != "done" || st.Passed != "Installs from a clean checkout" {
-		t.Fatalf("install = %+v", st)
+	run := r.Steps[0]
+	if run.Key != "run" || run.State != "failing" || len(run.Blockers) != 1 || run.Passed != "" {
+		t.Fatalf("run = %+v", run)
 	}
-	checks := r.Steps[1]
-	if checks.State != "failing" || len(checks.Blockers) != 2 {
-		t.Fatalf("checks = %+v", checks)
+	if svc := run.Blockers[0]; svc.Status != "none" || svc.Issue != 0 {
+		t.Fatalf("services = %+v", svc)
 	}
-	lint, svc := checks.Blockers[0], checks.Blockers[1]
+	if len(r.Work) != 2 {
+		t.Fatalf("work = %+v", r.Work)
+	}
+	lint, fl := r.Work[0], r.Work[1]
 	if lint.Status != "building" || lint.Issue != 12 || !strings.HasSuffix(lint.IssueURL, "/o/r/issues/12") || lint.ItemID == nil || lint.ItemStage != "implementing" {
 		t.Fatalf("lint = %+v", lint)
 	}
-	if svc.Status != "none" || svc.Issue != 0 {
-		t.Fatalf("services = %+v", svc)
-	}
-	if fl := r.Steps[2].Blockers[0]; fl.Status != "not_queued" || fl.Issue != 13 || fl.ItemID != nil {
+	if fl.Status != "not_queued" || fl.Issue != 13 || fl.ItemID != nil {
 		t.Fatalf("flaky = %+v", fl)
 	}
 	status := map[string]string{}
@@ -186,7 +187,7 @@ func TestReadinessCheckAgain(t *testing.T) {
 	}
 	wait()
 	r := got.Repos[0]
-	if r.State != "ready" || r.Done != 3 || r.Total != 3 || r.CheckError != "" {
+	if r.State != "ready" || r.Done != 1 || r.Total != 1 || len(r.Work) != 0 || r.CheckError != "" {
 		t.Fatalf("after = %+v", r)
 	}
 	// Every checked repo is ready and the factory has only worked on setup.
@@ -288,7 +289,7 @@ func TestReadinessShowsASplitBlocker(t *testing.T) {
 	}
 	var got APIReadiness
 	getJSON(t, base+"/api/v1/readiness", &got)
-	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitDone != 1 || f.SplitTotal != 3 {
+	if f := got.Repos[0].Work[0]; f.Status != "split" || f.SplitDone != 1 || f.SplitTotal != 3 {
 		t.Fatalf("lint = %+v", f)
 	}
 	var d APIItemDetail
@@ -348,8 +349,7 @@ func TestReadinessLintBaseline(t *testing.T) {
 	}
 }
 
-// A repo that isn't ready is checked again once its base branch moves;
-// once someone chose File and start work, it's filed and queued instead.
+// A repo that isn't ready is checked again once its base branch moves.
 func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
 	t.Parallel()
 	_, _, s := readinessServer(t)
@@ -391,13 +391,6 @@ func TestFollowReadinessChecksAgainWhenTheBranchMoves(t *testing.T) {
 	if !strings.Contains(res, "main moved from abc1234 to def5678") {
 		t.Fatalf("result = %q", res)
 	}
-	if err := readiness.Follow(s.ReadinessDir, "o/r"); err != nil {
-		t.Fatal(err)
-	}
-	s.followOnce(ctx, "o/r")
-	if r := next(); r != "file o/r queue=true" {
-		t.Fatalf("ran %q", r)
-	}
 }
 
 // A blocker split into pieces follows its pieces, even once splitting
@@ -420,7 +413,7 @@ func TestSplitBlockerAndWorkWaitingForSetup(t *testing.T) {
 
 	var got APIReadiness
 	getJSON(t, base+"/api/v1/readiness", &got)
-	if f := got.Repos[0].Steps[1].Blockers[0]; f.Status != "split" || f.SplitTotal != 1 || f.SplitDone != 0 {
+	if f := got.Repos[0].Work[0]; f.Status != "split" || f.SplitTotal != 1 || f.SplitDone != 0 {
 		t.Fatalf("lint = %+v", f)
 	}
 	var d APIItemDetail

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -411,6 +412,21 @@ func Assess(ctx context.Context, in Input) *Report {
 
 // offenses is RuboCop's count of what it found.
 var offenses = regexp.MustCompile(`(\d+) offenses? detected`)
+
+// Offenses is how many offenses the run of gate counted (RuboCop's
+// summary), or -1 when it didn't say.
+func (r *Report) Offenses(gate string) int {
+	for _, x := range r.Runs {
+		if x.Gate != gate {
+			continue
+		}
+		if m := offenses.FindStringSubmatch(x.Output); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			return n
+		}
+	}
+	return -1
+}
 
 // sinceBaseline says what lint found, with a baseline in: new offenses.
 func sinceBaseline(out string) string {

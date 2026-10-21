@@ -9,6 +9,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/state"
 )
 
 // fakeRubocop stands in for RuboCop: its baseline writes the two files
@@ -130,5 +131,31 @@ func TestLintBaselineChecksAccessFirst(t *testing.T) {
 	}
 	if out := git(t, e.remote, "branch", "--list", BaselineBranch); strings.TrimSpace(out) != "" {
 		t.Fatalf("pushed %s", out)
+	}
+}
+
+// The issue the readiness check files for lint failing across the repo
+// is fixed by a baseline: the item's first job makes it, no model runs,
+// and the item waits for a person with the baseline as its pull request.
+func TestLintIssueIsFixedByABaseline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos = []config.Repo{{Name: "o/r", Gates: &config.Gates{Install: "bundle install", Required: []string{"lint"}, Commands: map[string]string{"lint": "bundle exec rubocop"}}}}
+	e.p.GateExec = fakeRubocop(false)
+	e.gh.issues[9] = &github.Issue{Number: 9, Title: "Make the lint check pass on main", Body: "Lint fails.\n\n" + lintIssueMarker, Labels: []string{"factory:ready"}}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 9)
+	pr := e.gh.prs[BaselineBranch]
+	if it.Stage != state.AwaitingHuman || pr == nil || it.PRNumber != pr.Number || it.Branch != BaselineBranch {
+		t.Fatalf("item %+v, pr %+v", it, pr)
+	}
+	if n := e.claude.calls["triage"] + e.claude.calls["implement"]; n != 0 {
+		t.Fatalf("a model ran %d times", n)
+	}
+	if c := e.gh.comments[9]; len(c) == 0 || !strings.Contains(c[len(c)-1], "fixed with a baseline") {
+		t.Fatalf("comments %v", c)
 	}
 }

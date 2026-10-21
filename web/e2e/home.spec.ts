@@ -23,14 +23,28 @@ async function allSetUp(page: Page) {
   });
 }
 
-test("while a repo isn't set up, Home leads with its next step and ranks the rest by what blocks it", async ({ page }, info) => {
+test("while a person's part of setup is left, Home leads with it and ranks the rest by what blocks it", async ({ page }, info) => {
+  // A service only a person can add to factory.yaml.
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const r = body.repos[0];
+    r.checking = false;
+    r.done = 0;
+    r.steps[0].state = "failing";
+    r.steps[0].blockers = [
+      { key: "", level: "blocker", area: "services", title: "`test` can't reach a service it needs", detail: "Add postgres under services in factory.yaml.",
+        issue: 0, issue_url: "", status: "none", split_done: 0, split_total: 0, item_id: null, item_stage: "" },
+    ];
+    await route.fulfill({ response: res, json: body });
+  });
   await page.goto("/app/");
   const lead = page.getByRole("region", { name: "Setup", exact: true });
   await expect(lead.getByRole("heading", { level: 1 })).toHaveText("Finish setting up api");
   const card = lead.getByTestId("setup-lead");
-  await expect(card).toContainText("new tasks wait until it's done");
-  await expect(card).toContainText("Accept today's lint offenses");
-  await expect(card.getByRole("button", { name: "Accept today's offenses" })).toBeVisible();
+  await expect(card).toContainText("Setup · needs you · new tasks wait until it's done");
+  await expect(card).toContainText("Test can't reach a service it needs");
+  await expect(card.getByRole("button", { name: "Check again" })).toBeVisible();
   await expect(card.getByRole("link", { name: "See every step" })).toHaveAttribute("href", /\/app\/setup$/);
   // One lead: no setup banner repeating it, and the decisions are a list under it.
   await expect(page.getByRole("group", { name: "Notices" }).getByRole("region", { name: "Setup", exact: true })).toHaveCount(0);

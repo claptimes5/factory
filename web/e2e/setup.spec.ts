@@ -19,66 +19,55 @@ async function notice(page: Page, name: string) {
   return page.getByRole("region", { name, exact: true });
 }
 
-test("while a repo isn't ready, a banner leads to its setup steps and the work on each blocker", async ({ page }, info) => {
-  // On every screen but Home, which leads with setup itself.
+test("once a person's part is done, Setup and every screen say the factory is fixing the rest, as work on the line", async ({ page }, info) => {
+  // On every screen, Home included: a person's part is done, so Home is
+  // Home again, and the banner says what new tasks wait for.
   await page.goto("/app/line");
   const banner = await notice(page, "Setup");
-  await expect(banner).toContainText("Setup isn't finished.");
-  await expect(banner).toContainText("api: 1 of 3 setup steps done");
-  await banner.getByRole("link", { name: "See what's missing" }).click();
-  await expect(page).toHaveURL(/\/app\/setup$/);
-  // The banner leaves once you're on the page it points at.
-  await expect(page.getByRole("region", { name: "Setup", exact: true })).toHaveCount(0);
+  await expect(banner).toContainText("The factory is fixing 2 things that fail on api's main today; new tasks wait until they're merged.");
+  await expect(banner.getByRole("link", { name: "See the work" })).toHaveAttribute("href", /\/app\/line$/);
 
+  await page.goto("/app/setup");
   const api = page.getByRole("region", { name: "Setup of acme/api" });
   await expect(api).toContainText("Not ready yet");
-  await expect(api).toContainText("1 of 3 setup steps done");
-  await expect(api.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+  await expect(api).toContainText("1 of 1 setup steps done");
   const steps = api.getByTestId("setup-step");
-  await expect(steps).toHaveCount(3);
-  await expect(steps.nth(0)).toContainText("Dependencies install from a clean checkout");
-  await expect(steps.nth(0).getByLabel("Done")).toBeVisible();
+  await expect(steps).toHaveCount(1);
+  await expect(steps.first()).toContainText("The factory can install the repo and run its checks");
+  await expect(steps.first().getByLabel("Done")).toBeVisible();
 
-  // Each blocker says what the factory is doing about it and links its
-  // issue, unless the next step is on its row: then that's all it says.
-  const lint = steps.nth(1).getByTestId("readiness-finding");
-  await expect(lint).toContainText("lint fails on main");
-  await lint.getByRole("button", { name: /Details/ }).click();
-  await expect(lint).toContainText("ineffectual assignment");
-  const flaky = steps.nth(2).getByTestId("readiness-finding");
-  await expect(flaky).toContainText("Tests are flaky");
-  await expect(flaky).toContainText("Waiting its turn");
-  await expect(flaky.getByRole("link", { name: /#106/ })).toHaveAttribute("href", /acme\/api\/issues\/106$/);
-  // One next step, and it's a button, never a command to run. Lint that
-  // fails across the repo can't be fixed in pieces, so the baseline leads.
+  // One next step: the person's part is done, and it says what's left.
   const next = api.getByTestId("next-step");
-  await expect(next).toContainText("Next: accept today's lint offenses");
-  await expect(next).toContainText("can't fix that in pieces");
+  await expect(next).toContainText("Your part is done. The factory is fixing 2 things first");
+  await expect(next.getByRole("link", { name: "See them on the line" })).toHaveAttribute("href", /\/app\/line$/);
   await expect(api).not.toContainText("./factory");
-  await expect(next.getByRole("button", { name: "Accept today's offenses" })).toBeVisible();
-  await expect(api.getByRole("button", { name: "File and start work" })).toHaveCount(0);
-  // It sits on the row it fixes; the top points there.
-  await expect(lint.getByTestId("next-step")).toBeVisible();
-  await expect(api.getByTestId("next-pointer")).toContainText("Next: accept today's lint offenses");
-  await expect(api.getByTestId("next-pointer")).toContainText("in step 2");
+  await expect(api.getByRole("button", { name: /File|Accept/ })).toHaveCount(0);
 
-  // What isn't needed to start is recommended, in plain view.
+  // The factory's work: each blocker as an issue, with what it's doing about it.
+  const work = api.getByRole("region", { name: "The factory's work" });
+  await expect(work).toContainText("The factory is fixing these first (2)");
+  const rows = work.getByTestId("readiness-finding");
+  await expect(rows.nth(0)).toContainText("lint fails on main");
+  await expect(rows.nth(0)).toContainText("Being built");
+  await rows.nth(0).getByRole("button", { name: /Details/ }).click();
+  await expect(rows.nth(0)).toContainText("ineffectual assignment");
+  await expect(rows.nth(1)).toContainText("Tests are flaky");
+  await expect(rows.nth(1)).toContainText("Waiting its turn");
+  await expect(rows.nth(1).getByRole("link", { name: /#106/ })).toHaveAttribute("href", /acme\/api\/issues\/106$/);
+
+  // What isn't needed to start is recommended, filed by the factory.
   const recommended = api.getByRole("region", { name: "Recommended" });
   await expect(recommended).toContainText("Recommended (2)");
-  await expect(recommended).toContainText("No feature map");
-  await expect(recommended).toContainText("Filed, not queued");
-  await expect(recommended).toContainText("No issue yet");
+  await expect(recommended).toContainText("Filed for later: the factory starts on it once its setup fixes are merged.");
+  await expect(recommended).toContainText("No issue yet: the factory files one on its next check.");
 
   const web = page.getByRole("region", { name: "Setup of acme/web" });
-  await expect(web).toContainText("3 of 3 setup steps done");
-  await expect(web.getByTestId("next-step")).toContainText("Ready. Next: start the recommended work");
-  await expect(web.getByTestId("next-step").getByRole("button", { name: "File and start work" })).toBeVisible();
+  await expect(web.getByTestId("next-step")).toContainText("Ready: add the factory:ready label to issues to start");
   await shot(page, info, "setup");
   if (phone(info)) await noSidewaysScroll(page);
 
   // Check again runs in the background and the page follows it.
   await api.getByRole("button", { name: "Check again" }).click();
-  // The other project may be running one too: one run at a time.
   await expect(api.getByRole("status").first()).toContainText(/[Cc]hecking/);
   await expect(api.getByRole("button", { name: "Check again" })).toBeVisible({ timeout: 15_000 });
   await expect(api).toContainText(/Checked \d+s ago/);
@@ -86,38 +75,72 @@ test("while a repo isn't ready, a banner leads to its setup steps and the work o
   await api.getByText("What the last run did").click();
   await expect(api.getByRole("list", { name: "What it has done" })).toContainText("Passed bin/rails test in 1s");
 
-  // File and start work checks again, then files; the page follows it. The
-  // devserver changes nothing, so the other project sees the same report.
-  if (!phone(info)) {
-    // Retried, since the phone project's own check can hold the one slot.
-    await expect(async () => {
-      await web.getByRole("button", { name: "File and start work" }).click({ timeout: 5_000 });
-      await expect(web.getByRole("status").first()).toContainText(/[Cc]hecking/);
-      await expect(web.getByText("Opened 0 issue(s) on acme/web.")).toBeVisible({ timeout: 8_000 });
-    }).toPass({ timeout: 40_000 });
-  }
-
-  // A blocker's work opens from its row.
-  await flaky.getByRole("link", { name: "See the work" }).click();
+  // The work opens from its row.
+  await rows.nth(1).getByRole("link", { name: "See the work" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Flaky TestCacheEviction on CI");
 });
 
-test("blockers the factory can fix lead with File and start work, which carries on to the recommended work", async ({ page }) => {
+/** acme/api with a blocker only a person can fix, in its run step. */
+async function serviceMissing(page: Page) {
   await page.route(/\/api\/v1\/readiness$/, async (route) => {
     const res = await route.fetch();
     const body = await res.json();
-    body.repos[0].can_baseline = false;
-    // The other project's runs may hold the slot, or have made a baseline.
+    const r = body.repos[0];
+    r.checking = false;
+    r.done = 0;
+    r.steps[0].state = "failing";
+    r.steps[0].blockers = [
+      {
+        key: "",
+        level: "blocker",
+        area: "services",
+        title: "`test` can't reach a service it needs",
+        detail: "Add postgres under services in factory.yaml.",
+        issue: 0,
+        issue_url: "",
+        status: "none",
+        split_done: 0,
+        split_total: 0,
+        item_id: null,
+        item_stage: "",
+      },
+    ];
+    await route.fulfill({ response: res, json: body });
+  });
+}
+
+test("what only a person can fix comes first, on its step and on Home", async ({ page }) => {
+  await serviceMissing(page);
+  await page.goto("/app/setup");
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  const step = api.getByTestId("setup-step").first();
+  await expect(step.getByTestId("next-step")).toContainText("Next: test can't reach a service it needs");
+  await expect(step.getByTestId("next-step")).toContainText("Needs you");
+  await expect(api.getByTestId("next-pointer")).toContainText("in step 1");
+  await page.goto("/app/");
+  await expect(page.getByTestId("setup-lead")).toContainText("Test can't reach a service it needs");
+});
+
+test("the factory's fix waiting for review is the next step, on its row", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const lint = body.repos[0].work[0];
     body.repos[0].checking = false;
-    body.repos[0].baseline_pr = "";
+    lint.status = "needs_you";
+    lint.item_stage = "awaiting_human";
     await route.fulfill({ response: res, json: body });
   });
   await page.goto("/app/setup");
-  const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
-  await expect(next).toContainText("Next: let the factory work through it");
-  await expect(next).toContainText("starts on the 2 recommended items below by itself");
-  await expect(next.getByRole("button", { name: "Only file the issues" })).toBeVisible();
-  await expect(next.getByRole("button", { name: "File and start work" })).toBeVisible();
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  const lint = api.getByRole("region", { name: "The factory's work" }).getByTestId("readiness-finding").first();
+  const next = lint.getByTestId("next-step");
+  await expect(next).toContainText("Next: review the factory's fix: lint fails on main");
+  await expect(next).toContainText("Needs you");
+  await expect(next.getByRole("link", { name: "Review it" })).toHaveAttribute("href", /\/app\/items\/\d+$/);
+  // The row says nothing else that competes.
+  await expect(lint).not.toContainText("#113");
+  await expect(api.getByTestId("next-pointer")).toContainText("in the factory's work");
 });
 
 test("plan usage shows as percentages, and dollar costs say they're API-price estimates", async ({ page }, info) => {
@@ -155,68 +178,27 @@ test("without leave to file, the setup screen names no buttons it doesn't show",
   await expect(api).toContainText("Checking from here needs a dashboard password.");
 });
 
-test("lint failing on main offers a baseline, and making it keeps its pull request on the page", async ({ page }) => {
-  // The devserver keeps the pull request once either project makes it, so
-  // until this one has, the page sees none.
-  let made = false;
-  await page.route(/\/api\/v1\/readiness$/, async (route) => {
-    const res = await route.fetch();
-    const body = await res.json();
-    if (!made) for (const r of body.repos) r.baseline_pr = "";
-    await route.fulfill({ response: res, json: body });
-  });
-  await page.goto("/app/setup");
-  const api = page.getByRole("region", { name: "Setup of acme/api" });
-  const offer = api.getByTestId("next-step");
-  await expect(offer).toContainText("Next: accept today's lint offenses");
-  await expect(offer).toContainText(".rubocop_todo.yml");
-  made = true;
-  // Retried, since the other project's run can hold the one slot.
-  await expect(async () => {
-    await offer.getByRole("button", { name: "Accept today's offenses" }).click({ timeout: 5_000 });
-    await expect(offer).toContainText("Next: open and merge the lint baseline's pull request", { timeout: 8_000 });
-  }).toPass({ timeout: 40_000 });
-  const pr = offer.getByRole("link", { name: "Open the pull request to merge it" });
-  await expect(pr).toHaveAttribute("href", "https://github.com/acme/api/pull/120", { timeout: 10_000 });
-  // Only a person can merge it, and the row says nothing else that competes.
-  const lint = api.getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
-  await expect(lint).toContainText("Needs you");
-  await expect(lint).not.toContainText("See the work");
-  await expect(lint).not.toContainText("#113");
-  await expect(lint.getByRole("button", { name: "Make it again" })).toHaveCount(0);
-  await expect(offer).toContainText("The factory checks again by itself after you merge.");
-});
-
 test("a setup run in progress shows the same on every screen, with its time counting", async ({ page }) => {
   await page.route("**/api/v1/readiness", async (route) => {
     const r = await route.fetch();
     const body = await r.json();
     body.repos[0].checking = true;
-    body.repos[0].action = "baseline";
+    body.repos[0].action = "check";
     body.repos[0].checking_since = new Date(Date.now() - 90_000).toISOString();
+    body.repos[0].checking_why = "Started by itself: main moved from 1a2b3c4 to 5d6e7f8.";
     await route.fulfill({ response: r, json: body });
   });
   await page.goto("/app/line");
   const banner = await notice(page, "Setup");
-  await expect(banner).toContainText(/Making the lint baseline for api, started 1m ago/);
+  await expect(banner).toContainText(/Checking api, started 1m ago/);
   await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);
   // The line shows it as work under way, as it would a job.
-  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Making the lint baseline for api");
+  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Checking api");
 
-  // Home and Setup say the same: it's under way, and what happens next.
-  await page.goto("/app/");
-  const lead = page.getByTestId("setup-lead");
-  await expect(lead).toContainText("working on it now");
-  await expect(lead).toContainText("Making the lint baseline");
-  await expect(lead).toContainText("opens a pull request for you to merge");
-  await expect(lead.getByRole("button", { name: "Accept today's offenses" })).toHaveCount(0);
   await page.goto("/app/setup");
   const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
-  await expect(next).toContainText("Working on it: making the lint baseline");
-  await expect(next).toContainText("Started 1m ago");
-  // The lint row says so too, rather than what became of its issue.
-  const lint = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
-  await expect(lint.getByTestId("next-step")).toContainText("Working on it: making the lint baseline");
+  await expect(next).toContainText("Working on it: checking api");
+  await expect(next).toContainText("Started 1m ago. The factory started it: main moved from 1a2b3c4 to 5d6e7f8.");
 });
 
 test("a token that can't open pull requests comes first, on Setup and Home, before any work", async ({ page }) => {
@@ -225,6 +207,7 @@ test("a token that can't open pull requests comes first, on Setup and Home, befo
     const body = await res.json();
     const r = body.repos[0];
     r.checking = false;
+    r.total += 1;
     r.steps.unshift({
       key: "access",
       title: "The factory's token can do its job",
