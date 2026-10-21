@@ -419,6 +419,36 @@ paths:
       summary: Mark Home seen now, so the catch-up starts again from here
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Home" } } } }
+  /trust:
+    get:
+      summary: "Trust: each repo's level on the ladder toward full automation, its record and practice runs"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Trust" } } } }
+    post:
+      summary: Move a repo to a trust level (its auto_merge in factory.yaml), applied once the factory restarts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, level]
+              properties:
+                repo: { type: string }
+                level: { type: integer, description: "1 to 5; 6 and 7 aren't built yet" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, trust]
+                properties:
+                  message: { type: string }
+                  trust: { $ref: "#/components/schemas/Trust" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /stream:
     get:
       summary: 'A `version` event (data `{"version": string}`) whenever anything shown changes'
@@ -1592,6 +1622,52 @@ components:
         at: { type: string }
         choice_job_id: { type: [integer, "null"], description: "For a parked item, the job its choices act on" }
         choices: { type: array, items: { $ref: "#/components/schemas/Choice" } }
+    Trust:
+      type: object
+      required: [levels, repos, always_asks, window_days, can_change, reason, pending]
+      properties:
+        levels: { type: array, items: { $ref: "#/components/schemas/TrustLevel" } }
+        repos: { type: array, items: { $ref: "#/components/schemas/RepoTrust" } }
+        always_asks: { type: array, items: { type: string }, description: "Kinds of change that wait for a person at every level (risk.needs_person)" }
+        window_days: { type: integer, description: How far back the record and practice runs look }
+        can_change: { type: boolean }
+        reason: { type: string, description: "Why a level can't be changed here, or empty" }
+        pending: { type: boolean, description: "factory.yaml changed since the factory started: a new level applies once it restarts" }
+    TrustLevel:
+      type: object
+      required: [level, name, detail, up_to, max_size, available, needs, evidence]
+      properties:
+        level: { type: integer }
+        name: { type: string }
+        detail: { type: string }
+        up_to: { type: string, description: "The level's auto_merge.up_to: none, low or medium" }
+        max_size: { type: string }
+        available: { type: boolean, description: The factory can work at this level today }
+        needs: { type: string, description: "What a level not built yet would take, or empty" }
+        evidence: { type: integer, description: "Changes it would have merged in the window, none gone wrong, before it's suggested" }
+    RepoTrust:
+      type: object
+      required: [repo, level, custom, stepped_back, why, merged, automatic, reverted, broke_main, practice, suggest, suggest_why]
+      properties:
+        repo: { type: string }
+        level: { type: integer }
+        custom: { type: boolean, description: "auto_merge is set by hand between levels; level is the highest it covers" }
+        stepped_back: { type: boolean, description: "The breaker turned auto-merge off: level 1 until it's reset" }
+        why: { type: string }
+        merged: { type: integer }
+        automatic: { type: integer, description: Merged by auto-merge }
+        reverted: { type: integer }
+        broke_main: { type: integer }
+        practice: { type: array, items: { $ref: "#/components/schemas/Practice" } }
+        suggest: { type: integer, description: "A level the record supports above the current one, or 0" }
+        suggest_why: { type: string }
+    Practice:
+      type: object
+      required: [level, would_merge, went_wrong]
+      properties:
+        level: { type: integer }
+        would_merge: { type: integer, description: "Merged factory PRs in the window this level would have merged on its own" }
+        went_wrong: { type: integer, description: "Of those, how many were reverted or broke main" }
     Home:
       type: object
       required: [seen_at, went_live]

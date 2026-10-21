@@ -1,0 +1,292 @@
+package web
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/store"
+)
+
+// Trust: how much the factory may do on its own, for each repo, on a
+// ladder toward full automation. Levels 1 to 5 are names for auto_merge
+// (up_to and max_size); 6 and 7 are the road ahead, not built yet. The
+// factory suggests a level up when its record at that level is clean;
+// only a person raises it. The breaker steps it back on its own.
+// Background: docs/plans/design-system.md, "Trust".
+
+// TrustLevel is one rung of the ladder.
+type TrustLevel struct {
+	Level  int    `json:"level"`
+	Name   string `json:"name"`
+	Detail string `json:"detail"`
+	// UpTo and MaxSize are its auto_merge; UpTo "none" merges nothing.
+	UpTo    string `json:"up_to"`
+	MaxSize string `json:"max_size"`
+	// Available: the factory can work at this level today.
+	Available bool `json:"available"`
+	// Needs is what a level not built yet would take.
+	Needs string `json:"needs"`
+	// Evidence is how many changes in the window it would have merged on
+	// its own, with none gone wrong, before the factory suggests it.
+	Evidence int `json:"evidence"`
+}
+
+// TrustLevels is the ladder, lowest first.
+var TrustLevels = []TrustLevel{
+	{Level: 1, Name: "Ask me about every change", Detail: "Every pull request waits for you. The factory keeps score of what it would have merged, so you can see when it's ready for more.", UpTo: "none", Available: true},
+	{Level: 2, Name: "Merge tiny, low-risk changes", Detail: "Copy, config and one-line fixes (size XS) merge once the checks and the reviewer pass.", UpTo: "low", MaxSize: "XS", Available: true, Evidence: 5},
+	{Level: 3, Name: "Merge small, low-risk changes", Detail: "Small fixes and changes (up to size S) merge on their own.", UpTo: "low", MaxSize: "S", Available: true, Evidence: 10},
+	{Level: 4, Name: "Merge low-risk changes of any normal size", Detail: "Low-risk features and fixes (up to size M) merge on their own.", UpTo: "low", MaxSize: "M", Available: true, Evidence: 20},
+	{Level: 5, Name: "Merge medium-risk changes too", Detail: "Medium-risk changes merge on their own as well. You're told each time, and each can be reverted.", UpTo: "medium", MaxSize: "M", Available: true, Evidence: 30},
+	{Level: 6, Name: "Pick its own work", Detail: "The factory files and starts its own fixes (flaky tests, failing main, dependency updates, old bugs) within a budget, under level 5's rules.", Needs: "Not built yet: today the issues it files wait for your label."},
+	{Level: 7, Name: "Ship", Detail: "It releases and deploys what it merges, with a canary and an automatic rollback. You watch, and keep the off switch.", Needs: "Not built yet: the factory doesn't deploy."},
+}
+
+// trustWindow is how far back the record and practice runs look.
+const trustWindow = 30 * 24 * time.Hour
+
+// APITrust is the trust screen.
+type APITrust struct {
+	Levels []TrustLevel   `json:"levels"`
+	Repos  []APIRepoTrust `json:"repos"`
+	// AlwaysAsks are the kinds of change that wait for a person at every level.
+	AlwaysAsks []string `json:"always_asks"`
+	WindowDays int      `json:"window_days"`
+	// CanChange: this request may raise or lower a level (see settingsWritable); Reason says why not.
+	CanChange bool   `json:"can_change"`
+	Reason    string `json:"reason"`
+	// Pending: factory.yaml changed since the factory started; a change
+	// of level applies once it restarts.
+	Pending bool `json:"pending"`
+}
+
+// APIRepoTrust is one repo's trust.
+type APIRepoTrust struct {
+	Repo  string `json:"repo"`
+	Level int    `json:"level"`
+	// Custom: its auto_merge is set by hand to something between levels;
+	// Level is the highest it covers.
+	Custom bool `json:"custom"`
+	// SteppedBack: the breaker turned auto-merge off, so it works at
+	// level 1 until it's reset; Why says what tripped it.
+	SteppedBack bool   `json:"stepped_back"`
+	Why         string `json:"why"`
+	// The record over the window.
+	Merged    int `json:"merged"`
+	Automatic int `json:"automatic"`
+	Reverted  int `json:"reverted"`
+	BrokeMain int `json:"broke_main"`
+	// Practice is what each level would have merged on its own over the
+	// window, and how many of those went wrong.
+	Practice []APIPractice `json:"practice"`
+	// Suggest is the level the record supports, above the current one; 0
+	// for none. SuggestWhy says why, or why not yet.
+	Suggest    int    `json:"suggest"`
+	SuggestWhy string `json:"suggest_why"`
+}
+
+// APIPractice is a practice run: one level against the window's merges.
+type APIPractice struct {
+	Level      int `json:"level"`
+	WouldMerge int `json:"would_merge"`
+	WentWrong  int `json:"went_wrong"`
+}
+
+func levelOf(a *config.AutoMerge) (int, bool) {
+	if !a.On() {
+		return 1, false
+	}
+	level := 1
+	for _, l := range TrustLevels {
+		if l.Available && l.Level > 1 && a.Allows(l.UpTo, l.MaxSize) {
+			level = l.Level
+		}
+	}
+	l := TrustLevels[level-1]
+	ms := a.MaxSize
+	if ms == "" {
+		ms = "S"
+	}
+	return level, level == 1 || a.UpTo != l.UpTo || ms != l.MaxSize
+}
+
+func (l TrustLevel) autoMerge() *config.AutoMerge {
+	return &config.AutoMerge{UpTo: l.UpTo, MaxSize: l.MaxSize}
+}
+
+func (s *Server) trust(r *http.Request) (APITrust, error) {
+	ctx := r.Context()
+	out := APITrust{Levels: TrustLevels, Repos: []APIRepoTrust{}, WindowDays: int(trustWindow.Hours() / 24)}
+	out.CanChange, out.Reason = s.settingsWritable(r)
+	if s.SetTrust == nil {
+		out.CanChange, out.Reason = false, "This control room can't change trust."
+	}
+	var cfg *config.Config
+	if s.ConfigPath != "" {
+		b, err := os.ReadFile(s.ConfigPath)
+		if err != nil {
+			return out, err
+		}
+		out.Pending = s.StartedConfig != "" && ConfigVersion(b) != s.StartedConfig
+		if cfg, err = config.Load(s.ConfigPath); err != nil {
+			return out, err
+		}
+		out.AlwaysAsks = cfg.Risk.NeedsPerson
+	}
+	if out.AlwaysAsks == nil {
+		out.AlwaysAsks = []string{}
+	}
+	var breakers []APIBreaker
+	if s.Breakers != nil {
+		breakers = s.Breakers(ctx)
+	}
+	since := time.Now().Add(-trustWindow).UTC().Format(store.TimeFormat)
+	for _, repo := range s.Repos {
+		t := APIRepoTrust{Repo: repo, Level: 1, Practice: []APIPractice{}}
+		if cfg != nil {
+			if rc, ok := cfg.RepoConf(repo); ok {
+				t.Level, t.Custom = levelOf(rc.AutoMerge)
+			}
+		}
+		if i := slices.IndexFunc(breakers, func(b APIBreaker) bool { return strings.EqualFold(b.Repo, repo) }); i >= 0 && breakers[i].Tripped {
+			t.SteppedBack, t.Why = true, breakers[i].Reason
+		}
+		if err := s.practice(ctx, &t, since); err != nil {
+			return out, err
+		}
+		out.Repos = append(out.Repos, t)
+	}
+	return out, nil
+}
+
+// practice fills a repo's record and practice runs from its merged
+// factory PRs, and the level its record supports.
+func (s *Server) practice(ctx context.Context, t *APIRepoTrust, since string) error {
+	merges, err := s.Store.FactoryMerges(ctx, t.Repo, since)
+	if err != nil {
+		return err
+	}
+	type change struct {
+		risk, size string
+		wrong      bool
+	}
+	var changes []change
+	for _, m := range merges {
+		t.Merged++
+		wrong := m.RevertedAt != "" || m.RedAt != ""
+		if m.Auto {
+			t.Automatic++
+		}
+		if m.RevertedAt != "" {
+			t.Reverted++
+		}
+		if m.RedAt != "" {
+			t.BrokeMain++
+		}
+		c := change{wrong: wrong}
+		if m.ItemID > 0 {
+			if it, err := s.Store.GetItem(ctx, m.ItemID); err == nil && it != nil {
+				c.risk, c.size = it.Risk, it.Complexity
+			}
+		}
+		changes = append(changes, c)
+	}
+	for _, l := range TrustLevels {
+		if !l.Available || l.Level == 1 {
+			continue
+		}
+		p := APIPractice{Level: l.Level}
+		for _, c := range changes {
+			if l.autoMerge().Allows(c.risk, c.size) {
+				p.WouldMerge++
+				if c.wrong {
+					p.WentWrong++
+				}
+			}
+		}
+		t.Practice = append(t.Practice, p)
+	}
+	next := t.Level + 1
+	switch {
+	case t.SteppedBack:
+		t.SuggestWhy = "Auto-merge is off after what went wrong. Reset it first; the record starts again from there."
+	case next > len(TrustLevels) || !TrustLevels[next-1].Available:
+		t.SuggestWhy = "It's at the highest level the factory can work at today."
+	default:
+		p := t.Practice[slices.IndexFunc(t.Practice, func(p APIPractice) bool { return p.Level == next })]
+		need := TrustLevels[next-1].Evidence
+		switch {
+		case p.WentWrong > 0:
+			t.SuggestWhy = fmt.Sprintf("Not yet: %d of the %d changes level %d would have merged went wrong.", p.WentWrong, p.WouldMerge, next)
+		case p.WouldMerge < need:
+			t.SuggestWhy = fmt.Sprintf("Not yet: level %d would have merged %d changes in %d days, none gone wrong. It needs %d.", next, p.WouldMerge, int(trustWindow.Hours()/24), need)
+		default:
+			t.Suggest = next
+			t.SuggestWhy = fmt.Sprintf("Level %d would have merged %d changes on its own in the last %d days, and none was reverted or broke main.", next, p.WouldMerge, int(trustWindow.Hours()/24))
+		}
+	}
+	return nil
+}
+
+func (s *Server) apiTrust(w http.ResponseWriter, r *http.Request) {
+	t, err := s.trust(r)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+// apiSetTrust moves a repo to a level: its auto_merge in factory.yaml,
+// applied once the factory restarts.
+func (s *Server) apiSetTrust(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(w, r) {
+		return
+	}
+	if ok, why := s.settingsWritable(r); !ok {
+		apiErr(w, http.StatusForbidden, why)
+		return
+	}
+	if s.SetTrust == nil {
+		apiErr(w, http.StatusNotFound, "this control room can't change trust")
+		return
+	}
+	var in struct {
+		Repo  string `json:"repo"`
+		Level int    `json:"level"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Level < 1 || in.Level > len(TrustLevels) || !TrustLevels[in.Level-1].Available {
+		apiErr(w, http.StatusBadRequest, fmt.Sprintf("level %d isn't one the factory can work at", in.Level))
+		return
+	}
+	if !slices.ContainsFunc(s.Repos, func(x string) bool { return strings.EqualFold(x, in.Repo) }) {
+		apiErr(w, http.StatusBadRequest, in.Repo+" isn't one of the factory's repos")
+		return
+	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	l := TrustLevels[in.Level-1]
+	if err := s.SetTrust(r.Context(), in.Repo, l.autoMerge()); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	t, err := s.trust(r)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Message string   `json:"message"`
+		Trust   APITrust `json:"trust"`
+	}{fmt.Sprintf("%s is set to level %d: %s. It applies once the factory restarts.", in.Repo, l.Level, strings.ToLower(l.Name[:1])+l.Name[1:]), t})
+}

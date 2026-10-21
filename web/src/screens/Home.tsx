@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ExternalLink, MessageCircle } from "lucide-react";
-import { postJSON, useBoard, useHome, useOverview, type Card as CardT } from "@/api/client";
+import { CheckCircle2, ExternalLink, MessageCircle, ShieldCheck } from "lucide-react";
+import { postJSON, useBoard, useHome, useOverview, useTrust, type Card as CardT } from "@/api/client";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,8 @@ export function HomeScreen() {
 
       <LineStrip moving={moving} you={needs.length} stuck={stuck.length} />
 
+      <Earned />
+
       <button
         onClick={openAsk}
         className="flex h-12 cursor-pointer items-center gap-3 rounded-card border bg-surface px-4 text-left text-body text-muted-foreground hover:border-muted-foreground/40"
@@ -116,6 +118,25 @@ export function HomeScreen() {
         <span className="flex-1">Ask, or hand over a task…</span>
       </button>
     </div>
+  );
+}
+
+/** A repo whose record supports more trust, to raise on the trust screen. */
+function Earned() {
+  const r = useTrust().data?.repos.find((x) => x.suggest > 0);
+  if (!r) return null;
+  return (
+    <Link
+      to={`/trust?repo=${encodeURIComponent(r.repo)}`}
+      aria-label="Earned more trust"
+      className="flex items-start gap-2.5 rounded-card bg-live-bg px-4 py-3 text-body-sm hover:ring-1 hover:ring-live-border"
+    >
+      <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+      <span className="flex-1">
+        <span className="font-mono">{r.repo}</span> has earned more trust. {r.suggest_why}{" "}
+        <span className="font-medium text-primary">Move it to level {r.suggest}?</span>
+      </span>
+    </Link>
   );
 }
 

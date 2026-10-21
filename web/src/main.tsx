@@ -14,6 +14,7 @@ import { MetricsScreen } from "@/screens/Metrics";
 import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
 import { HistoryScreen } from "@/screens/History";
+import { TrustScreen } from "@/screens/Trust";
 import { SettingsScreen } from "@/screens/Settings";
 import { SetupScreen } from "@/screens/Setup";
 import { GetStartedScreen } from "@/screens/GetStarted";
@@ -36,6 +37,7 @@ const router = createBrowserRouter(
         { path: "/metrics", element: <MetricsScreen /> },
         { path: "/notifications", element: <NotificationsScreen /> },
         { path: "/history", element: <HistoryScreen /> },
+        { path: "/trust", element: <TrustScreen /> },
         { path: "/live", element: <Navigate to="/history" replace /> },
         { path: "/settings", element: <SettingsScreen /> },
         { path: "/setup", element: <SetupScreen /> },

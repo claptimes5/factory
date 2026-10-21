@@ -120,6 +120,7 @@ func (r *restarter) RestartWaitsFor() string            { return "" }
 const sampleConfig = `# A sample factory.yaml for the devserver.
 repos: [acme/api, acme/web]
 runner: {kind: local}
+auto_merge: {up_to: low, max_size: S}
 
 routing:
   triage:       {harness: claude, model: haiku}
@@ -201,6 +202,8 @@ func main() {
 		Wizard:       newWizard(rs),
 		Uninstaller:  uninstaller{},
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
+		// Trust levels are written to the sample config as the factory writes them.
+		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge) error { return config.SetRepoAutoMerge(cfgPath, repo, a) },
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{
 				{Repo: "acme/api", On: true, Strikes: 1, Threshold: 2, WindowHours: 168},

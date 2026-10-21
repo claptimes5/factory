@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
-import { Activity, History, House, LayoutGrid, LogOut, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, History, House, ShieldCheck, LayoutGrid, LogOut, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -63,6 +63,7 @@ const links = [
   { to: "/", label: "Home", icon: House, end: true },
   { to: "/line", label: "The line", icon: LayoutGrid },
   { to: "/history", label: "History", icon: History },
+  { to: "/trust", label: "Trust", icon: ShieldCheck },
   { to: "/metrics", label: "Spend", icon: Activity },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];

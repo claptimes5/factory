@@ -824,6 +824,8 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/spend", s.apiSpend)
 	mux.HandleFunc("GET /api/v1/notifications", s.apiNotifications)
 	mux.HandleFunc("GET /api/v1/home", s.apiHome)
+	mux.HandleFunc("GET /api/v1/trust", s.apiTrust)
+	mux.HandleFunc("POST /api/v1/trust", s.apiSetTrust)
 	mux.HandleFunc("POST /api/v1/home/seen", s.apiHomeSeen)
 	mux.HandleFunc("GET /api/v1/stream", s.apiStream)
 	mux.HandleFunc("GET /api/v1/settings", s.apiSettings)

@@ -1472,6 +1472,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trust: each repo's level on the ladder toward full automation, its record and practice runs */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Trust"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Move a repo to a trust level (its auto_merge in factory.yaml), applied once the factory restarts */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        /** @description 1 to 5; 6 and 7 aren't built yet */
+                        level: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: string;
+                            trust: components["schemas"]["Trust"];
+                        };
+                    };
+                };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stream": {
         parameters: {
             query?: never;
@@ -3518,6 +3587,58 @@ export interface components {
             /** @description For a parked item, the job its choices act on */
             choice_job_id: number | null;
             choices: components["schemas"]["Choice"][];
+        };
+        Trust: {
+            levels: components["schemas"]["TrustLevel"][];
+            repos: components["schemas"]["RepoTrust"][];
+            /** @description Kinds of change that wait for a person at every level (risk.needs_person) */
+            always_asks: string[];
+            /** @description How far back the record and practice runs look */
+            window_days: number;
+            can_change: boolean;
+            /** @description Why a level can't be changed here, or empty */
+            reason: string;
+            /** @description factory.yaml changed since the factory started: a new level applies once it restarts */
+            pending: boolean;
+        };
+        TrustLevel: {
+            level: number;
+            name: string;
+            detail: string;
+            /** @description The level's auto_merge.up_to: none, low or medium */
+            up_to: string;
+            max_size: string;
+            /** @description The factory can work at this level today */
+            available: boolean;
+            /** @description What a level not built yet would take, or empty */
+            needs: string;
+            /** @description Changes it would have merged in the window, none gone wrong, before it's suggested */
+            evidence: number;
+        };
+        RepoTrust: {
+            repo: string;
+            level: number;
+            /** @description auto_merge is set by hand between levels; level is the highest it covers */
+            custom: boolean;
+            /** @description The breaker turned auto-merge off: level 1 until it's reset */
+            stepped_back: boolean;
+            why: string;
+            merged: number;
+            /** @description Merged by auto-merge */
+            automatic: number;
+            reverted: number;
+            broke_main: number;
+            practice: components["schemas"]["Practice"][];
+            /** @description A level the record supports above the current one, or 0 */
+            suggest: number;
+            suggest_why: string;
+        };
+        Practice: {
+            level: number;
+            /** @description Merged factory PRs in the window this level would have merged on its own */
+            would_merge: number;
+            /** @description Of those, how many were reverted or broke main */
+            went_wrong: number;
         };
         Home: {
             /** @description When Home was last marked seen; empty before the first time */

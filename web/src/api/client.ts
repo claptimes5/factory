@@ -117,6 +117,11 @@ export type Home = S["Home"];
 /** Home's catch-up: when it was last looked at, and what went live since. */
 export const useHome = () => useQuery({ queryKey: ["home"], queryFn: () => getJSON<Home>("/home") });
 
+export type Trust = S["Trust"];
+export type RepoTrust = S["RepoTrust"];
+/** Each repo's trust level, its record and practice runs. */
+export const useTrust = () => useQuery({ queryKey: ["trust"], queryFn: () => getJSON<Trust>("/trust") });
+
 export const useBoard = (opts: { enabled?: boolean; refetchInterval?: number | ((q: { state: { data?: Board } }) => number) } = {}) =>
   useQuery({ queryKey: ["board"], queryFn: () => getJSON<Board>("/board"), ...opts });
 export const useItem = (id: number) =>
