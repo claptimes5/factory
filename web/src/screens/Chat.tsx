@@ -18,7 +18,7 @@ type Sent = components["schemas"]["SentChat"];
 
 const writing = (st?: string) => st === "queued" || st === "running";
 
-const useChats = () => useQuery({ queryKey: ["chats"], queryFn: () => getJSON<Chats>("/chats") });
+export const useChats = () => useQuery({ queryKey: ["chats"], queryFn: () => getJSON<Chats>("/chats") });
 
 /** One chat. While its reply is written it polls, since drafts land mid-run. */
 const useChat = (id: number) =>
@@ -112,7 +112,14 @@ const modelName = (m: string) => (m ? m.charAt(0).toUpperCase() + m.slice(1) : "
 /** "1h0m0s" as "1h", "30m0s" as "30m". */
 const every = (d: string) => d.replace(/(\d+[hm])0s$/, "$1").replace(/h0m$/, "h");
 
-function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats; onStarted: (id: number) => void }) {
+/** Requests the Ask panel offers: each fills the message, for you to finish or send. */
+const suggestions = ["What's running right now?", "What's stuck, and why?", "What shipped this week?", "Draft an issue to "];
+
+/**
+ * A chat's messages, its drafted issues and the box to write in. Compact
+ * is the Ask panel's: suggestions in place of the examples, no frame.
+ */
+export function Conversation({ chatId, info, onStarted, compact }: { chatId: number; info: Chats; onStarted: (id: number) => void; compact?: boolean }) {
   const qc = useQueryClient();
   const { data, error, isLoading } = useChat(chatId);
   const [text, setText] = useState("");
@@ -162,11 +169,13 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
       await qc.invalidateQueries({ queryKey: ["chat", chatId] });
     }
   };
+  const Frame = compact ? "div" : Card;
+  const Body = compact ? "div" : CardContent;
   return (
     <div className="min-w-0 space-y-4">
-      <Card>
-        <CardContent className="space-y-3 pt-4" data-testid="conversation">
-          {turns === 0 && (
+      <Frame>
+        <Body className={cn("space-y-3", !compact && "pt-4")} data-testid="conversation">
+          {turns === 0 && !compact && (
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>Say what you want, as you would to a teammate. For example:</p>
               <ul className="list-disc space-y-1 pl-5">
@@ -218,8 +227,8 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
             </div>
           )}
           <div ref={end} />
-        </CardContent>
-      </Card>
+        </Body>
+      </Frame>
       {drafts.length > 0 && (
         <section className="space-y-2" aria-label="Drafted issues">
           <div className="flex flex-wrap items-center gap-2">
@@ -253,6 +262,20 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
           if (text.trim()) void send();
         }}
       >
+        {compact && turns === 0 && (
+          <div className="flex flex-wrap gap-2" aria-label="Suggestions" role="group">
+            {suggestions.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setText(t)}
+                className="h-9 cursor-pointer rounded-full border bg-surface px-3 text-meta hover:bg-accent"
+              >
+                {t.trim()}
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           aria-label="Message"
           value={text}
@@ -263,15 +286,15 @@ function Conversation({ chatId, info, onStarted }: { chatId: number; info: Chats
               if (text.trim() && !busy && !sending) void send();
             }
           }}
-          rows={3}
-          placeholder={busy ? "Wait for the reply…" : "Describe what you want built, or ask about the factory's work"}
-          className="w-full rounded-md border bg-card px-3 py-2 text-sm"
+          rows={compact ? 2 : 3}
+          placeholder={busy ? "Wait for the reply…" : compact ? "Ask, or hand over a task…" : "Describe what you want built, or ask about the factory's work"}
+          className="w-full rounded-control border bg-surface px-3 py-2 text-base md:text-body-sm"
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" size="sm" disabled={!text.trim() || busy || sending || !info.available}>
             {sending ? <Loader2 className="animate-spin" /> : <Send />} Send
           </Button>
-          <span className="text-xs text-muted-foreground">Enter sends; Shift+Enter starts a new line.</span>
+          {!compact && <span className="text-xs text-muted-foreground">Enter sends; Shift+Enter starts a new line.</span>}
           {msg && (
             <span role="alert" className="text-sm text-destructive">
               {msg}
