@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -12,6 +13,9 @@ func TestPresets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Fast mode on Opus, which only Opus may have: a preset that moves the
+	// route off Opus must drop it.
+	src = []byte(strings.Replace(string(src), "implement.L:       {harness: claude, model: opus}", "implement.L:       {harness: claude, model: opus, fast: true}", 1))
 	c, err := ParseIn(src, "../..")
 	if err != nil {
 		t.Fatal(err)

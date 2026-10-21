@@ -160,6 +160,9 @@ export const useUninstall = (enabled: boolean) =>
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
   postJSON<Settings>("/settings", { changes, version });
 
+/** Sets how hard the factory works, for the harnesses named (empty: as they are). */
+export const applyPreset = (body: { key?: string; builder?: string; reviewer?: string; version: string }) => postJSON<Settings>("/settings/preset", body);
+
 /**
  * The get-started page. It polls while a check or an image build runs.
  */

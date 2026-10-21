@@ -162,6 +162,11 @@ func (c *Config) PresetChanges(key, builder, reviewer string) ([]Change, error) 
 			e = r.Effort
 		}
 		out = append(out, Change{Path: append(slices.Clone(p), "effort"), Value: e})
+		// Fast mode is Opus's only: a route moved off it loses it; one on
+		// it keeps what the file says.
+		if r.Harness != "claude" || r.Model != "opus" {
+			out = append(out, Change{Path: append(slices.Clone(p), "fast"), Value: nil})
+		}
 	}
 	// The security pass never runs on a reviewer's model: with two
 	// harnesses it's the builder's biggest; with one, the biggest model

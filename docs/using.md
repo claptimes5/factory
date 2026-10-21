@@ -73,18 +73,43 @@ are a tap away. A tablet gets two columns.
 
 ### Settings
 
-The Settings screen changes part of `factory.yaml` for you:
+The Settings screen changes part of `factory.yaml` for you. It starts
+with **How hard it works**, a ladder of presets:
 
-- **Budgets**: the daily cap, jobs at once, PRs waiting for you, the cap
-  per job and per triage or review, `pause_at_usage` and
-  `fast_multiplier`.
+| Preset | What it sets |
+| --- | --- |
+| **Lean** | Small models for most builds, one review round, findings not double-checked |
+| **Balanced** | A small model for small builds, the big one for large builds and review, findings double-checked, two review rounds |
+| **Thorough** | Bigger models for most builds, the reviewer at high effort, high-risk changes reviewed in pairs, three review rounds |
+| **Maximum** | The biggest model at high effort for every build and review |
+
+A preset sets the model of each step (`routing`), `review.verify`,
+`review.paired_high_risk`, `escalation.implement` and
+`escalation.max_review_rounds`, for the harness that builds and the one
+that reviews, and leaves everything else as it is. Claude's models are
+haiku, sonnet and opus; Codex's are the ones your config prices or routes
+to, cheapest first, since their names differ by account. With one harness
+the reviewer gets its biggest model, and the security pass never runs on
+a reviewer's model. The card says which preset the file is at, or "set by
+hand" once you've changed one of those settings yourself, and
+**Swap** changes which harness builds and which reviews.
+
+The rest is in five sections, each folded to a line that says where it
+stands ("$25 a day · 3 jobs at once"); one you've edited opens:
+
+- **Spending and limits**: the daily cap, jobs at once, PRs waiting for
+  you and `pause_at_usage` first; the per-job, triage and review caps and
+  `fast_multiplier` under **More limits**. When every harness is on a
+  plan, the dollar caps fold away, since no job costs dollars.
 - **Models**: the harness, model, effort and fast mode of each routing
   entry in the file.
-- **Escalation**: the model tiers, attempts per tier and review rounds.
-- **Auto-merge**: the top-level `up_to`, `max_size` and `method`.
-- **Orchestrator**, **Tuning** and **Intake**: whether the orchestrator
-  runs, its budgets and how often it runs; how often [tuning](#tuning)
-  runs and the fewest builds it needs; and how often intake polls.
+- **Review and escalation**: whether findings are verified and high-risk
+  reviews paired; the model tiers, attempts per tier and review rounds.
+- **Automation**: auto-merge's top-level `up_to`, `max_size` and
+  `method`; whether the orchestrator runs, its budgets and how often; how
+  often [tuning](#tuning) runs and the fewest builds it needs; and how
+  often intake polls.
+- **Notifications and asks**: quiet hours and concise asks.
 
 An empty box means the key is left out of the file, so its default
 applies; the box shows that default. Gate commands, repos, the runner,

@@ -326,6 +326,12 @@ test("inbox lists what needs you", async ({ page }, info) => {
 
 test("settings save to factory.yaml and restart once jobs finish", async ({ page }, info) => {
   await page.goto("/app/settings");
+  // Sections are folded to a line saying where they stand.
+  await expect(page.getByTestId("settings-section")).toHaveCount(5);
+  await expect(page.getByText("Spending and limits")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Budgets" })).toBeHidden();
+  await page.getByText("Spending and limits").click();
+  await page.getByText("Models", { exact: true }).click();
   const budgets = page.getByRole("region", { name: "Budgets" });
   await expect(page.getByRole("region", { name: "Models" })).toContainText("implement.L");
   await expect(budgets.getByLabel("Pause at usage (%)")).toHaveAttribute("placeholder", "95");
@@ -346,6 +352,24 @@ test("settings save to factory.yaml and restart once jobs finish", async ({ page
   await expect(notice).toContainText("Restart pending, waiting for 1 running job");
   await expect(page.getByText("Gate commands, repos, the runner and the network are edited in factory.yaml.")).toBeVisible();
   await shot(page, info, "settings");
+  if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("a preset sets how hard the factory works, for the harnesses it has", async ({ page }, info) => {
+  await page.goto("/app/settings");
+  const card = page.getByRole("region", { name: "How hard it works" });
+  await expect(card.getByTestId("preset")).toHaveCount(4);
+  await expect(card).toContainText(/Claude builds; Codex reviews what it builds\.|Codex builds; Claude reviews what it builds\./);
+  await expect(card.getByRole("button", { name: /Swap/ })).toBeVisible();
+  // Both projects share the devserver: pick whichever isn't the preset now.
+  await expect(async () => {
+    await page.reload(); // the other project may have just changed factory.yaml
+    const target = (await card.getByRole("button", { name: /^Thorough/ }).getAttribute("aria-pressed")) === "true" ? "Lean" : "Thorough";
+    await card.getByRole("button", { name: new RegExp("^" + target) }).click({ timeout: 3_000 });
+    await expect(card.getByRole("button", { name: new RegExp("^" + target) })).toHaveAttribute("aria-pressed", "true", { timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+  await expect(page.getByText(/Changes apply when the factory restarts|Restart pending/)).toBeVisible();
+  await shot(page, info, "presets");
   if (phone(info)) await noSidewaysScroll(page);
 });
 

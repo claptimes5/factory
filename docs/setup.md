@@ -22,8 +22,7 @@ it.
 | Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
 | git | any recent | Worktrees and pushes. |
 | Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
-| A Claude API key or subscription token | | The builder and Claude reviewers. |
-| An OpenAI API key or a ChatGPT plan | | Only if a reviewer uses Codex. |
+| Claude (an API key or subscription token), Codex (an OpenAI API key or a ChatGPT plan), or both | | Either one runs everything. With both, the one you connect first builds and the other reviews what it builds. |
 
 You don't install Claude Code, Codex or Playwright yourself. They're pinned
 in the job image (`deploy/job-image/Dockerfile`), which setup builds. The

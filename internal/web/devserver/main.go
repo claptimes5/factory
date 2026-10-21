@@ -198,7 +198,8 @@ func main() {
 			return ""
 		},
 		ReadinessDir: reports, IntakeLabel: "factory:ready", QueueReadiness: queueCheck(st, jobs, reports),
-		Plans: []string{"claude", "codex"}, PauseAtUsage: 95,
+		Harnesses: func() []string { return []string{"claude", "codex"} },
+		Plans:     []string{"claude", "codex"}, PauseAtUsage: 95,
 		Chat:         &chatter{st: st},
 		Wizard:       newWizard(rs),
 		Uninstaller:  uninstaller{},
