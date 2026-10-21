@@ -111,6 +111,11 @@ type Input struct {
 	// token may do there, and Denied is what it may not.
 	AccessChecked bool
 	Denied        []Denied
+	// FilesSet says the repo's files setting is set, so its untracked
+	// files are copied in; Checkout, when it isn't, is a checkout of the
+	// repo on this machine they could come from, or "".
+	FilesSet bool
+	Checkout string
 }
 
 // Denied is something the factory does on the repo that its token may
@@ -181,7 +186,7 @@ func Assess(ctx context.Context, in Input) *Report {
 			if err != nil {
 				out += "\n" + err.Error()
 			}
-			x.Output = tail(out, 3000)
+			x.Output = excerpt(out, 3000)
 		}
 		r.Runs = append(r.Runs, x)
 		switch {
@@ -226,6 +231,14 @@ func Assess(ctx context.Context, in Input) *Report {
 				Body: "Generate and commit the lockfile for this repo's package manager (package-lock.json, pnpm-lock.yaml, yarn.lock, Gemfile.lock, uv.lock, poetry.lock or Cargo.lock) so installs are reproducible. Don't change dependency versions beyond what the lockfile pins today."}})
 	}
 
+	// Files the repo's .worktreeinclude names (a master key, a .env)
+	// aren't in a fresh clone; a check that fails for one is the factory's
+	// setup to fix, not a builder's.
+	var include []string
+	if !in.FilesSet {
+		include = worktreeInclude(in.Dir)
+	}
+	filesHit := false
 	// Every required check must pass on the base branch, or every job fails.
 	var testRun *Run
 	allPassed := installed && len(g.Required) > 0
@@ -254,6 +267,10 @@ func Assess(ctx context.Context, in Input) *Report {
 			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "services", Title: "`" + name + "` can't reach a service it needs",
 				Detail: hint + "\n\n" + fence(x.Output)})
+		} else if missing := mentioned(x.Output, include); !x.Passed && missing != "" {
+			allPassed, filesHit = false, true
+			r.add(Finding{Level: Blocker, Area: "files", Title: "`" + name + "` fails without " + missing + ", which git doesn't track",
+				Detail: filesDetail(in, include) + "\n\n" + fence(x.Output)})
 		} else if !x.Passed {
 			allPassed = false
 			r.add(Finding{Level: Blocker, Area: "checks", Title: "`" + name + "` fails on " + r.Branch,
@@ -265,6 +282,9 @@ func Assess(ctx context.Context, in Input) *Report {
 	}
 	if allPassed {
 		r.add(Finding{Level: Good, Area: "checks", Title: "Every required check passes on " + r.Branch + ": " + strings.Join(orderGates(g.Required), ", ")})
+	}
+	if len(include) > 0 && !filesHit {
+		r.add(Finding{Level: Gap, Area: "files", Title: "The factory doesn't copy the files .worktreeinclude lists", Detail: filesDetail(in, include)})
 	}
 	for _, want := range []struct{ gate, why string }{
 		{"test", "Nothing checks that a change works."},
@@ -348,6 +368,50 @@ func Assess(ctx context.Context, in Input) *Report {
 	}
 
 	return r.finish()
+}
+
+// worktreeInclude are the paths dir's .worktreeinclude names, as written
+// there less a leading or trailing /, or none.
+func worktreeInclude(dir string) []string {
+	b, err := os.ReadFile(filepath.Join(dir, ".worktreeinclude"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		l = strings.Trim(strings.TrimSpace(l), "/")
+		if l != "" && !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "!") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// mentioned is the first of paths that out names, or "": a check that
+// says it lacks config/master.key needs that file, not a code change.
+func mentioned(out string, paths []string) string {
+	for _, p := range paths {
+		if !strings.ContainsAny(p, "*?[") && strings.Contains(out, p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// filesDetail says how to have the factory copy what .worktreeinclude
+// names into its checkouts.
+func filesDetail(in Input, include []string) string {
+	from := in.Checkout
+	where := "Point it at a checkout of the repo on this machine"
+	if from != "" {
+		where = "There's a checkout of the repo at " + from + ", so"
+	} else {
+		from = "/path/to/your/checkout"
+	}
+	return "A fresh copy of the repo doesn't have files git doesn't track, and this repo's .worktreeinclude lists some it needs (" + strings.Join(include, ", ") + "). " +
+		where + " add this to the repo in factory.yaml:\n\n" +
+		fence("repos:\n  - name: "+in.Repo.Name+"\n    files:\n      from: "+from) +
+		"\nThe factory then copies what .worktreeinclude picks into every job's checkout, as Claude Code does for its worktrees, except folders an install makes, like node_modules. They're never committed. Restart the factory, then check again."
 }
 
 // reviewGuide looks for a REVIEW.md, which tells the factory's reviewers
@@ -721,11 +785,15 @@ func fence(s string) string {
 	return f + "\n" + s + "\n" + f + "\n"
 }
 
-func tail(s string, n int) string {
+// excerpt keeps about n bytes of a command's output: its start, where an
+// error usually says what went wrong (a stack trace's message comes before
+// its frames), and its end, where a summary is.
+func excerpt(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return "…" + s[len(s)-n:]
+	head, end := n/3, n-n/3
+	return strings.ToValidUTF8(s[:head], "") + "\n…\n" + strings.ToValidUTF8(s[len(s)-end:], "")
 }
 
 // Save writes the report as JSON next to the factory's data.

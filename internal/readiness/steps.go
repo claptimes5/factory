@@ -40,7 +40,7 @@ var steps = []struct {
 	{"install", "Dependencies install from a clean checkout",
 		"Every job starts by installing dependencies on a fresh copy of {branch}.", []string{"install"}},
 	{"checks", "Every required check passes on {branch}",
-		"Every change runs these checks. One that already fails on {branch} fails every change, whatever it does.", []string{"checks", "services"}},
+		"Every change runs these checks. One that already fails on {branch} fails every change, whatever it does.", []string{"checks", "services", "files"}},
 	{"tests", "There are tests, and they pass every time",
 		"The factory proves each change with the tests, so there must be some, and they must give the same answer on every run.", []string{"tests"}},
 }

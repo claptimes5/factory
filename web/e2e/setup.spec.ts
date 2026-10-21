@@ -171,6 +171,9 @@ test("lint failing on main offers a baseline, and making it keeps its pull reque
   }).toPass({ timeout: 40_000 });
   const pr = offer.getByRole("link", { name: "Open the pull request" });
   await expect(pr).toHaveAttribute("href", "https://github.com/acme/api/pull/120", { timeout: 10_000 });
+  const lint = api.getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
+  await expect(lint).toContainText("Baseline: yours to merge");
+  await expect(lint.getByRole("link", { name: "Open the pull request" })).toHaveAttribute("href", /\/pull\/120$/);
   await expect(api).toContainText("Once you merge it, the factory checks again by itself.");
 });
 
@@ -201,6 +204,10 @@ test("a setup run in progress shows the same on every screen, with its time coun
   const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
   await expect(next).toContainText("Working on it: making the lint baseline");
   await expect(next).toContainText("Started 1m ago");
+  // The lint row says so too, rather than what became of its issue.
+  const lint = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("setup-step").nth(1).getByTestId("readiness-finding");
+  await expect(lint).toContainText("Making the baseline");
+  await expect(lint).toContainText("recording today's offenses as a baseline");
 });
 
 test("a token that can't open pull requests comes first, on Setup and Home, before any work", async ({ page }) => {

@@ -3238,6 +3238,8 @@ export interface components {
             blockers: components["schemas"]["ReadinessFinding"][];
         };
         ReadinessFinding: {
+            /** @description What it's about across checks (check:lint, flaky), or empty with nothing to file */
+            key: string;
             /** @enum {string} */
             level: "blocker" | "gap" | "tip" | "good";
             area: string;

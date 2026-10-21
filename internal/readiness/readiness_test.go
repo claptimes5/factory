@@ -355,3 +355,47 @@ func TestTestsThatRanNothing(t *testing.T) {
 		t.Fatal("ranNoTests: Minitest's empty run, or a real RSpec run")
 	}
 }
+
+// A check that fails for a file .worktreeinclude names, which a fresh
+// clone lacks, is the factory's setup to fix: no builder issue, and the
+// finding says what to add, with the checkout found on this machine.
+// Once files is set, or with nothing missing, it's a check like any other.
+func TestChecksThatNeedUntrackedFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := tree(t, "Gemfile", "Gemfile.lock", "test/models/user_test.rb")
+	os.WriteFile(filepath.Join(dir, ".worktreeinclude"), []byte(".env\n\n/config/master.key\nnode_modules/\n"), 0o644)
+	exec := func(_ context.Context, _ string, cmd string, _ bool) (int, string, error) {
+		if cmd == "run test" {
+			return 1, "ActiveSupport::EncryptedConfiguration::MissingKeyError: Missing encryption key. Write it to config/master.key", nil
+		}
+		return 0, "", nil
+	}
+	in := Input{Repo: repo("bundle install", "lint", "test"), Dir: dir, Exec: exec, Checkout: "/home/me/code/api"}
+	r := Assess(ctx, in)
+	var f *Finding
+	for i := range r.Findings {
+		if r.Findings[i].Area == "files" {
+			f = &r.Findings[i]
+		}
+	}
+	if f == nil || f.Level != Blocker || f.Issue != nil || f.Title != "`test` fails without config/master.key, which git doesn't track" {
+		t.Fatalf("report:\n%s", r.Text())
+	}
+	if !strings.Contains(f.Detail, "from: /home/me/code/api") || !strings.Contains(f.Detail, "name: o/api") {
+		t.Fatalf("detail: %s", f.Detail)
+	}
+	for _, is := range r.Issues() {
+		if strings.Contains(is.Title, "test check") {
+			t.Fatalf("a builder was asked to fix a missing key: %+v", is)
+		}
+	}
+	if s := r.Steps()[1]; s.Key != "checks" || s.State != StepFailing {
+		t.Fatalf("checks step %+v", s)
+	}
+
+	in.FilesSet = true
+	r = Assess(ctx, in)
+	if strings.Contains(r.Text(), "git doesn't track") || titles(r, Blocker) != "`test` fails on main" {
+		t.Fatalf("with files set:\n%s", r.Text())
+	}
+}

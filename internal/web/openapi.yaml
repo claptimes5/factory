@@ -1138,8 +1138,9 @@ components:
         blockers: { type: array, items: { $ref: "#/components/schemas/ReadinessFinding" } }
     ReadinessFinding:
       type: object
-      required: [level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
+      required: [key, level, area, title, detail, issue, issue_url, status, split_done, split_total, item_id, item_stage]
       properties:
+        key: { type: string, description: "What it's about across checks (check:lint, flaky), or empty with nothing to file" }
         level: { type: string, enum: [blocker, gap, tip, good] }
         area: { type: string }
         title: { type: string, description: "Markdown: code spans in backticks" }

@@ -297,7 +297,15 @@ brings only the files git doesn't track there.
 
 Leave out `paths` and the `.worktreeinclude` file in `from` picks them,
 the way Claude Code does for its worktrees: the files that match its
-patterns (gitignore syntax) and are gitignored.
+patterns (gitignore syntax) and are gitignored. Folders a job's install
+makes (`node_modules`, `vendor/bundle`, `.venv`, `.bundle`) are left out:
+copying yours would be slow, and built for your machine, not the job's.
+
+The readiness check notices a repo that commits a `.worktreeinclude`
+while `files` isn't set. A check that fails naming one of its files (a
+missing `config/master.key`, say) is a setup blocker for you rather than
+an issue for a builder, and it says what to add, with the path of a
+checkout of the repo it found under your home folder.
 
 ```
 # .worktreeinclude

@@ -76,19 +76,30 @@ const statusText: Record<string, { label: string; variant: "default" | "secondar
 };
 
 /** One blocker or gap, with its issue and the factory's work on it. */
-function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean }) {
+function Finding({ f, label, repo, canFile, offersFile }: { f: FindingT; label: string; repo: RepoReadiness; canFile: boolean; offersFile: boolean }) {
   const [open, setOpen] = useState(false);
+  // Lint with a baseline under way is being fixed by that, whatever became of its issue.
+  const baseline = f.key === "check:lint" && f.status !== "done" ? (repo.checking && repo.action === "baseline" ? "making" : repo.baseline_pr ? "waiting" : "") : "";
   const s =
-    f.status === "split"
-      ? { label: `Split: ${f.split_done} of ${f.split_total} done`, variant: "default" as const }
-      : (statusText[f.status] ?? { label: f.status, variant: "secondary" as const });
-  const hint =
-    f.status === "none"
+    baseline === "making"
+      ? { label: "Making the baseline", variant: "default" as const }
+      : baseline === "waiting"
+        ? { label: "Baseline: yours to merge", variant: "warning" as const }
+        : f.status === "split"
+          ? { label: `Split: ${f.split_done} of ${f.split_total} done`, variant: "default" as const }
+          : (statusText[f.status] ?? { label: f.status, variant: "secondary" as const });
+  const hint = baseline
+    ? baseline === "making"
+      ? "The factory is recording today's offenses as a baseline. Once you merge its pull request, lint passes and the issues it was split into close."
+      : "Merge the baseline's pull request: lint then passes, only new offenses fail, and the issues it was split into close."
+    : f.status === "none"
       ? f.level === "blocker"
         ? "The factory can't change this one: its fix is in factory.yaml or the factory's setup."
         : "The factory doesn't file an issue for this one: the details say what to add."
       : f.status === "not_filed"
-        ? canFile && repo.unfiled > 0 && "No issue yet: File and start work files one."
+        ? canFile &&
+          repo.unfiled > 0 &&
+          (offersFile ? "No issue yet: File and start work files one." : "No issue yet: it's filed when you get to File and start work, after the next step above.")
         : f.status === "not_queued"
           ? `Add the ${label} label on the issue so the factory works on it.`
           : f.status === "split"
@@ -102,7 +113,17 @@ function Finding({ f, label, repo, canFile }: { f: FindingT; label: string; repo
         <span className="min-w-0 flex-1 text-sm font-medium break-words">
           <Inline text={f.title} />
         </span>
-        {f.level !== "good" && <Badge variant={s.variant}>{s.label}</Badge>}
+        {f.level !== "good" && (
+          <Badge variant={s.variant}>
+            {baseline === "making" && <Loader2 className="size-3 animate-spin" aria-hidden />}
+            {s.label}
+          </Badge>
+        )}
+        {baseline === "waiting" && (
+          <a href={repo.baseline_pr} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
+            Open the pull request <ExternalLink className="size-3" aria-hidden />
+          </a>
+        )}
         {f.issue > 0 && (
           <a href={f.issue_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-mono text-xs text-primary hover:underline">
             #{f.issue} <ExternalLink className="size-3" aria-hidden />
@@ -137,7 +158,7 @@ function StepIcon({ state }: { state: string }) {
   return <CircleDashed aria-label="Not checked yet" className="size-5 shrink-0 text-muted-foreground" />;
 }
 
-function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; label: string; repo: RepoReadiness; canFile: boolean }) {
+function StepRow({ step, n, label, repo, canFile, offersFile }: { step: Step; n: number; label: string; repo: RepoReadiness; canFile: boolean; offersFile: boolean }) {
   return (
     <li data-testid="setup-step" className="flex gap-3 py-3">
       <StepIcon state={step.state} />
@@ -151,7 +172,7 @@ function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; lab
         {step.blockers.length > 0 && (
           <ul className="divide-y">
             {step.blockers.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} />
+              <Finding key={f.title} f={f} label={label} repo={repo} canFile={canFile} offersFile={offersFile} />
             ))}
           </ul>
         )}
@@ -171,7 +192,7 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const label = data.intake_label;
   const blockers = r.steps.flatMap((s) => s.blockers);
   const merged = blockers.filter((f) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total)).length;
-  const lintFails = blockers.some((f) => f.status !== "done" && /^`?lint`? fails/.test(f.title));
+  const lintFails = blockers.some((f) => f.key === "check:lint" && f.status !== "done");
   const needsYou = [...blockers, ...r.extras].filter((f) => f.status === "needs_you").length;
   const yours = blockers.filter((f) => f.status === "none").length;
   const recommended = r.extras.filter((f) => f.level === "gap" && f.status !== "done").length;
@@ -227,6 +248,15 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
         ...(host ? [{ label: "Open your access tokens", primary: true, href: `https://${host}/-/user_settings/personal_access_tokens` }] : []),
         ...check.map((a) => ({ ...a, primary: !host })),
       ],
+    };
+  }
+  const files = blockers.find((f) => f.area === "files");
+  if (files) {
+    return {
+      tone: "attention",
+      title: "Next: let the factory copy the files git doesn't track",
+      body: `${files.title.replace(/`/g, "")}. A fresh copy of the repo lacks what its .worktreeinclude lists, and no change can add it, so every job would fail. Point factory.yaml's files setting at a checkout of the repo on this machine (the checks step below says exactly what to add), restart the factory, then check again.`,
+      actions: check,
     };
   }
   if (r.state === "not_ready" && merged > 0) {
@@ -399,6 +429,7 @@ const stateBadge: Record<string, [string, "success" | "warning" | "destructive" 
 function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: boolean }) {
   const { busy, msg, run } = useReadinessRun(r);
   const check = () => run("/readiness/check", {});
+  const offersFile = nextStep(r, data).actions.some((a) => a.run?.[0] === "/readiness/file");
   const [badge, variant] = stateBadge[r.state] ?? [r.state, "secondary"];
   const label = data.intake_label;
   const gaps = r.extras.filter((f) => f.level === "gap");
@@ -472,7 +503,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       {r.steps.length > 0 && (
         <ol aria-label="Setup steps" className="divide-y border-y">
           {r.steps.map((s, i) => (
-            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} />
+            <StepRow key={s.key} step={s} n={i + 1} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
           ))}
         </ol>
       )}
@@ -492,7 +523,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           </p>
           <ul className="divide-y">
             {gaps.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
             ))}
           </ul>
         </section>
@@ -502,7 +533,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           <summary className="cursor-pointer text-sm font-medium">Nice to have ({tips.length})</summary>
           <ul className="divide-y">
             {tips.map((f) => (
-              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} />
+              <Finding key={f.title} f={f} label={label} repo={r} canFile={data.can_file} offersFile={offersFile} />
             ))}
           </ul>
         </details>

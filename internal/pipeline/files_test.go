@@ -96,14 +96,17 @@ func TestWorktreeIncludePicksIgnoredMatches(t *testing.T) {
 	ctx := context.Background()
 	from := t.TempDir()
 	git(t, from, "init", "-q")
-	writeFile(from, ".gitignore", ".env\n*.local\n")
-	writeFile(from, ".worktreeinclude", ".env\n*.local\nnotes.txt\n")
+	writeFile(from, ".gitignore", ".env\n*.local\nnode_modules/\n/config/master.key\n")
+	writeFile(from, ".worktreeinclude", ".env\n*.local\nnotes.txt\nnode_modules/\n/config/master.key\n")
 	writeFile(from, ".env", "x\n")
+	writeFile(from, "config/master.key", "x\n")
+	// What the job's install makes is left out: slow, and built for this machine.
+	writeFile(from, "node_modules/left-pad/index.js", "x\n")
 	writeFile(from, "db/settings.local", "x\n")
 	writeFile(from, "notes.txt", "matches but isn't ignored\n")
 	writeFile(from, "other.secret", "ignored nowhere\n")
 	got, err := worktreeInclude(ctx, from)
-	if err != nil || !slices.Equal(got, []string{".env", "db/settings.local"}) {
+	if err != nil || !slices.Equal(got, []string{".env", "config/master.key", "db/settings.local"}) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }

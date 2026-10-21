@@ -106,12 +106,24 @@ func worktreeInclude(ctx context.Context, from string) ([]string, error) {
 	var rel []string
 	for f := range match {
 		// A nested repo comes back as its folder.
-		if ignored[f] && !strings.HasSuffix(f, "/") {
+		if ignored[f] && !strings.HasSuffix(f, "/") && !installed(f) {
 			rel = append(rel, f)
 		}
 	}
 	slices.Sort(rel)
 	return rel, nil
+}
+
+// installed says whether f is in a folder a job's install step makes,
+// such as node_modules: copying the owner's would be slow, and built for
+// their machine rather than the job's.
+func installed(f string) bool {
+	for _, dir := range []string{"node_modules", ".venv", ".bundle"} {
+		if f == dir || strings.HasPrefix(f, dir+"/") || strings.Contains(f, "/"+dir+"/") {
+			return true
+		}
+	}
+	return strings.HasPrefix(f, "vendor/bundle/")
 }
 
 // gitList runs a NUL-separated git listing in from, the owner's checkout.

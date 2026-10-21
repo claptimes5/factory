@@ -91,6 +91,9 @@ type APIReadinessStep struct {
 // APIReadinessFinding is one thing the check found, with the issue filed
 // for it and the factory's item for that issue.
 type APIReadinessFinding struct {
+	// Key names what it's about across checks ("check:lint", "flaky"),
+	// or "" for a finding with nothing to file.
+	Key      string `json:"key"`
 	Level    string `json:"level"` // blocker, gap, tip, good
 	Area     string `json:"area"`
 	Title    string `json:"title"`
@@ -226,6 +229,7 @@ func (s *Server) readinessFinding(ctx context.Context, repo string, f readiness.
 	if f.Issue == nil {
 		return a
 	}
+	a.Key = f.Issue.Key
 	if f.Issue.Number == 0 {
 		a.Status = "not_filed"
 		return a
