@@ -324,15 +324,6 @@ func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, strin
 	return "blocks", "Fixes a setup blocker (" + strings.ReplaceAll(f.Title, "`", "") + "). Nothing else runs on " + it.Repo + " until the blockers are fixed."
 }
 
-// prName is what a pull request is called on repo's host: a GitLab repo
-// is named host/path.
-func prName(repo string) string {
-	if strings.Count(repo, "/") > 1 {
-		return "merge request"
-	}
-	return "pull request"
-}
-
 // workedBeyondSetup says whether the factory has an item that isn't for
 // one of the issues the readiness check filed: once it has, nobody needs
 // telling how to start.

@@ -803,7 +803,7 @@ func queueCheck(st *store.Store, jobs, reports string) func(context.Context, str
 		}
 		go func() {
 			dir := filepath.Join(jobs, strconv.FormatInt(j.ID, 10))
-			os.MkdirAll(dir, 0o755)
+			_ = os.MkdirAll(dir, 0o755)
 			f, err := os.Create(filepath.Join(dir, pipeline.ProgressFile))
 			if err != nil {
 				return
@@ -811,7 +811,7 @@ func queueCheck(st *store.Store, jobs, reports string) func(context.Context, str
 			defer f.Close()
 			say := func(text string) {
 				b, _ := json.Marshal(pipeline.ProgressLine{At: store.Now(), Text: text})
-				f.Write(append(b, '\n'))
+				_, _ = f.Write(append(b, '\n'))
 			}
 			for _, step := range []string{"bundle install", "bundle exec rubocop", "bin/rails test"} {
 				say("running `" + step + "`")
@@ -820,10 +820,10 @@ func queueCheck(st *store.Store, jobs, reports string) func(context.Context, str
 			}
 			if r, _ := readiness.Load(reports, repo); r != nil {
 				r.Started = time.Now().UTC()
-				readiness.Save(reports, r)
+				_, _ = readiness.Save(reports, r)
 			}
-			os.WriteFile(filepath.Join(dir, pipeline.ResultFile), []byte("Checked main. Opened 0 issue(s) on "+repo+"."), 0o644)
-			st.FinishJob(ctx, j.ID, store.Result{State: state.Succeeded})
+			_ = os.WriteFile(filepath.Join(dir, pipeline.ResultFile), []byte("Checked main. Opened 0 issue(s) on "+repo+"."), 0o644)
+			_ = st.FinishJob(ctx, j.ID, store.Result{State: state.Succeeded})
 		}()
 		return true, nil
 	}

@@ -56,7 +56,7 @@ func (p *Pipeline) runReadiness(ctx context.Context, j *store.Job) error {
 		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
 		return nil
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	res, err := p.Readiness(ctx, in.Repo, w)
 	if err != nil {
 		p.finish(ctx, j, agentRun{}, state.Failed, "", err.Error())
