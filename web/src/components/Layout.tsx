@@ -49,12 +49,19 @@ function usePalette() {
   return [open, setOpen] as const;
 }
 
+/**
+ * Factory's mark: the line, with its stations on a track. The last one is
+ * lit, the moment work reaches you or ships. The tile is ink, so it
+ * inverts with the theme like the decision cards (public/icon.svg too).
+ */
 export function Logo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 28 28" aria-hidden className={className}>
-      <rect x="2" y="10" width="7" height="16" rx="1.5" className="fill-warning-fill" />
-      <rect x="10.5" y="5" width="7" height="21" rx="1.5" className="fill-primary" />
-      <rect x="19" y="14" width="7" height="12" rx="1.5" className="fill-success-fill" />
+      <rect width="28" height="28" rx="7" className="fill-ink" />
+      <path d="M7 14h14" strokeWidth="1.6" strokeLinecap="round" className="stroke-ink-foreground opacity-45" />
+      <circle cx="7" cy="14" r="2.1" className="fill-ink-foreground" />
+      <circle cx="14" cy="14" r="2.1" className="fill-ink-foreground" />
+      <circle cx="21" cy="14" r="3.2" className="fill-ink-attention" />
     </svg>
   );
 }

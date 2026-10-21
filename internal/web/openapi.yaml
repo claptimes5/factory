@@ -449,6 +449,50 @@ paths:
                   trust: { $ref: "#/components/schemas/Trust" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /push:
+    get:
+      summary: "Web push: whether this factory can push, the key a browser subscribes with, and the devices with push on"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Push" } } } }
+  /push/subscribe:
+    post:
+      summary: Turn push on for this browser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, keys]
+              description: "PushSubscription.toJSON(), and a name for the device"
+              properties:
+                endpoint: { type: string }
+                keys: { type: object, required: [p256dh, auth], properties: { p256dh: { type: string }, auth: { type: string } } }
+                agent: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /push/unsubscribe:
+    post:
+      summary: Turn push off for a browser, by its endpoint or its id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endpoint: { type: string }
+                id: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } } }
+  /push/test:
+    post:
+      summary: Send a test push to every device with push on
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /stream:
     get:
       summary: 'A `version` event (data `{"version": string}`) whenever anything shown changes'
@@ -1622,6 +1666,21 @@ components:
         at: { type: string }
         choice_job_id: { type: [integer, "null"], description: "For a parked item, the job its choices act on" }
         choices: { type: array, items: { $ref: "#/components/schemas/Choice" } }
+    Push:
+      type: object
+      required: [available, public_key, devices]
+      properties:
+        available: { type: boolean }
+        public_key: { type: string, description: "The VAPID key (applicationServerKey), base64url" }
+        devices: { type: array, items: { $ref: "#/components/schemas/PushDevice" } }
+    PushDevice:
+      type: object
+      required: [id, agent, created_at, failed_at]
+      properties:
+        id: { type: string, description: "A hash of the device's endpoint" }
+        agent: { type: string }
+        created_at: { type: string }
+        failed_at: { type: string, description: "When the last push to it failed; empty after one that worked" }
     Trust:
       type: object
       required: [levels, repos, always_asks, window_days, can_change, reason, pending]

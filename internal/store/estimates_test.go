@@ -130,6 +130,7 @@ func TestEstimatesMigrationMarksHealthFixes(t *testing.T) {
 		`DROP TABLE review_findings`,                               // 0015
 		`DROP TABLE factory_merges`, `DROP TABLE auto_merge_guard`, // 0016
 		`DROP TABLE issue_drafts`, `DROP TABLE chat_messages`, `DROP TABLE chats`, // 0017
+		`DROP TABLE kv`, `DROP TABLE push_subscriptions`, `DROP TABLE held_notifications`, // 0018
 		`DROP TABLE groom_proposals`, `DROP TABLE groom_children`, `DROP TABLE groom_runs`, // 0014
 		`DROP TABLE estimates`, `ALTER TABLE work_items DROP COLUMN main_health`,
 		`DELETE FROM schema_migrations WHERE version >= 13`,

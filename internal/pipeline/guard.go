@@ -351,7 +351,7 @@ func (p *Pipeline) applyReverts(ctx context.Context, r *revertReading) {
 		}
 		data, _ := json.Marshal(map[string]any{"pr": h.merge.PR, "by": h.by, "auto": h.merge.Auto})
 		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: item, Type: "pr_reverted", Reason: fmt.Sprintf("PR #%d", h.merge.PR), Data: string(data)}), "AddEvent")
-		p.notify(ctx, fmt.Sprintf("Factory PR %s (%s) was reverted on %s by %s.", p.ref(r.repo, h.merge.PR), SafeText(h.merge.Title, 100), p.repoConf(r.repo).BaseBranch, h.by))
+		p.alert(ctx, fmt.Sprintf("Factory PR %s (%s) was reverted on %s by %s.", p.ref(r.repo, h.merge.PR), SafeText(h.merge.Title, 100), p.repoConf(r.repo).BaseBranch, h.by))
 	}
 	if r.head != "" && !p.Cfg.NoGuard && !r.more {
 		p.warn(p.Store.SetWatched(ctx, r.repo, r.head, stamp(now)), "SetWatched")
@@ -456,7 +456,7 @@ func (p *Pipeline) attributeRed(ctx context.Context, r *healthReading, check str
 	}
 	data, _ := json.Marshal(map[string]any{"pr": m.PR, "sha": sha, "check": check, "auto": m.Auto})
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: item, Type: "pr_broke_main", Reason: fmt.Sprintf("PR #%d", m.PR), Data: string(data)}), "AddEvent")
-	p.notify(ctx, fmt.Sprintf("Main health: %s went red on %s at %s, the merge of factory PR %s (%s); it passed on the commit before.", SafeName(check), repo, short(sha), p.ref(repo, m.PR), SafeText(m.Title, 100)))
+	p.alert(ctx, fmt.Sprintf("Main health: %s went red on %s at %s, the merge of factory PR %s (%s); it passed on the commit before.", SafeName(check), repo, short(sha), p.ref(repo, m.PR), SafeText(m.Title, 100)))
 	p.checkBreaker(ctx, repo)
 }
 
@@ -590,7 +590,7 @@ func (p *Pipeline) checkBreaker(ctx context.Context, repo string) {
 	if c := am.BreakerCoolOff(); c > 0 {
 		msg += fmt.Sprintf("; it comes back on its own after %s", days(c))
 	}
-	p.notify(ctx, msg+".")
+	p.alert(ctx, msg+".")
 }
 
 // days writes a duration in days when it's whole days, else as is.

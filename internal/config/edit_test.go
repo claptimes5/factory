@@ -204,7 +204,7 @@ func TestSettings(t *testing.T) {
 	for _, g := range groups {
 		names = append(names, g.Name)
 	}
-	if strings.Join(names, ",") != "Budgets,Models,Review,Escalation,Auto-merge,Orchestrator,Asks,Tuning,Intake" {
+	if strings.Join(names, ",") != "Budgets,Models,Review,Escalation,Auto-merge,Orchestrator,Quiet hours,Asks,Tuning,Intake" {
 		t.Fatalf("groups = %v", names)
 	}
 	get := func(p ...string) Setting {

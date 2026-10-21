@@ -39,9 +39,15 @@ func (s *Server) routesApp(mux *http.ServeMux) error {
 		p = strings.TrimPrefix(p, "/")
 		if p != "" && p != "index.html" {
 			if st, err := fs.Stat(dist, p); err == nil && !st.IsDir() {
-				if strings.HasPrefix(p, "assets/") {
+				switch {
+				case strings.HasPrefix(p, "assets/"):
 					// Vite puts a content hash in every asset name.
 					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				case p == "sw.js":
+					// A new service worker is picked up on the next load.
+					w.Header().Set("Cache-Control", "no-cache")
+				case strings.HasSuffix(p, ".webmanifest"):
+					w.Header().Set("Content-Type", "application/manifest+json")
 				}
 				r2 := r.Clone(r.Context())
 				r2.URL.Path = "/" + p

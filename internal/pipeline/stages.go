@@ -1156,7 +1156,7 @@ func (p *Pipeline) cancelAutoMerge(ctx context.Context, it *store.WorkItem, why 
 	}
 	if err := m.CancelAutoMerge(ctx, it.PRNumber); err != nil {
 		p.log().Warn("cancel auto-merge", "pr", it.PRNumber, "err", err)
-		p.notify(ctx, fmt.Sprintf("Couldn't turn off auto-merge on %s (%s): %v. Turn it off on the PR yourself.", p.ref(it.Repo, it.PRNumber), why, err))
+		p.alert(ctx, fmt.Sprintf("Couldn't turn off auto-merge on %s (%s): %v. Turn it off on the PR yourself.", p.ref(it.Repo, it.PRNumber), why, err))
 		return err
 	}
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "auto_merge_off", Reason: fmt.Sprintf("PR #%d", it.PRNumber), Data: fmt.Sprintf(`{"why":%q}`, why)}), "AddEvent")

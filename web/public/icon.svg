@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28">
+  <style>
+    .tile { fill: #17171a } .mark { fill: #ffffff } .track { stroke: #ffffff } .you { fill: #fdba74 }
+    @media (prefers-color-scheme: dark) { .tile { fill: #f4f4f5 } .mark { fill: #17171a } .track { stroke: #17171a } .you { fill: #c2410c } }
+  </style>
+  <rect class="tile" width="28" height="28" rx="7"/>
+  <path class="track" d="M7 14h14" stroke-width="1.6" stroke-linecap="round" opacity=".45"/>
+  <circle class="mark" cx="7" cy="14" r="2.1"/>
+  <circle class="mark" cx="14" cy="14" r="2.1"/>
+  <circle class="you" cx="21" cy="14" r="3.2"/>
+</svg>

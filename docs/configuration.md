@@ -465,7 +465,9 @@ reports a dollar figure, and that counts.
 ## Auto-merge
 
 By default every PR waits for you. `auto_merge` lets the factory merge its
-own PRs for small, low-risk changes, once the repo's CI passes:
+own PRs for small, low-risk changes, once the repo's CI passes. The
+dashboard's [Trust](using.md#trust) screen sets it for each repo as a
+level, from its record:
 
 ```yaml
 auto_merge:

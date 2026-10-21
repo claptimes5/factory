@@ -51,6 +51,7 @@ const input =
 /** The screens that set the factory up, a tap away: on a phone, Settings is where they live. */
 export const settingsLinks = [
   { to: "/trust", label: "Trust", hint: "How much the factory may do on its own" },
+  { to: "/notify", label: "When to tell you", hint: "Notifications on your phone, quiet hours" },
   { to: "/get-started", label: "Get started", hint: "Repos, access, model keys" },
   { to: "/setup", label: "Repo setup", hint: "Is each repo ready for work?" },
   { to: "/metrics", label: "Spend", hint: "Costs, plans and how work goes" },

@@ -115,6 +115,12 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			integer("orchestrator.daily_issue_cap", "Issues a day", "How many issues it may open a day.", 10),
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
 		}},
+		{Name: "Quiet hours", Help: "When only something wrong is sent: main broken, a revert, the budget or the disk run out. The rest waits for one catch-up when they end.", Settings: []Setting{
+			{Path: []string{"notify", "quiet_hours", "from"}, Label: "From", Help: "A 24-hour time such as 19:00; empty is off.", Kind: "text"},
+			{Path: []string{"notify", "quiet_hours", "until"}, Label: "Until", Help: "Such as 08:00; earlier than From spans midnight.", Kind: "text"},
+			{Path: []string{"notify", "quiet_hours", "weekends"}, Label: "All weekend", Help: "Saturday and Sunday are quiet all day.", Kind: "bool", Default: false},
+			{Path: []string{"notify", "quiet_hours", "timezone"}, Label: "Time zone", Help: "Such as Europe/Madrid; empty is the factory machine's.", Kind: "text"},
+		}},
 		{Name: "Asks", Help: "How the factory writes what you read and decide on.", Settings: []Setting{
 			{Path: []string{"concise_asks"}, Label: "Concise", Help: "Plans and chat replies lead with what you decide, in short numbered steps (prompts/concise.md, from the i-have-adhd skill).", Kind: "bool", Default: true},
 		}},

@@ -15,6 +15,7 @@ import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
 import { HistoryScreen } from "@/screens/History";
 import { TrustScreen } from "@/screens/Trust";
+import { NotifySettingsScreen } from "@/screens/NotifySettings";
 import { SettingsScreen } from "@/screens/Settings";
 import { SetupScreen } from "@/screens/Setup";
 import { GetStartedScreen } from "@/screens/GetStarted";
@@ -38,6 +39,7 @@ const router = createBrowserRouter(
         { path: "/notifications", element: <NotificationsScreen /> },
         { path: "/history", element: <HistoryScreen /> },
         { path: "/trust", element: <TrustScreen /> },
+        { path: "/notify", element: <NotifySettingsScreen /> },
         { path: "/live", element: <Navigate to="/history" replace /> },
         { path: "/settings", element: <SettingsScreen /> },
         { path: "/setup", element: <SetupScreen /> },
@@ -49,6 +51,13 @@ const router = createBrowserRouter(
   ],
   { basename: "/app" },
 );
+
+// The service worker shows push notifications; it caches nothing.
+if ("serviceWorker" in navigator) {
+  void navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(() => {
+    /* without it, push is unavailable: the notifications screen says so */
+  });
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
