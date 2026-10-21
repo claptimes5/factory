@@ -341,11 +341,11 @@ func TestSettleBaseline(t *testing.T) {
 	filed := []github.Issue{{Number: 9, State: "closed", Body: "x\n<!-- factory-readiness: check:lint -->"}}
 	lintFails := readiness.Finding{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on master",
 		Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on master", Body: "1 offense"}}
-	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/1864")
+	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/42")
 
 	// Not on master yet, and still open: nothing changes.
-	f.pr = &github.PR{Number: 1864, State: "open"}
-	r := &readiness.Report{Repo: "o/r", Branch: "master", SHA: "fe13cd10a0", Findings: []readiness.Finding{lintFails}}
+	f.pr = &github.PR{Number: 42, State: "open"}
+	r := &readiness.Report{Repo: "o/r", Branch: "master", SHA: "c0ffee1234", Findings: []readiness.Finding{lintFails}}
 	if got := settleBaseline(ctx, cfg, f, st, r, filed); len(got) != 1 || readiness.BaselinePR(dir, "o/r") == "" || len(f.closed) != 0 {
 		t.Fatalf("before the merge: filed %v, closed %v", got, f.closed)
 	}
@@ -355,7 +355,7 @@ func TestSettleBaseline(t *testing.T) {
 	if readiness.BaselinePR(dir, "o/r") != "" {
 		t.Fatal("still asks to merge a baseline that's in")
 	}
-	if fmt.Sprint(f.closed) != "[12 13]" || !strings.Contains(f.comments[12], "lint baseline is on `master` now (at fe13cd1)") {
+	if fmt.Sprint(f.closed) != "[12 13]" || !strings.Contains(f.comments[12], "lint baseline is on `master` now (at c0ffee1)") {
 		t.Fatalf("closed %v, comments %v", f.closed, f.comments)
 	}
 	if len(got) != 2 || got[1].State != "open" || strings.Join(f.created, "|") != "Fix the lint offenses on master since the baseline factory:readiness,factory:ready" {
@@ -368,8 +368,8 @@ func TestSettleBaseline(t *testing.T) {
 	}
 
 	// A baseline closed without merging stops being asked for.
-	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/1865")
-	f.pr = &github.PR{Number: 1865, State: "closed"}
+	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/43")
+	f.pr = &github.PR{Number: 43, State: "closed"}
 	settleBaseline(ctx, cfg, f, st, &readiness.Report{Repo: "o/r", Findings: []readiness.Finding{lintFails}}, filed)
 	if readiness.BaselinePR(dir, "o/r") != "" {
 		t.Fatal("still asks to merge a closed baseline")

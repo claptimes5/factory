@@ -23,10 +23,10 @@ func TestFindCheckout(t *testing.T) {
 		exec.Command("git", "-C", p, "remote", "add", "origin", remote).Run()
 	}
 	mk("code/other", "git@gitlab.com:team/other.git")
-	mk(".cache/api", "https://gitlab.com/team/api_backend.git")
-	mk("development/team/api_backend", "git@gitlab.com:team/api_backend.git")
-	rc := config.Repo{Name: "gitlab.com/team/api_backend", Host: "gitlab.com"}
-	if got := findCheckout(rc); got != filepath.Join(home, "development/team/api_backend") {
+	mk(".cache/api", "https://gitlab.com/team/storefront.git")
+	mk("development/team/storefront", "git@gitlab.com:team/storefront.git")
+	rc := config.Repo{Name: "gitlab.com/team/storefront", Host: "gitlab.com"}
+	if got := findCheckout(rc); got != filepath.Join(home, "development/team/storefront") {
 		t.Fatalf("found %q", got)
 	}
 	if got := findCheckout(config.Repo{Name: "o/missing"}); got != "" {

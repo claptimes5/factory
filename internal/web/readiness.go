@@ -65,7 +65,7 @@ type APIRepoReadiness struct {
 	CheckingSince string `json:"checking_since"`
 	Action        string `json:"action"`
 	// CheckingWhy says what started it, when the factory did by itself
-	// ("Started by itself: master moved from f410faf to f736f54."), or "".
+	// ("Started by itself: master moved from 1a2b3c4 to 5d6e7f8."), or "".
 	CheckingWhy string `json:"checking_why"`
 	// CheckError is why the last run started here failed, or "", and
 	// Result what it did when it worked.
