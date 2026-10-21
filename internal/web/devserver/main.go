@@ -25,9 +25,9 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
-	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/preview"
+	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -203,7 +203,7 @@ func main() {
 		Wizard:       newWizard(rs),
 		Uninstaller:  uninstaller{},
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
-		Push: devPush(),
+		Push:         devPush(),
 		// Trust levels are written to the sample config as the factory writes them.
 		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge) error {
 			return config.SetRepoAutoMerge(cfgPath, repo, a)
