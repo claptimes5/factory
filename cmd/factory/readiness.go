@@ -66,6 +66,7 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 			return p.ExecSaying(ctx, repo, dir, cmd, install)
 		}}
 	in.AccessChecked, in.Denied = missingAccess(ctx, p.GitHubFor(repo))
+	in.Last, _ = readiness.Load(readinessDir(cfg), repo)
 	if in.FilesSet = rc.Files != nil; !in.FilesSet {
 		in.Checkout = findCheckout(rc)
 	}

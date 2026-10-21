@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/runner"
@@ -429,5 +430,29 @@ func TestMissingMasterKeyUnnamed(t *testing.T) {
 	}
 	if got := mentioned(out, []string{".env"}); got != "" {
 		t.Fatalf("blamed %q, which the repo doesn't list", got)
+	}
+}
+
+// Tests a recent check ran twice, passing, run once; the trust ends a day
+// after the check that ran them twice, not the one that trusted it.
+func TestStableTestsRunOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := tree(t, "Gemfile", "Gemfile.lock", "test/models/user_test.rb")
+	exec, ran := fails()
+	first := Assess(ctx, Input{Repo: repo("bundle install", "test"), Dir: dir, Exec: exec})
+	if strings.Count(strings.Join(*ran, "|"), "run test") != 2 || first.StableSince.IsZero() {
+		t.Fatalf("first: ran %v, stable %v", *ran, first.StableSince)
+	}
+	exec, ran = fails()
+	second := Assess(ctx, Input{Repo: repo("bundle install", "test"), Dir: dir, Exec: exec, Last: first})
+	if strings.Count(strings.Join(*ran, "|"), "run test") != 1 || !second.StableSince.Equal(first.StableSince) || !strings.Contains(titles(second, Good), "so once now") {
+		t.Fatalf("second: ran %v, stable %v\n%s", *ran, second.StableSince, second.Text())
+	}
+	// A day after the proof, twice again.
+	second.StableSince = second.StableSince.Add(-25 * time.Hour)
+	exec, ran = fails()
+	Assess(ctx, Input{Repo: repo("bundle install", "test"), Dir: dir, Exec: exec, Last: second})
+	if strings.Count(strings.Join(*ran, "|"), "run test") != 2 {
+		t.Fatalf("ran %v after the trust ran out", *ran)
 	}
 }

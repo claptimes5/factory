@@ -95,6 +95,10 @@ type Report struct {
 	// (.rubocop_todo.yml from --auto-gen-config), so lint failing there
 	// is offenses since, not the old ones.
 	Baselined bool `json:"baselined,omitempty"`
+	// StableSince is when the tests, run by TestCommand, last passed
+	// twice in a row, by this check or one it trusted; zero if not.
+	StableSince time.Time `json:"stable_since,omitzero"`
+	TestCommand string    `json:"test_command,omitempty"`
 }
 
 // Exec runs a command on the export the way gates do; install marks the
@@ -120,6 +124,23 @@ type Input struct {
 	// repo on this machine they could come from, or "".
 	FilesSet bool
 	Checkout string
+	// Last is the repo's previous report, or nil: tests it proved pass
+	// twice in a row, recently, run once now (see stableSince).
+	Last *Report
+}
+
+// stableFor is how long tests that passed twice in a row are trusted not
+// to be flaky, so a check runs them once.
+const stableFor = 24 * time.Hour
+
+// stableSince is when last's tests, run by cmd, were proved to pass twice
+// in a row, if within stableFor; zero otherwise. The proof is the run
+// that did it, not one that trusted it, so it ends stableFor after.
+func stableSince(last *Report, cmd string) time.Time {
+	if last == nil || last.TestCommand != cmd || last.StableSince.IsZero() || time.Since(last.StableSince) > stableFor {
+		return time.Time{}
+	}
+	return last.StableSince
 }
 
 // Denied is something the factory does on the repo that its token may
@@ -325,6 +346,11 @@ func Assess(ctx context.Context, in Input) *Report {
 		r.add(Finding{Level: Blocker, Area: "tests", Title: "`test` passes without running any tests",
 			Detail: fmt.Sprintf("Its output says no tests ran, though the repo has %d test files, so every change would pass it untested. "+
 				"The command is probably for another framework, such as RSpec on a Minitest suite: fix `test` under the repo's gates in factory.yaml.\n\n%s", tests, fence(testRun.Output))})
+	case testRun != nil && testRun.Passed && !stableSince(in.Last, testRun.Command).IsZero():
+		// A recent check ran them twice, passing: once is enough now.
+		r.StableSince, r.TestCommand = stableSince(in.Last, testRun.Command), testRun.Command
+		r.add(Finding{Level: Good, Area: "tests", Title: fmt.Sprintf("%d test files, passing (twice in a row on the check of %s, so once now)",
+			tests, r.StableSince.UTC().Format("Jan 2 15:04 UTC"))})
 	case testRun != nil && testRun.Passed:
 		// Run them again: a suite that passes and fails at random makes every
 		// gate result a coin flip.
@@ -341,6 +367,7 @@ func Assess(ctx context.Context, in Input) *Report {
 					Body: fmt.Sprintf("`%s` passed once and then failed on the same commit of `%s`:\n\n%s\n"+
 						"Find the tests that depend on order, time, randomness, shared state or the network, and make them deterministic. Don't delete or skip them.", testRun.Command, r.Branch, fence(again.Output))}})
 		} else {
+			r.StableSince, r.TestCommand = r.Started, testRun.Command
 			r.add(Finding{Level: Good, Area: "tests", Title: fmt.Sprintf("%d test files, passing twice in a row", tests)})
 		}
 		if testRun.Duration > slowTests {

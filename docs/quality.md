@@ -590,7 +590,8 @@ comment), which the host refuses with a 403 when the token lacks the
 permission and with a "field missing" error when it has it. A token that
 can't open pull requests is a blocker, the first setup step, since every
 change ends in one. Then it clones the base branch, runs the install step
-and every required check (the tests twice, to catch flakiness), and looks
+and every required check (the tests twice, to catch flakiness, or once if
+a check in the last day ran the same test command twice and both passed), and looks
 for tests, end-to-end tests, a feature map, a lockfile and CI. It prints a score and what's
 missing:
 
