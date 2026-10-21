@@ -161,9 +161,9 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
         ref={dialog}
         aria-label="Remove the factory?"
         onClose={() => setConfirming(false)}
-        className="mx-auto mt-[10vh] w-[min(560px,calc(100vw-32px))] rounded-xl border bg-surface p-4 text-foreground shadow-2xl backdrop:bg-black/50"
+        className="mx-auto mt-[10vh] w-[min(560px,calc(100vw-32px))] rounded-card border bg-surface p-4 text-foreground shadow-2xl backdrop:bg-black/50"
       >
-        <h2 className="font-display text-lg font-semibold">Remove the factory?</h2>
+        <h2 className="text-title-sm font-semibold">Remove the factory?</h2>
         <div className="mt-2 max-h-[55vh] space-y-2 overflow-y-auto text-sm">
           {p.labels.length > 0 && (
             <p>

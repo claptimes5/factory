@@ -41,7 +41,7 @@ export function OrchestratorScreen() {
   );
 }
 
-function Decisions() {
+export function Decisions() {
   const [params, setParams] = useSearchParams();
   const item = Number(params.get("item")) || undefined;
   const { data, error, isLoading } = useFeed(item);

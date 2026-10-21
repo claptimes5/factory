@@ -48,6 +48,27 @@ const show = (v: SettingValue) => (v == null ? "" : Array.isArray(v) ? v.join(",
 const input =
   "h-10 w-full min-w-0 rounded-md border bg-card px-2.5 text-base text-foreground placeholder:text-muted-foreground/70 disabled:opacity-60 md:h-9 md:text-sm";
 
+/** The screens that set the factory up, a tap away: on a phone, Settings is where they live. */
+export const settingsLinks = [
+  { to: "/get-started", label: "Get started", hint: "Repos, access, model keys" },
+  { to: "/setup", label: "Repo setup", hint: "Is each repo ready for work?" },
+  { to: "/metrics", label: "Spend", hint: "Costs, plans and how work goes" },
+  { to: "/notifications", label: "Inbox", hint: "Everything waiting on you" },
+];
+
+function SettingsHub() {
+  return (
+    <nav aria-label="More settings" className="grid gap-2 sm:grid-cols-2">
+      {settingsLinks.map((l) => (
+        <Link key={l.to} to={l.to} className="flex flex-col gap-0.5 rounded-card border bg-surface px-4 py-3 hover:border-muted-foreground/40">
+          <span className="text-body-sm font-medium">{l.label}</span>
+          <span className="text-meta text-muted-foreground">{l.hint}</span>
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
 export function SettingsScreen() {
   const { data, error, isLoading } = useSettings();
   if (isLoading) return <Loading />;
@@ -112,6 +133,7 @@ function SettingsForm({ s }: { s: Settings }) {
         </Link>
         .
       </p>
+      <SettingsHub />
 
       {ro && (
         <div role="note" className="flex gap-2 rounded-md border border-warning-border bg-warning-bg p-3 text-sm text-warning">
@@ -191,7 +213,7 @@ function SettingsForm({ s }: { s: Settings }) {
       ))}
 
       {!ro && (
-        <div className="sticky bottom-20 z-10 flex flex-wrap items-center gap-3 rounded-lg border bg-surface/95 p-3 shadow-xs backdrop-blur md:bottom-4">
+        <div className="sticky bottom-20 z-10 flex flex-wrap items-center gap-3 rounded-control border bg-surface/95 p-3 shadow-xs backdrop-blur md:bottom-4">
           <Button onClick={save} disabled={saving || changed.length === 0}>
             <Save /> {saving ? "Saving…" : "Save"}
           </Button>

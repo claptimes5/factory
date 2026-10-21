@@ -187,7 +187,7 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
           )}
           {data?.messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="ml-auto max-w-[85%] rounded-lg bg-primary/10 px-3 py-2 text-sm whitespace-pre-wrap" data-testid="you">
+              <div key={m.id} className="ml-auto max-w-[85%] rounded-control bg-primary/10 px-3 py-2 text-sm whitespace-pre-wrap" data-testid="you">
                 {m.text}
               </div>
             ) : (

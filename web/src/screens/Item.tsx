@@ -9,6 +9,7 @@ import { Choices } from "@/components/Choices";
 import { PlanCostNote } from "@/components/PlanUsage";
 import { PRPanel } from "@/components/PRPanel";
 import { Screenshots } from "@/components/Screenshots";
+import { StationStamps } from "@/components/StationStamps";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ago, cn, duration, money } from "@/lib/utils";
@@ -27,8 +28,8 @@ export function ItemScreen() {
     <div className="space-y-4">
       <div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Link to="/" className="hover:text-foreground">
-            Floor
+          <Link to="/line" className="hover:text-foreground">
+            The line
           </Link>
           <span>/</span>
           <a href={it.issue_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
@@ -43,9 +44,12 @@ export function ItemScreen() {
             </>
           )}
         </div>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold tracking-tight">
+        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-title font-semibold tracking-tight">
           {it.title} <StageBadge stage={it.stage} />
         </h1>
+        <div className="mt-3">
+          <StationStamps it={it} jobs={jobs} />
+        </div>
         <WaitsFor items={it.waits_for} plan={it.plan_waiting} className="mt-1 text-sm" />
         {/* One card for where it stands and what you can do: what happened, then the buttons, with the raw error out of the way. */}
         {(happened || note || choices) && (
@@ -127,7 +131,7 @@ export function ItemScreen() {
             </CardContent>
           </Card>
           {plan && !plan.waiting && (
-            <details className="rounded-xl border bg-card" data-testid="plan-folded">
+            <details className="rounded-card border bg-card" data-testid="plan-folded">
               <summary className="cursor-pointer px-4 py-3 text-sm font-semibold">
                 Plan
                 {plan.approved_by && <span className="font-normal text-muted-foreground"> · approved {plan.approved_by}</span>}
@@ -235,7 +239,7 @@ function EstimateCard({ itemId, e, waiting, planWaiting }: { itemId: number; e: 
         {e.threshold_usd > 0 && <span className="text-xs text-muted-foreground">limit {money(e.threshold_usd)}</span>}
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
-        <p className="font-mono text-lg font-semibold">{e.range}</p>
+        <p className="font-mono text-title-sm font-semibold">{e.range}</p>
         <p className="text-muted-foreground">{e.detail}</p>
         <p>{status}</p>
         {e.finished && (

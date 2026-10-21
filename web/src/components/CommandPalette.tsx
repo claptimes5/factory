@@ -30,11 +30,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       void navigate(to);
     };
     const screens: Entry[] = [
-      { key: "s:/", label: "The floor", hint: "Screen", go: go("/") },
+      { key: "s:/", label: "Home: what needs you", hint: "Screen", go: go("/") },
+      { key: "s:/line", label: "The line", hint: "Screen", go: go("/line") },
+      { key: "s:/history", label: "History: activity, done, decisions", hint: "Screen", go: go("/history") },
       { key: "s:/notifications", label: "Inbox", hint: "Screen", go: go("/notifications") },
-      { key: "s:/live", label: "Live activity", hint: "Screen", go: go("/live") },
       { key: "s:/orchestrator", label: "Chat: draft issues with the orchestrator", hint: "Screen", go: go("/orchestrator") },
-      { key: "s:/orchestrator/decisions", label: "Orchestrator decisions", hint: "Screen", go: go("/orchestrator?tab=decisions") },
       { key: "s:/metrics", label: "Spend and metrics", hint: "Screen", go: go("/metrics") },
       { key: "s:/settings", label: "Settings", hint: "Screen", go: go("/settings") },
       { key: "s:/get-started", label: "Get started", hint: "Screen", go: go("/get-started") },
@@ -85,7 +85,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       aria-label="Jump to"
       onClose={onClose}
       onClick={(e) => e.target === ref.current && onClose()}
-      className="mx-auto mt-[12vh] w-[min(640px,calc(100vw-32px))] rounded-xl border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-black/50"
+      className="mx-auto mt-[12vh] w-[min(640px,calc(100vw-32px))] rounded-card border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-black/50"
     >
       <div className="flex items-center gap-2 border-b px-3">
         <Search className="size-4 text-muted-foreground" aria-hidden />

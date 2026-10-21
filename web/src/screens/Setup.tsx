@@ -183,10 +183,10 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
   const gaps = r.extras.filter((f) => f.level !== "good");
   const good = r.extras.filter((f) => f.level === "good");
   return (
-    <section aria-label={`Setup of ${r.repo}`} data-testid="setup-repo" className="flex flex-col gap-4 rounded-xl border bg-card p-4 md:p-5">
+    <section aria-label={`Setup of ${r.repo}`} data-testid="setup-repo" className="flex flex-col gap-4 rounded-card border bg-card p-4 md:p-5">
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h2 className="flex flex-wrap items-center gap-2.5 font-display text-lg font-semibold">
+          <h2 className="flex flex-wrap items-center gap-2.5 text-title-sm font-semibold">
             <span className="font-mono break-all">{many ? r.repo : repoName(r.repo) || r.repo}</span>
             <Badge variant={variant}>{badge}</Badge>
           </h2>
@@ -230,7 +230,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       )}
 
       {r.state === "ready" && (
-        <div className="rounded-lg border border-success/40 bg-success/10 p-3 text-sm">
+        <div className="rounded-control border border-success/40 bg-success/10 p-3 text-sm">
           <p className="font-semibold text-success">Ready: add the {label} label to issues to start.</p>
           <p className="mt-1 text-text-2">Every setup step passes, so the factory's changes can be checked. It picks up each issue with that label.</p>
           {r.unqueued > 0 && (
@@ -297,7 +297,7 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
       )}
 
       {r.can_baseline && data.can_check && !r.checking && (
-        <div data-testid="baseline" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+        <div data-testid="baseline" className="flex flex-col gap-2 rounded-control border border-primary/40 bg-primary/5 p-3 text-sm">
           <p className="font-semibold">Lint fails on {r.branch} today. Accept today's offenses, and block new ones?</p>
           <p className="text-text-2">
             The factory runs RuboCop's own baseline (<code className="font-mono text-[0.9em]">rubocop --auto-gen-config</code>) on {r.branch}, checks

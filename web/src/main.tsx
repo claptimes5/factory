@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, RouterProvider } from "react-router";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 import { queryClient } from "@/api/client";
 import { Layout } from "@/components/Layout";
 import { BoardScreen } from "@/screens/Board";
@@ -13,7 +13,7 @@ import { OrchestratorScreen } from "@/screens/Orchestrator";
 import { MetricsScreen } from "@/screens/Metrics";
 import { NotificationsScreen } from "@/screens/Notifications";
 import { NotFound } from "@/screens/NotFound";
-import { LiveScreen } from "@/screens/Live";
+import { HistoryScreen } from "@/screens/History";
 import { SettingsScreen } from "@/screens/Settings";
 import { SetupScreen } from "@/screens/Setup";
 import { GetStartedScreen } from "@/screens/GetStarted";
@@ -35,7 +35,8 @@ const router = createBrowserRouter(
         { path: "/orchestrator", element: <OrchestratorScreen /> },
         { path: "/metrics", element: <MetricsScreen /> },
         { path: "/notifications", element: <NotificationsScreen /> },
-        { path: "/live", element: <LiveScreen /> },
+        { path: "/history", element: <HistoryScreen /> },
+        { path: "/live", element: <Navigate to="/history" replace /> },
         { path: "/settings", element: <SettingsScreen /> },
         { path: "/setup", element: <SetupScreen /> },
         { path: "/get-started", element: <GetStartedScreen /> },

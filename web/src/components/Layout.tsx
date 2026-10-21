@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
-import { Activity, Bell, Bot, House, LayoutGrid, ListChecks, LogOut, MessageCircle, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, History, House, LayoutGrid, LogOut, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -62,18 +62,16 @@ export function Logo({ className }: { className?: string }) {
 const links = [
   { to: "/", label: "Home", icon: House, end: true },
   { to: "/line", label: "The line", icon: LayoutGrid },
-  { to: "/notifications", label: "Inbox", icon: Bell },
-  { to: "/live", label: "Live", icon: Radio },
-  { to: "/orchestrator", label: "Orchestrator", icon: Bot },
+  { to: "/history", label: "History", icon: History },
   { to: "/metrics", label: "Spend", icon: Activity },
-  { to: "/setup", label: "Setup", icon: ListChecks },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
+// On a phone, Spend and the rest are reached from Settings.
 const tabs = [
   { to: "/", label: "Home", icon: House, end: true },
   { to: "/line", label: "Line", icon: LayoutGrid },
-  { to: "/metrics", label: "Spend", icon: Activity },
+  { to: "/history", label: "History", icon: History },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 

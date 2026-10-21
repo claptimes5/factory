@@ -136,7 +136,7 @@ const onGitLab = (repo: string) => repo.split("/")[0].includes(".");
 /** How the factory is connected to a host, with a button that removes it. */
 function Connection({ children, remove, onRemove, ro }: { children: ReactNode; remove: string; onRemove: () => void; ro: boolean }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border bg-muted/40 px-3 py-2 text-sm">
       <CheckCircle2 aria-hidden className="size-4 shrink-0 text-success" />
       <span className="min-w-0 flex-1 break-words">{children}</span>
       <Button size="sm" variant="ghost" disabled={ro} onClick={onRemove}>
@@ -258,7 +258,7 @@ function StepCard({
       data-testid="wizard-step"
       data-key={step.key}
       data-state={step.state}
-      className={cn("scroll-mt-4 rounded-xl border bg-card transition-colors", open && step.state === "attention" && "border-primary/40")}
+      className={cn("scroll-mt-4 rounded-card border bg-card transition-colors", open && step.state === "attention" && "border-primary/40")}
     >
       <h2>
         <button
@@ -270,7 +270,7 @@ function StepCard({
           <StepIcon state={step.state} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              <span className="font-display text-body font-semibold">
+              <span className="text-body font-semibold">
                 {n}. {step.title}
               </span>
               <Badge variant={variant}>{label}</Badge>
@@ -397,7 +397,7 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
         branch, and opens a pull request for you to review. It never uses or changes a folder on this computer, including the one you started it from.
       </p>
       {w.repos.length > 0 && (
-        <ul aria-label="Chosen repositories" className="flex flex-col divide-y rounded-lg border">
+        <ul aria-label="Chosen repositories" className="flex flex-col divide-y rounded-control border">
           {w.repos.map((r) => (
             <li key={r} data-testid="repo" className="flex min-w-0 items-center gap-2.5 py-1.5 pr-1.5 pl-3">
               <Badge variant="secondary" className="w-14 justify-center">
@@ -420,7 +420,7 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
         </ul>
       )}
       <form
-        className="flex flex-col gap-3 rounded-lg border p-3"
+        className="flex flex-col gap-3 rounded-control border p-3"
         aria-label="Add a repository"
         onSubmit={(e) => {
           e.preventDefault();
@@ -637,7 +637,7 @@ function GitHubStep({ w, ro }: { w: Wizard; ro: boolean }) {
       ) : null}
       <Message msg={off.msg} />
       {g.method !== "app" && (
-        <section aria-label="Create a GitHub App" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+        <section aria-label="Create a GitHub App" className="flex flex-col gap-2 rounded-control border border-primary/40 bg-primary/5 p-3">
           <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
             Create a GitHub App <Badge>Recommended</Badge>
           </h3>
@@ -654,7 +654,7 @@ function GitHubStep({ w, ro }: { w: Wizard; ro: boolean }) {
         </section>
       )}
       {g.method === "app" && !installed && (
-        <section aria-label="Install the app" className="flex flex-col gap-2 rounded-lg border border-warning-border bg-warning-bg p-3 text-sm">
+        <section aria-label="Install the app" className="flex flex-col gap-2 rounded-control border border-warning-border bg-warning-bg p-3 text-sm">
           <h3 className="font-semibold">Install the app</h3>
           {g.install_url ? (
             <p>
@@ -693,7 +693,7 @@ function Alternatives({ w, ro }: { w: Wizard; ro: boolean }) {
   const tok = useAction();
   const wrongHost = tokenHost(token) === "gitlab";
   return (
-    <details className="rounded-lg border p-3" open={g.method === "token" || undefined}>
+    <details className="rounded-control border p-3" open={g.method === "token" || undefined}>
       <summary className="cursor-pointer text-sm font-medium">Other ways to connect: an app you already made, or a personal access token</summary>
       <div className="mt-3 flex flex-col gap-4">
         <section aria-label="Use an app I already made" className="flex flex-col gap-2">
@@ -1021,11 +1021,11 @@ function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
     <>
       <p className="text-sm text-text-2">Claude writes the code. It can use either of these:</p>
       <ul className="flex flex-col gap-2 text-sm">
-        <li className="rounded-lg border p-3">
+        <li className="rounded-control border p-3">
           <span className="font-medium">A Claude subscription</span> (Pro or Max), using the plan's limits. Run <CopyCommand cmd="claude setup-token" /> in a
           terminal and paste the token it prints.
         </li>
-        <li className="rounded-lg border p-3">
+        <li className="rounded-control border p-3">
           <span className="font-medium">An API key</span>, billed per use. Make one at{" "}
           <A href="https://console.anthropic.com/settings/keys">console.anthropic.com</A>.
         </li>
@@ -1200,7 +1200,7 @@ function NotifyStep({ w, ro }: { w: Wizard; ro: boolean }) {
         ntfy topic, or a Slack or Discord webhook address.
       </p>
       {!w.notify.set && (
-        <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
+        <div className="flex flex-col gap-2 rounded-control border p-3 text-sm">
           <p>
             <span className="font-medium">Quickest: ntfy</span>, free and with no account. Make a private topic, install the ntfy app (
             <A href="https://ntfy.sh/docs/subscribe/phone/">iPhone or Android</A>) and subscribe to it there.
@@ -1408,7 +1408,7 @@ function FinishStep({ w, ro }: { w: Wizard; ro: boolean }) {
         </p>
       )}
       {w.can_finish && (
-        <section aria-label="What happens next" className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+        <section aria-label="What happens next" className="flex flex-col gap-2 rounded-control border bg-muted/40 p-3 text-sm">
           <h3 className="font-semibold">What happens next</h3>
           <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-text-2">
             <li>

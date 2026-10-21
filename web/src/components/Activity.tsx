@@ -67,11 +67,11 @@ export function WeekStats({ className }: { className?: string }) {
     { v: pct(m.first_pass_rate), l: "passed the gates first try" },
   ];
   return (
-    <dl className={cn("grid grid-cols-3 gap-2 rounded-xl border bg-card p-3.5", className)}>
+    <dl className={cn("grid grid-cols-3 gap-2 rounded-card border bg-card p-3.5", className)}>
       {stats.map((s) => (
         <div key={s.l} className="flex flex-col-reverse justify-end">
           <dt className="text-xs leading-tight text-muted-foreground">{s.l}</dt>
-          <dd className="font-display text-title font-semibold">{s.v}</dd>
+          <dd className="text-title font-semibold">{s.v}</dd>
         </div>
       ))}
     </dl>

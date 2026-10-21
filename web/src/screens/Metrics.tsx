@@ -93,7 +93,7 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint?
   return (
     <Card className="p-3" title={hint}>
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={big ? "text-2xl font-semibold" : "text-xl font-semibold"}>{value}</div>
+      <div className={big ? "text-display font-semibold" : "text-title font-semibold"}>{value}</div>
     </Card>
   );
 }
