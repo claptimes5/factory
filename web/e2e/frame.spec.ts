@@ -11,13 +11,12 @@ test("every screen sits in one frame: the sidebar on a desk, tabs on a phone", a
   if (phone(info)) {
     const tabs = page.getByRole("navigation", { name: "Tabs" });
     await expect(tabs).toBeVisible();
-    for (const name of [/^Floor$/, /^Inbox/, /^Spend$/, /^Settings$/]) await expect(tabs.getByRole("link", { name })).toBeVisible();
-    await expect(tabs.getByRole("link", { name: /^Inbox/ })).toHaveAccessibleName("Inbox 8 need you");
+    for (const name of [/^Home$/, /^Line$/, /^Spend$/, /^Settings$/]) await expect(tabs.getByRole("link", { name })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Main" })).toBeHidden();
   } else {
     const main = page.getByRole("navigation", { name: "Main" });
     await expect(main).toBeVisible();
-    for (const name of [/^Floor$/, /^Inbox/, /^Live$/, /^Orchestrator$/, /^Spend$/, /^Setup$/, /^Settings$/]) await expect(main.getByRole("link", { name })).toBeVisible();
+    for (const name of [/^Home$/, /^The line$/, /^Inbox/, /^Live$/, /^Orchestrator$/, /^Spend$/, /^Setup$/, /^Settings$/]) await expect(main.getByRole("link", { name })).toBeVisible();
     await expect(main.getByRole("link", { name: /^Inbox/ })).toContainText("8");
     await main.getByRole("link", { name: "Spend" }).click();
     await expect(page).toHaveURL(/\/app\/metrics$/);

@@ -5,6 +5,7 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 import { queryClient } from "@/api/client";
 import { Layout } from "@/components/Layout";
 import { BoardScreen } from "@/screens/Board";
+import { HomeScreen } from "@/screens/Home";
 import { ItemScreen } from "@/screens/Item";
 import { SessionScreen } from "@/screens/Session";
 import { DiffScreen } from "@/screens/Diff";
@@ -26,7 +27,8 @@ const router = createBrowserRouter(
     {
       element: <Layout />,
       children: [
-        { path: "/", element: <BoardScreen /> },
+        { path: "/", element: <HomeScreen /> },
+        { path: "/line", element: <BoardScreen /> },
         { path: "/items/:id", element: <ItemScreen /> },
         { path: "/items/:id/diff", element: <DiffScreen /> },
         { path: "/jobs/:id", element: <SessionScreen /> },

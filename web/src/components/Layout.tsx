@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
-import { Activity, Bell, Bot, LayoutGrid, ListChecks, LogOut, MessageCircle, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, Bell, Bot, House, LayoutGrid, ListChecks, LogOut, MessageCircle, Moon, Radio, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -60,7 +60,8 @@ export function Logo({ className }: { className?: string }) {
 }
 
 const links = [
-  { to: "/", label: "Floor", icon: LayoutGrid, end: true },
+  { to: "/", label: "Home", icon: House, end: true },
+  { to: "/line", label: "The line", icon: LayoutGrid },
   { to: "/notifications", label: "Inbox", icon: Bell },
   { to: "/live", label: "Live", icon: Radio },
   { to: "/orchestrator", label: "Orchestrator", icon: Bot },
@@ -70,8 +71,8 @@ const links = [
 ];
 
 const tabs = [
-  { to: "/", label: "Floor", icon: LayoutGrid, end: true },
-  { to: "/notifications", label: "Inbox", icon: Bell },
+  { to: "/", label: "Home", icon: House, end: true },
+  { to: "/line", label: "Line", icon: LayoutGrid },
   { to: "/metrics", label: "Spend", icon: Activity },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
@@ -169,6 +170,12 @@ function FullLayout() {
   const [askSheet, setAskSheet] = useState(false);
   const askOpen = wide ? askDocked : askSheet;
   const setAskOpen = wide ? setAskDocked : setAskSheet;
+  // Home's "Ask" box, and anything else, opens it with this event.
+  useEffect(() => {
+    const on = () => setAskOpen(true);
+    window.addEventListener("factory:ask", on);
+    return () => window.removeEventListener("factory:ask", on);
+  });
   // Following a link out of the sheet (to the full chat, a job) closes it.
   const path = useLocation().pathname;
   useEffect(() => setAskSheet(false), [path]);

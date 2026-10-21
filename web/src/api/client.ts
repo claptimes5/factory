@@ -113,6 +113,10 @@ export const queryClient = new QueryClient({
 });
 
 export const useOverview = () => useQuery({ queryKey: ["overview"], queryFn: () => getJSON<Overview>("/overview") });
+export type Home = S["Home"];
+/** Home's catch-up: when it was last looked at, and what went live since. */
+export const useHome = () => useQuery({ queryKey: ["home"], queryFn: () => getJSON<Home>("/home") });
+
 export const useBoard = (opts: { enabled?: boolean; refetchInterval?: number | ((q: { state: { data?: Board } }) => number) } = {}) =>
   useQuery({ queryKey: ["board"], queryFn: () => getJSON<Board>("/board"), ...opts });
 export const useItem = (id: number) =>

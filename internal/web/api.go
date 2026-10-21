@@ -823,6 +823,8 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/metrics", s.metricsJSON)
 	mux.HandleFunc("GET /api/v1/spend", s.apiSpend)
 	mux.HandleFunc("GET /api/v1/notifications", s.apiNotifications)
+	mux.HandleFunc("GET /api/v1/home", s.apiHome)
+	mux.HandleFunc("POST /api/v1/home/seen", s.apiHomeSeen)
 	mux.HandleFunc("GET /api/v1/stream", s.apiStream)
 	mux.HandleFunc("GET /api/v1/settings", s.apiSettings)
 	mux.HandleFunc("POST /api/v1/settings", s.apiSaveSettings)

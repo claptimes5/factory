@@ -409,6 +409,16 @@ paths:
       summary: Things the human may need to act on
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+  /home:
+    get:
+      summary: "Home's catch-up: when Home was last looked at, and what went live since"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Home" } } } }
+  /home/seen:
+    post:
+      summary: Mark Home seen now, so the catch-up starts again from here
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Home" } } } }
   /stream:
     get:
       summary: 'A `version` event (data `{"version": string}`) whenever anything shown changes'
@@ -1582,6 +1592,12 @@ components:
         at: { type: string }
         choice_job_id: { type: [integer, "null"], description: "For a parked item, the job its choices act on" }
         choices: { type: array, items: { $ref: "#/components/schemas/Choice" } }
+    Home:
+      type: object
+      required: [seen_at, went_live]
+      properties:
+        seen_at: { type: string, description: "When Home was last marked seen; empty before the first time" }
+        went_live: { type: array, description: "Items done since then, newest first, at most 20", items: { $ref: "#/components/schemas/Item" } }
     Notifications:
       type: object
       required: [notifications]
