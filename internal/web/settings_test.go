@@ -255,3 +255,35 @@ func TestSettingsReadOnlyWithoutAPassword(t *testing.T) {
 		}
 	}
 }
+
+// A preset rewrites how hard the factory works for the harnesses it has,
+// and the page says which preset the file is at; it won't route to a
+// harness with no key or sign-in.
+func TestApplyPreset(t *testing.T) {
+	t.Parallel()
+	base, _, s, _ := settingsSetup(t, "127.0.0.1:8080")
+	s.Harnesses = func() []string { return []string{"claude", "codex"} }
+	var got APISettings
+	getJSON(t, base+"/api/v1/settings", &got)
+	if len(got.Presets) != 4 || got.Builder != "claude" || got.Reviewer != "codex" {
+		t.Fatalf("settings = %+v", got)
+	}
+	code, body := postJSON(t, base+"/api/v1/settings/preset", "", `{"key":"thorough","version":"`+got.Version+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("apply = %d %s", code, body)
+	}
+	getJSON(t, base+"/api/v1/settings", &got)
+	if got.Preset != "thorough" || got.Builder != "claude" || got.Reviewer != "codex" {
+		t.Fatalf("after = preset %q, %s builds, %s reviews", got.Preset, got.Builder, got.Reviewer)
+	}
+	// Swap them: Codex builds, Claude reviews, still thorough.
+	code, body = postJSON(t, base+"/api/v1/settings/preset", "", `{"builder":"codex","reviewer":"claude","version":"`+got.Version+`"}`)
+	getJSON(t, base+"/api/v1/settings", &got)
+	if code != http.StatusOK || got.Preset != "thorough" || got.Builder != "codex" || got.Reviewer != "claude" {
+		t.Fatalf("swap = %d %s; preset %q, %s builds, %s reviews", code, body, got.Preset, got.Builder, got.Reviewer)
+	}
+	s.Harnesses = func() []string { return []string{"claude"} }
+	if code, body := postJSON(t, base+"/api/v1/settings/preset", "", `{"builder":"codex","reviewer":"codex","version":"`+got.Version+`"}`); code != http.StatusBadRequest || !strings.Contains(body, "codex has no key") {
+		t.Fatalf("codex without a key = %d %s", code, body)
+	}
+}

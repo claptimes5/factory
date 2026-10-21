@@ -32,7 +32,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -494,6 +493,29 @@ func planHarnesses(cfg *config.Config, billed map[string]bool) []string {
 	return out
 }
 
+// connected are the harnesses with a key or sign-in: the ones a route may
+// name.
+func connected(secrets map[string]map[string]string, plans map[string]bool) []string {
+	var out []string
+	for _, h := range []string{"claude", "codex"} {
+		if len(secrets[h]) > 0 || plans[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// onlyPlans says every harness the routing uses runs on a subscription
+// plan: no job costs dollars, so the dashboard shows plan usage instead.
+func onlyPlans(cfg *config.Config, billed map[string]bool) bool {
+	for _, r := range cfg.Routing {
+		if !billed[r.Harness] {
+			return false
+		}
+	}
+	return len(cfg.Routing) > 0
+}
+
 // noReadingLines are status's lines on each harness on a plan that has
 // reported no usage yet, so its dollar spend isn't mistaken for the limit.
 func noReadingLines(plans []string, limits []store.Limit) []string {
@@ -562,48 +584,13 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label
 	// A check a crash or restart cut off left its folder behind.
 	sweepReadiness(cfg.Path(cfg.DataDir))
-	// Readiness runs count as busy for removing the factory, and none
-	// starts while it is removed.
-	var readinessRuns atomic.Int32
-	var removing atomic.Bool
-	readinessRun := func() (func(), error) {
-		// Counted first, so a removal that starts now sees it.
-		readinessRuns.Add(1)
-		if removing.Load() {
-			readinessRuns.Add(-1)
-			return nil, errors.New("the factory is being removed")
-		}
-		return func() { readinessRuns.Add(-1) }, nil
+	// A check is a job the daemon runs, like any other (see
+	// pipeline.KindReadiness): the page queues it, as the daemon does by
+	// itself when a repo's base branch moves.
+	p.Readiness = func(ctx context.Context, repo string, out io.Writer) (string, error) {
+		return recheckReadiness(ctx, cfg, p, repo, out)
 	}
-	srv.CheckReadiness = func(_ context.Context, repo string) error {
-		done, err := readinessRun()
-		if err != nil {
-			return err
-		}
-		defer done()
-		return recheckReadiness(ctx, cfg, p, repo, srv.ReadinessLog(repo))
-	}
-	srv.FileReadiness = func(_ context.Context, repo string, queue bool) (string, error) {
-		done, err := readinessRun()
-		if err != nil {
-			return "", err
-		}
-		defer done()
-		return fileReadiness(ctx, cfg, p, repo, queue, srv.ReadinessLog(repo))
-	}
-	// A lint baseline runs the repo's install and linter like a check, in
-	// containers named apart from the daemon's jobs.
-	srv.CanBaseline = p.CanBaseline
-	srv.LintBaseline = func(_ context.Context, repo string) (string, error) {
-		done, err := readinessRun()
-		if err != nil {
-			return "", err
-		}
-		defer done()
-		pl := &pipeline.Pipeline{Cfg: cfg, Runner: p.Runner, JobPrefix: readinessPrefix(), ClientsFor: p.ClientsFor}
-		pl.Progress = srv.ReadinessLog(repo)
-		return pl.LintBaseline(ctx, repo)
-	}
+	srv.QueueReadiness = p.QueueReadiness
 	go relinkSaved(ctx, cfg, p)
 	srv.BaseSHA = func(ctx context.Context, repo string) (string, error) {
 		gh, ok := p.GitHubFor(repo).(forge)
@@ -612,23 +599,10 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		}
 		return gh.BranchSHA(ctx, repoFor(cfg, repo).BaseBranch)
 	}
-	srv.BaselineOpen = func(ctx context.Context, repo, url string) (bool, error) {
-		gh, ok := p.GitHubFor(repo).(forge)
-		if !ok {
-			return false, fmt.Errorf("no client for %s's host", repo)
-		}
-		n, err := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
-		if err != nil {
-			return false, fmt.Errorf("no pull request number in %s", url)
-		}
-		pr, err := gh.GetPR(ctx, n)
-		if err != nil {
-			return false, err
-		}
-		return pr.State == "open" && !pr.Merged, nil
-	}
 	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
+	srv.PlansOnly = onlyPlans(cfg, p.PlanBilled)
+	srv.Harnesses = func() []string { return connected(p.Secrets, p.PlanBilled) }
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
 	srv.Orchestrator = web.OrchestratorInfo{On: cfg.Orchestrator.On, Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),
@@ -689,17 +663,8 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return err
 	}
 	srv.Wizard = wz
-	// A restart waits for an image build, a sign-in or a readiness
-	// check, as for a job.
-	p.Busy = func() string {
-		if w := wz.waitingOn(); w != "" {
-			return w
-		}
-		if readinessRuns.Load() > 0 {
-			return "the readiness check"
-		}
-		return ""
-	}
+	// A restart waits for an image build or a sign-in, as for a job.
+	p.Busy = wz.waitingOn
 	// Settings' "Remove the factory" waits for jobs, readiness checks and
 	// compare runs (in any process, by their run locks) and that work too,
 	// and holds off new work while it removes.
@@ -714,19 +679,12 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		if n > 0 {
 			return fmt.Sprintf("Not now: %d job(s) are running. Wait for them to finish, or cancel them, then try again.", n)
 		}
-		if readinessRuns.Load() > 0 {
-			return "Not now: a readiness check is running. Wait for it to finish, then try again."
-		}
 		if w := wz.waitingOn(); w != "" {
 			return "Not now: " + w + " is running. Wait for it to finish, then try again."
 		}
 		return ""
 	})
-	un.hold = func() func() {
-		release := p.Hold()
-		removing.Store(true)
-		return func() { removing.Store(false); release() }
-	}
+	un.hold = p.Hold
 	srv.Uninstaller = un
 	_, err = listenWeb(ctx, cfg, srv)
 	return err

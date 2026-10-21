@@ -85,9 +85,9 @@ function PlanLine({ p }: { p: UsagePlan }) {
 }
 
 /**
- * A note beside dollar costs for jobs that ran on a plan: the figure is
- * what the work would cost at API prices, and the plan's usage is what
- * counts. Nothing when none of the harnesses is on a plan.
+ * A note beside dollar costs for jobs that ran on a plan: they cost no
+ * dollars, and the plan's usage is what counts. Nothing when none of the
+ * harnesses is on a plan.
  */
 export function PlanCostNote({ harnesses, className }: { harnesses: string[]; className?: string }) {
   const plans = (usePlanUsage().data?.plans ?? []).filter((p) => harnesses.includes(p.harness));
@@ -96,9 +96,7 @@ export function PlanCostNote({ harnesses, className }: { harnesses: string[]; cl
     <p data-testid="plan-cost-note" className={cn("text-xs text-muted-foreground", className)}>
       {plans.map((p) => (
         <span key={p.harness} className="block">
-          {p.harness === "codex"
-            ? `${p.name} runs on your ${p.plan}, so its jobs cost no dollars here: the plan's usage is what counts.`
-            : `${p.name} runs on your ${p.plan}: its dollar figures are an estimate at API prices, and the plan's usage is what counts.`}{" "}
+          {`${p.name} runs on your ${p.plan}, so its jobs cost no dollars here: the plan's usage is what counts.`}{" "}
           {p.windows.length > 0 ? p.windows.map(windowLine).join(". ") + "." : p.no_reading}
         </span>
       ))}

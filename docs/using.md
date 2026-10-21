@@ -37,7 +37,7 @@ with push notifications (see [Notifications](#notifications)).
 | **Inbox** | Every item waiting on you in one list, and budget alerts. "Notify me in this browser" shows them while a dashboard tab is open. |
 | **When to tell you** | Push notifications on this device and the list of devices with them on, a test, and [quiet hours](#quiet-hours). |
 | **Settings** | Budgets, models, escalation, auto-merge, the orchestrator, quiet hours, tuning and intake, saved to `factory.yaml`, and the latest [tuning proposal](#tuning). See below. |
-| **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): "2 of 3 setup steps done", each step passing or not and why it matters, and each blocker linked to its issue and the factory's item for it (waiting its turn, being built, needs you, done). **Check again** runs the check on the repo as it is now, so blockers fixed outside the factory show as fixed. A **Next** box says the one thing to do now, with its button. **Only file the issues** and **File and start work** check again, then file what has no issue yet, as `factory readiness -file` and `-queue` do; File and start work also lets the factory carry on by itself, checking again as the base branch moves and starting the **Recommended** work (a feature map, end-to-end tests…) once the setup steps pass. |
+| **Setup** | How ready each repo is for the factory, from the [readiness check](quality.md#how-ready-a-repo-is): your part as steps (the token, and the factory being able to install the repo and run its checks), and the factory's part, each blocker it's fixing as an issue with its item (waiting its turn, being built, needs you, done). A **Next** box says the one thing to do now, on the row it's about. **Check again** runs the check on the repo as it is now; each check files the factory's work by itself. |
 | **Design** | `/app/design`, not in the menus: the dashboard's colors, type and components, for anyone changing it. |
 
 Warnings that apply to every screen sit in one notice area above it; the
@@ -59,9 +59,13 @@ show each plan's usage windows ("5-hour: 42% used, resets 6:06pm",
 "Weekly: 18% used"), since on a plan those limit the work, not dollars.
 Until a harness reports a reading it says so: Claude Code only includes a
 percentage once a window gets close to its limit, and Codex reports after
-each job on the Docker runner. Job and item pages say that on a plan the
-dollar figures are estimates at API prices. With API keys there's no line,
-and dollars are what count.
+each job on the Docker runner. A job on a plan costs no dollars: it
+records none, so it never counts toward `budgets.daily_total` (the plan's
+windows and `budgets.pause_at_usage` are its limit), and job and item
+pages say so. When every harness in use is on a plan, the dashboard shows
+no dollars at all: the sidebar shows plan usage only, Spend becomes
+**Usage**, and PR descriptions mark each job "plan". With API keys,
+dollars are what count.
 
 With several repos, the chips in the header narrow every screen to one. On
 a phone, what's building and in review comes first and the other stages
@@ -69,18 +73,43 @@ are a tap away. A tablet gets two columns.
 
 ### Settings
 
-The Settings screen changes part of `factory.yaml` for you:
+The Settings screen changes part of `factory.yaml` for you. It starts
+with **How hard it works**, a ladder of presets:
 
-- **Budgets**: the daily cap, jobs at once, PRs waiting for you, the cap
-  per job and per triage or review, `pause_at_usage` and
-  `fast_multiplier`.
+| Preset | What it sets |
+| --- | --- |
+| **Lean** | Small models for most builds, one review round, findings not double-checked |
+| **Balanced** | A small model for small builds, the big one for large builds and review, findings double-checked, two review rounds |
+| **Thorough** | Bigger models for most builds, the reviewer at high effort, high-risk changes reviewed in pairs, three review rounds |
+| **Maximum** | The biggest model at high effort for every build and review |
+
+A preset sets the model of each step (`routing`), `review.verify`,
+`review.paired_high_risk`, `escalation.implement` and
+`escalation.max_review_rounds`, for the harness that builds and the one
+that reviews, and leaves everything else as it is. Claude's models are
+haiku, sonnet and opus; Codex's are the ones your config prices or routes
+to, cheapest first, since their names differ by account. With one harness
+the reviewer gets its biggest model, and the security pass never runs on
+a reviewer's model. The card says which preset the file is at, or "set by
+hand" once you've changed one of those settings yourself, and
+**Swap** changes which harness builds and which reviews.
+
+The rest is in five sections, each folded to a line that says where it
+stands ("$25 a day · 3 jobs at once"); one you've edited opens:
+
+- **Spending and limits**: the daily cap, jobs at once, PRs waiting for
+  you and `pause_at_usage` first; the per-job, triage and review caps and
+  `fast_multiplier` under **More limits**. When every harness is on a
+  plan, the dollar caps fold away, since no job costs dollars.
 - **Models**: the harness, model, effort and fast mode of each routing
   entry in the file.
-- **Escalation**: the model tiers, attempts per tier and review rounds.
-- **Auto-merge**: the top-level `up_to`, `max_size` and `method`.
-- **Orchestrator**, **Tuning** and **Intake**: whether the orchestrator
-  runs, its budgets and how often it runs; how often [tuning](#tuning)
-  runs and the fewest builds it needs; and how often intake polls.
+- **Review and escalation**: whether findings are verified and high-risk
+  reviews paired; the model tiers, attempts per tier and review rounds.
+- **Automation**: auto-merge's top-level `up_to`, `max_size` and
+  `method`; whether the orchestrator runs, its budgets and how often; how
+  often [tuning](#tuning) runs and the fewest builds it needs; and how
+  often intake polls.
+- **Notifications and asks**: quiet hours and concise asks.
 
 An empty box means the key is left out of the file, so its default
 applies; the box shows that default. Gate commands, repos, the runner,

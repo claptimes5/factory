@@ -219,6 +219,9 @@ type APIOverview struct {
 	SignedIn bool `json:"signed_in"`
 	// MainHealth is each repo's base branch CI, as main health last read it.
 	MainHealth []APIMainHealth `json:"main_health"`
+	// PlansOnly: every harness in use runs on a subscription plan, so no
+	// job costs dollars: plan usage is what to show, not spend.
+	PlansOnly bool `json:"plans_only"`
 	// AutoMerge is each repo's auto-merge breaker, where auto-merge is on
 	// or its breaker tripped.
 	AutoMerge []APIBreaker `json:"auto_merge"`
@@ -849,6 +852,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/stream", s.apiStream)
 	mux.HandleFunc("GET /api/v1/settings", s.apiSettings)
 	mux.HandleFunc("POST /api/v1/settings", s.apiSaveSettings)
+	mux.HandleFunc("POST /api/v1/settings/preset", s.apiApplyPreset)
 	mux.HandleFunc("POST /api/v1/settings/restart", s.apiRestart)
 	mux.HandleFunc("POST /api/v1/settings/restart/cancel", s.apiCancelRestart)
 	mux.HandleFunc("GET /api/v1/settings/tuning", s.apiTuning)
@@ -868,12 +872,6 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	waiting, _ := s.Store.ListItems(ctx, state.AwaitingHuman)
 	running, _ := s.Store.CountJobs(ctx, state.Running, "")
 	queued, _ := s.Store.CountJobs(ctx, state.Queued, "")
-	// A setup run (a readiness check, a lint baseline) is running work too.
-	s.ready.mu.Lock()
-	if s.ready.repo != "" {
-		running++
-	}
-	s.ready.mu.Unlock()
 	v, err := s.Store.Version(ctx)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
@@ -881,7 +879,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
 		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != "",
-		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r)})
+		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r), PlansOnly: s.PlansOnly})
 }
 
 // breakers are the repos' auto-merge breakers worth showing.

@@ -700,3 +700,31 @@ func TestEstimateRaisedSizeIsEstimatedAgain(t *testing.T) {
 		t.Fatal("queued while waiting")
 	}
 }
+
+// A run on a subscription costs no dollars: it records none, so it never
+// counts toward the daily cap; a run on an API key still does.
+func TestPlanRunsCostNoDollars(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.p.PlanBilled = map[string]bool{"claude": true} // codex reviews on its API key
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{pass}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: e.item(t, 1).ID})
+	var plan, billed float64
+	for _, j := range jobs {
+		if j.Harness == "claude" {
+			plan += j.CostUSD
+		} else {
+			billed += j.CostUSD
+		}
+	}
+	spent, _ := e.p.Store.SpendOn(ctx, store.Today())
+	if plan != 0 || billed == 0 || spent != billed {
+		t.Fatalf("plan $%.2f, billed $%.2f, spent today $%.2f", plan, billed, spent)
+	}
+}

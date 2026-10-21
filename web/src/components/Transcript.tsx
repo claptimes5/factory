@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ChevronRight, Download, Loader2, OctagonX, Send } from "lucide-react";
-import { act, type Job, type Stop, type TranscriptEntry } from "@/api/client";
+import { act, useOverview, type Job, type Stop, type TranscriptEntry } from "@/api/client";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { cn, money } from "@/lib/utils";
@@ -179,6 +179,7 @@ function Thinking({ text }: { text: string }) {
 
 /** How the run ended, in plain words. */
 function Outcome({ job, stop, outcome, state }: { job: Job; stop?: Stop | null; outcome?: TranscriptEntry; state: string }) {
+  const plansOnly = !!useOverview().data?.plans_only;
   let tone: "ok" | "stop" | "bad" = state === "succeeded" ? "ok" : "bad";
   let head = outcome?.summary || `The job ${state.replace("_", " ")}.`;
   let more = "";
@@ -208,7 +209,7 @@ function Outcome({ job, stop, outcome, state }: { job: Job; stop?: Stop | null; 
         <p className="font-medium">{head}</p>
         {more && <p className="mt-0.5 break-words whitespace-pre-wrap text-muted-foreground">{more}</p>}
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {[turns > 0 && `${turns} turns`, `${money(job.cost_usd)} of ${money(job.budget_usd)}`].filter(Boolean).join(" · ")}
+          {[turns > 0 && `${turns} turns`, !plansOnly && `${money(job.cost_usd)} of ${money(job.budget_usd)}`].filter(Boolean).join(" · ")}
         </p>
       </div>
     </div>

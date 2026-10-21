@@ -174,15 +174,25 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 		step("claude", "Claude", "attention", "No key yet")
 	}
 	out.Claude = c
-	out.Codex = &web.APIWizardCodex{Mode: w.codexMode, SignedIn: w.signedIn, SignIn: w.signIn, ReviewOnly: true}
+	out.Codex = &web.APIWizardCodex{Mode: w.codexMode, SignedIn: w.signedIn, SignIn: w.signIn}
+	// As the factory routes them: one connected does everything, with
+	// both Claude builds and Codex reviews.
+	switch {
+	case w.claude != "" && w.codexMode == "chatgpt" && w.signedIn:
+		c.Role, out.Codex.Role = "builds", "reviews"
+	case w.claude != "":
+		c.Role = "builds and reviews"
+	case w.codexMode == "chatgpt" && w.signedIn:
+		out.Codex.Role = "builds and reviews"
+	}
 	switch {
 	case w.codexMode == "chatgpt" && w.signedIn:
-		step("codex", "OpenAI (Codex)", "done", "ChatGPT plan, signed in")
+		step("codex", "Codex", "done", "ChatGPT plan, signed in")
 	case w.codexMode == "chatgpt":
-		step("codex", "OpenAI (Codex)", "attention", "ChatGPT plan, not signed in yet")
+		step("codex", "Codex", "attention", "ChatGPT plan, not signed in yet")
 		out.Warnings = append(out.Warnings, "Codex isn't signed in to ChatGPT, so Codex jobs wait until you sign in.")
 	default:
-		step("codex", "OpenAI (Codex)", "done", "Saved")
+		step("codex", "Codex", "done", "Saved")
 	}
 	if w.notify != "" {
 		step("notify", "Notifications", "done", "Saved")

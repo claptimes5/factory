@@ -1,4 +1,4 @@
-import { useMetrics, useSpend } from "@/api/client";
+import { useMetrics, useOverview, useSpend } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
 import { PlanUsageMeter } from "@/components/PlanUsage";
 import { Chart } from "@/components/Chart";
@@ -8,6 +8,8 @@ import { money, pct } from "@/lib/utils";
 export function MetricsScreen() {
   const m = useMetrics();
   const s = useSpend();
+  // On plans, no job costs dollars: the plans' usage is what to watch.
+  const plansOnly = !!useOverview().data?.plans_only;
   if (m.isLoading || s.isLoading) return <Loading />;
   if (m.error || s.error) return <ErrorBox error={m.error ?? s.error} />;
   const r = m.data!;
@@ -17,10 +19,10 @@ export function MetricsScreen() {
   const rate = (v: number) => (v < 0 ? null : v);
   return (
     <div className="space-y-4">
-      <PageTitle>Spend and metrics</PageTitle>
+      <PageTitle>{plansOnly ? "Usage and metrics" : "Spend and metrics"}</PageTitle>
       <PlanUsageMeter className="mb-4 rounded-card border bg-surface p-3.5" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-        <Stat label="Cost per merged PR" value={r.merged ? money(r.cost_per_merged_usd) : "–"} big />
+        {!plansOnly && <Stat label="Cost per merged PR" value={r.merged ? money(r.cost_per_merged_usd) : "–"} big />}
         <Stat label="First-pass rate" value={pct(r.first_pass_rate)} />
         <Stat label="Escalation rate" value={pct(r.escalation_rate)} />
         <Stat label="Review escapes" value={pct(r.review_escape_rate)} hint="Reviewer-passed PRs a human changed or closed" />
@@ -32,17 +34,21 @@ export function MetricsScreen() {
           hint={`Factory PRs merged in the last ${r.revert_window_days} days that a later commit or PR reverted: ${r.reverted} of ${r.revert_merged}`}
         />
         <Stat label="Raised by the diff" value={String(r.risk_raised_by_diff)} hint="Items whose built diff raised their risk above triage's" />
-        <Stat label="Spent this week" value={money(sp.week_usd)} />
+        {!plansOnly && <Stat label="Spent this week" value={money(sp.week_usd)} />}
         <Stat label="Merged / items" value={`${r.merged} / ${r.items}`} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Daily spend (30 days)">
-          <Chart kind="bar" format={money} max={Math.max(sp.daily_cap_usd, ...sp.days.map((d) => d.cost_usd)) || undefined}
-            points={[...sp.days].reverse().map((d) => ({ label: d.day.slice(5), value: d.cost_usd }))} />
-        </ChartCard>
-        <ChartCard title="Cost per merged PR, by week">
-          <Chart format={money} points={weeks.map((w) => ({ label: wl(w.start), value: w.merged ? w.cost_per_merged_usd : null }))} />
-        </ChartCard>
+        {!plansOnly && (
+          <>
+            <ChartCard title="Daily spend (30 days)">
+              <Chart kind="bar" format={money} max={Math.max(sp.daily_cap_usd, ...sp.days.map((d) => d.cost_usd)) || undefined}
+                points={[...sp.days].reverse().map((d) => ({ label: d.day.slice(5), value: d.cost_usd }))} />
+            </ChartCard>
+            <ChartCard title="Cost per merged PR, by week">
+              <Chart format={money} points={weeks.map((w) => ({ label: wl(w.start), value: w.merged ? w.cost_per_merged_usd : null }))} />
+            </ChartCard>
+          </>
+        )}
         <ChartCard title="First-pass rate, by week">
           <Chart format={pct} max={1} points={weeks.map((w) => ({ label: wl(w.start), value: rate(w.first_pass_rate) }))} />
         </ChartCard>
@@ -51,8 +57,12 @@ export function MetricsScreen() {
         </ChartCard>
       </div>
       <div className="grid gap-4 lg:grid-cols-3">
-        <Table title="Cost per PR by size" rows={r.by_complexity.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Size", "Merged", "Per PR"]} />
-        <Table title="Cost per PR by model" rows={r.by_model.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Model", "Merged", "Per PR"]} />
+        {!plansOnly && (
+          <>
+            <Table title="Cost per PR by size" rows={r.by_complexity.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Size", "Merged", "Per PR"]} />
+            <Table title="Cost per PR by model" rows={r.by_model.map((g) => [g.key, String(g.merged), money(g.cost_per_pr_usd)])} head={["Model", "Merged", "Per PR"]} />
+          </>
+        )}
         <Table
           title="Reviewer precision"
           rows={r.precision_by_reviewer.map((x) => [x.key, `${x.fixed} / ${x.findings}`, String(x.refuted), pct(x.precision)])}
@@ -65,7 +75,7 @@ export function MetricsScreen() {
             head={["Repo", "Reverted", "Rate", "Broke main"]}
           />
         )}
-        <Table title="Spend by model (all time)" rows={sp.by_model.map((x) => [x.model, money(x.cost_usd)])} head={["Model", "Spend"]} />
+        {!plansOnly && <Table title="Spend by model (all time)" rows={sp.by_model.map((x) => [x.model, money(x.cost_usd)])} head={["Model", "Spend"]} />}
         {sp.usage.length > 0 && (
           <Table
             title="Usage limits (last reported)"
@@ -79,7 +89,7 @@ export function MetricsScreen() {
         Reviewer blocks: {r.review_blocks}. The verifier refuted {pct(r.verifier_refute_rate)} of the findings it checked. Security passes:{" "}
         {r.security_passes}, {r.security_blocks} of them blocking.
       </p>
-      {sp.estimates.compared > 0 && (
+      {!plansOnly && sp.estimates.compared > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="estimate-accuracy">
           Cost estimates: {sp.estimates.within} of {sp.estimates.compared} finished builds cost at most their p75; the median build came in{" "}
           {sp.estimates.median_miss_usd >= 0 ? `${money(sp.estimates.median_miss_usd)} over` : `${money(-sp.estimates.median_miss_usd)} under`} its estimate's median.

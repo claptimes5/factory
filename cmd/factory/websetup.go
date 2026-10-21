@@ -452,8 +452,42 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 		step("checks", "Checks", "done", "Every repo's checks are set")
 	}
 
-	if usesHarness(cfg, "claude") {
-		c := &web.APIWizardClaude{}
+	// Claude and Codex are equals: either one is enough, and with both one
+	// builds and the other reviews. A step is to do only while neither is
+	// connected; then the other is optional.
+	have := harnessesIn(vals)
+	builder, reviewer := cfg.Harnesses()
+	role := func(h string) string {
+		switch {
+		case !slices.Contains(have, h):
+			return ""
+		case builder == h && reviewer == h:
+			return "builds and reviews"
+		case builder == h:
+			return "builds"
+		case reviewer == h:
+			return "reviews"
+		}
+		return ""
+	}
+	missing := func(h, also string) {
+		switch {
+		case len(have) == 0:
+			step(h, harnessName(h), "attention", "Not connected: connect Claude, Codex or both")
+		default:
+			step(h, harnessName(h), "optional", "Optional: with "+also+" too, one reviews what the other builds")
+		}
+	}
+	if len(have) == 0 {
+		out.Warnings = append(out.Warnings, "Neither Claude nor Codex is connected, so no job can run: connect one, or both.")
+	}
+	for _, h := range []string{"claude", "codex"} {
+		if usesHarness(cfg, h) && len(have) > 0 && !slices.Contains(have, h) {
+			out.Warnings = append(out.Warnings, "factory.yaml routes jobs to "+harnessName(h)+", which isn't connected, so they will fail.")
+		}
+	}
+	{
+		c := &web.APIWizardClaude{Role: role("claude")}
 		switch {
 		case vals["ANTHROPIC_API_KEY"] != "":
 			c.Kind, c.Key = "api_key", secretOf(vals["ANTHROPIC_API_KEY"])
@@ -462,14 +496,13 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 			c.Kind, c.Key = "subscription", secretOf(vals["CLAUDE_CODE_OAUTH_TOKEN"])
 			step("claude", "Claude", "done", "Subscription token saved")
 		default:
-			step("claude", "Claude", "attention", "No key yet")
-			out.Warnings = append(out.Warnings, "Claude has no key, so jobs routed to Claude will fail.")
+			missing("claude", "Codex")
 		}
 		out.Claude = c
 	}
-	if usesHarness(cfg, "codex") {
+	{
 		c := &web.APIWizardCodex{Mode: codexAPIKey, APIKey: secretOf(firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"])),
-			AccessToken: secretOf(vals["CODEX_ACCESS_TOKEN"]), SignIn: w.signInState(), ReviewOnly: usesHarness(cfg, "claude")}
+			AccessToken: secretOf(vals["CODEX_ACCESS_TOKEN"]), SignIn: w.signInState(), Role: role("codex")}
 		if b, err := os.ReadFile(codexAuthFile(cfg)); err == nil && harness.ValidAuth(b) {
 			c.SignedIn = true
 		}
@@ -481,17 +514,16 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 		}
 		switch {
 		case c.Mode == codexAccessToken:
-			step("codex", "OpenAI (Codex)", "done", "Access token saved")
+			step("codex", "Codex", "done", "Access token saved")
 		case c.Mode == codexChatGPT && c.SignedIn:
-			step("codex", "OpenAI (Codex)", "done", "ChatGPT plan, signed in")
+			step("codex", "Codex", "done", "ChatGPT plan, signed in")
 		case c.Mode == codexChatGPT:
-			step("codex", "OpenAI (Codex)", "attention", "ChatGPT plan, not signed in yet")
+			step("codex", "Codex", "attention", "ChatGPT plan, not signed in yet")
 			out.Warnings = append(out.Warnings, "Codex isn't signed in to ChatGPT, so Codex jobs wait until you sign in.")
 		case c.APIKey.Set:
-			step("codex", "OpenAI (Codex)", "done", "API key saved")
+			step("codex", "Codex", "done", "API key saved")
 		default:
-			step("codex", "OpenAI (Codex)", "attention", "No key or sign-in yet")
-			out.Warnings = append(out.Warnings, "Codex has no key or sign-in, so jobs routed to Codex will fail.")
+			missing("codex", "Claude")
 		}
 		out.Codex = c
 	}
@@ -829,10 +861,31 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return w.tryChecks(cfg, in)
 	case "labels":
 		return w.createLabels(ctx, cfg)
-	case "claude":
-		return w.saveClaude(in.Key, in.Anyway)
-	case "codex":
-		return w.saveCodex(cfg, in.Mode, in.Key)
+	case "claude", "codex":
+		before := harnessesIn(w.vals())
+		var msg string
+		var err error
+		if action == "claude" {
+			msg, err = w.saveClaude(in.Key, in.Anyway)
+		} else {
+			msg, err = w.saveCodex(cfg, in.Mode, in.Key)
+		}
+		if err != nil {
+			return "", err
+		}
+		// Jobs go to what's connected: either one alone, or one builds and
+		// the other reviews.
+		moved, err := routeHarnesses(w.cfgPath, before, harnessesIn(w.vals()))
+		if err != nil {
+			return msg, fmt.Errorf("saved, but routing jobs to it failed: %w", err)
+		}
+		if moved != "" {
+			if err := w.reload(); err != nil {
+				return msg, err
+			}
+			msg += " " + moved
+		}
+		return msg, nil
 	case "notify":
 		u := strings.TrimSpace(in.URL)
 		if _, err := notify.New(u); err != nil {
@@ -1191,7 +1244,7 @@ func (w *wizard) saveCodex(cfg *config.Config, mode, key string) (string, error)
 			return "", err
 		}
 		if v == "" {
-			return "Without a key, Codex jobs fail until you add one or switch to Claude-only review.", nil
+			return "Without a key or sign-in, Codex isn't connected.", nil
 		}
 		return "Saved the API key.", nil
 	case codexChatGPT:

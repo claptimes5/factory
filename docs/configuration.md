@@ -1215,8 +1215,14 @@ coverage floor found, show either way.
 
 ## Claude-only review
 
-By default Codex reviews what Claude builds, so the reviewer is never the
-model that wrote the code. If you only have Claude, Claude reviews too.
+Setup routes jobs to what you connect: connect only Claude and it builds
+and reviews; connect Codex too and Codex reviews what Claude builds (or
+the other way round, if Codex came first). The presets on the Settings
+screen write routing like the below for whichever you have. This section
+explains what they do with one harness.
+
+With both, the reviewer is never the model that wrote the code. If you
+only have Claude, Claude reviews too.
 
 A reviewer may run the same model as the builder, including a tier a retry
 escalates to: every review is a job of its own in a fresh session, which

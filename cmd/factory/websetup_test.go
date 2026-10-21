@@ -208,7 +208,7 @@ func TestWizardTokenAndAccess(t *testing.T) {
 		t.Fatal("the token was sent back")
 	}
 	// Warnings say what won't work: no model keys yet.
-	if !st.CanFinish || !strings.Contains(strings.Join(st.Warnings, " "), "Claude has no key") {
+	if !st.CanFinish || !strings.Contains(strings.Join(st.Warnings, " "), "Neither Claude nor Codex is connected") {
 		t.Fatalf("finish = %v %v", st.CanFinish, st.Warnings)
 	}
 	if s := step(st, "machine"); s.State != "attention" {
@@ -276,8 +276,9 @@ func TestWizardModelKeys(t *testing.T) {
 		t.Fatalf("anyway: %v", vals)
 	}
 
-	if _, err := w.Do(ctx, "codex", web.WizardInput{Mode: codexAPIKey, Key: "sk-openai-123"}); err != nil {
-		t.Fatal(err)
+	// Codex comes second, so it reviews what Claude builds.
+	if msg, err := w.Do(ctx, "codex", web.WizardInput{Mode: codexAPIKey, Key: "sk-openai-123"}); err != nil || !strings.Contains(msg, "reviews what it builds") {
+		t.Fatalf("codex: %q %v", msg, err)
 	}
 	msg, err := w.Do(ctx, "codex", web.WizardInput{Mode: codexChatGPT})
 	if err != nil || !strings.Contains(msg, "sign in with ChatGPT") {
@@ -290,8 +291,8 @@ func TestWizardModelKeys(t *testing.T) {
 	if b, _ := os.ReadFile(w.envPath); !strings.Contains(string(b), "# OPENAI_API_KEY=sk-openai-123") {
 		t.Fatalf("the API key is commented out, not lost:\n%s", b)
 	}
-	if c := w.State(ctx, false).Codex; c.Mode != codexChatGPT || c.SignedIn || !c.ReviewOnly {
-		t.Fatalf("codex state = %+v", c)
+	if st := w.State(ctx, false); st.Codex.Mode != codexChatGPT || st.Codex.SignedIn || st.Codex.Role != "reviews" || st.Claude.Role != "builds" {
+		t.Fatalf("codex state = %+v, claude %+v", st.Codex, st.Claude)
 	}
 	if _, err := w.Do(ctx, "codex", web.WizardInput{Mode: codexAccessToken}); err == nil {
 		t.Fatal("an access token is needed")

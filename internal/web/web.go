@@ -113,31 +113,26 @@ type Server struct {
 	// or "" (may be nil: then none can).
 	SteerUnsupported func(j *store.Job) string
 	// ReadinessDir holds the readiness check's latest report on each repo
-	// ("" for none), and CheckReadiness runs it again on one, saving the
-	// report there (nil when the dashboard can't). IntakeLabel is the
-	// label that hands an issue to the factory.
+	// ("" for none), and QueueReadiness queues a check of one, a job the
+	// daemon runs, unless one is queued or running (nil when the
+	// dashboard can't). IntakeLabel is the label that hands an issue to
+	// the factory.
 	ReadinessDir   string
-	CheckReadiness func(ctx context.Context, repo string) error
-	// FileReadiness checks a repo again and files an issue for each gap
-	// that has none, as `factory readiness -file` does, or -queue with
-	// queue. It says what it did.
-	FileReadiness func(ctx context.Context, repo string, queue bool) (string, error)
-	// LintBaseline records a repo's lint offenses as a baseline and opens
-	// a pull request with it, returning its address; CanBaseline says
-	// whether its linter can.
-	LintBaseline func(ctx context.Context, repo string) (string, error)
-	CanBaseline  func(repo string) bool
+	QueueReadiness func(ctx context.Context, repo, why string) (bool, error)
+	// Harnesses are the harnesses with a key or sign-in, which a preset may
+	// route to (nil when the dashboard can't tell: then any).
+	Harnesses func() []string
 	// BaseSHA is a repo's base branch head on its host, for
 	// FollowReadiness to see when it moves.
-	BaseSHA func(ctx context.Context, repo string) (string, error)
-	// BaselineOpen says whether the lint baseline's pull request at url
-	// is still open on repo's host.
-	BaselineOpen func(ctx context.Context, repo, url string) (bool, error)
-	IntakeLabel  string
+	BaseSHA     func(ctx context.Context, repo string) (string, error)
+	IntakeLabel string
 	// Plans are the harnesses in use that run on a subscription plan,
 	// whose usage windows matter more than dollars, and PauseAtUsage the
 	// percent of a window that holds their jobs.
-	Plans        []string
+	Plans []string
+	// PlansOnly: every harness in use runs on a plan, so no job costs
+	// dollars and the dashboard shows plan usage, not spend.
+	PlansOnly    bool
 	PauseAtUsage float64
 	// Chat is the chat with the orchestrator's model (nil for none), and
 	// Orchestrator what the dashboard says about the orchestrator.
@@ -153,7 +148,7 @@ type Server struct {
 	// "Remove the factory" (nil hides it).
 	Uninstaller Uninstaller
 
-	ready      readinessRun
+	ready      readinessFollow
 	tmpl       *template.Template
 	pollPeriod time.Duration
 	settingsMu sync.Mutex

@@ -141,12 +141,14 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
   /readiness/check:
     post:
-      summary: Run the readiness check on a repo again, in the background
+      summary: Queue a readiness check of a repo
       description: |
-        Clones the repo's base branch and runs its install and checks, as a
-        build's gates do, then saves the report. It files and labels nothing.
-        One check runs at a time (409 while one does). Needs the password, or
-        a request from this machine, and a daemon that can run it (403 otherwise).
+        Queues a readiness job, which the daemon runs like any job: it clones
+        the repo's base branch and runs its install and checks, as a build's
+        gates do, saves the report, and files an issue for each blocker a
+        change can fix, labeled for the factory. One per repo (409 while one
+        is queued or running). Needs the password, or a request from this
+        machine, and a daemon that can run it (403 otherwise).
       requestBody:
         required: true
         content:
@@ -155,58 +157,6 @@ paths:
               type: object
               required: [repo]
               properties: { repo: { type: string, description: "owner/name" } }
-      responses:
-        "200": { $ref: "#/components/responses/Action" }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Action" }
-  /readiness/file:
-    post:
-      summary: Check a repo again, then file an issue for each gap that has none, in the background
-      description: |
-        Runs the readiness check as /readiness/check does, then files an issue
-        for each blocker and gap that has none. With queue they get the intake
-        label (only the blockers while the repo has any), and once it is ready
-        the issues filed earlier get it too, so the factory starts on them. A
-        check that couldn't finish files nothing. Shares the one-at-a-time
-        slot with /readiness/check (409 while a run is going). Needs the
-        password, or a request from this machine (403 otherwise).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [repo]
-              properties:
-                repo: { type: string, description: "owner/name" }
-                queue: { type: boolean, description: "Give the issues the intake label, so the factory works on them" }
-      responses:
-        "200": { $ref: "#/components/responses/Action" }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Action" }
-  /readiness/baseline:
-    post:
-      summary: Record a repo's lint offenses on its base branch as a baseline, and open a pull request with it, in the background
-      description: |
-        For a lint check that fails on the base branch (RuboCop for now), runs
-        the repo's install and the linter's baseline command on the base
-        branch, checks the lint command passes with it, and pushes only the
-        linter's files to factory/lint-baseline with a pull request to merge.
-        Once merged, lint passes and only new offenses fail a change. Shares
-        the one-at-a-time slot with /readiness/check (409 while a run is
-        going). Needs the password, or a request from this machine (403
-        otherwise).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [repo]
-              properties:
-                repo: { type: string, description: "owner/name" }
       responses:
         "200": { $ref: "#/components/responses/Action" }
         "400": { $ref: "#/components/responses/Error" }
@@ -527,6 +477,33 @@ paths:
                       path: { type: array, items: { type: string } }
                       value: { $ref: "#/components/schemas/SettingValue" }
                 version: { type: string, description: "The version the GET returned; a save over a file changed since is refused (409)" }
+      responses:
+        "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /settings/preset:
+    post:
+      summary: Set how hard the factory works
+      description: |
+        Applies a preset's changes to factory.yaml (the model for each step,
+        review strictness, escalation) for the harness that builds and the
+        one that reviews: as they are, or ones named here that have a key or
+        sign-in. Without a key, the current preset (Balanced when set by
+        hand) is made again for the harnesses named, so this also swaps
+        them. Applies when the factory restarts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                key: { type: string, description: "lean, balanced, thorough or maximum; empty keeps the current one" }
+                builder: { type: string, description: "claude or codex; empty keeps the current one" }
+                reviewer: { type: string, description: "claude or codex; empty keeps the current one" }
+                version: { type: string, description: "The version the GET returned; a file changed since is refused (409)" }
       responses:
         "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -959,8 +936,9 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only]
       properties:
+        plans_only: { type: boolean, description: "Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend" }
         auto_merge:
           type: array
           description: Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped
@@ -1087,7 +1065,7 @@ components:
         pause_at: { type: number, description: "Percent of a five-hour or weekly window at which its jobs wait for the reset" }
     Readiness:
       type: object
-      required: [repos, banner, intake_label, can_check, check_note, can_file]
+      required: [repos, banner, intake_label, can_check, check_note]
       properties:
         repos: { type: array, items: { $ref: "#/components/schemas/RepoReadiness" } }
         banner:
@@ -1097,10 +1075,9 @@ components:
         intake_label: { type: string, description: The label that hands an issue to the factory }
         can_check: { type: boolean, description: "This request may run the check here (behind the password or on this machine, with a daemon that can)" }
         check_note: { type: string, description: "Why it can't, or empty" }
-        can_file: { type: boolean, description: "This request may also file issues from here" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, extras, unqueued, unfiled, can_queue, checking, checking_since, action, check_error, result, can_baseline, baseline_pr, following, progress, checking_why]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, checking, checking_since, check_job, check_error, result, progress, checking_why]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1111,31 +1088,29 @@ components:
         done: { type: integer, description: Setup steps that pass }
         total: { type: integer, description: Setup steps in all }
         steps: { type: array, items: { $ref: "#/components/schemas/ReadinessStep" } }
+        work:
+          type: array
+          description: "The blockers the factory fixes, each filed as an issue: until they're merged, new tasks on the repo wait"
+          items: { $ref: "#/components/schemas/ReadinessFinding" }
         extras:
           type: array
           description: "Gaps and tips, worth doing but not needed to start, and what's in place beyond the steps"
           items: { $ref: "#/components/schemas/ReadinessFinding" }
-        unqueued: { type: integer, description: Issues filed without the intake label }
-        unfiled: { type: integer, description: "Findings that need an issue and have none" }
-        can_queue: { type: boolean, description: "Filing with the intake label would do something: file what isn't filed, or label what waited for the blockers" }
-        checking: { type: boolean, description: A run started from the dashboard is going }
+        checking: { type: boolean, description: "A check of the repo, a readiness job, is queued or running" }
         checking_since: { type: string }
-        action: { type: string, enum: ["", check, file, queue, baseline], description: "What that run does: check, file issues, file and start work, or make a lint baseline" }
-        check_error: { type: string, description: "Why the last run started here failed, or empty" }
-        result: { type: string, description: "What the last run started here did, when it filed or made a baseline; else empty" }
-        can_baseline: { type: boolean, description: "Lint fails on the base branch and its linter can record today's offenses as a baseline: POST /readiness/baseline" }
-        baseline_pr: { type: string, description: "The pull request the last lint baseline opened, while lint still fails, or empty" }
+        check_error: { type: string, description: "Why the last check failed, or empty" }
+        result: { type: string, description: "What the last check did, when it worked; else empty" }
+        check_job: { type: [integer, "null"], description: The readiness job of the check going, or of the last one }
         checking_why: { type: string, description: "What started the run going, when the factory did by itself; else empty" }
-        following: { type: boolean, description: "File and start work was chosen: the factory checks again as the base branch moves and starts the recommended work once the setup steps pass" }
         progress:
           type: array
-          description: What the run going (or the last one started here) has done so far, a step at a time, oldest first
+          description: What the check going (or the last one) has done so far, a step at a time, oldest first
           items: { $ref: "#/components/schemas/ReadinessProgress" }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]
       properties:
-        key: { type: string, enum: [install, checks, tests] }
+        key: { type: string, enum: [access, run] }
         title: { type: string }
         why: { type: string, description: What the factory needs it for }
         state: { type: string, enum: [done, failing, unchecked] }
@@ -1851,7 +1826,7 @@ components:
         fields: { type: array, items: { $ref: "#/components/schemas/Setting" } }
     Settings:
       type: object
-      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups]
+      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups, presets, preset, builder, reviewer, harnesses]
       properties:
         path: { type: string, description: The config file }
         writable: { type: boolean }
@@ -1862,6 +1837,18 @@ components:
         restart_waits_for: { type: string, description: "Other work the pending restart waits for, such as \"the job image build\" or \"the Codex sign-in\"; else empty" }
         running_jobs: { type: integer }
         groups: { type: array, items: { $ref: "#/components/schemas/SettingsGroup" } }
+        presets: { type: array, description: "How hard the factory works, least first", items: { $ref: "#/components/schemas/Preset" } }
+        preset: { type: string, description: "The preset the file matches; empty when its settings were changed by hand" }
+        builder: { type: string, description: The harness that builds }
+        reviewer: { type: string, description: "The harness that reviews; the builder's with only one" }
+        harnesses: { type: array, items: { type: string }, description: "Harnesses with a key or sign-in, which routes may name" }
+    Preset:
+      type: object
+      required: [key, name, summary]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        summary: { type: string }
     TuningChange:
       type: object
       required: [path, value, why, reason, now]
@@ -2056,20 +2043,21 @@ components:
         tokens_url: { type: string, description: The page fine-grained tokens are made on }
     WizardClaude:
       type: object
-      required: [kind, key]
+      required: [kind, key, role]
       properties:
         kind: { type: string, enum: [api_key, subscription, ""] }
         key: { $ref: "#/components/schemas/WizardSecret" }
+        role: { type: string, enum: [builds, reviews, builds and reviews, ""], description: "What Claude does; empty while it isn't connected" }
     WizardCodex:
       type: object
-      required: [mode, api_key, access_token, signed_in, sign_in, review_only]
+      required: [mode, api_key, access_token, signed_in, sign_in, role]
       properties:
         mode: { type: string, enum: [api-key, chatgpt, access-token] }
         api_key: { $ref: "#/components/schemas/WizardSecret" }
         access_token: { $ref: "#/components/schemas/WizardSecret" }
         signed_in: { type: boolean, description: The ChatGPT sign-in is saved }
         sign_in: { $ref: "#/components/schemas/WizardSignIn" }
-        review_only: { type: boolean, description: Claude writes the code and Codex reviews it }
+        role: { type: string, enum: [builds, reviews, builds and reviews, ""], description: "What Codex does; empty while it isn't connected" }
     WizardSignIn:
       type: object
       description: A ChatGPT sign-in with a device code, started with /setup/codex/sign-in

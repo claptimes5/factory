@@ -99,6 +99,9 @@ func (p *Pipeline) runTriage(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
+	if p.fixesByBaseline(it.Repo, is.Body) {
+		return p.runBaseline(ctx, j, it)
+	}
 	p.warn(p.gh(it.Repo).AddLabels(ctx, it.IssueNumber, LabelRunning), "AddLabels")
 	ws, err := p.git(it.Repo).Prepare(ctx, dir, p.repoConf(it.Repo).BaseBranch, "", false, false)
 	if err != nil {

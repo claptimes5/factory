@@ -9,7 +9,7 @@ import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
-import { NextActions, nextStep, RunProgress, useReadiness, useReadinessRun } from "@/screens/Setup";
+import { NextActions, nextStep, RunProgress, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type Readiness = components["schemas"]["Readiness"];
@@ -73,7 +73,8 @@ export function HomeScreen() {
   const repos = useOverview().data?.repos ?? [];
   const repo = useRepo(repos);
   const readiness = useReadiness().data;
-  const unready = (readiness?.repos ?? []).filter((r) => (r.state === "not_ready" || r.state === "incomplete") && (!repo || r.repo === repo));
+  // Home leads with setup while a person's part is left; the factory's own fixes are work like any other.
+  const unready = (readiness?.repos ?? []).filter((r) => r.state !== "unchecked" && yourPartLeft(r) && (!repo || r.repo === repo));
   const [later, setLater] = useState<number[]>([]);
   const cols = useMemo(() => {
     const m = new Map<string, CardT[]>();

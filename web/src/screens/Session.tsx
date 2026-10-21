@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router";
-import { useItem, useJob, useSavedDiff, type Stop } from "@/api/client";
+import { useItem, useJob, useSavedDiff, type Stop, useOverview } from "@/api/client";
 import { Choices } from "@/components/Choices";
 import { Actions, Empty, ErrorBox, GateList, JobStateBadge, Loading, PageHeader } from "@/components/common";
 import { DiffView } from "@/components/DiffView";
@@ -15,6 +15,7 @@ import { duration, money } from "@/lib/utils";
 const kindName = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
 
 export function SessionScreen() {
+  const plansOnly = !!useOverview().data?.plans_only;
   const id = Number(useParams().id);
   const { data, error, isLoading } = useJob(id);
   const itemId = data?.job.item_id ?? 0;
@@ -62,7 +63,8 @@ export function SessionScreen() {
         meta={
           <>
             {j.harness}/{j.model}
-            {j.effort && ` · ${j.effort}`} · attempt {j.attempt} · {money(j.cost_usd)} of {money(j.budget_usd)}
+            {j.effort && ` · ${j.effort}`} · attempt {j.attempt}
+            {!plansOnly && ` · ${money(j.cost_usd)} of ${money(j.budget_usd)}`}
             {j.started_at && ` · ${duration(j.started_at, j.finished_at || undefined)}`}
             {j.skillset && ` · skills: ${j.skillset}`}
             <PlanCostNote harnesses={[j.harness]} className="mt-1" />

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -150,7 +150,7 @@ func TestReadinessLinksIssuesAndStatusSumsUp(t *testing.T) {
 	it, _, _ := st.UpsertItem(ctx, "o/r", 101, "Make the lint check pass on main")
 	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
 	st.SetStage(ctx, it.ID, state.Implementing, "daemon", "")
-	want := "setup o/r:\t2 of 3 setup steps done, not ready: lint fails on main (#101, implementing)"
+	want := "setup o/r:\t1 of 1 setup steps done, not ready: lint fails on main (#101, implementing)"
 	if got := strings.Join(readinessLines(ctx, st, cfg), "\n"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
@@ -168,7 +168,7 @@ func TestReadinessLinksIssuesAndStatusSumsUp(t *testing.T) {
 	if err := runReadiness(ctx, cfg, p, nil); err != nil || len(f.issues) != 0 {
 		t.Fatalf("err %v, issues %v", err, f.issues)
 	}
-	want = "setup o/r:\t3 of 3 setup steps done, ready; add the factory:ready label to an issue to start"
+	want = "setup o/r:\t1 of 1 setup steps done, ready; add the factory:ready label to an issue to start"
 	if got := strings.Join(readinessLines(ctx, st, cfg), "\n"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
@@ -207,7 +207,7 @@ func TestFileReadinessFromTheDashboard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msg != "Opened 1 issue(s) on o/r (1 already filed). Labeled 1 issue(s) filed earlier factory:ready, now that the blockers are fixed." {
+	if msg != "Opened 1 issue(s) on o/r (1 already filed). Labeled 1 issue(s) filed earlier factory:ready, so the factory works on them." {
 		t.Fatal(msg)
 	}
 	if strings.Join(f.issues, "|") != "/repos/o/r/issues Add end-to-end smoke tests factory:readiness,factory:ready" ||
@@ -322,15 +322,14 @@ func (f *baselineForge) CreateIssue(_ context.Context, title, _ string, labels [
 	return 30, nil
 }
 
-// Once the commit checked has the lint baseline, the page stops asking to
-// merge it, the pieces lint was split into close, and what lint still
-// finds gets an issue of its own for the factory, once. Closed without
-// merging, the page stops asking for it too.
+// Once the commit checked has the lint baseline, the pieces lint was
+// split into close, and what lint still finds gets an issue of its own for
+// the factory, once. A lint issue whose own work was the baseline closes:
+// what fails now is new.
 func TestSettleBaseline(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{DataDir: t.TempDir()}
 	cfg.Intake.Label = "factory:ready"
-	dir := readinessDir(cfg)
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
 	lint, _, _ := st.UpsertItem(ctx, "o/r", 9, "Make the lint check pass on master")
 	for _, n := range []int{12, 13} {
@@ -341,20 +340,15 @@ func TestSettleBaseline(t *testing.T) {
 	filed := []github.Issue{{Number: 9, State: "closed", Body: "x\n<!-- factory-readiness: check:lint -->"}}
 	lintFails := readiness.Finding{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on master",
 		Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on master", Body: "1 offense"}}
-	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/42")
 
-	// Not on master yet, and still open: nothing changes.
-	f.pr = &github.PR{Number: 42, State: "open"}
+	// Not on master yet: nothing changes.
 	r := &readiness.Report{Repo: "o/r", Branch: "master", SHA: "c0ffee1234", Findings: []readiness.Finding{lintFails}}
-	if got := settleBaseline(ctx, cfg, f, st, r, filed); len(got) != 1 || readiness.BaselinePR(dir, "o/r") == "" || len(f.closed) != 0 {
+	if got := settleBaseline(ctx, cfg, f, st, r, filed); len(got) != 1 || len(f.closed) != 0 || len(f.created) != 0 {
 		t.Fatalf("before the merge: filed %v, closed %v", got, f.closed)
 	}
 
 	r.Baselined = true
 	got := settleBaseline(ctx, cfg, f, st, r, filed)
-	if readiness.BaselinePR(dir, "o/r") != "" {
-		t.Fatal("still asks to merge a baseline that's in")
-	}
 	if fmt.Sprint(f.closed) != "[12 13]" || !strings.Contains(f.comments[12], "lint baseline is on `master` now (at c0ffee1)") {
 		t.Fatalf("closed %v, comments %v", f.closed, f.comments)
 	}
@@ -367,11 +361,55 @@ func TestSettleBaseline(t *testing.T) {
 		t.Fatalf("filed again: %v", f.created)
 	}
 
-	// A baseline closed without merging stops being asked for.
-	readiness.SaveBaselinePR(dir, "o/r", "https://gitlab.com/o/r/-/merge_requests/43")
-	f.pr = &github.PR{Number: 43, State: "closed"}
-	settleBaseline(ctx, cfg, f, st, &readiness.Report{Repo: "o/r", Findings: []readiness.Finding{lintFails}}, filed)
-	if readiness.BaselinePR(dir, "o/r") != "" {
-		t.Fatal("still asks to merge a closed baseline")
+	// The lint issue was fixed by the baseline itself (its item is done),
+	// and new offenses came since: it closes, and they get their own.
+	f2 := &baselineForge{closingForge: closingForge{open: map[int]bool{9: true}, comments: map[int]string{}}}
+	st.SetStage(ctx, lint.ID, state.Ready, "daemon", "")
+	st.SetStage(ctx, lint.ID, state.Done, "daemon", "")
+	got = settleBaseline(ctx, cfg, f2, st, r, []github.Issue{{Number: 9, State: "open", Body: "x\n<!-- factory-readiness: check:lint -->"}})
+	if fmt.Sprint(f2.closed) != "[9]" || got[0].State != "closed" || len(f2.created) != 1 {
+		t.Fatalf("closed %v, filed %v, created %v", f2.closed, got, f2.created)
+	}
+}
+
+// A check, by the dashboard or by itself, files the factory's work: an
+// issue for each blocker a change can fix, labeled for the factory, while
+// gaps wait unlabeled until the repo is ready.
+func TestRecheckFilesTheFactorysWork(t *testing.T) {
+	// Flaky tests were filed before, unlabeled, by a plain check.
+	f := &fakeGitHub{labels: map[string]bool{}, filed: []map[string]any{
+		{"number": 13, "title": "Fix flaky tests", "body": "x\n<!-- factory-readiness: flaky -->", "state": "open", "labels": []map[string]string{{"name": "factory:readiness"}}},
+	}}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	cfg, err := config.Load(testConfig(t, "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeline.Pipeline{Cfg: cfg, ClientsFor: func(repo string) pipeline.RepoClients {
+		return pipeline.RepoClients{GH: &github.Client{Repo: repo, BaseURL: srv.URL, Tokens: github.StaticToken("t")}}
+	}}
+	oldAssess := assess
+	t.Cleanup(func() { assess = oldAssess })
+	assess = func(_ context.Context, cfg *config.Config, _ *pipeline.Pipeline, repo string, _ io.Writer) (*readiness.Report, error) {
+		r := &readiness.Report{Repo: repo, Branch: "main", Findings: []readiness.Finding{
+			{Level: readiness.Blocker, Area: "tests", Title: "Tests are flaky", Issue: &readiness.Issue{Key: "flaky", Title: "Fix flaky tests"}},
+			{Level: readiness.Blocker, Area: "checks", Title: "`lint` fails on main", Issue: &readiness.Issue{Key: "check:lint", Title: "Make the lint check pass on main"}},
+			{Level: readiness.Blocker, Area: "services", Title: "`test` can't reach a service it needs"},
+			{Level: readiness.Gap, Area: "e2e", Issue: &readiness.Issue{Key: "e2e", Title: "Add end-to-end smoke tests"}},
+		}}
+		_, err := readiness.Save(readinessDir(cfg), r)
+		return r, err
+	}
+	var out strings.Builder
+	msg, err := recheckReadiness(context.Background(), cfg, p, "o/r", &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.issues, "|"); got != "/repos/o/r/issues Make the lint check pass on main factory:readiness,factory:ready|/repos/o/r/issues Add end-to-end smoke tests factory:readiness" {
+		t.Fatalf("issues %s", got)
+	}
+	if !strings.Contains(msg, "Opened 2 issue(s)") || strings.Join(f.labeled, "|") != "/repos/o/r/issues/13/labels factory:ready" {
+		t.Fatalf("said %q, labeled %v", msg, f.labeled)
 	}
 }

@@ -157,7 +157,7 @@ func TestDoctorChecks(t *testing.T) {
 		{"no claude", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("ANTHROPIC_API_KEY", "") },
 			fail, "No Claude credential", "./factory setup"},
 		{"no openai", func(t *testing.T, _ *fakeMachine, _ *config.Config) { t.Setenv("OPENAI_API_KEY", "") },
-			fail, "routes review to Codex", "docs/configuration.md#claude-only-review"},
+			fail, "routes review to Codex", "choose Claude only"},
 		{"auth token with docker", func(t *testing.T, _ *fakeMachine, _ *config.Config) {
 			t.Setenv("ANTHROPIC_API_KEY", "")
 			t.Setenv("ANTHROPIC_AUTH_TOKEN", "x")

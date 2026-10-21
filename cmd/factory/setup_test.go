@@ -301,6 +301,7 @@ func TestSetupWithSeveralRepos(t *testing.T) {
 		"3", "ghp_token123",
 		"y", // create labels on both
 		"",  // run the readiness check
+		"",  // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"", "", // Codex on an API key, but none
 		"",
@@ -415,6 +416,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 		"y", // o/web's checks
 		"y", // build the images
 		"",  // run the readiness check
+		"",  // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"", "", // Codex on an API key, but none
 		"",
@@ -477,6 +479,7 @@ func TestSetupFilesReadinessIssues(t *testing.T) {
 		"",  // run the readiness check
 		"y", // open the issues
 		"y", // and queue them
+		"",  // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"", "", // Codex on an API key, but none
 		"",
@@ -641,6 +644,7 @@ func TestSetupCreatesTheAppAndSavesEverything(t *testing.T) {
 		"",               // the browser said it was created
 		"y",              // create labels
 		"",               // run the readiness check
+		"",               // Claude, Codex or both: both
 		"sk-ant-api03-abc",
 		"", // Codex on an API key
 		"sk-openai-xyz",
@@ -682,6 +686,7 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 		"3", "ghp_token123", // personal token
 		"n",                         // don't create labels
 		"n",                         // skip the readiness check
+		"",                          // Claude, Codex or both: both
 		"sk-ant-oat01-subscription", // a subscription token goes in its own variable
 		"", "",                      // an API key for Codex, but none
 		"https://example.com/hook", // not a supported notifier
@@ -697,15 +702,17 @@ func TestSetupWithTokenSortsClaudeCredentials(t *testing.T) {
 	if vals["FACTORY_NOTIFY_URL"] != "https://ntfy.sh/my-topic" {
 		t.Fatalf("notify: %v\n%s", vals, out)
 	}
-	if !strings.Contains(out, "reviews will fail") {
-		t.Fatalf("no warning about the missing OpenAI key:\n%s", out)
+	// Only Claude is connected, so it does everything.
+	if !strings.Contains(out, "Codex isn't connected") || !strings.Contains(out, "Claude now builds and reviews.") {
+		t.Fatalf("no word on Codex, or routing:\n%s", out)
 	}
 	if len(f.created) != 0 {
 		t.Fatal("labels created without permission")
 	}
 }
 
-// With every route on Codex, setup doesn't ask for a Claude credential.
+// Choosing Codex alone, setup asks for no Claude credential and keeps
+// every route on Codex.
 func TestSetupCodexOnlySkipsClaude(t *testing.T) {
 	f := &fakeGitHub{labels: map[string]bool{}, yaml: func(y string) string {
 		y = regexp.MustCompile(`harness: claude, model: [a-z]+`).ReplaceAllString(y, "harness: codex, model: gpt-6.1-sol")
@@ -720,14 +727,12 @@ func TestSetupCodexOnlySkipsClaude(t *testing.T) {
 		"3", "ghp_token123", // personal token
 		"n",           // don't create labels
 		"n",           // skip the readiness check
+		"codex",       // only Codex
 		"1", "sk-xyz", // Codex on an API key
 		"", // no notifications
 	)
-	if strings.Contains(out, "Anthropic") || strings.Contains(out, "== 7. Claude") {
+	if strings.Contains(out, "Anthropic") || strings.Contains(out, "Claude: paste") {
 		t.Fatalf("setup asked for Claude:\n%s", out)
-	}
-	if !strings.Contains(out, "runs every job on Codex") {
-		t.Fatalf("no Codex-only wording:\n%s", out)
 	}
 	if vals, _ := readEnvFile(envPath); vals["OPENAI_API_KEY"] != "sk-xyz" {
 		t.Fatalf("codex key: %v\n%s", vals, out)

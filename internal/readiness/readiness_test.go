@@ -390,8 +390,8 @@ func TestChecksThatNeedUntrackedFiles(t *testing.T) {
 			t.Fatalf("a builder was asked to fix a missing key: %+v", is)
 		}
 	}
-	if s := r.Steps()[1]; s.Key != "checks" || s.State != StepFailing {
-		t.Fatalf("checks step %+v", s)
+	if s := r.Steps()[0]; s.Key != "run" || s.State != StepFailing || len(s.Blockers) != 1 {
+		t.Fatalf("run step %+v", s)
 	}
 
 	in.FilesSet = true

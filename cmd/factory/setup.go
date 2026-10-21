@@ -296,26 +296,51 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 		}
 	}
 
-	// A Codex-only factory needs no Claude sign-in.
-	if usesHarness(cfg, "claude") {
-		p.say("\n== 7. Claude (writes the code)")
-		p.say("Paste an API key from https://console.anthropic.com/settings/keys, or, to use")
-		p.say("a Claude subscription, run `claude setup-token` and paste the token it prints.")
+	// Claude and Codex are equals: either one is enough, and with both one
+	// builds and the other reviews what it builds.
+	p.say("\n== 7. Claude and Codex")
+	p.say("The factory runs on Claude, Codex or both: either one is enough. With both,")
+	p.say("one builds and the other reviews what it builds, which catches more.")
+	before := harnessesIn(vals)
+	def := "both"
+	if len(before) == 1 {
+		def = before[0]
+	}
+	var use string
+	for {
+		use = strings.ToLower(p.ask("Which will you use? claude, codex or both", def))
+		if use == "claude" || use == "codex" || use == "both" {
+			break
+		}
+		p.say("Answer claude, codex or both.")
+	}
+	if use != "codex" {
+		p.say("\nClaude: paste an API key from https://console.anthropic.com/settings/keys, or, to")
+		p.say("use a Claude subscription, run `claude setup-token` and paste the token it prints.")
 		setupClaude(p, vals)
+		if err := save(); err != nil {
+			return err
+		}
 	}
-	if err := save(); err != nil {
-		return err
-	}
-
-	if usesHarness(cfg, "codex") {
-		p.say("\n== 8. OpenAI (Codex)")
+	if use != "claude" {
+		p.say("\nCodex:")
 		setupCodex(p, cfg, vals)
 		if err := save(); err != nil {
 			return err
 		}
 	}
+	// Jobs go to what's connected now.
+	moved, err := routeHarnesses(cfgPath, before, harnessesIn(vals))
+	if err != nil {
+		p.say("Couldn't route jobs to them in %s: %v", cfgPath, err)
+	} else if moved != "" {
+		p.say("%s (%s; Settings can change it.)", moved, cfgPath)
+		if c, err := config.Load(cfgPath); err == nil {
+			cfg = c
+		}
+	}
 
-	p.say("\n== 9. Phone notifications (optional)")
+	p.say("\n== 8. Phone notifications (optional)")
 	p.say("An ntfy topic URL (https://ntfy.sh/<topic>), or a Slack or Discord webhook URL.")
 	for {
 		// Webhook URLs work as passwords, so this is read like a key.
@@ -329,7 +354,7 @@ func setup(ctx context.Context, cfgPath string, cfg *config.Config, envPath stri
 	}
 
 	if cfg.Sources.Sentry.Enabled {
-		p.say("\n== 10. Sentry (optional)")
+		p.say("\n== 9. Sentry (optional)")
 		p.say("sources.sentry files an issue for each unresolved Sentry error. It reads Sentry with")
 		p.say("an auth token: an internal integration's, or a personal one, with the project:read")
 		p.say("and event:read scopes (Settings > Developer Settings on your Sentry).")
@@ -357,8 +382,8 @@ func setupClaude(p *prompter, vals map[string]string) {
 		case k != "":
 			vals[k] = v
 		case v == "":
-			p.say("factory.yaml routes jobs to Claude, so they can't run without one.")
-			if p.yes("Skip it for now?", false) {
+			p.say("Without one, Claude isn't connected.")
+			if p.yes("Skip Claude for now?", false) {
 				break
 			}
 			continue
@@ -403,16 +428,10 @@ func clearKeys(vals map[string]string, keys []string) {
 // setupCodex asks how Codex signs in: an API key, a ChatGPT plan, or a
 // Business or Enterprise access token.
 func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
-	if usesHarness(cfg, "claude") {
-		p.say("factory.yaml has Codex review Claude's work. Codex can sign in with:")
-	} else {
-		p.say("factory.yaml runs every job on Codex. Codex can sign in with:")
-	}
+	p.say("Codex can sign in with:")
 	p.say("  1. An OpenAI API key, billed per use. OpenAI recommends this for automation.")
 	p.say("  2. A ChatGPT plan (Plus, Pro, Business or Enterprise), using the plan's limits.")
 	p.say("  3. A Codex access token from a ChatGPT Business or Enterprise workspace.")
-	p.say("No OpenAI account? Choose 1, leave the key empty, and see")
-	p.say("docs/configuration.md#claude-only-review.")
 	def := "1"
 	switch {
 	case vals["CODEX_ACCESS_TOKEN"] != "":
@@ -427,7 +446,7 @@ func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
 			vals["OPENAI_API_KEY"] = p.secret("OpenAI API key", firstOf(vals["OPENAI_API_KEY"], vals["CODEX_API_KEY"]))
 			clearKeys(vals, codexClears[codexAPIKey])
 			if vals["OPENAI_API_KEY"] == "" {
-				p.say("Without it, reviews will fail until you add one or switch to Claude-only review.")
+				p.say("Without it, Codex isn't connected.")
 			}
 			return
 		case "2":
@@ -451,7 +470,7 @@ func setupCodex(p *prompter, cfg *config.Config, vals map[string]string) {
 			vals["CODEX_ACCESS_TOKEN"] = p.secret("Codex access token", vals["CODEX_ACCESS_TOKEN"])
 			clearKeys(vals, codexClears[codexAccessToken])
 			if vals["CODEX_ACCESS_TOKEN"] == "" {
-				p.say("Without it, reviews will fail until you add one.")
+				p.say("Without it, Codex isn't connected.")
 			}
 			return
 		}

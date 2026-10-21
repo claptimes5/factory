@@ -33,7 +33,7 @@ test("warnings for every screen share one notice area: the most serious shows, t
   await area.getByRole("button", { name: "2 more notices" }).click();
   await expect(area.getByRole("region")).toHaveCount(3);
   await expect(area.getByRole("region", { name: "Auto-merge breaker" })).toContainText("Auto-merge is off");
-  await expect(area.getByRole("region", { name: "Setup", exact: true })).toContainText("Setup isn't finished.");
+  await expect(area.getByRole("region", { name: "Setup", exact: true })).toContainText("The factory is fixing 2 things");
   await area.getByRole("button", { name: "Show fewer" }).click();
   await expect(area.getByRole("region")).toHaveCount(1);
 });

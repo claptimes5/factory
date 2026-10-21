@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Lock, RotateCw, Save, Sparkles, X } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronRight, ExternalLink, Lock, RotateCw, Save, Sparkles, X } from "lucide-react";
 import {
   act,
   APIError,
+  applyPreset,
   applyTuning,
   saveSettings,
+  useOverview,
   useSettings,
   useTuning,
   type Setting,
@@ -60,16 +62,34 @@ export const settingsLinks = [
 
 function SettingsHub() {
   return (
-    <nav aria-label="More settings" className="grid gap-2 sm:grid-cols-2">
+    <nav aria-label="More settings" className="flex flex-wrap gap-2">
       {settingsLinks.map((l) => (
-        <Link key={l.to} to={l.to} className="flex flex-col gap-0.5 rounded-card border bg-surface px-4 py-3 hover:border-muted-foreground/40">
-          <span className="text-body-sm font-medium">{l.label}</span>
-          <span className="text-meta text-muted-foreground">{l.hint}</span>
+        <Link
+          key={l.to}
+          to={l.to}
+          title={l.hint}
+          className="flex items-center gap-1 rounded-full border bg-surface px-3 py-1.5 text-body-sm hover:border-muted-foreground/40"
+        >
+          {l.label} <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
         </Link>
       ))}
     </nav>
   );
 }
+
+/** The screen's sections: the server's groups, gathered so there are a few to scan, each with a line saying where it stands. */
+const sections: { key: string; title: string; groups: string[] }[] = [
+  { key: "limits", title: "Spending and limits", groups: ["Budgets"] },
+  { key: "models", title: "Models", groups: ["Models"] },
+  { key: "review", title: "Review and escalation", groups: ["Review", "Escalation"] },
+  { key: "automation", title: "Automation", groups: ["Auto-merge", "Orchestrator", "Tuning", "Intake"] },
+  { key: "notify", title: "Notifications and asks", groups: ["Quiet hours", "Asks"] },
+];
+
+/** The spending fields shown first; the rest wait behind "More limits". */
+const firstLimits = ["budgets.daily_total", "budgets.concurrent_jobs", "budgets.awaiting_human_max", "budgets.pause_at_usage"];
+
+const harnessName = (h: string) => (h === "codex" ? "Codex" : h === "claude" ? "Claude" : h);
 
 export function SettingsScreen() {
   const { data, error, isLoading } = useSettings();
@@ -124,6 +144,8 @@ function SettingsForm({ s }: { s: Settings }) {
   const restart = () => press("/settings/restart");
   const cancelRestart = () => press("/settings/restart/cancel");
   const draft = (f: Setting) => (key(f) in drafts ? drafts[key(f)] : initial(f));
+  // On plans only, no job costs dollars: the dollar caps matter only with API keys.
+  const plansOnly = !!useOverview().data?.plans_only;
 
   return (
     <div className="max-w-4xl space-y-4" data-testid="settings">
@@ -186,35 +208,32 @@ function SettingsForm({ s }: { s: Settings }) {
       )}
       {restartMsg && <p role="alert" className="text-sm text-destructive">{restartMsg}</p>}
 
-      {s.groups.map((g) => (
-        <Card key={g.name} role="region" aria-label={g.name}>
-          <CardHeader className="flex-col items-start gap-0.5">
-            <CardTitle>{g.name}</CardTitle>
-            {g.help && <p className="text-xs text-muted-foreground">{g.help}</p>}
-          </CardHeader>
-          <CardContent>
-            {g.fields.some((f) => f.row) ? (
-              <Rows fields={g.fields} draft={draft} set={set} ro={ro} />
-            ) : (
-              <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-                {g.fields.map((f) => (
-                  <div key={key(f)} className="flex min-w-0 flex-col gap-1">
-                    <label htmlFor={id(f)} className="text-sm font-medium">
-                      {f.label}
-                    </label>
-                    <Input f={f} d={draft(f)} set={set} ro={ro} />
-                    <span id={id(f) + "-help"} className="text-xs text-muted-foreground">
-                      {f.help}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ))}
+      <PresetCard s={s} ro={ro} pending={changed.length > 0} onApplied={(next) => qc.setQueryData(["settings"], next)} />
 
-      {!ro && (
+      {sections.map((sec) => {
+        const groups = s.groups.filter((g) => sec.groups.includes(g.name));
+        if (groups.length === 0) return null;
+        const edited = groups.some((g) => g.fields.some((f) => changed.includes(f)));
+        return (
+          <Section key={sec.key} title={sec.title} summary={summary(sec.key, s, plansOnly)} edited={edited}>
+            {groups.map((g) => (
+              <div key={g.name} role="region" aria-label={g.name} className="flex flex-col gap-2">
+                {groups.length > 1 && <h3 className="text-body-sm font-semibold">{g.name}</h3>}
+                {g.help && <p className="text-xs text-muted-foreground">{g.help}</p>}
+                {g.fields.some((f) => f.row) ? (
+                  <Rows fields={g.fields} draft={draft} set={set} ro={ro} />
+                ) : g.name === "Budgets" ? (
+                  <Limits fields={g.fields} draft={draft} set={set} ro={ro} plansOnly={plansOnly} />
+                ) : (
+                  <Fields fields={g.fields} draft={draft} set={set} ro={ro} />
+                )}
+              </div>
+            ))}
+          </Section>
+        );
+      })}
+
+      {!ro && changed.length > 0 && (
         <div className="sticky bottom-20 z-10 flex flex-wrap items-center gap-3 rounded-control border bg-surface/95 p-3 shadow-xs backdrop-blur md:bottom-4">
           <Button onClick={save} disabled={saving || changed.length === 0}>
             <Save /> {saving ? "Saving…" : "Save"}
@@ -244,6 +263,205 @@ function SettingsForm({ s }: { s: Settings }) {
       <p className="text-xs text-muted-foreground">Gate commands, repos, the runner and the network are edited in factory.yaml.</p>
       <RemoveFactory />
     </div>
+  );
+}
+
+/** A section of settings, folded to a line that says where it stands; one with edits opens. */
+function Section({ title, summary, edited, children }: { title: string; summary: string; edited: boolean; children: ReactNode }) {
+  return (
+    <details open={edited || undefined} className="group rounded-card border bg-card" data-testid="settings-section">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 p-4 md:px-5">
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
+        <span className="font-semibold">{title}</span>
+        <span className="min-w-0 flex-1 text-sm text-muted-foreground">{summary}</span>
+        {edited && <span className="text-xs font-medium text-primary">Edited</span>}
+      </summary>
+      <div className="flex flex-col gap-5 border-t p-4 md:px-5">{children}</div>
+    </details>
+  );
+}
+
+/** A field's value as it stands: the file's, or the default. */
+function current(s: Settings, path: string): SettingValue {
+  for (const g of s.groups) for (const f of g.fields) if (f.path.join(".") === path) return f.value ?? f.default;
+  return null;
+}
+
+/** A section's line: its few settings that matter most, as they stand. */
+function summary(sec: string, s: Settings, plansOnly: boolean): string {
+  const v = (p: string) => current(s, p);
+  switch (sec) {
+    case "limits": {
+      const jobs = `${v("budgets.concurrent_jobs") ?? 3} jobs at once`;
+      const pause = `plans pause at ${v("budgets.pause_at_usage") ?? 95}% of a usage window`;
+      return plansOnly ? `${jobs} · ${pause}` : `$${v("budgets.daily_total") ?? "?"} a day · ${jobs} · ${pause}`;
+    }
+    case "models": {
+      const p = s.presets.find((x) => x.key === s.preset);
+      const who = s.builder === s.reviewer ? `${harnessName(s.builder)} builds and reviews` : `${harnessName(s.builder)} builds, ${harnessName(s.reviewer)} reviews`;
+      return `${p ? `As ${p.name} sets them` : "Set by hand"} · ${who}`;
+    }
+    case "review":
+      return `Findings ${v("review.verify") === false ? "not double-checked" : "double-checked"} · ${v("escalation.max_review_rounds") ?? 2} review rounds`;
+    case "automation": {
+      const up = v("auto_merge.up_to");
+      return [
+        !up || up === "none" ? "Auto-merge off" : `Auto-merge up to ${up} risk`,
+        v("orchestrator.enabled") === true ? "orchestrator on" : "orchestrator off",
+        `tuning every ${v("tuning.every") ?? "720h"}`,
+      ].join(" · ");
+    }
+    case "notify": {
+      const from = v("notify.quiet_hours.from");
+      return [from ? `Quiet ${from}–${v("notify.quiet_hours.until") ?? "?"}` : "No quiet hours", v("concise_asks") === false ? "full asks" : "concise asks"].join(" · ");
+    }
+  }
+  return "";
+}
+
+/** Fields in a grid: label, input, what it does. */
+function Fields({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) {
+  return (
+    <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+      {fields.map((f) => (
+        <div key={key(f)} className="flex min-w-0 flex-col gap-1">
+          <label htmlFor={id(f)} className="text-sm font-medium">
+            {f.label}
+          </label>
+          <Input f={f} d={draft(f)} set={set} ro={ro} />
+          <span id={id(f) + "-help"} className="text-xs text-muted-foreground">
+            {f.help}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Spending: the limits that matter first; per-job caps behind a fold, and on plans only, the dollar caps too. */
+function Limits({ fields, plansOnly, ...p }: { fields: Setting[]; plansOnly: boolean } & FieldProps) {
+  const dollars = (f: Setting) => f.path[1] !== "concurrent_jobs" && f.path[1] !== "awaiting_human_max" && f.path[1] !== "pause_at_usage" && f.path[1] !== "max_turns";
+  const first = fields.filter((f) => firstLimits.includes(f.path.join(".")) && !(plansOnly && dollars(f)));
+  const rest = fields.filter((f) => !first.includes(f));
+  return (
+    <>
+      <Fields fields={first} {...p} />
+      {rest.length > 0 && (
+        <details open={rest.some((f) => p.draft(f) !== initial(f)) || undefined}>
+          <summary className="cursor-pointer text-sm font-medium">{plansOnly ? "Dollar caps: only for work on API keys" : "More limits"}</summary>
+          <div className="mt-3">
+            <Fields fields={rest} {...p} />
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
+ * How hard the factory works: a ladder of presets, each setting the model
+ * for every step and how strictly review checks itself, for the harnesses
+ * there are. Applied at once, like a save.
+ */
+function PresetCard({ s, ro, pending, onApplied }: { s: Settings; ro: boolean; pending: boolean; onApplied: (s: Settings) => void }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const both = s.harnesses.includes("claude") && s.harnesses.includes("codex");
+  const apply = async (body: { key?: string; builder?: string; reviewer?: string }, what: string) => {
+    setBusy(what);
+    setErr("");
+    try {
+      onApplied(await applyPreset({ ...body, version: s.version }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      // Changed on disk since: load it, so the next try starts from it.
+      if (e instanceof APIError && e.status === 409) void qc.invalidateQueries({ queryKey: ["settings"] });
+    } finally {
+      setBusy("");
+    }
+  };
+  const blocked = ro || pending || !!busy;
+  return (
+    <section aria-label="How hard it works" className="flex flex-col gap-3 rounded-card border bg-card p-4 md:p-5">
+      <div>
+        <h2 className="font-semibold">How hard it works</h2>
+        <p className="text-xs text-muted-foreground">
+          Sets the model for each step, how strictly review checks itself and how far a failing build climbs, for the harnesses you have. The rest stays as it is.
+        </p>
+      </div>
+      <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {s.presets.map((p) => {
+          const now = p.key === s.preset;
+          return (
+            <li key={p.key}>
+              <button
+                type="button"
+                data-testid="preset"
+                aria-pressed={now}
+                disabled={blocked || now}
+                onClick={() => apply({ key: p.key }, p.key)}
+                className={cn(
+                  "flex h-full w-full flex-col gap-1 rounded-control border p-3 text-left text-sm disabled:cursor-default",
+                  now ? "border-primary bg-primary/5" : "hover:border-muted-foreground/40",
+                )}
+              >
+                <span className="flex items-center gap-2 font-medium">
+                  {p.name}
+                  {now && <span className="rounded-full bg-primary/15 px-2 text-caption text-primary">Now</span>}
+                  {busy === p.key && <span className="text-caption text-muted-foreground">Applying…</span>}
+                </span>
+                <span className="text-xs text-muted-foreground">{p.summary}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {s.preset === "" && (
+        <p className="text-xs text-muted-foreground">
+          Set by hand: the models and review settings below match no preset. Choosing one replaces them.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+        <span>
+          {s.builder === s.reviewer
+            ? `${harnessName(s.builder)} builds and reviews.`
+            : `${harnessName(s.builder)} builds; ${harnessName(s.reviewer)} reviews what it builds.`}
+        </span>
+        {both && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={blocked}
+            onClick={() =>
+              apply(
+                s.builder === s.reviewer
+                  ? { builder: s.builder, reviewer: s.builder === "claude" ? "codex" : "claude" }
+                  : { builder: s.reviewer, reviewer: s.builder },
+                "swap",
+              )
+            }
+          >
+            <ArrowLeftRight /> {s.builder === s.reviewer ? `Have ${harnessName(s.builder === "claude" ? "codex" : "claude")} review` : "Swap"}
+          </Button>
+        )}
+        {!both && s.harnesses.length === 1 && (
+          <span className="text-xs text-muted-foreground">
+            Connect {harnessName(s.harnesses[0] === "claude" ? "codex" : "claude")} on the{" "}
+            <Link to="/get-started" className="text-primary hover:underline">
+              get-started page
+            </Link>
+            , and it reviews what {harnessName(s.harnesses[0])} builds.
+          </span>
+        )}
+      </div>
+      {pending && <p className="text-xs text-muted-foreground">Save or discard your edits below first.</p>}
+      {err && (
+        <p role="alert" className="text-sm text-destructive">
+          {err}
+        </p>
+      )}
+    </section>
   );
 }
 

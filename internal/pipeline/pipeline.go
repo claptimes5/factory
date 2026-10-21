@@ -146,6 +146,10 @@ type Pipeline struct {
 	// Progress, when set, is told what a long setup run (a readiness
 	// check, a lint baseline) is doing, a line at a time.
 	Progress io.Writer
+	// Readiness runs a readiness check of repo, saying what it does to
+	// out a line at a time, and says what it did: a readiness job's work.
+	// It lives with the setup commands, which set it.
+	Readiness func(ctx context.Context, repo string, out io.Writer) (string, error)
 	// GateExec runs one gate command against a checkout. Defaults to
 	// running it in the job image through Runner.
 	GateExec func(ctx context.Context, workdir, command string) (int, string, error)
@@ -628,7 +632,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, msg)
 		}
 		// The orchestrator writes next to nothing; builds wait.
-		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx)); j != nil || err != nil {
+		if j, err := p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom", "hunt", KindReadiness), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx)); j != nil || err != nil {
 			return j, err
 		}
 		return nil, ErrDiskLow
@@ -1496,6 +1500,12 @@ func (p *Pipeline) result(ctx context.Context, j *store.Job, run agentRun, st st
 	if run.res != nil {
 		r.TokensIn, r.TokensOut = run.res.TokensIn, run.res.TokensOut
 	}
+	// A run on a subscription costs no dollars: the plan's usage windows
+	// are its limit, not the daily cap. (Codex reports nothing to begin
+	// with; Claude reports what it would cost at API prices.)
+	if p.onPlan(j.Harness) {
+		r.CostUSD = 0
+	}
 	// Claude enforces the cap itself (--max-budget-usd); Codex reports usage
 	// only at the end, so an overrun is recorded for the control room.
 	if run.cost > j.BudgetUSD {
@@ -1572,6 +1582,8 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		err = p.runGroom(ctx, j)
 	case "hunt":
 		err = p.runHunt(ctx, j)
+	case KindReadiness:
+		err = p.runReadiness(ctx, j)
 	case store.KindVerify, store.KindParallelCritic, store.KindSecurity:
 		// Only ever run inside a review, which starts its own again.
 		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "runs only inside the review that started it")

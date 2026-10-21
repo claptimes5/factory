@@ -165,7 +165,7 @@ func baselineBody(l *linter, lint, base string) string {
 		"When the generated lists would replace a cop's own excludes (Style/Documentation skips test/ by default), `.rubocop.yml` gets `inherit_mode: merge: [Exclude]` so they add to them instead, "+
 		"and any file still flagged after that (such as a `rubocop:disable` comment the baseline made redundant) is listed too.\n\n"+
 		"To pay the old offenses down later, delete a cop's entry from `.rubocop_todo.yml` and fix what it flags, one cop at a time.\n\n"+
-		"_Opened by the factory from its Setup page. It ran the baseline on `%s` and checked `%s` passes with it._",
+		"_Opened by the factory to make lint pass. It ran the baseline on `%s` and checked `%s` passes with it._",
 		lint, base, l.cmd, lint, "`"+strings.Join(l.files, "` and `")+"`", base, lint)
 }
 
