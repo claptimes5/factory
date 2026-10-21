@@ -66,13 +66,22 @@ export const shortSha = (s: string) => s.slice(0, 7);
 
 /**
  * A note as a line or two for a card: the part before any log or code it
- * quotes ("Last failure: ```…"), cut at about max characters.
+ * quotes ("Last failure: ```…"), in whole sentences up to about max
+ * characters. The first sentence shows whole unless it runs past twice that.
  */
 export function brief(note: string, max = 220): string {
   let s = note.split("```")[0];
   const cut = s.search(/\b(Last failure|Output|Log):/);
   if (cut > 0) s = s.slice(0, cut);
-  s = s.replace(/\s+/g, " ").trim();
-  if (s.length > max) s = s.slice(0, max).replace(/\s+\S*$/, "") + "…";
-  return s;
+  // Who parked it is noise on a card: the card already says it needs you.
+  s = s.replace(/^Parked by [^:]{1,40}:\s*/, "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  const sentences = s.split(/(?<=[.!?])\s+/);
+  let out = sentences[0];
+  for (const n of sentences.slice(1)) {
+    if (out.length + 1 + n.length > max) break;
+    out += " " + n;
+  }
+  if (out.length > max * 2) out = out.slice(0, max * 2).replace(/\s+\S*$/, "") + "…";
+  return out;
 }

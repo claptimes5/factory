@@ -22,10 +22,11 @@
  * Factory's design tokens (docs/plans/design-system.md). Calm and warm:
  * a paper-grey page, white surfaces, one blue for work that's moving,
  * orange for what needs you, green for what went live. The ink card is
- * a decision waiting for you: dark on the light theme, light on the dark
- * one, so it is the strongest thing on either. Every text pair holds
- * 4.5:1. The older names below (card, text-2, live-*, warning-*) are the
- * same roles, kept so screens not yet rebuilt follow the new look.
+ * a decision waiting for you: charcoal on the light theme (pure black
+ * was too harsh on the paper page), light on the dark one, so it is the
+ * strongest thing on either. Every text pair holds 4.5:1. The older
+ * names below (card, text-2, live-*, warning-*) are the same roles,
+ * kept so screens not yet rebuilt follow the new look.
  */
 :root {
   --background: #f7f7f5;
@@ -52,10 +53,10 @@
   --warning-ink: #1a1206;
   --warning-bg: #fff4ec;
   --warning-border: #f3c9a6;
-  --ink: #17171a;
+  --ink: #2e3036;
   --ink-foreground: #ffffff;
   --ink-muted: #c8c8ce;
-  --ink-border: #3f3f46;
+  --ink-border: #5a5c64;
   --ink-attention: #fdba74;
   --ring: #1d4ed8;
 }
