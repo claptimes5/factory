@@ -401,7 +401,7 @@ func (s *Server) startReadiness(w http.ResponseWriter, r *http.Request, action s
 
 // failedAs is how a failed run of each action is told on the page.
 var failedAs = map[string]string{"check": "The last check failed: ", "file": "Filing its issues failed: ", "queue": "Filing its issues failed: ",
-	"baseline": "Making the lint baseline failed (nothing was pushed): "}
+	"baseline": "Making the lint baseline failed: "}
 
 // beginReadiness starts run for repo in the background, as action, unless
 // a run is going; then it returns the repo that one is for.

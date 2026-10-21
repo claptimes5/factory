@@ -8,7 +8,11 @@ import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Badge } from "@/components/ui/badge";
 import { useRepo } from "@/lib/repo";
-import { brief, cn, duration, money, shortRef, stageName } from "@/lib/utils";
+import { brief, cn, duration, money, repoName, shortRef, stageName } from "@/lib/utils";
+import { actionText, useReadiness } from "@/screens/Setup";
+import type { components } from "@/api/schema";
+
+type RepoReadiness = components["schemas"]["RepoReadiness"];
 
 // The line's stations, in the order work moves through them. The quiet
 // ones show only when they hold something.
@@ -23,6 +27,7 @@ export function BoardScreen() {
   });
   const repos = useOverview().data?.repos ?? [];
   const repo = useRepo(repos);
+  const setupRun = useReadiness().data?.repos.find((r) => r.checking && (!repo || r.repo === repo));
   const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
   const [showDone, setShowDone] = useState(false);
   const [cols, held] = useMemo(() => {
@@ -65,17 +70,18 @@ export function BoardScreen() {
         {/* Laptop and tablet: a column per stage. */}
         <section aria-label="The floor" className="grid gap-3.5 max-md:hidden md:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
           {shown.map((s) => (
-            <Column key={s} stage={s} cards={cols.get(s) ?? []} />
+            <Column key={s} stage={s} cards={cols.get(s) ?? []} setup={s === "implementing" ? setupRun : undefined} />
           ))}
         </section>
 
         {/* Phone: what's moving as cards, the rest a tap away. */}
         <section aria-label="On the floor" className="flex flex-col gap-2.5 md:hidden">
           <h2 className="label text-muted-foreground">On the floor</h2>
+          {setupRun && <SetupRunCard r={setupRun} />}
           {moving.map((c) => (
             <FloorCard key={c.id} card={c} showStage />
           ))}
-          {moving.length === 0 && <p className="text-sm text-muted-foreground">Nothing is building or in review.</p>}
+          {moving.length === 0 && !setupRun && <p className="text-sm text-muted-foreground">Nothing is building or in review.</p>}
           <div className="grid grid-cols-3 gap-2">
             {[...waiting, "done"].map((s) => {
               const n = (s === "done" ? done : (cols.get(s) ?? [])).length;
@@ -141,16 +147,17 @@ export function BoardScreen() {
   );
 }
 
-function Column({ stage, cards }: { stage: string; cards: CardT[] }) {
+function Column({ stage, cards, setup }: { stage: string; cards: CardT[]; setup?: RepoReadiness }) {
   return (
     <section aria-label={stageName(stage)} className="flex min-w-0 flex-col gap-2.5">
       <h3 className="label flex justify-between text-muted-foreground">
-        {stageName(stage)} <span className="font-mono tracking-normal">{cards.length}</span>
+        {stageName(stage)} <span className="font-mono tracking-normal">{cards.length + (setup ? 1 : 0)}</span>
       </h3>
+      {setup && <SetupRunCard r={setup} />}
       {cards.map((c, i) => (
         <FloorCard key={c.id} card={c} next={stage === "ready" && i === 0} />
       ))}
-      {cards.length === 0 && <div className="rounded-control border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
+      {cards.length === 0 && !setup && <div className="rounded-control border border-dashed p-3 text-center text-xs text-muted-foreground">Nothing here</div>}
     </section>
   );
 }
@@ -239,6 +246,22 @@ function Dot({ ok }: { ok: boolean | null }) {
   return <span className={cn("size-2 shrink-0 rounded-full", ok === null ? "pulse bg-primary" : ok ? "bg-success-fill" : "bg-destructive")} aria-hidden />;
 }
 
+/** A setup run (a check, a lint baseline) on the line, like a job: it isn't an item, so it opens Setup. */
+function SetupRunCard({ r }: { r: RepoReadiness }) {
+  return (
+    <article data-testid="setup-run" className="relative flex flex-col gap-1.5 rounded-card border border-primary/40 bg-surface p-3.5">
+      <div className="flex items-center gap-2 text-caption text-muted-foreground">
+        <span className="pulse inline-block size-1.5 rounded-full bg-primary" aria-hidden />
+        Setup · {repoName(r.repo) || r.repo}
+      </div>
+      <Link to="/setup" className="text-body-sm font-semibold after:absolute after:inset-0 hover:underline">
+        {actionText[r.action] ?? "Checking"} {repoName(r.repo) || r.repo}
+      </Link>
+      <span className="text-meta text-muted-foreground">{duration(r.checking_since)}</span>
+    </article>
+  );
+}
+
 function NeedsYouCard({ card: c }: { card: CardT }) {
   const pr = c.stage === "awaiting_human";
   const plan = c.plan_waiting;
@@ -255,6 +278,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       <div className="flex items-center gap-2.5">
         <span className="font-mono text-caption text-muted-foreground">{shortRef(c.ref)}</span>
         <Badge variant="attention">{pr ? "PR ready" : plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</Badge>
+        {c.setup && <Badge variant={c.setup === "blocks" ? "warning" : "secondary"}>{c.setup === "blocks" ? "Blocks setup" : "Waits for setup"}</Badge>}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
             ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")
@@ -263,6 +287,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       </div>
       <CardLink card={c} className="text-title-sm leading-tight font-semibold" />
       <FoundBy source={c.self_started} className="text-muted-foreground" />
+      {c.setup === "blocks" && c.setup_note && <p className="text-sm leading-relaxed text-text-2">{c.setup_note}</p>}
       {pr ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-2">
           {c.gates_total > 0 && (

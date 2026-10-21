@@ -990,3 +990,16 @@ func TestWizardRemovesAToken(t *testing.T) {
 		t.Fatalf("disconnect with an exported token: %q", msg)
 	}
 }
+
+// A token that reads the repo but can't open pull requests fails the
+// access check, saying what's missing, rather than every job at its end.
+func TestWizardAccessNeedsPullRequests(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, noPulls: true}
+	w := testWizard(t, f, "o/r", true, noDocker)
+	ctx := context.Background()
+	w.Do(ctx, "github/token", web.WizardInput{Token: "ghp_secret_token_1234"})
+	a := w.State(ctx, false).Access[0]
+	if a.State != "failed" || !strings.Contains(a.Error, "can't open pull requests") || !slices.ContainsFunc(a.Hints, func(h string) bool { return strings.Contains(h, "not accessible") }) {
+		t.Fatalf("access = %+v", a)
+	}
+}

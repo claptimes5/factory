@@ -35,6 +35,8 @@ var steps = []struct {
 	key, title, why string
 	areas           []string
 }{
+	{"access", "The factory's token can do its job",
+		"Every change ends with the factory opening a pull request, and it labels and comments on issues as it works.", []string{"access"}},
 	{"install", "Dependencies install from a clean checkout",
 		"Every job starts by installing dependencies on a fresh copy of {branch}.", []string{"install"}},
 	{"checks", "Every required check passes on {branch}",
@@ -65,7 +67,9 @@ func (r *Report) Steps() []Step {
 				seen = true
 			}
 		}
-		if g.key == "install" && !seen {
+		// Shown when they were looked at: a repo with no install command,
+		// or a host that couldn't be asked, skips them.
+		if (g.key == "install" || g.key == "access") && !seen {
 			continue
 		}
 		switch {

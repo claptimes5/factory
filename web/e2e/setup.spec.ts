@@ -100,6 +100,9 @@ test("blockers the factory can fix lead with File and start work, which carries 
     const res = await route.fetch();
     const body = await res.json();
     body.repos[0].can_baseline = false;
+    // The other project's runs may hold the slot, or have made a baseline.
+    body.repos[0].checking = false;
+    body.repos[0].baseline_pr = "";
     await route.fulfill({ response: res, json: body });
   });
   await page.goto("/app/setup");
@@ -171,7 +174,7 @@ test("lint failing on main offers a baseline, and making it keeps its pull reque
   await expect(api).toContainText("Once you merge it, the factory checks again by itself.");
 });
 
-test("a setup run in progress shows above every screen, with its time counting", async ({ page }) => {
+test("a setup run in progress shows the same on every screen, with its time counting", async ({ page }) => {
   await page.route("**/api/v1/readiness", async (route) => {
     const r = await route.fetch();
     const body = await r.json();
@@ -184,4 +187,59 @@ test("a setup run in progress shows above every screen, with its time counting",
   const banner = await notice(page, "Setup");
   await expect(banner).toContainText(/Making the lint baseline for api, started 1m ago/);
   await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);
+  // The line shows it as work under way, as it would a job.
+  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Making the lint baseline for api");
+
+  // Home and Setup say the same: it's under way, and what happens next.
+  await page.goto("/app/");
+  const lead = page.getByTestId("setup-lead");
+  await expect(lead).toContainText("working on it now");
+  await expect(lead).toContainText("Making the lint baseline");
+  await expect(lead).toContainText("opens a pull request for you to merge");
+  await expect(lead.getByRole("button", { name: "Accept today's offenses" })).toHaveCount(0);
+  await page.goto("/app/setup");
+  const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
+  await expect(next).toContainText("Working on it: making the lint baseline");
+  await expect(next).toContainText("Started 1m ago");
+});
+
+test("a token that can't open pull requests comes first, on Setup and Home, before any work", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const r = body.repos[0];
+    r.checking = false;
+    r.steps.unshift({
+      key: "access",
+      title: "The factory's token can do its job",
+      why: "Every change ends with the factory opening a pull request.",
+      state: "failing",
+      passed: "",
+      blockers: [
+        {
+          level: "blocker",
+          area: "access",
+          title: "The factory's token can't open pull requests",
+          detail: "Give the token leave to:\n\n- open pull requests",
+          issue: 0,
+          issue_url: "",
+          status: "none",
+          split_done: 0,
+          split_total: 0,
+          item_id: null,
+          item_stage: "",
+        },
+      ],
+    });
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/app/setup");
+  const api = page.getByRole("region", { name: "Setup of acme/api" });
+  const next = api.getByTestId("next-step");
+  await expect(next).toContainText("Next: give the factory's token the permissions it needs");
+  await expect(next).toContainText("Its token can't open pull requests");
+  await expect(next.getByRole("button", { name: "Check again" })).toBeVisible();
+  await expect(api.getByTestId("setup-step").first()).toContainText("1. The factory's token can do its job");
+  await page.goto("/app/");
+  await expect(page.getByTestId("setup-lead")).toContainText("Give the factory's token the permissions it needs");
 });

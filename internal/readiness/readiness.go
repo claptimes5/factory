@@ -107,15 +107,66 @@ type Input struct {
 	// Claude says Claude Code builds for the repo, so its CLAUDE.md
 	// should load AGENTS.md.
 	Claude bool
+	// AccessChecked says the repo's host was asked what the factory's
+	// token may do there, and Denied is what it may not.
+	AccessChecked bool
+	Denied        []Denied
 }
+
+// Denied is something the factory does on the repo that its token may
+// not, and what the host said about it.
+type Denied struct{ What, Says string }
 
 // slowTests is when a test run starts to hold up every job.
 const slowTests = 15 * time.Minute
+
+// access reports what the factory's token may not do on the repo: every
+// change ends with a pull request, so a token that can't open one fails
+// every job at its end, after the work and its cost.
+func (r *Report) access(in Input) {
+	if !in.AccessChecked {
+		return
+	}
+	pr := "pull requests"
+	if in.Repo.GitLab() {
+		pr = "merge requests"
+	}
+	if len(in.Denied) == 0 {
+		r.add(Finding{Level: Good, Area: "access", Title: "The factory's token can open " + pr + ", issues and labels"})
+		return
+	}
+	var what []string
+	var b strings.Builder
+	b.WriteString("Every change ends with the factory opening a " + strings.TrimSuffix(pr, "s") + ", and it labels and comments on issues as it works, so without these every job would fail at its end. Give the token leave to:\n\n")
+	for _, d := range in.Denied {
+		what = append(what, d.What)
+		b.WriteString("- " + d.What)
+		if d.Says != "" {
+			b.WriteString(" (it says: " + strings.TrimSpace(d.Says) + ")")
+		}
+		b.WriteString("\n")
+	}
+	if in.Repo.GitLab() {
+		b.WriteString("\nOn GitLab, edit the token under your user settings, Access tokens: a fine-grained token needs each permission GitLab names above, or make a token with the `api` scope. Put a new one in the factory's env file (GITLAB_TOKEN), restart the factory, then check again.")
+	} else {
+		b.WriteString("\nOn GitHub, give the factory's GitHub App (or token) read and write access to pull requests, issues and contents, then check again.")
+	}
+	r.add(Finding{Level: Blocker, Area: "access", Title: "The factory's token can't " + joinAnd(what), Detail: b.String()})
+}
+
+// joinAnd lists words as a person would: "a, b and c".
+func joinAnd(s []string) string {
+	if len(s) < 2 {
+		return strings.Join(s, "")
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
+}
 
 // Assess runs the repo's install and checks on its base branch (the tests
 // twice, to catch flakiness) and inspects its files.
 func Assess(ctx context.Context, in Input) *Report {
 	r := &Report{Repo: in.Repo.Name, SHA: in.SHA, Branch: in.Repo.BaseBranch, Started: time.Now().UTC()}
+	r.access(in)
 	g := in.Repo.Gates
 	files := listFiles(in.Dir)
 	// run runs one command. When the command couldn't be run at all, it

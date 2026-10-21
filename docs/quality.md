@@ -583,9 +583,15 @@ run it again any time:
 ./factory readiness -queue       # open them labeled for the factory to work
 ```
 
-It clones the base branch, runs the install step and every required check
-(the tests twice, to catch flakiness), and looks for tests, end-to-end
-tests, a feature map, a lockfile and CI. It prints a score and what's
+It first asks the repo's host what the factory's token may do there,
+without changing anything: it sends empty requests to open a pull
+request, an issue and a label (and on GitLab to update them and
+comment), which the host refuses with a 403 when the token lacks the
+permission and with a "field missing" error when it has it. A token that
+can't open pull requests is a blocker, the first setup step, since every
+change ends in one. Then it clones the base branch, runs the install step
+and every required check (the tests twice, to catch flakiness), and looks
+for tests, end-to-end tests, a feature map, a lockfile and CI. It prints a score and what's
 missing:
 
 ```
@@ -695,6 +701,9 @@ pieces that each pass a whole-repo lint. When the linter is RuboCop
 4. pushes only those two files to `factory/lint-baseline` and opens a
    pull request for you to review and merge. The Setup screen keeps a
    link to it until lint passes, and says so if making it failed.
+
+It asks the host first whether the token may open a pull request, and
+starts nothing if it may not.
 
 Once it's merged, the daemon checks again by itself: lint passes, the issue filed for it
 and any issues it was split into are closed, and only new offenses fail

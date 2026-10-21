@@ -3,7 +3,10 @@ package readiness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/claptimes5/factory/internal/config"
 )
 
 func TestSteps(t *testing.T) {
@@ -93,5 +96,37 @@ func TestHolds(t *testing.T) {
 		if r.Holds(16, 0) {
 			t.Errorf("%+v holds", r)
 		}
+	}
+}
+
+// A token that can't open merge requests is a blocker of its own, the
+// first step, with what the host said and where to fix it; a host that
+// couldn't be asked shows no such step.
+func TestAccessStep(t *testing.T) {
+	gitlab := config.Repo{Name: "gitlab.com/team/api", Host: "gitlab.com", BaseBranch: "master"}
+	r := &Report{Branch: "master"}
+	r.access(Input{Repo: gitlab, AccessChecked: true, Denied: []Denied{{What: "open merge requests", Says: "requires [Merge Request: Create]"}}})
+	r.finish()
+	steps := r.Steps()
+	if len(steps) != 3 || steps[0].Key != "access" || steps[0].State != StepFailing || r.Ready {
+		t.Fatalf("steps %+v, ready %v", steps, r.Ready)
+	}
+	f := steps[0].Blockers[0]
+	if f.Title != "The factory's token can't open merge requests" || f.Issue != nil ||
+		!strings.Contains(f.Detail, "Merge Request: Create") || !strings.Contains(f.Detail, "GITLAB_TOKEN") {
+		t.Fatalf("finding %+v", f)
+	}
+
+	r = &Report{Branch: "master"}
+	r.access(Input{Repo: gitlab, AccessChecked: true})
+	r.finish()
+	if s := r.Steps()[0]; s.Key != "access" || s.State != StepDone || s.Passed != "The factory's token can open merge requests, issues and labels" {
+		t.Fatalf("step %+v", s)
+	}
+	r = &Report{Branch: "master"}
+	r.access(Input{Repo: gitlab})
+	r.finish()
+	if s := r.Steps()[0]; s.Key == "access" {
+		t.Fatalf("an unasked host has a step: %+v", s)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/github"
 )
 
 // fakeRubocop stands in for RuboCop: its baseline writes the two files
@@ -111,5 +112,23 @@ func TestAddExcludes(t *testing.T) {
 	want := "# Generated.\n\n# This cop supports safe autocorrection.\nStyle/Alias:\n  Exclude:\n    - 'a.rb'\n    - 'b.rb'\n\nStyle/Documentation:\n  Enabled: false\n\nLint/X:\n  Exclude:\n    - 'd.rb'\n"
 	if string(b) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", b, want)
+	}
+}
+
+// A token that can't open pull requests is found out before any work:
+// nothing runs, nothing is pushed, and the error says why.
+func TestLintBaselineChecksAccessFirst(t *testing.T) {
+	t.Parallel()
+	e := setup(t)
+	e.p.Cfg.Repos = []config.Repo{{Name: "o/r", Gates: &config.Gates{Install: "bundle install", Required: []string{"lint"}, Commands: map[string]string{"lint": "bundle exec rubocop"}}}}
+	ran := false
+	e.p.GateExec = func(context.Context, string, string) (int, string, error) { ran = true; return 0, "", nil }
+	e.gh.denied = []github.Denied{{Key: "pr", What: "open merge requests", Says: "requires [Merge Request: Create]"}}
+	_, err := e.p.LintBaseline(context.Background(), "o/r")
+	if err == nil || !strings.Contains(err.Error(), "can't open merge requests") || !strings.Contains(err.Error(), "started nothing") || ran {
+		t.Fatalf("err = %v, ran %v", err, ran)
+	}
+	if out := git(t, e.remote, "branch", "--list", BaselineBranch); strings.TrimSpace(out) != "" {
+		t.Fatalf("pushed %s", out)
 	}
 }

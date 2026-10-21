@@ -46,6 +46,14 @@ type fakeGH struct {
 	failAutoMerge error
 	cancelled     []int
 	failCancel    error
+
+	denied []github.Denied // what MissingAccess reports
+}
+
+func (f *fakeGH) MissingAccess(context.Context) ([]github.Denied, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.denied, nil
 }
 
 func (f *fakeGH) Private(context.Context) (bool, error) {

@@ -164,7 +164,7 @@ function StepRow({ step, n, label, repo, canFile }: { step: Step; n: number; lab
 type NextAction = { label: string; primary?: boolean; run?: [string, Record<string, unknown>]; to?: string; href?: string };
 
 /** A repo's next step: the one thing to do now, and its buttons. */
-export type Next = { tone: "info" | "success" | "attention"; title: string; body: string; actions: NextAction[] };
+export type Next = { tone: "info" | "success" | "attention"; title: string; body: string; actions: NextAction[]; running?: boolean };
 
 /** The one thing to do next on a repo, most pressing first. */
 export function nextStep(r: RepoReadiness, data: Readiness): Next {
@@ -181,6 +181,24 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
     { label: "File and start work", primary: true, run: ["/readiness/file", { queue: true }] },
     ...(r.unfiled > 0 ? [{ label: "Only file the issues", run: ["/readiness/file", { queue: false }] as [string, Record<string, unknown>] }] : []),
   ];
+  if (r.checking) {
+    const what: Record<string, [string, string]> = {
+      baseline: [
+        "Making the lint baseline",
+        `It installs ${r.repo}'s dependencies, runs RuboCop's baseline on ${r.branch} and checks lint passes with it, then opens a pull request for you to merge. It takes a few minutes; this updates by itself.`,
+      ],
+      file: ["Checking again, then filing issues", "It runs the install and checks on a fresh copy first, then files an issue for each gap that has none. It takes a few minutes."],
+      queue: [
+        "Checking again, then handing the work to the factory",
+        "It runs the install and checks on a fresh copy first, then files and labels the issues so the factory starts on them. It takes a few minutes.",
+      ],
+    };
+    const [title, body] = what[r.action] ?? [
+      `Checking ${repoName(r.repo) || r.repo}`,
+      `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks twice to catch flaky tests. It takes a few minutes; this updates by itself.`,
+    ];
+    return { tone: "info", title: `Working on it: ${title.charAt(0).toLowerCase()}${title.slice(1)}`, body, actions: [], running: true };
+  }
   if (r.state === "unchecked") {
     return {
       tone: "info",
@@ -195,6 +213,20 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
       title: "Next: fix what stopped the check, then check again",
       body: "The check stopped early, so this says nothing about the repo past that point. It's usually the factory's setup or a command in factory.yaml, not the repo's code.",
       actions: check,
+    };
+  }
+  const access = blockers.find((f) => f.area === "access");
+  if (access) {
+    // A GitLab repo is named host/path; its tokens are in the user's settings there.
+    const host = r.repo.split("/").length > 2 ? r.repo.split("/")[0] : "";
+    return {
+      tone: "attention",
+      title: "Next: give the factory's token the permissions it needs",
+      body: `${access.title.replace(/^The factory's token/, "Its token")}. Every change ends with the factory opening a pull request, so until it can, every job would fail at its end and nothing else starts. The first step below says what's missing and where to set it; once the new token is in place and the factory restarted, check again.`,
+      actions: [
+        ...(host ? [{ label: "Open your access tokens", primary: true, href: `https://${host}/-/user_settings/personal_access_tokens` }] : []),
+        ...check.map((a) => ({ ...a, primary: !host })),
+      ],
     };
   }
   if (r.state === "not_ready" && merged > 0) {
@@ -342,7 +374,15 @@ function NextStep({ r, data, busy, run }: { r: RepoReadiness; data: Readiness; b
         next.tone === "success" ? "border-success/40 bg-success/10" : next.tone === "attention" ? "border-warning/40 bg-warning/10" : "border-primary/40 bg-primary/5",
       )}
     >
-      <p className={cn("font-semibold", next.tone === "success" && "text-success")}>{next.title}</p>
+      <p className={cn("flex items-center gap-2 font-semibold", next.tone === "success" && "text-success")}>
+        {next.running && <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden />}
+        {next.title}
+      </p>
+      {next.running && (
+        <p className="text-meta text-muted-foreground">
+          Started <Ago ts={r.checking_since} />
+        </p>
+      )}
       <p className="text-text-2">{next.body}</p>
       <NextActions next={next} busy={busy} run={run} />
     </div>
@@ -515,7 +555,7 @@ export function SetupScreen() {
   );
 }
 
-const actionText: Record<string, string> = {
+export const actionText: Record<string, string> = {
   check: "Checking",
   file: "Checking, then filing issues for",
   queue: "Checking, then filing and starting work on",

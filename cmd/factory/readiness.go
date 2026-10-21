@@ -59,15 +59,34 @@ var assess = func(ctx context.Context, cfg *config.Config, p *pipeline.Pipeline,
 	if err != nil {
 		return nil, err
 	}
-	r := readiness.Assess(ctx, readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
+	in := readiness.Input{Repo: rc, SHA: ws.BaseSHA, Dir: export, Claude: p.ClaudeBuilds(),
 		Exec: func(ctx context.Context, dir, cmd string, install bool) (int, string, error) {
 			fmt.Fprintf(out, "  running %s\n", cmd)
 			return p.Exec(ctx, repo, dir, cmd, install)
-		}})
+		}}
+	in.AccessChecked, in.Denied = missingAccess(ctx, p.GitHubFor(repo))
+	r := readiness.Assess(ctx, in)
 	if _, err := readiness.Save(readinessDir(cfg), r); err != nil {
 		return r, err
 	}
 	return r, nil
+}
+
+// missingAccess asks the repo's host what the factory's token may not do
+// there; checked is false when it couldn't ask.
+func missingAccess(ctx context.Context, gh any) (checked bool, denied []readiness.Denied) {
+	pr, ok := gh.(pipeline.AccessProber)
+	if !ok {
+		return false, nil
+	}
+	ds, err := pr.MissingAccess(ctx)
+	if err != nil {
+		return false, nil
+	}
+	for _, d := range ds {
+		denied = append(denied, readiness.Denied{What: d.What, Says: d.Says})
+	}
+	return true, denied
 }
 
 // readinessDir holds each repo's latest report, which the dashboard and

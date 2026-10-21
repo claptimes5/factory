@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/claptimes5/factory/internal/github"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,6 +21,12 @@ import (
 // a change. The factory makes it without a model: it runs the linter's
 // own baseline command on the base branch and opens a pull request with
 // just the files that command writes, for a person to merge.
+
+// AccessProber is a host's client that can say what the factory's token
+// may not do on its repo, without doing it (see github.Client.MissingAccess).
+type AccessProber interface {
+	MissingAccess(ctx context.Context) ([]github.Denied, error)
+}
 
 // BaselineBranch is the branch a lint baseline is pushed to.
 const BaselineBranch = "factory/lint-baseline"
@@ -68,6 +75,17 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 	l := baselineFor(lint)
 	if l == nil {
 		return "", fmt.Errorf("the factory can baseline RuboCop for now, not `%s`", lint)
+	}
+	// It ends in a pull request: a token that can't open one would find
+	// out only after minutes of installing and linting.
+	if pr, ok := p.gh(repo).(AccessProber); ok {
+		if denied, err := pr.MissingAccess(ctx); err == nil {
+			for _, d := range denied {
+				if d.Key == "pr" {
+					return "", fmt.Errorf("the factory's token can't %s on %s, so it started nothing (%s). Give the token that permission; the Setup screen says how", d.What, repo, d.Says)
+				}
+			}
+		}
 	}
 	data := p.Cfg.Path(p.Cfg.DataDir)
 	if err := os.MkdirAll(data, 0o755); err != nil {
@@ -132,7 +150,7 @@ func (p *Pipeline) LintBaseline(ctx context.Context, repo string) (string, error
 	}
 	pr, err := gh.CreatePR(ctx, "Accept today's "+l.name+" offenses as a baseline", baselineBody(l, lint, rc.BaseBranch), BaselineBranch, rc.BaseBranch, false)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("it pushed the baseline to %s, but couldn't open the pull request: %w. Open one from that branch yourself, or give the factory's token leave to and accept again", BaselineBranch, err)
 	}
 	return pr.URL, nil
 }

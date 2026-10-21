@@ -138,7 +138,7 @@ export function HomeScreen() {
         </section>
       )}
 
-      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} />
+      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => r.checking) ? 1 : 0} />
 
       <Earned />
 
@@ -286,7 +286,7 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
 function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more: number }) {
   const { busy, msg, run } = useReadinessRun(r);
   const next = nextStep(r, data);
-  const title = next.title.replace(/^(Ready\. )?Next: /, "");
+  const title = next.title.replace(/^(Ready\. )?Next: |^Working on it: /, "");
   return (
     <section aria-label="Setup" className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -298,10 +298,13 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
         )}
       </div>
       <article data-testid="setup-lead" className="flex flex-col gap-3 rounded-card bg-ink p-5 text-ink-foreground md:p-6">
-        <div className="text-meta font-semibold text-ink-attention">Setup · new tasks wait until it's done</div>
-        <p className="text-title-sm font-semibold md:text-title">{title.charAt(0).toUpperCase() + title.slice(1)}</p>
+        <div className="text-meta font-semibold text-ink-attention">{next.running ? "Setup · working on it now" : "Setup · new tasks wait until it's done"}</div>
+        <p className="flex items-center gap-2.5 text-title-sm font-semibold md:text-title">
+          {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
+          {title.charAt(0).toUpperCase() + title.slice(1)}
+        </p>
         <p className="text-body-sm text-ink-muted">{next.body}</p>
-        {r.checking && <p className="text-body-sm text-ink-muted">Working on it now, started {duration(r.checking_since)} ago.</p>}
+        {next.running && <p className="text-body-sm text-ink-muted">Started {duration(r.checking_since)} ago.</p>}
         <div className="mt-1 flex flex-wrap gap-2">
           <NextActions next={next} busy={busy} run={run} inverse />
           <Button size="sm" variant="inverse-outline" asChild>
@@ -350,8 +353,9 @@ function NeedRow({ c }: { c: CardT }) {
 }
 
 /** The line at a glance: how many jobs are at each station, you being the last. */
-function LineStrip({ moving, you, stuck }: { moving: { key: string; label: string; cards: CardT[] }[]; you: number; stuck: number }) {
-  const working = moving.reduce((n, s) => n + s.cards.filter((c) => c.live).length, 0);
+function LineStrip({ moving, you, stuck, setup }: { moving: { key: string; label: string; cards: CardT[] }[]; you: number; stuck: number; setup: number }) {
+  // A setup run (a check, a lint baseline) is work too.
+  const working = moving.reduce((n, s) => n + s.cards.filter((c) => c.live).length, 0) + setup;
   return (
     <section aria-label="The line" className="flex flex-col gap-4 rounded-card border bg-surface p-4 md:p-5">
       <div className="flex items-baseline justify-between gap-3">

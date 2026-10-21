@@ -721,6 +721,20 @@ func (w *wizard) checkOne(ctx context.Context, client clientFor, cfg *config.Con
 	}
 	a.State = "ok"
 	if gh, _, err := client(n); err == nil {
+		// Reading the repo isn't enough: every change ends in a pull
+		// request, and a token that can't open one fails every job at
+		// its end.
+		if _, denied := missingAccess(ctx, gh); len(denied) > 0 {
+			var what []string
+			for _, d := range denied {
+				what = append(what, d.What)
+				if d.Says != "" {
+					a.Hints = append(a.Hints, d.Says)
+				}
+			}
+			a.State, a.Error = "failed", "the token can read "+n+" but can't "+strings.Join(what, ", ")+", which the factory needs for every change"
+			return a, errors.New(a.Error)
+		}
 		if b, err := gh.DefaultBranch(ctx); err == nil {
 			a.DefaultBranch = b
 		}
