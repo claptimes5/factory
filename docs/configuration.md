@@ -561,6 +561,34 @@ you as usual. On GitLab, `method: rebase` and `merge` both follow the
 project's own merge method; only `squash` changes it. PRs waiting to
 auto-merge count toward `awaiting_human_max` until they merge.
 
+## Picking its own work
+
+Trust level 6 for a repo (see [Trust](using.md#trust)): the issues the
+factory files from its own findings start without the intake label, and
+merge themselves under the repo's `auto_merge`. The Trust screen writes
+it; by hand:
+
+```yaml
+repos:
+  - name: you/api
+    auto_merge: {up_to: medium, max_size: M}
+    self_start:
+      sources: [main_health, dependabot]   # also todos, sentry, hunt, orchestrator
+      daily: 3        # issues a day that start on their own (default 3)
+      budget: 12      # dollars a day for that work (default daily_total / 5)
+```
+
+| Source | What it finds |
+| --- | --- |
+| `main_health` | A check failing on the base branch (its fixes start whatever the level; at 6 they may merge themselves) |
+| `dependabot`, `todos`, `sentry` | What [sources](using.md#issues-from-sentry-dependabot-and-todos) file |
+| `hunt` | What the [old-bug hunt](#old-bug-hunting) files |
+| `orchestrator` | The issues the orchestrator opens on its own schedule (they start whatever the level; at 6 they may merge themselves) |
+
+Without `self_start`, or for a source it leaves out, the work waits for a
+person: to label it, or to merge it. A tripped breaker stops it starting
+its own work until it's reset.
+
 ## Sensitive code
 
 One list says which code is sensitive: where a mistake is an exploit, a

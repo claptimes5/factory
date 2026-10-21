@@ -719,11 +719,12 @@ ladder toward full automation, on the dashboard's **Trust** screen:
 | 3 | Merge small, low-risk changes (up to S). |
 | 4 | Merge low-risk changes up to size M. |
 | 5 | Merge medium-risk changes too. |
-| 6 | Pick its own work: file and start its own fixes. *Not built yet.* |
+| 6 | Pick its own work: what it finds itself starts without your label, and merges itself under level 5's rules. |
 | 7 | Ship: release and deploy, with a canary and an automatic rollback. *Not built yet.* |
 
 Levels 1 to 5 are names for a repo's [`auto_merge`](configuration.md#auto-merge)
-(`up_to` and `max_size`). At every level, high-risk changes and the kinds
+(`up_to` and `max_size`); level 6 adds its
+[`self_start`](configuration.md#picking-its-own-work). At every level, high-risk changes and the kinds
 in `risk.needs_person` (a migration, a new dependency, auth code, a
 deleted test) wait for you, and the [breaker](#auto-merge-guard-rails)
 steps a repo back to level 1 when its merges are reverted or break main,
@@ -735,7 +736,9 @@ practice run of each level: how many of those merged PRs that level would
 have merged on its own, and how many of them went wrong. When the next
 level's practice run is long enough (5 changes for level 2, then 10, 20
 and 30) and none went wrong, the factory suggests it, on the screen and on
-Home. Only a person raises a level: **Move here** writes the repo's own
+Home. Level 6's practice run is different: of the issues the factory filed
+from its own findings in the window, how many you took on (it needs 10,
+and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the repo's own
 `auto_merge` to `factory.yaml`, and it applies once the factory restarts.
 
 The ladder follows research on agent autonomy: oversight moving from
@@ -745,6 +748,23 @@ autonomy as a level a person grants on evidence and takes back
 ([Levels of Autonomy for AI Agents](https://knightcolumbia.org/content/levels-of-autonomy-for-ai-agents-1)),
 and a change freeze when a budget for failure is spent ([error budget
 policy](https://sre.google/workbook/error-budget-policy/)).
+
+### Picking its own work (level 6)
+
+The factory already finds work: main health files a fix when a check
+fails on main, and Dependabot, TODOs, Sentry and the old-bug hunt file
+issues for what they find. The orchestrator opens issues on its own
+schedule. Below level 6, what it finds waits for you: issues from the
+sources wait for your label, and main health's fixes and the
+orchestrator's issues are built but wait for you to merge them.
+
+At level 6, the findings from the repo's `self_start.sources` (main
+health and Dependabot when the Trust screen raises it) start without a
+label, approved as "the factory (dependabot)" and so on, and merge
+themselves under the repo's auto_merge. Up to 3 a day, and a fifth of
+the daily budget for that work, start this way; past either, they wait
+for your label. A tripped breaker stops it too. Home, The line and
+History mark such work "Found by the factory".
 
 ## Auto-merge guard rails
 

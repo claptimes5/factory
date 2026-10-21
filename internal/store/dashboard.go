@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // KV reads a value the dashboard keeps; "" when it has none.
@@ -110,4 +111,22 @@ func (s *Store) TakeHeldNotifications(ctx context.Context) ([]string, error) {
 		return err
 	})
 	return out, err
+}
+
+// SpendByApprovers is what a repo's jobs that started since cost, for the
+// items one of approvers approved: the work the factory started on its
+// own, for trust level 6's daily budget.
+func (s *Store) SpendByApprovers(ctx context.Context, repo, since string, approvers []string) (float64, error) {
+	if len(approvers) == 0 {
+		return 0, nil
+	}
+	q := `SELECT COALESCE(SUM(j.cost_usd), 0) FROM jobs j JOIN work_items w ON w.id = j.item_id JOIN approvals a ON a.item_id = w.id
+		WHERE w.repo = ? AND j.queued_at >= ? AND a.approved_by IN (?` + strings.Repeat(", ?", len(approvers)-1) + `)`
+	args := []any{repo, since}
+	for _, a := range approvers {
+		args = append(args, a)
+	}
+	var v float64
+	err := s.read.QueryRowContext(ctx, q, args...).Scan(&v)
+	return v, err
 }

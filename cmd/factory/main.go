@@ -583,8 +583,8 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Listen = cfg.Web.Listen
 	srv.Restarter = p
 	srv.Push = deliveries.push
-	srv.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge) error {
-		return config.SetRepoAutoMerge(srv.ConfigPath, repo, a)
+	srv.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error {
+		return config.SetRepoTrust(srv.ConfigPath, repo, a, s)
 	}
 	srv.Breakers = func(ctx context.Context) []web.APIBreaker {
 		var out []web.APIBreaker

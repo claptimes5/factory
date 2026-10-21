@@ -218,8 +218,7 @@ step explains itself"). Its PR may still need opening.
 
 ## Open questions
 
-- Level 6: the factory labelling the issues it files itself (main health
-  fixes already can), within a budget, under level 5's rules.
+- Level 6 is built: see [trust-level-6.md](trust-level-6.md).
 - Level 7 needs deploys, canaries and rollback the factory doesn't have.
 - Trust earned with one model may not hold with the next: re-earn on a
   model change, as autonomy certificates suggest?

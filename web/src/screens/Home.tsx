@@ -5,6 +5,7 @@ import { CheckCircle2, ExternalLink, MessageCircle, ShieldCheck } from "lucide-r
 import { postJSON, useBoard, useHome, useOverview, useTrust, type Card as CardT } from "@/api/client";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
+import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, shortRef } from "@/lib/utils";
@@ -197,6 +198,7 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
         <div className="flex flex-wrap items-center gap-x-2 text-meta font-semibold text-ink-attention">
           {kindLabel[kind]} · <span className="font-mono font-medium">{shortRef(c.ref)}</span>
         </div>
+        <FoundBy source={c.self_started} className="text-ink-muted" />
         <Link to={`/items/${c.id}`} className="text-title-sm font-semibold hover:underline md:text-title">
           {c.title}
         </Link>
