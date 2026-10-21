@@ -3,9 +3,17 @@
 Factory is a single Go binary that turns labeled GitHub (or GitLab) issues
 into reviewed draft PRs. Claude Code builds each change in a fresh
 container, deterministic gates check it, Codex reviews it adversarially,
-and you merge. It only merges on its own if you turn on
-[auto-merge](docs/configuration.md#auto-merge) for small, low-risk changes.
-The full design is in [SPEC.md](SPEC.md).
+and you merge. As its record holds up, you can [trust](docs/using.md#trust)
+it with more: merging small changes itself, then bigger ones, then starting
+work it finds on its own. It earns each level from evidence, you raise it,
+and it steps back by itself when something goes wrong.
+
+You run it from a calm dashboard that works as well on your phone as on
+your desk: **Home** shows what needs you, one decision at a time, and the
+line of work in progress; **Ask** lets you talk to the factory from any
+screen; and notifications reach your phone, held in
+[quiet hours](docs/using.md#quiet-hours) unless something's wrong. The full
+design is in [SPEC.md](SPEC.md).
 
 ```
 issue labeled factory:ready
@@ -61,13 +69,16 @@ and admin rights on the repo you want the factory to work on.
    reads, and `./factory version` says which release it is.
 
 3. **Run `./factory serve`, then open http://127.0.0.1:8080/app/get-started.**
-   The page walks you through the rest: your repos, Docker, a GitHub App it
-   creates for you, and your keys, checking each as you go and saving them
-   in `factory.yaml` and `factory.env`. The first run makes `factory.yaml`
-   from `factory.example.yaml`; both are yours, and git ignores them, so
-   pulling a new version never touches your settings. Finish starts the factory. On a server or in a script,
-   `./factory setup` asks the same in the terminal.
-   [Setting up in the browser](docs/setup.md#setting-up-in-the-browser).
+   The page walks you through the rest: this machine, which repos to work
+   on (on GitHub or GitLab, which the factory clones itself; not the folder
+   you started it from), access to them (a GitHub App it creates for you,
+   or a GitLab token), your model keys, each repo's checks and the job
+   images, checking each as you go and saving them in `factory.yaml` and
+   `factory.env`. The first run makes `factory.yaml` from
+   `factory.example.yaml`; both are yours, and git ignores them, so pulling
+   a new version never touches your settings. Finish starts the factory.
+   On a server or in a script, `./factory setup` asks the same in the
+   terminal. [Setting up in the browser](docs/setup.md#setting-up-in-the-browser).
 
 4. **Keep it running.** `./factory serve` is the daemon. To keep it running
    across reboots, [run it as a service](docs/setup.md#running-it-as-a-service).
@@ -80,9 +91,13 @@ and admin rights on the repo you want the factory to work on.
    your review before merging, plus your CI checks if it has any. The
    factory only opens draft PRs, so this keeps every merge in your hands.
 
-6. **Open the dashboard** at http://127.0.0.1:8080/app/.
+6. **Open the dashboard** at http://127.0.0.1:8080/app/. On your phone,
+   add it to the home screen and turn on notifications under **Settings,
+   When to tell you** (push needs the dashboard on HTTPS, such as through
+   `tailscale serve`; see [Notifications](docs/using.md#notifications)).
 
-7. **Label an issue `factory:ready`.** Watch it move across the board.
+7. **Label an issue `factory:ready`.** Home shows it moving along the line,
+   and asks you when it needs you.
 
 Set a spend alert on your API accounts too. The factory has its own
 [budgets](docs/configuration.md#budgets), but a second line of defense is
@@ -107,9 +122,12 @@ See [How ready a repo is](docs/quality.md#how-ready-a-repo-is).
 | Read why an item parked (it leaves a comment), fix or answer it, then add `factory:retry` | Sends it back through triage |
 | Set [`budgets.confirm_over`](docs/using.md#cost-estimates), then OK the costly items with `factory:go` | Estimates each item's cost from its own history after triage, and holds anything over the limit for you before building it |
 | Read the plan the factory posts on an `L` issue, then add `factory:go`, or comment and add `factory:replan` | [Plans big items](docs/using.md#plans-before-big-builds) before building them, so a wrong approach is caught in a comment rather than a finished PR |
-| Glance at the dashboard's **Home** or your phone | Notifies you when something parks, a PR is ready or the budget runs out |
+| Glance at the dashboard's **Home** or your phone | Shows what needs you one decision at a time, and what went live since you looked; notifies you when something parks, a PR is ready or something goes wrong |
+| Ask the factory, from any screen | Answers about its work, and drafts issues for you to create |
+| Set [quiet hours](docs/using.md#quiet-hours) | Holds everything but what's wrong, and sends one catch-up when they end |
+| Raise a repo's [trust level](docs/using.md#trust) when it has earned it | Merges changes up to that level itself; at level 6, starts the work it finds on its own; steps back when a merge is reverted or breaks main |
 | Turn on [`main_health`](docs/using.md#keeping-main-green) | Files a fix first in the queue when a check goes red or flaky on your default branch, and closes it once the check passes |
-| Turn on [`sources`](docs/using.md#issues-from-sentry-dependabot-and-todos), then label the issues you want built | Files issues from Sentry errors, Dependabot alerts and `TODO(factory)` comments, which wait for your approval, and closes them if the error, alert or comment goes away first |
+| Turn on [`sources`](docs/using.md#issues-from-sentry-dependabot-and-todos), then label the issues you want built | Files issues from Sentry errors, Dependabot alerts and `TODO(factory)` comments, which wait for your approval (or, at [level 6](docs/configuration.md#picking-its-own-work), start on their own), and closes them if the error, alert or comment goes away first |
 | Turn on [`grooming`](docs/using.md#backlog-grooming), then confirm what you agree with | Flags likely duplicate, stale and too-big issues with a comment and a `?` label; closes one when you add `factory:close`, or opens its proposed sub-issues under an epic when you add `factory:split`. It never closes or splits on its own |
 | Give a web app's repo a [`preview`](docs/using.md#screenshots-on-the-pr) | Runs the app once a change passes its gates, screenshots the pages it touches at desktop and phone sizes (before and after, if you like), shows them to the reviewer, and keeps one comment on the PR with them |
 
@@ -122,12 +140,13 @@ file issues and you choose which ones to build. See
 | Guide | What's in it |
 | --- | --- |
 | [Setup](docs/setup.md) | Dependencies, what setup asks, running as a service, upgrades, manual setup with a GitHub App, WSL2 |
-| [Using the factory](docs/using.md) | The dashboard and control room, notifications, every command, the orchestrator, keeping main green, issues from Sentry, Dependabot and TODOs, backlog grooming, screenshots on the PR, `factory pull`, `eval` and `compare` |
-| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, main health, sources, backlog grooming, PR previews, Claude-only review |
+| [Using the factory](docs/using.md) | The dashboard (Home, The line, Ask, History, Trust), notifications, push and quiet hours, every command, the orchestrator, trust levels, keeping main green, issues from Sentry, Dependabot and TODOs, backlog grooming, screenshots on the PR, `factory pull`, `eval` and `compare` |
+| [Configuration](docs/configuration.md) | `factory.yaml`: several repos, workspaces, GitLab, toolchains and checks, services, files a repo doesn't commit, disk space, skill sets, models, budgets, auto-merge, picking its own work, main health, sources, backlog grooming, PR previews, Claude-only review |
 | [Quality](docs/quality.md) | The gates, proves-fix, the coverage floor, text-only changes, review scaled by risk, review findings, the feature map, readiness, hidden scenarios, metrics, the replay set |
 | [Security](docs/security.md) | Who can start work, how jobs are isolated, sources' tokens and untrusted text, grooming's untrusted issue text, running a preview, the egress allowlist, the control room's login |
 | [Starting a new project](docs/new-project.md) | What a new repo needs before the factory can work on it |
 | [Status](docs/status.md) | What's built, and where this differs from [SPEC.md](SPEC.md) |
+| [Plans](docs/plans/) | Where the dashboard and trust are going, and why: [the design system](docs/plans/design-system.md), [trust level 6](docs/plans/trust-level-6.md) |
 
 ## License
 

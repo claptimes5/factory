@@ -33,15 +33,16 @@ import {
 import { Ago, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
 
 // The get-started page: what `factory setup` asks in the terminal, as a
 // list of steps. Each step saves as it goes, to factory.yaml and
 // factory.env on the factory's machine. Saved secrets never come back
 // here: only whether each is set, and a masked hint.
-
-const input =
-  "h-10 w-full min-w-0 rounded-md border bg-card px-2.5 text-base text-foreground placeholder:text-muted-foreground/70 disabled:opacity-60 md:h-9 md:text-sm";
 
 type Msg = { ok: boolean; text: string } | null;
 
@@ -169,15 +170,14 @@ function SecretField({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label htmlFor={id} className="text-sm font-medium">
+      <label htmlFor={id} className="text-body-sm font-medium">
         {label}
       </label>
-      <input
+      <Input
         id={id}
         type="password"
         autoComplete="off"
         spellCheck={false}
-        className={input}
         value={value}
         disabled={disabled}
         placeholder={saved?.set ? `Saved: ${saved.masked}. Paste a new one to replace it.` : placeholder}
@@ -214,10 +214,10 @@ function TextField({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label htmlFor={id} className="text-sm font-medium">
+      <label htmlFor={id} className="text-body-sm font-medium">
         {label}
       </label>
-      <input id={id} className={input} value={value} disabled={disabled} placeholder={placeholder} spellCheck={false} onChange={(e) => set(e.target.value)} />
+      <Input id={id} value={value} disabled={disabled} placeholder={placeholder} spellCheck={false} onChange={(e) => set(e.target.value)} />
       {help && <span className="text-xs text-muted-foreground">{help}</span>}
     </div>
   );
@@ -427,23 +427,16 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
           void add();
         }}
       >
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="mb-1.5 text-sm font-medium">{w.repos.length === 0 ? "Add your first repository. Where is it hosted?" : "Add another. Where is it hosted?"}</legend>
-          <div className="inline-flex w-fit rounded-md border bg-muted p-0.5">
-            {hosts.map((h) => (
-              <label
-                key={h.key}
-                className={cn(
-                  "cursor-pointer rounded px-3 py-1 text-sm font-medium text-muted-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
-                  host === h.key && "bg-card text-foreground shadow-sm",
-                )}
-              >
-                <input type="radio" name="repo-host" className="sr-only" checked={host === h.key} onChange={() => setHost(h.key)} disabled={ro} />
-                {h.label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        <div className="flex flex-col gap-2">
+          <span className="text-body-sm font-medium">{w.repos.length === 0 ? "Add your first repository. Where is it hosted?" : "Add another. Where is it hosted?"}</span>
+          <SegmentedControl
+            label="Where is it hosted?"
+            value={host}
+            onValueChange={(v) => setHost(v as typeof host)}
+            options={hosts.map((h) => ({ value: h.key, label: h.label }))}
+            disabled={ro}
+          />
+        </div>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end">
           {host === "gitlab" && (
             <div className="sm:w-44">
@@ -770,17 +763,21 @@ function GitLabStep({ w, ro }: { w: Wizard; ro: boolean }) {
           Connected with the token <Code>{g.token.masked}</Code>.
         </Connection>
       )}
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium">Which kind of token will you make?</legend>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="radio" name="gitlab-kind" className="mt-1" checked={kind === "legacy"} onChange={() => setKind("legacy")} />
-          <span>Legacy, the quick one: one link opens the form with its scopes already ticked.</span>
-        </label>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="radio" name="gitlab-kind" className="mt-1" checked={kind === "fine"} onChange={() => setKind("fine")} />
-          <span>Fine-grained: limited to these projects, but about 20 boxes to tick by hand.</span>
-        </label>
-      </fieldset>
+      <div className="flex flex-col gap-2">
+        <span id="gitlab-kind" className="text-body-sm font-medium">
+          Which kind of token will you make?
+        </span>
+        <RadioGroup aria-labelledby="gitlab-kind" value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
+          <label className="flex items-start gap-2.5 text-body-sm">
+            <RadioGroupItem value="legacy" className="mt-0.5" />
+            <span>Legacy, the quick one: one link opens the form with its scopes already ticked.</span>
+          </label>
+          <label className="flex items-start gap-2.5 text-body-sm">
+            <RadioGroupItem value="fine" className="mt-0.5" />
+            <span>Fine-grained: limited to these projects, but about 20 boxes to tick by hand.</span>
+          </label>
+        </RadioGroup>
+      </div>
       {kind === "legacy" ? (
         <div className="flex flex-col gap-1.5 text-sm">
           {g.hosts.map((h) => (
@@ -888,7 +885,7 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
             <label htmlFor={id(g)} className="text-sm font-medium">
               {g}
             </label>
-            <input id={id(g)} className={cn(input, "font-mono")} value={cmds[g] ?? ""} disabled={ro} placeholder="none" spellCheck={false}
+            <Input id={id(g)} className="font-mono" value={cmds[g] ?? ""} disabled={ro} placeholder="none" spellCheck={false}
               onChange={(e) => setCmds({ ...cmds, [g]: e.target.value })} />
             {row?.suggested ? (
               <span className="flex flex-wrap items-center gap-2 text-xs text-warning">
@@ -908,11 +905,10 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
           <legend className="text-sm font-medium">Services the checks start</legend>
           {c.services.map((s) => (
             <label key={s.name} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+              <Checkbox
                 disabled={ro}
                 checked={svcs.includes(s.name)}
-                onChange={(e) => setSvcs(e.target.checked ? [...svcs, s.name] : svcs.filter((n) => n !== s.name))}
+                onCheckedChange={(on) => setSvcs(on === true ? [...svcs, s.name] : svcs.filter((n) => n !== s.name))}
               />
               <span className="font-mono">{s.name}</span>
               <span className="text-xs text-muted-foreground">
@@ -931,7 +927,7 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
             .map((k) => (
               <label key={k} className="flex min-w-0 flex-col gap-1 text-xs sm:flex-row sm:items-center sm:gap-2">
                 <span className="w-32 shrink-0 font-mono">{k}</span>
-                <input className={cn(input, "font-mono")} value={env[k]} disabled={ro} spellCheck={false} onChange={(e) => setEnv({ ...env, [k]: e.target.value })} />
+                <Input className="font-mono" value={env[k]} disabled={ro} spellCheck={false} onChange={(e) => setEnv({ ...env, [k]: e.target.value })} />
               </label>
             ))}
           <span className="text-xs text-muted-foreground">Each service is reached by its name as the host, such as postgres.</span>
@@ -1062,15 +1058,14 @@ function CodexStep({ w, ro }: { w: Wizard; ro: boolean }) {
       <p className="text-sm text-text-2">
         {c.review_only ? "factory.yaml has Codex review Claude's work." : "factory.yaml runs every job on Codex."} Codex can sign in with:
       </p>
-      <fieldset className="flex flex-col gap-2">
-        <legend className="sr-only">How Codex signs in</legend>
+      <RadioGroup aria-label="How Codex signs in" value={mode} onValueChange={setMode}>
         {codexModes.map((m) => (
-          <label key={m.mode} className="flex items-start gap-2 text-sm">
-            <input type="radio" name="codex-mode" className="mt-1" checked={mode === m.mode} onChange={() => setMode(m.mode)} />
+          <label key={m.mode} className="flex items-start gap-2.5 text-body-sm">
+            <RadioGroupItem value={m.mode} className="mt-0.5" />
             <span>{m.label}</span>
           </label>
         ))}
-      </fieldset>
+      </RadioGroup>
       {mode === "api-key" && (
         <>
           <p className="text-sm text-text-2">

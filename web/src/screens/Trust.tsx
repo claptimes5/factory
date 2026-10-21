@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, RotateCcw, ShieldCheck } from "lucide-react";
 import { act, postJSON, useTrust, type RepoTrust, type Trust } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
+import { sourceName } from "@/components/FoundBy";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -127,11 +128,22 @@ function RepoTrustView({ t, r }: { t: Trust; r: RepoTrust }) {
                 </div>
                 <p className="text-meta text-text-2">{l.detail}</p>
                 {!l.available && <p className="text-meta text-muted-foreground">{l.needs}</p>}
-                {p && l.level !== 1 && (
+                {p && l.level === 6 ? (
                   <p className="text-meta text-muted-foreground">
-                    Practice run: would have merged {p.would_merge} in {t.window_days} days
-                    {p.would_merge > 0 && (p.went_wrong > 0 ? `, ${p.went_wrong} went wrong` : ", none went wrong")}.
+                    Practice run: of the {r.proposed} issues it filed from its own findings in {t.window_days} days, you took on {r.accepted}
+                    {r.accepted > 0 && (p.went_wrong > 0 ? `; ${p.went_wrong} went wrong once merged` : "; none went wrong once merged")}.
                   </p>
+                ) : (
+                  p &&
+                  l.level !== 1 && (
+                    <p className="text-meta text-muted-foreground">
+                      Practice run: would have merged {p.would_merge} in {t.window_days} days
+                      {p.would_merge > 0 && (p.went_wrong > 0 ? `, ${p.went_wrong} went wrong` : ", none went wrong")}.
+                    </p>
+                  )
+                )}
+                {l.level === 6 && here && r.sources.length > 0 && (
+                  <p className="text-meta text-text-2">Starts on its own: {r.sources.map(sourceName).join(", ")}.</p>
                 )}
               </div>
               {l.available && !here && t.can_change && (
@@ -188,7 +200,7 @@ function RepoTrustView({ t, r }: { t: Trust; r: RepoTrust }) {
         </p>
         <p>
           <span className="font-semibold text-foreground">Steps back on its own:</span> reverts or a broken main turn auto-merge off for the repo until you
-          reset it; the record starts again from there.
+          reset it, which also stops it starting its own work; the record starts again from there.
         </p>
         <p className="text-meta text-muted-foreground">
           A level is a repo's auto_merge in factory.yaml; you can set it there too. <Link to="/settings" className="text-primary hover:underline">Settings</Link>

@@ -18,6 +18,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/diffrisk"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -43,13 +44,17 @@ type APIItem struct {
 	Branch     string `json:"branch"`
 	PRNumber   int    `json:"pr_number"`
 	// PRs are a workspace change's PRs, one per repo, in merge order.
-	PRs         []APILinkedPR `json:"prs"`
-	CreatedAt   string        `json:"created_at"`
-	UpdatedAt   string        `json:"updated_at"`
-	IssueURL    string        `json:"issue_url"`
-	PRURL       string        `json:"pr_url"`
-	NeedsYou    bool          `json:"needs_you"`
-	BlockedNote string        `json:"blocked_note"`
+	PRs       []APILinkedPR `json:"prs"`
+	CreatedAt string        `json:"created_at"`
+	UpdatedAt string        `json:"updated_at"`
+	IssueURL  string        `json:"issue_url"`
+	PRURL     string        `json:"pr_url"`
+	NeedsYou  bool          `json:"needs_you"`
+	// SelfStarted is the finding the factory started it from on its own
+	// (main_health, dependabot, orchestrator, ...), or "" when a person
+	// asked for it.
+	SelfStarted string `json:"self_started"`
+	BlockedNote string `json:"blocked_note"`
 	// Estimate is triage's cost estimate in a line ("$1.80–$3.10"), or "".
 	Estimate string `json:"estimate"`
 	// EstimateWaiting: the item waits for your OK on its estimate.
@@ -529,6 +534,9 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		Repo: it.Repo, Ref: s.ref(it.Repo, it.IssueNumber),
 		IssueURL: s.issueURL(it.Repo, it.IssueNumber),
 		NeedsYou: it.Stage == state.AwaitingHuman || it.Stage == state.Parked,
+	}
+	if ap, err := s.Store.ItemApproval(ctx, it.ID); err == nil && ap != nil {
+		a.SelfStarted = pipeline.SelfSource(ap.ApprovedBy)
 	}
 	a.PRs, a.PRURL = s.linkedPRs(ctx, it)
 	a.WaitsFor = []APIItemRef{}

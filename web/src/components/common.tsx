@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, ExternalLink, Loader2, XCircle } from "lucide-react";
 import { act, useJob, type Gate } from "@/api/client";
 import { Choices } from "@/components/Choices";
 import { Badge } from "@/components/ui/badge";
@@ -24,8 +24,60 @@ export function ErrorBox({ error }: { error: unknown }) {
   );
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="px-1 py-6 text-center text-sm text-muted-foreground">{children}</p>;
+/** Nothing to show: centered in its own space, or inline in a section. */
+export function Empty({ children, inline }: { children: ReactNode; inline?: boolean }) {
+  if (inline) return <p className="text-body-sm text-muted-foreground">{children}</p>;
+  return <p className="px-1 py-6 text-center text-body-sm text-muted-foreground">{children}</p>;
+}
+
+export type Crumb = { label: ReactNode; to?: string; href?: string };
+
+/**
+ * A detail screen's head: the way back (the line, then its item), the
+ * title with its badges, a line of facts, and the actions, wrapping on a
+ * phone. Item, Session and Diff share it.
+ */
+export function PageHeader({
+  crumbs,
+  title,
+  badges,
+  meta,
+  children,
+}: {
+  crumbs: Crumb[];
+  title: ReactNode;
+  badges?: ReactNode;
+  meta?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <header className="flex flex-col gap-2">
+      <nav aria-label="Breadcrumb" className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-muted-foreground">
+        {crumbs.map((c, i) => (
+          <span key={i} className="flex min-w-0 items-center gap-1.5">
+            {i > 0 && <ChevronRight className="size-3.5 shrink-0" aria-hidden />}
+            {c.to ? (
+              <Link to={c.to} className="min-w-0 truncate hover:text-foreground">
+                {c.label}
+              </Link>
+            ) : c.href ? (
+              <a href={c.href} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 hover:text-foreground">
+                <span className="truncate">{c.label}</span> <ExternalLink className="size-3 shrink-0" aria-hidden />
+              </a>
+            ) : (
+              <span className="truncate">{c.label}</span>
+            )}
+          </span>
+        ))}
+      </nav>
+      <h1 className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-title font-semibold tracking-tight">
+        <span className="min-w-0 break-words">{title}</span>
+        {badges}
+      </h1>
+      {meta && <div className="text-body-sm text-muted-foreground">{meta}</div>}
+      {children && <div className="flex flex-wrap items-center gap-2 pt-1">{children}</div>}
+    </header>
+  );
 }
 
 export function PageTitle({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
@@ -78,7 +130,7 @@ export function GateIcon({ status }: { status: string }) {
 }
 
 export function GateList({ gates }: { gates: Gate[] }) {
-  if (gates.length === 0) return <Empty>No gate results yet.</Empty>;
+  if (gates.length === 0) return <Empty inline>No gate results yet.</Empty>;
   return (
     <ul className="divide-y text-sm">
       {gates.map((g) => (

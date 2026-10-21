@@ -300,6 +300,15 @@ func (p *Pipeline) warn(err error, what string) {
 	}
 }
 
+// stopEgress removes the egress proxy, so it doesn't outlive the daemon.
+func (p *Pipeline) stopEgress() {
+	if d, ok := p.Runner.(*runner.Docker); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		p.warn(d.StopEgress(ctx), "remove the egress proxy")
+	}
+}
+
 func (p *Pipeline) notify(ctx context.Context, msg string) {
 	if h, ok := ctx.Value(heldNotesKey{}).(*heldNotes); ok {
 		h.msgs = append(h.msgs, queuedNote{msg, IsUrgent(ctx)}) // sent once the lock is let go
@@ -461,6 +470,7 @@ func (p *Pipeline) Serve(ctx context.Context) error {
 	if err := p.Recover(ctx); err != nil {
 		return err
 	}
+	defer p.stopEgress() // runs last, once no job is left
 	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelJobs()
 	p.jobCtx = jobCtx

@@ -435,7 +435,7 @@ paths:
               required: [repo, level]
               properties:
                 repo: { type: string }
-                level: { type: integer, description: "1 to 5; 6 and 7 aren't built yet" }
+                level: { type: integer, description: "1 to 6; 7 isn't built yet" }
       responses:
         "200":
           description: Saved
@@ -1176,7 +1176,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -1199,6 +1199,7 @@ components:
         issue_url: { type: string }
         pr_url: { type: string }
         needs_you: { type: boolean, description: Awaiting review, parked, or waiting for an OK on its cost }
+        self_started: { type: string, description: "The finding the factory started it from on its own (main_health, dependabot, todos, sentry, hunt, orchestrator), or empty when a person asked for it" }
         blocked_note: { type: string, description: Why it is parked or blocked }
         estimate: { type: string, description: "Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty" }
         estimate_waiting: { type: boolean, description: It waits for your OK on its cost estimate }
@@ -1708,8 +1709,11 @@ components:
         evidence: { type: integer, description: "Changes it would have merged in the window, none gone wrong, before it's suggested" }
     RepoTrust:
       type: object
-      required: [repo, level, custom, stepped_back, why, merged, automatic, reverted, broke_main, practice, suggest, suggest_why]
+      required: [repo, level, custom, stepped_back, why, merged, automatic, reverted, broke_main, practice, proposed, accepted, sources, suggest, suggest_why]
       properties:
+        proposed: { type: integer, description: "Level 6's record: issues the factory filed from its own findings in the window" }
+        accepted: { type: integer, description: "Of those, how many a person took on (or level 6 started)" }
+        sources: { type: array, items: { type: string }, description: "What starts on its own at level 6 (self_start.sources)" }
         repo: { type: string }
         level: { type: integer }
         custom: { type: boolean, description: "auto_merge is set by hand between levels; level is the highest it covers" }

@@ -3,6 +3,7 @@ import { CheckCircle2, CircleDashed, ExternalLink, GitPullRequest, XCircle } fro
 import { usePRPanel, type Finding, type PRPanel as PRPanelT } from "@/api/client";
 import { Actions, Empty, ErrorBox, GateList, Loading } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { shortSha } from "@/lib/utils";
 
@@ -45,8 +46,8 @@ export function FindingRow({ f, itemId }: { f: Finding; itemId: number }) {
 
 function Checks({ p }: { p: PRPanelT }) {
   if (p.checks_error) return <p className="text-sm text-destructive">GitHub: {p.checks_error}</p>;
-  if (!p.head_sha) return <Empty>No commit yet.</Empty>;
-  if (p.checks.length === 0) return <Empty>No CI checks on {shortSha(p.head_sha)}.</Empty>;
+  if (!p.head_sha) return <Empty inline>No commit yet.</Empty>;
+  if (p.checks.length === 0) return <Empty inline>No CI checks on {shortSha(p.head_sha)}.</Empty>;
   return (
     <ul className="divide-y text-sm">
       {p.checks.map((c) => (
@@ -96,7 +97,7 @@ export function PRPanel({ itemId, needsYou, noActions }: { itemId: number; needs
       <CardContent className="space-y-4">
         {p.prs.length > 1 && (
           <section>
-            <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Merge in this order</h4>
+            <h4 className="label mb-1">Merge in this order</h4>
             <ol data-testid="linked-prs" className="space-y-1 text-sm">
               {p.prs.map((x, i) => (
                 <li key={x.url} className="flex items-center gap-2">
@@ -105,7 +106,7 @@ export function PRPanel({ itemId, needsYou, noActions }: { itemId: number; needs
                     {x.ref}
                   </a>
                   {needsYou && (
-                    <a href={`${x.url}/files`} target="_blank" rel="noreferrer" className="ml-auto text-xs text-primary-soft hover:underline">
+                    <a href={`${x.url}/files`} target="_blank" rel="noreferrer" className="ml-auto text-meta text-primary hover:underline">
                       Approve on GitHub
                     </a>
                   )}
@@ -117,34 +118,31 @@ export function PRPanel({ itemId, needsYou, noActions }: { itemId: number; needs
         <div className="flex flex-wrap gap-2">
           {p.pr_number > 0 && needsYou && p.prs.length <= 1 && (
             // Approving is a GitHub review in your own name; the factory never approves its own work.
-            <a
-              href={`${p.pr_url}/files`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-            >
-              Approve on GitHub <ExternalLink className="size-3.5" />
-            </a>
+            <Button size="sm" asChild>
+              <a href={`${p.pr_url}/files`} target="_blank" rel="noreferrer">
+                Approve on GitHub <ExternalLink aria-hidden />
+              </a>
+            </Button>
           )}
-          <Link to={`/items/${itemId}/diff`} className="inline-flex h-8 items-center rounded-md border bg-card px-2.5 text-xs font-medium hover:bg-accent">
-            View diff
-          </Link>
+          <Button size="sm" variant="outline" asChild>
+            <Link to={`/items/${itemId}/diff`}>View diff</Link>
+          </Button>
         </div>
         {!noActions && <Actions jobId={p.last_job_id} itemId={itemId} />}
         <section>
-          <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">CI</h4>
+          <h4 className="label mb-1">CI</h4>
           <Checks p={p} />
         </section>
         <section>
-          <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Gates</h4>
+          <h4 className="label mb-1">Gates</h4>
           <GateList gates={p.gates} />
         </section>
         <section>
-          <h4 className="mb-1 text-xs font-semibold text-muted-foreground uppercase">Reviewer</h4>
+          <h4 className="label mb-1">Reviewer</h4>
           {!p.review ? (
-            <Empty>No review yet.</Empty>
+            <Empty inline>No review yet.</Empty>
           ) : p.review.findings.length === 0 ? (
-            <Empty>No findings.</Empty>
+            <Empty inline>No findings.</Empty>
           ) : (
             <ul className="divide-y">
               {p.review.findings.map((f, i) => (

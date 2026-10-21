@@ -643,7 +643,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := audit(ctx, "create_issue", nil, a.Reason, raw); err != nil {
 					return "", err
 				}
-				by := "the factory orchestrator"
+				by := OrchestratorApprover
 				if actor == "chat" {
 					by = "the factory's chat"
 				}

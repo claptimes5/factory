@@ -10,7 +10,7 @@ RadioGroup.displayName = "RadioGroup";
 export const RadioGroupItem = React.forwardRef<React.ComponentRef<typeof R.Item>, React.ComponentPropsWithoutRef<typeof R.Item>>(({ className, ...props }, ref) => (
   <R.Item
     ref={ref}
-    className={cn("size-5 shrink-0 cursor-pointer rounded-full border bg-surface disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-ink", className)}
+    className={cn("size-5 shrink-0 cursor-pointer rounded-full border border-muted-foreground/60 bg-surface disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-ink", className)}
     {...props}
   >
     <R.Indicator className="flex items-center justify-center after:block after:size-2.5 after:rounded-full after:bg-ink" />

@@ -1513,7 +1513,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         repo: string;
-                        /** @description 1 to 5; 6 and 7 aren't built yet */
+                        /** @description 1 to 6; 7 isn't built yet */
                         level: number;
                     };
                 };
@@ -3304,6 +3304,8 @@ export interface components {
             pr_url: string;
             /** @description Awaiting review */
             needs_you: boolean;
+            /** @description The finding the factory started it from on its own (main_health, dependabot, todos, sentry, hunt, orchestrator), or empty when a person asked for it */
+            self_started: string;
             /** @description Why it is parked or blocked */
             blocked_note: string;
             /** @description Triage's cost estimate in a line: $1.80–$3.10, on your plan, or empty */
@@ -3799,6 +3801,12 @@ export interface components {
             evidence: number;
         };
         RepoTrust: {
+            /** @description Level 6's record: issues the factory filed from its own findings in the window */
+            proposed: number;
+            /** @description Of those, how many a person took on (or level 6 started) */
+            accepted: number;
+            /** @description What starts on its own at level 6 (self_start.sources) */
+            sources: string[];
             repo: string;
             level: number;
             /** @description auto_merge is set by hand between levels; level is the highest it covers */

@@ -126,7 +126,7 @@ func (d *Docker) ensureEgress(ctx context.Context) error {
 	if st := status(); st != "" && st != "running" {
 		_ = exec.CommandContext(ctx, d.bin(), "rm", "-f", name).Run() // broken: start afresh
 	}
-	args := []string{"create", "--name", name, "--label", "factory.egress=" + fp, "--label", "factory.egress.owner=" + e.Owner, "--restart", "unless-stopped",
+	args := []string{"create", "--name", name, "--label", "factory.egress=" + fp, "--label", "factory.egress.owner=" + e.Owner,
 		"--network", EgressNet, "--user", "65534:65534", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--read-only", "--memory", "256m", "--pids-limit", "512",
 		"-v", e.Binary + ":/opt/factory/factory:ro", "--entrypoint", "/opt/factory/factory",
@@ -230,6 +230,31 @@ func (d *Docker) importEmptyImage(ctx context.Context) error {
 		return fmt.Errorf("making the egress proxy's image: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// StopEgress removes this runner's proxy once no job is left on its
+// network, so it doesn't outlive the factory: it isn't set to restart, and
+// ensureEgress makes it again before the next job.
+// ponytail: another process sharing these rules, idle right now, may
+// start a job within ensureEgress's 30s cache and find no proxy; refcount
+// the users if that bites.
+func (d *Docker) StopEgress(ctx context.Context) error {
+	if d.Egress == nil {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "ps", "--filter", "network="+EgressNet, "--format", "{{.Names}}").Output()
+	if err != nil {
+		return err
+	}
+	for _, n := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(n, EgressProxy) {
+			return nil // a job still uses it
+		}
+	}
+	d.egressMu.Lock()
+	d.egressAt = time.Time{}
+	d.egressMu.Unlock()
+	return exec.CommandContext(ctx, d.bin(), "rm", "-f", d.Egress.name()).Run()
 }
 
 // StaleEgressProxies removes the proxies this runner's owner made for

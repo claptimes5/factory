@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,7 +16,8 @@ import (
 
 // Trust: how much the factory may do on its own, for each repo, on a
 // ladder toward full automation. Levels 1 to 5 are names for auto_merge
-// (up_to and max_size); 6 and 7 are the road ahead, not built yet. The
+// (up_to and max_size); 6 adds self_start (docs/plans/trust-level-6.md);
+// 7 is the road ahead, not built yet. The
 // factory suggests a level up when its record at that level is clean;
 // only a person raises it. The breaker steps it back on its own.
 // Background: docs/plans/design-system.md, "Trust".
@@ -44,7 +46,7 @@ var TrustLevels = []TrustLevel{
 	{Level: 3, Name: "Merge small, low-risk changes", Detail: "Small fixes and changes (up to size S) merge on their own.", UpTo: "low", MaxSize: "S", Available: true, Evidence: 10},
 	{Level: 4, Name: "Merge low-risk changes of any normal size", Detail: "Low-risk features and fixes (up to size M) merge on their own.", UpTo: "low", MaxSize: "M", Available: true, Evidence: 20},
 	{Level: 5, Name: "Merge medium-risk changes too", Detail: "Medium-risk changes merge on their own as well. You're told each time, and each can be reverted.", UpTo: "medium", MaxSize: "M", Available: true, Evidence: 30},
-	{Level: 6, Name: "Pick its own work", Detail: "The factory files and starts its own fixes (flaky tests, failing main, dependency updates, old bugs) within a budget, under level 5's rules.", Needs: "Not built yet: today the issues it files wait for your label."},
+	{Level: 6, Name: "Pick its own work", Detail: "What the factory finds itself starts without your label and merges itself under level 5's rules: failing checks on main and Dependabot alerts to begin with, up to 3 a day and a fifth of the daily budget. The orchestrator's issues merge themselves only from here.", UpTo: "medium", MaxSize: "M", Available: true, Evidence: 10},
 	{Level: 7, Name: "Ship", Detail: "It releases and deploys what it merges, with a canary and an automatic rollback. You watch, and keep the off switch.", Needs: "Not built yet: the factory doesn't deploy."},
 }
 
@@ -83,8 +85,16 @@ type APIRepoTrust struct {
 	Reverted  int `json:"reverted"`
 	BrokeMain int `json:"broke_main"`
 	// Practice is what each level would have merged on its own over the
-	// window, and how many of those went wrong.
+	// window, and how many of those went wrong. Level 6's is of the
+	// issues the factory filed itself: how many a person took on.
 	Practice []APIPractice `json:"practice"`
+	// Proposed and Accepted are level 6's record: the issues the factory
+	// filed from its own findings, and how many of those a person took
+	// on (or, at level 6, it started).
+	Proposed int `json:"proposed"`
+	Accepted int `json:"accepted"`
+	// Sources are what starts on its own at level 6.
+	Sources []string `json:"sources"`
 	// Suggest is the level the record supports, above the current one; 0
 	// for none. SuggestWhy says why, or why not yet.
 	Suggest    int    `json:"suggest"`
@@ -98,13 +108,17 @@ type APIPractice struct {
 	WentWrong  int `json:"went_wrong"`
 }
 
-func levelOf(a *config.AutoMerge) (int, bool) {
+func levelOf(a *config.AutoMerge, s *config.SelfStart) (int, bool) {
+	if s != nil && len(s.Sources) > 0 {
+		five := TrustLevels[4]
+		return 6, !a.On() || a.UpTo != five.UpTo || a.MaxSize != five.MaxSize
+	}
 	if !a.On() {
 		return 1, false
 	}
 	level := 1
 	for _, l := range TrustLevels {
-		if l.Available && l.Level > 1 && a.Allows(l.UpTo, l.MaxSize) {
+		if l.Available && l.Level > 1 && l.Level < 6 && a.Allows(l.UpTo, l.MaxSize) {
 			level = l.Level
 		}
 	}
@@ -148,10 +162,13 @@ func (s *Server) trust(r *http.Request) (APITrust, error) {
 	}
 	since := time.Now().Add(-trustWindow).UTC().Format(store.TimeFormat)
 	for _, repo := range s.Repos {
-		t := APIRepoTrust{Repo: repo, Level: 1, Practice: []APIPractice{}}
+		t := APIRepoTrust{Repo: repo, Level: 1, Practice: []APIPractice{}, Sources: []string{}}
 		if cfg != nil {
 			if rc, ok := cfg.RepoConf(repo); ok {
-				t.Level, t.Custom = levelOf(rc.AutoMerge)
+				t.Level, t.Custom = levelOf(rc.AutoMerge, rc.SelfStart)
+				if rc.SelfStart != nil {
+					t.Sources = rc.SelfStart.Sources
+				}
 			}
 		}
 		if i := slices.IndexFunc(breakers, func(b APIBreaker) bool { return strings.EqualFold(b.Repo, repo) }); i >= 0 && breakers[i].Tripped {
@@ -163,6 +180,42 @@ func (s *Server) trust(r *http.Request) (APITrust, error) {
 		out.Repos = append(out.Repos, t)
 	}
 	return out, nil
+}
+
+// proposals is level 6's practice run: the issues the factory filed from
+// its own findings in the window (sources and the hunt), how many became
+// work (a person labeled it, or level 6 started it), and how many of the
+// merges from those were reverted or broke main.
+func (s *Server) proposals(ctx context.Context, t *APIRepoTrust, since string, merges []store.FactoryMerge) error {
+	evs, err := s.Store.EventsFor(ctx, "source_filed", t.Repo)
+	if err != nil {
+		return err
+	}
+	taken := map[int64]bool{}
+	for _, e := range evs {
+		if e.At < since {
+			continue
+		}
+		var d struct {
+			Issue int `json:"issue"`
+		}
+		if json.Unmarshal([]byte(e.Data), &d) != nil || d.Issue == 0 {
+			continue
+		}
+		t.Proposed++
+		if it, err := s.Store.ItemByIssue(ctx, t.Repo, d.Issue); err == nil {
+			t.Accepted++
+			taken[it.ID] = true
+		}
+	}
+	p := APIPractice{Level: 6, WouldMerge: t.Accepted}
+	for _, m := range merges {
+		if taken[m.ItemID] && (m.RevertedAt != "" || m.RedAt != "") {
+			p.WentWrong++
+		}
+	}
+	t.Practice = append(t.Practice, p)
+	return nil
 }
 
 // practice fills a repo's record and practice runs from its merged
@@ -198,7 +251,7 @@ func (s *Server) practice(ctx context.Context, t *APIRepoTrust, since string) er
 		changes = append(changes, c)
 	}
 	for _, l := range TrustLevels {
-		if !l.Available || l.Level == 1 {
+		if !l.Available || l.Level == 1 || l.Level == 6 {
 			continue
 		}
 		p := APIPractice{Level: l.Level}
@@ -212,6 +265,9 @@ func (s *Server) practice(ctx context.Context, t *APIRepoTrust, since string) er
 		}
 		t.Practice = append(t.Practice, p)
 	}
+	if err := s.proposals(ctx, t, since, merges); err != nil {
+		return err
+	}
 	next := t.Level + 1
 	switch {
 	case t.SteppedBack:
@@ -222,6 +278,13 @@ func (s *Server) practice(ctx context.Context, t *APIRepoTrust, since string) er
 		p := t.Practice[slices.IndexFunc(t.Practice, func(p APIPractice) bool { return p.Level == next })]
 		need := TrustLevels[next-1].Evidence
 		switch {
+		case next == 6 && p.WentWrong > 0:
+			t.SuggestWhy = fmt.Sprintf("Not yet: %d of the changes from issues it filed itself went wrong.", p.WentWrong)
+		case next == 6 && (p.WouldMerge < need || p.WouldMerge*5 < t.Proposed*4):
+			t.SuggestWhy = fmt.Sprintf("Not yet: of the %d issues it filed from its own findings in %d days, you took on %d. Level 6 needs %d, and 4 in 5.", t.Proposed, int(trustWindow.Hours()/24), p.WouldMerge, need)
+		case next == 6:
+			t.Suggest = next
+			t.SuggestWhy = fmt.Sprintf("You took on %d of the %d issues it filed from its own findings in the last %d days, and none of what merged from them went wrong.", p.WouldMerge, t.Proposed, int(trustWindow.Hours()/24))
 		case p.WentWrong > 0:
 			t.SuggestWhy = fmt.Sprintf("Not yet: %d of the %d changes level %d would have merged went wrong.", p.WentWrong, p.WouldMerge, next)
 		case p.WouldMerge < need:
@@ -276,7 +339,11 @@ func (s *Server) apiSetTrust(w http.ResponseWriter, r *http.Request) {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	l := TrustLevels[in.Level-1]
-	if err := s.SetTrust(r.Context(), in.Repo, l.autoMerge()); err != nil {
+	var self *config.SelfStart
+	if l.Level == 6 {
+		self = &config.SelfStart{Sources: slices.Clone(config.DefaultSelfStartSources)}
+	}
+	if err := s.SetTrust(r.Context(), in.Repo, l.autoMerge(), self); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
 		return
 	}

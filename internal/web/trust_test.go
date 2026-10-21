@@ -29,8 +29,8 @@ func trustSetup(t *testing.T, sizes []string) (string, *Server, *store.Store, st
 	path := filepath.Join(t.TempDir(), "factory.yaml")
 	os.WriteFile(path, src, 0o640)
 	s.ConfigPath, s.Listen, s.StartedConfig = path, "127.0.0.1:0", ConfigVersion(src)
-	s.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge) error {
-		return config.SetRepoAutoMerge(path, repo, a)
+	s.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error {
+		return config.SetRepoTrust(path, repo, a, s)
 	}
 	ctx := context.Background()
 	for i, size := range sizes {
@@ -92,7 +92,7 @@ func TestTrustLevelsAndPracticeRuns(t *testing.T) {
 	if after.Trust.Repos[0].Level != 4 || !after.Trust.Pending {
 		t.Fatalf("after: %+v pending %v", after.Trust.Repos[0], after.Trust.Pending)
 	}
-	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":6}`); code != 400 {
+	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":7}`); code != 400 {
 		t.Fatalf("a level not built yet was taken: %d", code)
 	}
 	// Level 1 turns auto-merge off for the repo.
@@ -115,4 +115,51 @@ func TestTrustStepsBack(t *testing.T) {
 	if r := tr.Repos[0]; !r.SteppedBack || r.Why != "2 reverts" || r.Suggest != 0 || !strings.Contains(r.SuggestWhy, "Reset it first") {
 		t.Fatalf("stepped back = %+v", r)
 	}
+}
+
+// Level 6 is earned from the issues the factory filed itself that a
+// person took on; raising it writes self_start with the safest sources.
+func TestTrustLevelSix(t *testing.T) {
+	t.Parallel()
+	srv, _, st, path := trustSetup(t, nil)
+	ctx := context.Background()
+	os.WriteFile(path, []byte(strings.Replace(string(must(os.ReadFile(path))), "auto_merge: {up_to: low, max_size: S}", "auto_merge: {up_to: medium, max_size: M}", 1)), 0o640)
+	// 12 Dependabot issues filed, 10 taken on.
+	for i := range 12 {
+		st.AddEvent(ctx, store.Event{Actor: "daemon", Type: "source_filed", Reason: "o/r", Data: fmt.Sprintf(`{"source":"dependabot","issue":%d}`, 200+i)})
+		if i < 10 {
+			st.UpsertItem(ctx, "o/r", 200+i, "Bump")
+		}
+	}
+	var tr APITrust
+	getJSON(t, srv+"/api/v1/trust", &tr)
+	r := tr.Repos[0]
+	if r.Level != 5 || r.Proposed != 12 || r.Accepted != 10 || r.Suggest != 6 || !strings.Contains(r.SuggestWhy, "You took on 10 of the 12 issues") {
+		t.Fatalf("level 6's record: %+v", r)
+	}
+	if code, body := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":6}`); code != 200 {
+		t.Fatalf("set 6: %d %s", code, body)
+	}
+	cfg, _ := config.Load(path)
+	rc, _ := cfg.RepoConf("o/r")
+	if !rc.SelfStart.Allows("main_health") || !rc.SelfStart.Allows("dependabot") || rc.SelfStart.Allows("hunt") || rc.AutoMerge.UpTo != "medium" {
+		t.Fatalf("o/r at level 6: %+v %+v", rc.SelfStart, rc.AutoMerge)
+	}
+	getJSON(t, srv+"/api/v1/trust", &tr)
+	if tr.Repos[0].Level != 6 || tr.Repos[0].Custom {
+		t.Fatalf("after: %+v", tr.Repos[0])
+	}
+	// Stepping down takes self_start away.
+	postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":5}`)
+	cfg, _ = config.Load(path)
+	if rc, _ := cfg.RepoConf("o/r"); rc.SelfStart != nil {
+		t.Fatalf("self_start left at level 5: %+v", rc.SelfStart)
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

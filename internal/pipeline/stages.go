@@ -1076,10 +1076,11 @@ const (
 // repo's auto_merge covers its risk and size, it is one repo's change, the
 // feature map that rates its risk could be read, its diff was rated and is
 // of no kind that always needs a person, and the repo's auto-merge breaker
-// hasn't tripped. A fix main health started on its own never
-// qualifies: no human read its issue.
+// hasn't tripped. Work the factory started on its own (main health's
+// fixes, the orchestrator's issues, a source's findings) qualifies only
+// at trust level 6 for its source: below it no human read its issue.
 func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in ReviewInput) bool {
-	if len(in.Heads) > 0 || p.inWorkspace(it) || in.Head == "" || p.healthApproved(ctx, it) {
+	if len(in.Heads) > 0 || p.inWorkspace(it) || in.Head == "" || !p.mergesItself(ctx, it) {
 		return false
 	}
 	if _, ok := p.gh(it.Repo).(AutoMerger); !ok {

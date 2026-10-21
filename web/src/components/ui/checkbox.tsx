@@ -7,7 +7,7 @@ export const Checkbox = React.forwardRef<React.ComponentRef<typeof C.Root>, Reac
   <C.Root
     ref={ref}
     className={cn(
-      "peer size-5 shrink-0 cursor-pointer rounded-md border bg-surface disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-ink data-[state=checked]:bg-ink data-[state=checked]:text-ink-foreground",
+      "peer size-5 shrink-0 cursor-pointer rounded-md border border-muted-foreground/60 bg-surface disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-ink data-[state=checked]:bg-ink data-[state=checked]:text-ink-foreground",
       className,
     )}
     {...props}
