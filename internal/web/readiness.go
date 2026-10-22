@@ -86,6 +86,17 @@ type APIRepoReadiness struct {
 	// Progress is what the check going (or the last one) has done so far,
 	// a step at a time, oldest first.
 	Progress []APIProgress `json:"progress"`
+	// LastRuns are the commands the last finished check ran, in order: a
+	// check going shows what's still to come, and how long each took then.
+	LastRuns []APIRun `json:"last_runs"`
+}
+
+// APIRun is one command a check ran.
+type APIRun struct {
+	Gate    string  `json:"gate"`
+	Command string  `json:"command"`
+	Passed  bool    `json:"passed"`
+	Seconds float64 `json:"seconds"`
 }
 
 // APIProgress is one step of a setup run: "running `bundle install`",
@@ -217,7 +228,7 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	linked := map[int64]bool{}
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
-		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Work: []APIReadinessFinding{}, Extras: []APIReadinessFinding{}, Progress: []APIProgress{}}
+		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Work: []APIReadinessFinding{}, Extras: []APIReadinessFinding{}, Progress: []APIProgress{}, LastRuns: []APIRun{}}
 		if s.ImageBuilding != nil {
 			rr.Image = s.ImageBuilding(repo)
 		}
@@ -231,6 +242,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 			continue
 		}
 		checked++
+		for _, x := range rep.Runs {
+			rr.LastRuns = append(rr.LastRuns, APIRun{Gate: x.Gate, Command: x.Command, Passed: x.Passed, Seconds: x.Duration.Seconds()})
+		}
 		rr.CheckedAt, rr.Branch, rr.SHA, rr.Score = rep.Started.UTC().Format(store.TimeFormat), rep.Branch, rep.SHA, rep.Score
 		switch {
 		case rep.Incomplete:

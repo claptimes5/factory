@@ -1159,7 +1159,7 @@ components:
         step: { type: string, description: "The Dockerfile step it's on, such as [test 3/5] COPY ...; empty before the first" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, checking, checking_since, check_job, check_error, result, progress, checking_why, check_waits, image]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, checking, checking_since, check_job, check_error, result, progress, checking_why, check_waits, image, last_runs]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1194,6 +1194,18 @@ components:
           type: array
           description: What the check going (or the last one) has done so far, a step at a time, oldest first
           items: { $ref: "#/components/schemas/ReadinessProgress" }
+        last_runs:
+          type: array
+          description: The commands the last finished check ran, in order, so a check going can show what's still to come and how long each took then
+          items: { $ref: "#/components/schemas/ReadinessRun" }
+    ReadinessRun:
+      type: object
+      required: [gate, command, passed, seconds]
+      properties:
+        gate: { type: string, description: "install, types, lint, test, ..." }
+        command: { type: string }
+        passed: { type: boolean }
+        seconds: { type: number }
     ReadinessStep:
       type: object
       required: [key, title, why, state, passed, blockers]

@@ -3,13 +3,13 @@ import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ExternalLink, MessageCircle, ShieldCheck } from "lucide-react";
 import { postJSON, useBoard, useHome, useOverview, useTrust, type Card as CardT } from "@/api/client";
-import { ErrorBox, Inline, Loading, WaitsFor } from "@/components/common";
+import { Ago, ErrorBox, Inline, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
-import { NextActions, nextStep, RunProgress, setupActivity, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
+import { CheckSteps, NextActions, nextStep, RunProgress, setupActivity, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type Readiness = components["schemas"]["Readiness"];
@@ -371,6 +371,7 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
   const { busy, msg, run } = useReadinessRun(r);
   const next = nextStep(r, data);
   const title = next.title.replace(/^(Ready\. )?Next: |^Working on it: /, "");
+  const checkGoing = r.checking && !r.check_waits && !r.image;
   return (
     <section aria-label="Setup" className="flex flex-col gap-3">
       <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
@@ -382,19 +383,33 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
           {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
           {title.charAt(0).toUpperCase() + title.slice(1)}
         </p>
-        <p className="text-body-sm text-ink-muted">{next.body}</p>
-        {next.running && (
-          <div className="flex flex-col gap-1 text-body-sm text-ink-muted">
-            <p>Started {duration(setupActivity(r)?.since ?? r.checking_since)} ago.</p>
-            <RunProgress r={r} last />
-          </div>
+        {checkGoing ? (
+          // A check going is shown, not told: its commands as they pass, the time counting.
+          <>
+            {r.checking_why && <p className="text-body-sm text-ink-muted">{r.checking_why}</p>}
+            <CheckSteps r={r} />
+          </>
+        ) : (
+          <>
+            <p className="text-body-sm text-ink-muted">{next.body}</p>
+            {next.running && (
+              <div className="flex flex-col gap-1 text-body-sm text-ink-muted">
+                <p>
+                  Started <Ago ts={setupActivity(r)?.since ?? r.checking_since} />.
+                </p>
+                <RunProgress r={r} last />
+              </div>
+            )}
+          </>
         )}
         {/* One button; the details are a link, so nothing competes with it. */}
         <div className="mt-1 flex flex-wrap items-center gap-4">
           <NextActions next={next} busy={busy} run={run} inverse />
-          <Link to="/setup" className="text-body-sm text-ink-muted underline hover:text-ink-foreground">
-            {r.state === "incomplete" ? "See the error" : "See every step"}
-          </Link>
+          {!next.running && (
+            <Link to="/setup" className="text-body-sm text-ink-muted underline hover:text-ink-foreground">
+              {r.state === "incomplete" ? "See the error" : "See every step"}
+            </Link>
+          )}
         </div>
         {msg && <p className="text-body-sm text-ink-muted">{msg.text}</p>}
         {!msg && !r.checking && r.check_error && <p className="text-body-sm text-ink-muted">{r.check_error}</p>}

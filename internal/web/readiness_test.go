@@ -30,7 +30,7 @@ func TestSetupAndUsageSchemasMatchGo(t *testing.T) {
 	if err := yaml.Unmarshal(OpenAPI, &spec); err != nil {
 		t.Fatal(err)
 	}
-	for name, v := range map[string]any{"Readiness": APIReadiness{}, "RepoReadiness": APIRepoReadiness{}, "ReadinessStep": APIReadinessStep{}, "ReadinessFinding": APIReadinessFinding{},
+	for name, v := range map[string]any{"Readiness": APIReadiness{}, "RepoReadiness": APIRepoReadiness{}, "ReadinessStep": APIReadinessStep{}, "ReadinessFinding": APIReadinessFinding{}, "ReadinessRun": APIRun{},
 		"PlanUsage": APIPlanUsage{}, "UsagePlan": APIUsagePlan{}} {
 		props, required := spec.Components.Schemas[name].flatten(spec.Components.Schemas)
 		goFields := strings.Join(jsonFields(reflect.TypeOf(v)), ",")

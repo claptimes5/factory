@@ -3382,6 +3382,15 @@ export interface components {
             checking_why: string;
             /** @description What the check going (or the last one) has done so far, a step at a time, oldest first */
             progress: components["schemas"]["ReadinessProgress"][];
+            /** @description The commands the last finished check ran, in order, so a check going can show what's still to come and how long each took then */
+            last_runs: components["schemas"]["ReadinessRun"][];
+        };
+        ReadinessRun: {
+            /** @description install, types, lint, test, ... */
+            gate: string;
+            command: string;
+            passed: boolean;
+            seconds: number;
         };
         ReadinessStep: {
             /** @enum {string} */
