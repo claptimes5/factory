@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleDashed, ExternalLink, Loader2, UserRound, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, ExternalLink, Loader2, UserRound, XCircle } from "lucide-react";
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
-import { Ago, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
+import { Ago, clock, Elapsed, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
 import type { Notice } from "@/components/Notices";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,8 @@ type RepoReadiness = components["schemas"]["RepoReadiness"];
 export function setupActivity(r: RepoReadiness): { title: string; since: string; detail: string } | null {
   const name = repoName(r.repo) || r.repo;
   const again = r.checking_why.replace(/^Started by itself: /, "").replace(/\.$/, "");
-  const why = again ? `Why check again: ${again}.` : "You asked for it.";
+  // Unsaid when a person started it: they know, and a check runs whoever starts it.
+  const why = again ? `Why check again: ${again}.` : "";
   if (r.image) {
     const then = r.checking ? ` Then it checks ${r.branch} in it. ${why}` : "";
     return {
@@ -32,7 +33,7 @@ export function setupActivity(r: RepoReadiness): { title: string; since: string;
   }
   if (!r.checking) return null;
   if (r.check_waits) return { title: `${name}'s check of ${r.branch} waits for ${r.check_waits}`, since: r.checking_since, detail: why };
-  return { title: `Checking ${name}'s ${r.branch}`, since: r.checking_since, detail: `${why} It installs it on a fresh copy and runs its checks.` };
+  return { title: `Checking ${name}'s ${r.branch}`, since: r.checking_since, detail: `${why ? why + " " : ""}It installs it on a fresh copy and runs its checks.` };
 }
 type Step = components["schemas"]["ReadinessStep"];
 type FindingT = components["schemas"]["ReadinessFinding"];
@@ -463,10 +464,13 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
       {(last ? steps.slice(-1) : steps).map((p, i, all) => {
         const now = i === all.length - 1 && r.checking;
         const bad = p.text.startsWith("failed ") || p.text.startsWith("couldn't ");
+        const known = p.text.startsWith("failed ") && redOnBase(r, /`(.+?)`/.exec(p.text)?.[1] ?? "");
         return (
           <li key={i} className="flex items-start gap-2">
             {now ? (
               <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" aria-label="Doing now" />
+            ) : known ? (
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-label="Fails on the base branch too" />
             ) : bad ? (
               <XCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" aria-label="Failed" />
             ) : (
@@ -474,6 +478,7 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
             )}
             <span className="min-w-0 break-words">
               <Inline text={p.text.charAt(0).toUpperCase() + p.text.slice(1)} />
+              {known && <span className="text-warning"> · {knownLine(r, "it", known).replace(/^it/, "It")}</span>}
               {now && (
                 <span className="text-muted-foreground">
                   {" "}
@@ -486,6 +491,106 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
       })}
     </ol>
   );
+}
+
+/**
+ * The issue filed for command cmd failing on the base branch, when the
+ * last check found it: every check fails it the same way until that's merged.
+ */
+function redOnBase(r: RepoReadiness, cmd: string): FindingT | undefined {
+  const gate = r.last_runs.find((x) => x.command === cmd)?.gate;
+  return gate ? r.work.find((f) => f.key === `check:${gate}` && f.status !== "done") : undefined;
+}
+
+/** "Lint fails on master too; #17 fixes it." */
+const knownLine = (r: RepoReadiness, label: string, f: FindingT) => `${label} fails on ${r.branch} too${f.issue ? `; #${f.issue} fixes it` : ""}.`;
+
+const gateName: Record<string, string> = { install: "Install", types: "Types", lint: "Lint", test: "Tests", build: "Build" };
+
+/**
+ * A check going, as a row of its commands: done, failed, now (its time
+ * counting) and still to come, from what the last check ran.
+ */
+export function CheckSteps({ r }: { r: RepoReadiness }) {
+  type S = { cmd: string; label: string; state: "done" | "failed" | "known" | "now" | "next"; secs?: number; since?: string; was?: number };
+  const last = (cmd: string) => r.last_runs.find((x) => x.command === cmd);
+  // What this check has started, in order, then what the last one ran that it hasn't yet.
+  const steps: S[] = [];
+  for (const p of r.progress) {
+    const m = /^(running|passed|failed|couldn't finish) `(.+?)`(?: in (\S+)| \((\S+)\))?/.exec(p.text);
+    if (!m) continue;
+    let st = steps.find((x) => x.cmd === m[2]);
+    if (!st) {
+      const x = last(m[2]);
+      st = { cmd: m[2], label: x ? (gateName[x.gate] ?? x.gate) : m[2], state: "now", was: x?.seconds };
+      steps.push(st);
+    }
+    const took = m[3] ?? m[4];
+    const failed = m[1] === "failed" && redOnBase(r, m[2]) ? "known" : "failed";
+    Object.assign(st, { state: m[1] === "running" ? "now" : m[1] === "passed" ? "done" : failed, since: p.at, secs: took ? seconds(took) : undefined });
+  }
+  for (const x of r.last_runs)
+    if (!steps.some((st) => st.cmd === x.command)) steps.push({ cmd: x.command, label: gateName[x.gate] ?? x.gate, state: "next", was: x.seconds });
+  if (steps.length === 0) return null;
+  const usual = r.last_runs.reduce((n, x) => n + x.seconds, 0);
+  return (
+    <div className="flex flex-col gap-2">
+      <ol aria-label="Its checks" className="flex flex-wrap gap-2">
+        {steps.map((st, i) => (
+          <li
+            key={i}
+            aria-label={`${st.label}: ${{ done: "passed", failed: "failed", known: "fails on the base branch too", now: "running", next: "to come" }[st.state]}`}
+            className={cn(
+              "flex min-w-24 items-center gap-2 rounded-control border px-3 py-2 text-body-sm",
+              st.state === "now"
+                ? "border-primary bg-primary/10 font-semibold"
+                : st.state === "known"
+                  ? "border-warning/40 bg-warning/10"
+                  : st.state === "next"
+                    ? "border-dashed opacity-60"
+                    : "border-border",
+            )}
+          >
+            {st.state === "now" ? (
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden />
+            ) : st.state === "done" ? (
+              <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
+            ) : st.state === "failed" ? (
+              <XCircle className="size-4 shrink-0 text-destructive" aria-hidden />
+            ) : st.state === "known" ? (
+              <AlertTriangle className="size-4 shrink-0 text-warning" aria-hidden />
+            ) : (
+              <CircleDashed className="size-4 shrink-0" aria-hidden />
+            )}
+            <span>{st.label}</span>
+            <span className="ml-auto pl-1 font-mono text-meta tabular-nums">
+              {st.state === "now" && st.since ? <Elapsed ts={st.since} /> : st.secs != null ? clock(st.secs) : st.was ? `~${clock(st.was)}` : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {/* A failure the base branch has too isn't news: say so, and what fixes it. */}
+      {steps.map((st) => {
+        const f = st.state === "known" && redOnBase(r, st.cmd);
+        return f && <p key={st.cmd} className="text-meta text-warning">{knownLine(r, st.label, f)}</p>;
+      })}
+      {r.checking_since && (
+        <p className="text-meta">
+          <span className="font-mono tabular-nums">
+            <Elapsed ts={r.checking_since} />
+          </span>{" "}
+          so far{usual > 0 && ` · the last check took ${clock(usual)}`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** "2m14s" or "26s" as seconds. */
+function seconds(d: string): number {
+  let n = 0;
+  for (const [, v, u] of d.matchAll(/([\d.]+)(h|m|s)/g)) n += Number(v) * { h: 3600, m: 60, s: 1 }[u as "h" | "m" | "s"];
+  return n;
 }
 
 function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; id?: string }) {

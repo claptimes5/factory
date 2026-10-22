@@ -257,6 +257,23 @@ export function Inline({ text }: { text: string }) {
 }
 
 /** "2m ago" that keeps counting: the page's data doesn't change while something runs, so this redraws itself each second. */
+/** Time since ts as m:ss, counting up each second. */
+export function Elapsed({ ts }: { ts: string }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{clock((Date.now() - Date.parse(ts)) / 1000)}</>;
+}
+
+/** Seconds as m:ss, or h:mm:ss. */
+export function clock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`;
+}
+
 export function Ago({ ts }: { ts: string }) {
   const [, tick] = useState(0);
   useEffect(() => {

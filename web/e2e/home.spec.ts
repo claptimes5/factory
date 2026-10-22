@@ -40,6 +40,67 @@ async function personsPartLeft(page: Page) {
   });
 }
 
+/** A check of api going: install and types passed, lint running, tests still to come. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function checkGoing(page: Page, tweak: (r: any) => void = () => {}) {
+  // Fixed once: the page polls, and a check that restarts its clock each poll never counts.
+  const start = Date.now();
+  const at = (s: number) => new Date(start - s * 1000).toISOString();
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const r = body.repos[0];
+    Object.assign(r, { state: "incomplete", checking: true, checking_since: at(70), checking_why: "", check_waits: "", image: null });
+    r.last_runs = [
+      { gate: "install", command: "bundle install", passed: true, seconds: 26 },
+      { gate: "types", command: "pnpm run typecheck", passed: true, seconds: 11 },
+      { gate: "lint", command: "bundle exec rubocop", passed: false, seconds: 59 },
+      { gate: "test", command: "bin/rails test", passed: false, seconds: 167 },
+    ];
+    r.progress = [
+      { at: at(65), text: "running `bundle install`" },
+      { at: at(39), text: "passed `bundle install` in 26s" },
+      { at: at(39), text: "running `pnpm run typecheck`" },
+      { at: at(28), text: "passed `pnpm run typecheck` in 11s" },
+      { at: at(28), text: "running `bundle exec rubocop`" },
+    ];
+    tweak(r);
+    await route.fulfill({ response: res, json: body });
+  });
+}
+
+test("a failure the base branch has too shows as known, with what fixes it, not as news", async ({ page }) => {
+  await checkGoing(page, (r) => {
+    r.branch = "master";
+    r.progress.push({ at: r.progress[4].at, text: "failed `bundle exec rubocop` in 59s (exit 1)" }, { at: r.progress[4].at, text: "running `bin/rails test`" });
+    r.work = [{ key: "check:lint", level: "blocker", area: "checks", title: "`lint` fails on master", detail: "", issue: 17, issue_url: "", status: "needs_you",
+      split_done: 0, split_total: 0, item_id: 7, item_stage: "parked" }];
+  });
+  await page.goto("/app/");
+  const card = page.getByTestId("setup-lead");
+  await expect(card.getByRole("listitem", { name: "Lint: fails on the base branch too" })).toBeVisible();
+  await expect(card.getByRole("listitem", { name: "Tests: running" })).toBeVisible();
+  await expect(card).toContainText("Lint fails on master too; #17 fixes it.");
+});
+
+test("a check going shows its commands as they pass, its time counting, and nothing to press", async ({ page }) => {
+  await checkGoing(page);
+  await page.goto("/app/");
+  const card = page.getByTestId("setup-lead");
+  await expect(card).toContainText("Checking api's");
+  await expect(card).not.toContainText("You asked for it");
+  const steps = card.getByRole("list", { name: "Its checks" });
+  await expect(steps.getByRole("listitem")).toHaveText([/Install\s*0:26/, /Types\s*0:11/, /Lint\s*0:2\d/, /Tests\s*~2:47/]);
+  await expect(steps.getByRole("listitem", { name: "Lint: running" })).toBeVisible();
+  await expect(steps.getByRole("listitem", { name: "Tests: to come" })).toBeVisible();
+  // The time counts up while you watch.
+  const sofar = card.getByText(/so far/);
+  const first = await sofar.textContent();
+  await expect(sofar).not.toHaveText(first ?? "", { timeout: 3000 });
+  await expect(card).toContainText("the last check took 4:23");
+  await expect(card.getByRole("link")).toHaveCount(0);
+});
+
 test("a check that couldn't finish says which command stopped it and its error", async ({ page }) => {
   await page.route(/\/api\/v1\/readiness$/, async (route) => {
     const res = await route.fetch();
