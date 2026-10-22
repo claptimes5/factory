@@ -272,6 +272,18 @@ export function NeedsYou({ className }: { className?: string }) {
   );
 }
 
+/** The line in a command's output that says what went wrong, or "". */
+export function errorLine(out: string): string {
+  // eslint-disable-next-line no-control-regex
+  const lines = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split("\n");
+  const hit = lines.find((l) => /[a-z](Error|Exception)\b|^\s*(error|Error|ERROR|fatal|FATAL):/.test(l));
+  if (!hit) return "";
+  // The innermost of "Outer::Error: Inner::Error: what happened".
+  const m = [...hit.matchAll(/[\w:]*(Error|Exception):/g)].pop();
+  const s = (m ? hit.slice(m.index) : hit).trim();
+  return s.length > 200 ? s.slice(0, 199) + "…" : s;
+}
+
 /** The one thing to do next on a repo, most pressing first: the person's part (the setup steps), then the factory's (its work). */
 export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const label = data.intake_label;
@@ -301,11 +313,15 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
     };
   }
   if (r.state === "incomplete") {
+    const step = r.steps.find((s) => s.state === "failing");
+    const stopped = step?.blockers.find((f) => f.level === "blocker");
+    const line = stopped && errorLine(stopped.detail);
     return {
       tone: "attention",
-      title: "Next: fix what stopped the check, then check again",
-      body: "The check stopped early, so this says nothing about the repo past that point. It's usually the factory's setup or a command in factory.yaml, not the repo's code.",
+      title: stopped ? `Next: ${stopped.title.replace(/`/g, "")}: fix that, then check again` : "Next: fix what stopped the check, then check again",
+      body: `${line ? `It failed with: ${line} ` : ""}The check stopped there, so it says nothing about the repo past that point. That's usually the factory's setup (Docker, a service, a command in factory.yaml), not the repo's code; if it was a one-off, like Docker restarting, checking again is all it takes.`,
       actions: check,
+      at: step && `step:${step.key}`,
       human: true,
     };
   }

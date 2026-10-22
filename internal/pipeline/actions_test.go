@@ -229,3 +229,32 @@ func TestReviewNeverResumesTheBuildersSession(t *testing.T) {
 		}
 	}
 }
+
+// A review that couldn't finish parks the item; Retry runs the review
+// again on the build it had, with today's reviewer, not a rebuild.
+func TestRetryReviewAfterPark(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(97)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{"not json", "still not json"}
+	e.p.Drain(ctx)
+	it := e.item(t, 97)
+	if it.Stage != state.Parked {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	reviews, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "review"})
+	e.p.Cfg.Routing["review"] = e.p.Cfg.Routing["implement.S"] // switched to claude since
+	e.claude.reviews = []string{pass}
+	if err := e.p.Retry(ctx, reviews[len(reviews)-1].ID, false); err != nil {
+		t.Fatal(err)
+	}
+	e.p.Drain(ctx)
+	if st := e.item(t, 97).Stage; st != state.AwaitingHuman {
+		t.Fatalf("stage = %s", st)
+	}
+	if e.claude.calls["implement"] != 1 || e.claude.calls["review"] != 1 {
+		t.Fatalf("calls: claude %v", e.claude.calls)
+	}
+}

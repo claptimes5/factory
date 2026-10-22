@@ -55,6 +55,52 @@ const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Wait
 const holdsUp = (c: CardT) =>
   c.unblocks.length === 0 ? "" : `${c.unblocks.map((u) => shortRef(u.ref)).join(", ")} ${c.unblocks.length === 1 ? "waits" : "wait"} for it`;
 
+/** "Do first: #20 waits for it" for an item others wait for, each a link: what waits may not be on the list. */
+function HoldsUp({ c }: { c: CardT }) {
+  if (c.unblocks.length === 0) return null;
+  return (
+    <span className="rounded-full bg-warning/15 px-2 py-0.5 text-meta font-medium text-warning">
+      Do first:{" "}
+      {c.unblocks.map((u, i) => (
+        <span key={u.id}>
+          {i > 0 && ", "}
+          <Link to={`/items/${u.id}`} className="underline">
+            {shortRef(u.ref)}
+          </Link>
+        </span>
+      ))}{" "}
+      {c.unblocks.length === 1 ? "waits" : "wait"} for it
+    </span>
+  );
+}
+
+/**
+ * What waits for the base branch waits for the item fixing it: the setup
+ * check filed that, so it goes first and says who waits.
+ */
+function withBaseFixers(cs: CardT[], readiness?: Readiness): CardT[] {
+  return cs.map((c) => {
+    const fixes = (readiness?.repos ?? [])
+      .filter((r) => r.repo === c.repo)
+      .flatMap((r) => r.work)
+      .some((f) => f.item_id === c.id && f.level === "blocker" && f.area === "checks" && f.status !== "done");
+    if (!fixes) return c;
+    const waiting = cs.filter((o) => o.repo === c.repo && o.setup === "base" && !c.unblocks.some((u) => u.id === o.id));
+    return { ...c, unblocks: [...c.unblocks, ...waiting.map((o) => ({ id: o.id, ref: o.ref }))] };
+  });
+}
+
+/** How the list is ordered, naming only what's on it. */
+function orderLine(cs: CardT[]): string {
+  const parts = [
+    cs.some((c) => kindOf(c) === "review") && "changes to review",
+    cs.some((c) => c.unblocks.length > 0) && "what other work waits for",
+    "the rest",
+    cs.some((c) => c.setup === "held" || c.setup === "base") && "what waits for setup or the base branch",
+  ].filter(Boolean);
+  return `In this order: ${parts.join(", then ")}.`;
+}
+
 /** A decision's one-line ask, for the "next" list. */
 function ask(c: CardT): string {
   switch (kindOf(c)) {
@@ -95,7 +141,7 @@ export function HomeScreen() {
   if (error) return <ErrorBox error={error} />;
 
   const held = (cols.get("blocked") ?? []).filter((k) => k.estimate_waiting || k.plan_waiting);
-  const needs = [...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])].sort(
+  const needs = withBaseFixers([...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])], readiness).sort(
     // Reviews first (finished work), then what other work waits for: answering it lets the factory move again.
     (a, b) =>
       setupOrder(a) - setupOrder(b) ||
@@ -117,9 +163,7 @@ export function HomeScreen() {
           {needs.length > 0 && (
             <section aria-label="Needs you" className="flex flex-col gap-2">
               <h2 className="text-body font-semibold">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h2>
-              {needs.some((c) => c.unblocks.length > 0 || c.setup === "base") && (
-                <p className="text-body-sm text-muted-foreground">In this order: changes to review, then what other work waits for, then the rest.</p>
-              )}
+              {ordered(needs) && <p className="text-body-sm text-muted-foreground">{orderLine(needs)}</p>}
               {needs.some((c) => c.setup === "held" || c.setup === "base") && (
                 <p className="text-body-sm text-muted-foreground">What waits for setup or the base branch can't pass its checks until they're fixed; it starts by itself then, or Retry it.</p>
               )}
@@ -346,7 +390,7 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
         <div className="mt-1 flex flex-wrap gap-2">
           <NextActions next={next} busy={busy} run={run} inverse />
           <Button size="sm" variant="inverse-outline" asChild>
-            <Link to="/setup">See every step</Link>
+            <Link to="/setup">{r.state === "incomplete" ? "See the whole error" : "See every step"}</Link>
           </Button>
         </div>
         {msg && <p className="text-body-sm text-ink-muted">{msg.text}</p>}
@@ -382,15 +426,18 @@ function NeedRow({ c, n }: { c: CardT; n?: number }) {
             {setupLabel[c.setup]}
           </span>
         )}
-        {holdsUp(c) && <span className="rounded-full bg-warning/15 px-2 py-0.5 text-meta font-medium text-warning">Do first: {holdsUp(c)}</span>}
+        <HoldsUp c={c} />
       </div>
       <Link to={`/items/${c.id}`} className="text-body font-medium hover:underline">
         {c.title}
       </Link>
-      {(c.setup === "blocks" || c.setup === "image" || c.setup === "base") && c.setup_note && (
+      {(c.setup === "blocks" || c.setup === "image" || c.setup === "base") && c.setup_note ? (
         <p className="text-body-sm text-text-2">
           <Inline text={c.setup_note} />
         </p>
+      ) : (
+        // Why it stopped: "A question" alone doesn't say a review couldn't run.
+        c.blocked_note && kindOf(c) !== "review" && <p className="text-body-sm text-text-2">{brief(c.blocked_note, 160)}</p>
       )}
     </li>
   );

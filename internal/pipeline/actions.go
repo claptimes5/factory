@@ -113,10 +113,15 @@ func (p *Pipeline) planRetry(ctx context.Context, actor string, jobID int64, tie
 		}
 		rp.route = r
 	case "review", "critic":
-		if it.Stage != state.Reviewing {
+		// Parked: the review couldn't finish (its harness failed, say), and the build it read is still there.
+		if it.Stage != state.Reviewing && it.Stage != state.Parked {
 			return nil, fmt.Errorf("item is %s; retry its implement job instead", it.Stage)
 		}
-		rp.route = config.Route{Harness: j.Harness, Model: j.Model}
+		// Today's route, not the failed job's: a reviewer changed in factory.yaml since takes over.
+		rp.route = p.Cfg.Review(it.Risk)
+		if j.Kind == "critic" {
+			rp.route = p.Cfg.CriticRoute()
+		}
 	default:
 		return nil, fmt.Errorf("cannot retry a %s job", j.Kind)
 	}
@@ -158,6 +163,11 @@ func (p *Pipeline) retry(ctx context.Context, actor string, jobID int64, tierUp 
 		var in ReviewInput
 		if err := jsonUnmarshal(j.Input, &in); err != nil {
 			return err
+		}
+		if it.Stage == state.Parked {
+			if err := p.Store.SetStage(ctx, it.ID, state.Reviewing, actor, "retry "+j.Kind); err != nil {
+				return err
+			}
 		}
 		return p.enqueueReview(ctx, it, j.Kind, j.Attempt, in)
 	}
