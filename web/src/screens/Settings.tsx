@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, Check, ChevronRight, ExternalLink, Lock, RotateCw, Save, Sparkles, X } from "lucide-react";
@@ -7,12 +7,14 @@ import {
   APIError,
   applyPreset,
   applyTuning,
+  checkSettings,
   saveSettings,
   useOverview,
   useSettings,
   useTuning,
   type Setting,
   type Settings,
+  type SettingsCheck,
   type SettingValue,
   type TuningChange,
 } from "@/api/client";
@@ -43,6 +45,26 @@ function toValue(f: Setting, d: Draft): SettingValue {
   if (f.kind === "number" || f.kind === "integer") return Number.isNaN(Number(s)) ? s : Number(s);
   if (f.kind === "list") return s.split(/[\s,]+/).filter(Boolean);
   return s;
+}
+
+/** A line from checking the file: why a save would be refused, or a warning. */
+type Note = { text: string; warn: boolean };
+
+/** Where a note belongs: the first row or field it names ("row:" and the row's name, or the field's key), or "" for none. */
+function place(text: string, fields: Setting[]): string {
+  for (const [t] of text.matchAll(/[a-z_]+(?:\.[\w-]+)+/g)) {
+    const f = fields.find((f) => (f.row ? `routing.${f.row}` === t : f.path.join(".") === t));
+    if (f) return f.row ? "row:" + f.row : key(f);
+  }
+  return "";
+}
+
+function NoteLine({ n, className }: { n: Note; className?: string }) {
+  return (
+    <p role={n.warn ? "note" : "alert"} className={cn("text-xs break-words", n.warn ? "text-warning" : "text-destructive", className)}>
+      {n.text}
+    </p>
+  );
 }
 
 const show = (v: SettingValue) => (v == null ? "" : Array.isArray(v) ? v.join(", ") : String(v));
@@ -144,6 +166,35 @@ function SettingsForm({ s }: { s: Settings }) {
   const restart = () => press("/settings/restart");
   const cancelRestart = () => press("/settings/restart/cancel");
   const draft = (f: Setting) => (key(f) in drafts ? drafts[key(f)] : initial(f));
+  // What saving the edits would say, checked as they're typed.
+  const [check, setCheck] = useState<SettingsCheck | null>(null);
+  const pending = JSON.stringify(changed.map((f) => ({ path: f.path, value: toValue(f, drafts[key(f)]) })));
+  useEffect(() => {
+    setCheck(null);
+    if (pending === "[]") return;
+    let live = true;
+    const t = setTimeout(() => {
+      checkSettings(JSON.parse(pending))
+        .then((c) => live && setCheck(c))
+        .catch(() => {});
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [pending, s.version]);
+  const all: Note[] =
+    pending !== "[]" && check
+      ? [...check.error.split("\n").filter(Boolean).map((text) => ({ text, warn: false })), ...check.warnings.map((text) => ({ text, warn: true }))]
+      : pending === "[]"
+        ? s.warnings.map((text) => ({ text, warn: true }))
+        : [];
+  const placed = new Map<string, Note[]>();
+  for (const n of all) {
+    const k = place(n.text, fields);
+    placed.set(k, [...(placed.get(k) ?? []), n]);
+  }
+  const notes = (k: string) => placed.get(k) ?? [];
   // On plans only, no job costs dollars: the dollar caps matter only with API keys.
   const plansOnly = !!useOverview().data?.plans_only;
 
@@ -209,6 +260,7 @@ function SettingsForm({ s }: { s: Settings }) {
       {restartMsg && <p role="alert" className="text-sm text-destructive">{restartMsg}</p>}
 
       <PresetCard s={s} ro={ro} pending={changed.length > 0} onApplied={(next) => qc.setQueryData(["settings"], next)} />
+      {pending === "[]" && notes("").map((n) => <NoteLine key={n.text} n={n} className="text-sm" />)}
 
       {sections.map((sec) => {
         const groups = s.groups.filter((g) => sec.groups.includes(g.name));
@@ -221,11 +273,11 @@ function SettingsForm({ s }: { s: Settings }) {
                 {groups.length > 1 && <h3 className="text-body-sm font-semibold">{g.name}</h3>}
                 {g.help && <p className="text-xs text-muted-foreground">{g.help}</p>}
                 {g.fields.some((f) => f.row) ? (
-                  <Rows fields={g.fields} draft={draft} set={set} ro={ro} />
+                  <Rows fields={g.fields} draft={draft} set={set} ro={ro} notes={notes} harnesses={s.harnesses} />
                 ) : g.name === "Budgets" ? (
-                  <Limits fields={g.fields} draft={draft} set={set} ro={ro} plansOnly={plansOnly} />
+                  <Limits fields={g.fields} draft={draft} set={set} ro={ro} notes={notes} plansOnly={plansOnly} />
                 ) : (
-                  <Fields fields={g.fields} draft={draft} set={set} ro={ro} />
+                  <Fields fields={g.fields} draft={draft} set={set} ro={ro} notes={notes} />
                 )}
               </div>
             ))}
@@ -253,7 +305,11 @@ function SettingsForm({ s }: { s: Settings }) {
           <span className="text-sm text-muted-foreground">
             {changed.length === 0 ? "No changes." : `${changed.length} ${changed.length === 1 ? "change" : "changes"} to save.`}
           </span>
-          {err && (
+          {notes("").map((n) => (
+            <NoteLine key={n.text} n={n} className="w-full text-sm" />
+          ))}
+          {/* Shown by the fields it names once the check catches up. */}
+          {err && err !== check?.error && (
             <p role="alert" className="w-full text-sm break-words text-destructive">
               {err}
             </p>
@@ -320,7 +376,7 @@ function summary(sec: string, s: Settings, plansOnly: boolean): string {
 }
 
 /** Fields in a grid: label, input, what it does. */
-function Fields({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) {
+function Fields({ fields, draft, set, ro, notes }: { fields: Setting[] } & FieldProps) {
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
       {fields.map((f) => (
@@ -332,6 +388,9 @@ function Fields({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) 
           <span id={id(f) + "-help"} className="text-xs text-muted-foreground">
             {f.help}
           </span>
+          {notes(key(f)).map((n) => (
+            <NoteLine key={n.text} n={n} />
+          ))}
         </div>
       ))}
     </div>
@@ -473,10 +532,10 @@ function Notice({ children }: { children: ReactNode }) {
   );
 }
 
-type FieldProps = { draft: (f: Setting) => Draft; set: (f: Setting, d: Draft) => void; ro: boolean };
+type FieldProps = { draft: (f: Setting) => Draft; set: (f: Setting, d: Draft) => void; ro: boolean; notes: (k: string) => Note[] };
 
-/** Routing entries: one line each, harness, model, effort and fast. */
-function Rows({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) {
+/** Routing entries: one line each, harness, model, effort and fast. A harness offers only those with a key or sign-in, and the one set. */
+function Rows({ fields, draft, set, ro, notes, harnesses }: { fields: Setting[]; harnesses: string[] } & FieldProps) {
   const rows: { name: string; fields: Setting[] }[] = [];
   for (const f of fields) {
     const last = rows[rows.length - 1];
@@ -501,8 +560,20 @@ function Rows({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) {
           {r.fields.map((f) => (
             <label key={key(f)} className="flex min-w-0 flex-col gap-1">
               <span className="text-xs text-muted-foreground md:sr-only">{f.label}</span>
-              <Input f={f} d={draft(f)} set={set} ro={ro} label={`${r.name} ${f.label.toLowerCase()}`} />
+              <Input
+                f={f}
+                d={draft(f)}
+                set={set}
+                ro={ro}
+                label={`${r.name} ${f.label.toLowerCase()}`}
+                options={
+                  f.path[2] === "harness" && harnesses.length > 0 ? f.options.filter((o) => harnesses.includes(o) || o === initial(f) || o === draft(f)) : undefined
+                }
+              />
             </label>
+          ))}
+          {notes("row:" + r.name).map((n) => (
+            <NoteLine key={n.text} n={n} className="col-span-full" />
           ))}
         </fieldset>
       ))}
@@ -510,7 +581,21 @@ function Rows({ fields, draft, set, ro }: { fields: Setting[] } & FieldProps) {
   );
 }
 
-function Input({ f, d, set, ro, label }: { f: Setting; d: Draft; set: (f: Setting, d: Draft) => void; ro: boolean; label?: string }) {
+function Input({
+  f,
+  d,
+  set,
+  ro,
+  label,
+  options = f.options,
+}: {
+  f: Setting;
+  d: Draft;
+  set: (f: Setting, d: Draft) => void;
+  ro: boolean;
+  label?: string;
+  options?: string[];
+}) {
   const dirty = d !== initial(f);
   const cls = cn(input, dirty && "border-primary");
   // A row's inputs are named by the row; the others by their label, with the help line describing them.
@@ -533,7 +618,7 @@ function Input({ f, d, set, ro, label }: { f: Setting; d: Draft; set: (f: Settin
     const def = f.default == null ? "Not set" : show(f.default) === "" ? "Default" : `Default (${show(f.default)})`;
     return (
       <select {...a11y} value={d as string} disabled={ro} onChange={(e) => set(f, e.target.value)} className={cls}>
-        {f.options.map((o) => (
+        {options.map((o) => (
           <option key={o} value={o}>
             {o === "" ? def : o}
           </option>

@@ -371,6 +371,24 @@ test("settings save to factory.yaml and restart once jobs finish", async ({ page
   if (phone(info)) await noSidewaysScroll(page);
 });
 
+test("settings say what's wrong by the field as it's edited, and offer only connected harnesses", async ({ page }) => {
+  await page.route(/\/api\/v1\/settings$/, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), harnesses: ["claude"] } });
+  });
+  await page.goto("/app/settings");
+  await page.getByText("Models", { exact: true }).click();
+  const models = page.getByRole("region", { name: "Models" });
+  // Codex has no key here: rows on Claude can't pick it; the reviewer, set to it, keeps it.
+  await expect(models.getByLabel("triage harness").locator("option")).toHaveText(["claude"]);
+  await expect(models.getByLabel("review harness").locator("option")).toHaveText(["claude", "codex"]);
+  // Checked as it's typed, before Save, and shown on the row it names.
+  await models.getByLabel("review fast").check();
+  await expect(models.getByRole("group", { name: "review" }).getByRole("alert")).toContainText("routing.review: fast mode is Claude's");
+  await models.getByLabel("review fast").uncheck();
+  await expect(models.getByRole("alert")).toHaveCount(0);
+});
+
 test("a preset sets how hard the factory works, for the harnesses it has", async ({ page }, info) => {
   await page.goto("/app/settings");
   const card = page.getByRole("region", { name: "How hard it works" });

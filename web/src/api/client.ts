@@ -30,6 +30,7 @@ export type Notification = S["Notification"];
 export type Notifications = S["Notifications"];
 export type ActionResult = S["ActionResult"];
 export type Settings = S["Settings"];
+export type SettingsCheck = S["SettingsCheck"];
 export type SettingsGroup = S["SettingsGroup"];
 export type Setting = S["Setting"];
 export type SettingValue = S["SettingValue"];
@@ -160,6 +161,9 @@ export const useUninstall = (enabled: boolean) =>
 /** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
   postJSON<Settings>("/settings", { changes, version });
+
+/** What saving these changes would say, without writing them. */
+export const checkSettings = (changes: { path: string[]; value: SettingValue }[]) => postJSON<SettingsCheck>("/settings/check", { changes });
 
 /** Sets how hard the factory works, for the harnesses named (empty: as they are). */
 export const applyPreset = (body: { key?: string; builder?: string; reviewer?: string; version: string }) => postJSON<Settings>("/settings/preset", body);

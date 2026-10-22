@@ -60,6 +60,7 @@ var doctorChecks = []check{
 	{run: (*doctor).forges},
 	{system: true, run: (*doctor).ttyd},
 	{run: (*doctor).port},
+	{run: (*doctor).configWarnings},
 }
 
 // doctor runs the checks for one config. Everything it asks of the
@@ -361,6 +362,16 @@ func (d *doctor) images(ctx context.Context) []finding {
 	}
 	if len(built) > 0 {
 		out = append([]finding{{pass, "Job images built: " + strings.Join(built, ", "), ""}}, out...)
+	}
+	return out
+}
+
+// configWarnings are what factory.yaml loads with but is worth a second
+// look, such as the security pass on a reviewer's model.
+func (d *doctor) configWarnings(context.Context) []finding {
+	var out []finding
+	for _, w := range d.cfg.Warnings() {
+		out = append(out, finding{warn, w, ""})
 	}
 	return out
 }
