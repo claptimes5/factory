@@ -247,6 +247,10 @@ func TestReadinessShowsASplitBlocker(t *testing.T) {
 	if w := d.Children[2].WaitsFor; len(w) != 1 || w[0].ID != first.ID || w[0].Ref != "o/r#20" || len(d.Children[0].WaitsFor) != 0 {
 		t.Fatalf("waits for = %+v", d.Children)
 	}
+	// And the other way: what each holds up, the done one nothing.
+	if u := d.Children[0].Unblocks; len(u) != 1 || u[0].ID != last.ID || len(d.Children[1].Unblocks) != 0 || len(d.Children[2].Unblocks) != 0 {
+		t.Fatalf("unblocks = %+v", d.Children)
+	}
 }
 
 // A repo that isn't ready is checked again once its base branch moves:

@@ -280,7 +280,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       <div className="flex items-center gap-2.5">
         <span className="font-mono text-caption text-muted-foreground">{shortRef(c.ref)}</span>
         <Badge variant="attention">{pr ? "PR ready" : plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</Badge>
-        {c.setup && <Badge variant={c.setup === "blocks" ? "warning" : "secondary"}>{{ blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image" }[c.setup]}</Badge>}
+        {c.setup && <Badge variant={c.setup === "blocks" ? "warning" : "secondary"}>{{ blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image", base: "Waits for the base branch" }[c.setup]}</Badge>}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
             ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")

@@ -1226,7 +1226,7 @@ components:
               issue_url: { type: string }
     Item:
       type: object
-      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for, setup, setup_note]
+      required: [id, repo, ref, issue, title, stage, complexity, risk, priority, parent_id, branch, pr_number, prs, created_at, updated_at, issue_url, pr_url, needs_you, self_started, blocked_note, estimate, estimate_waiting, plan_waiting, choice_job_id, choices, waits_for, unblocks, setup, setup_note]
       properties:
         id: { type: integer }
         repo: { type: string, description: "owner/name" }
@@ -1263,7 +1263,11 @@ components:
           type: array
           description: "The items it depends on that aren't done: it isn't built until they are, whatever is approved"
           items: { $ref: "#/components/schemas/ItemRef" }
-        setup: { type: string, enum: ["", blocks, held, image], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; else empty" }
+        unblocks:
+          type: array
+          description: "The items not done that wait for it: what it holds up"
+          items: { $ref: "#/components/schemas/ItemRef" }
+        setup: { type: string, enum: ["", blocks, held, image, base], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; base when it's parked on checks that fail on the base branch too; else empty" }
         setup_note: { type: string, description: "Why, in a sentence" }
     ItemRef:
       type: object

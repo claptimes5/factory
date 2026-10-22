@@ -3435,11 +3435,13 @@ export interface components {
             choices: components["schemas"]["Choice"][];
             /** @description The items it depends on that aren't done: it isn't built until they are, whatever is approved */
             waits_for: components["schemas"]["ItemRef"][];
+            /** @description The items not done that wait for it: what it holds up */
+            unblocks: components["schemas"]["ItemRef"][];
             /**
-             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; else empty
+             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; base when it's parked on checks that fail on the base branch too; else empty
              * @enum {string}
              */
-            setup: "" | "blocks" | "held" | "image";
+            setup: "" | "blocks" | "held" | "image" | "base";
             /** @description Why, in a sentence */
             setup_note: string;
         };
