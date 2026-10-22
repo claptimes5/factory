@@ -51,7 +51,7 @@ func TestOpenAPIMatchesGo(t *testing.T) {
 		"Tuning": APITuning{}, "TuningProposal": APITuningProposal{}, "TuningChange": APITuningChange{},
 		"Preview": APIPreview{}, "PreviewShot": APIPreviewShot{},
 		"Breaker": APIBreaker{}, "RepoReverts": metrics.RepoReverts{},
-		"Choice": APIChoice{}, "Stop": APIStop{}, "TranscriptEntry": APITranscriptEntry{},
+		"Choice": APIChoice{}, "SetupFix": APISetupFix{}, "Stop": APIStop{}, "TranscriptEntry": APITranscriptEntry{},
 		"Chats": APIChats{}, "ChatAt": APIChatAt{}, "Chat": APIChat{}, "ChatMessage": APIChatMessage{}, "ChatReply": APIChatReply{},
 		"SentChat": APISentChat{}, "Draft": APIDraft{},
 		"Happened": APIHappened{}, "HappenedStep": APIHappenedStep{}, "Split": APISplit{},

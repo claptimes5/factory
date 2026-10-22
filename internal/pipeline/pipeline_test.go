@@ -679,6 +679,9 @@ func TestSetupFailureParksInsteadOfRetrying(t *testing.T) {
 			if !e.p.modelCantFix(ctx, it) {
 				t.Fatal("the park doesn't say no model can fix it")
 			}
+			if cs := e.p.Choices(ctx, jobs[0].ID); len(cs) == 0 || cs[0].Action != "fix_setup" || !cs[0].Available {
+				t.Fatalf("choices %+v: Fix setup isn't first", cs)
+			}
 			evs, _ := e.p.Store.Events(ctx, it.ID)
 			if !slices.ContainsFunc(evs, func(ev store.Event) bool {
 				return ev.Type == "park" && strings.Contains(ev.Reason, "No such file or directory - ffmpeg")

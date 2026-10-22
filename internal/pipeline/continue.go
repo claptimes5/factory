@@ -634,7 +634,7 @@ func SteerUnsupported(j *store.Job) string { return steerUnsupported(j) }
 // Choice is one thing a person can do with a job that ended, said
 // plainly, with the model it runs on.
 type Choice struct {
-	Action    string // continue, retry, tier_up or park
+	Action    string // fix_setup, continue, retry, tier_up or park
 	Label     string
 	Model     string // harness/model it runs, "" for park
 	Explain   string // what it does
@@ -680,6 +680,11 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 		}
 	}
 	cantFix := p.modelCantFix(ctx, it)
+	if _, ok := p.SetupPark(ctx, it); ok {
+		// First: what stopped it is the setup, so that's the fix.
+		out = append([]Choice{{Action: "fix_setup", Label: "Fix setup", Available: true,
+			Explain: "Shows the change to factory.yaml that gives its checks what they lack, read from the repo's Dockerfile and compose file, for you to apply. Applying saves it, restarts the factory once running jobs finish (rebuilding the job image if it changed), and retries this."}}, out...)
+	}
 	for _, up := range []bool{false, true} {
 		c := Choice{Action: "retry", Label: "Retry"}
 		if up {
@@ -714,26 +719,46 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 // modelCantFix reports whether the orchestrator parked item it, since its
 // last job was queued, saying no model could get past what stopped it.
 func (p *Pipeline) modelCantFix(ctx context.Context, it *store.WorkItem) bool {
+	pk, ok := p.lastPark(ctx, it)
+	return ok && pk.CantFix
+}
+
+// Park is what a parked item's park said: whether no model gets past it,
+// and, when the job's sandbox lacked something, its kind and the line
+// that showed it (see parkSetup).
+type Park struct {
+	CantFix bool   `json:"model_cant_fix"`
+	Setup   string `json:"setup"`
+	Line    string `json:"line"`
+}
+
+// SetupPark is the setup problem a parked item stopped on; false when it
+// didn't stop on one.
+func (p *Pipeline) SetupPark(ctx context.Context, it *store.WorkItem) (Park, bool) {
+	pk, ok := p.lastPark(ctx, it)
+	return pk, ok && pk.Line != ""
+}
+
+// lastPark is the park that parked it, unless a job was queued since.
+func (p *Pipeline) lastPark(ctx context.Context, it *store.WorkItem) (Park, bool) {
 	if it.Stage != state.Parked {
-		return false
+		return Park{}, false
 	}
 	evs, err := p.Store.Events(ctx, it.ID)
 	if err != nil {
-		return false
+		return Park{}, false
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
 		switch evs[i].Type {
 		case "job_queued":
-			return false
+			return Park{}, false
 		case "park":
-			var a struct {
-				CantFix bool `json:"model_cant_fix"`
-			}
-			_ = json.Unmarshal([]byte(evs[i].Data), &a)
-			return a.CantFix
+			var pk Park
+			_ = json.Unmarshal([]byte(evs[i].Data), &pk)
+			return pk, true
 		}
 	}
-	return false
+	return Park{}, false
 }
 
 // retryExplain says what a retry would do.

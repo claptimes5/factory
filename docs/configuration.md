@@ -286,8 +286,16 @@ something: a refused connection to a database or cache, a system library
 that can't be loaded, a program that isn't installed. Readiness reports it
 as a setup blocker with no issue. A build that fails that way, or whose
 builder reports it, parks at once with the line that shows it, rather than
-trying the next model. Add what's missing (a service, or a job image that
-has it), then press Retry.
+trying the next model. Its first button is **Fix setup**: it reads the
+repo's Dockerfile, compose file and CI as setup does, and shows the change
+to the repo's entry in `factory.yaml` that would give the checks what they
+lack (the job image built from a test stage, the services and the settings
+that find them), as a list and as before and after. **Apply and retry**
+saves it, restarts the factory once running jobs finish (no new job starts
+meanwhile, and the job image is rebuilt if it changed), then retries the
+item. It needs the dashboard password, or the dashboard opened on the
+factory's machine, as settings do. When the repo's files don't say what's
+missing, it says so: add it yourself, then press Retry.
 
 ## Files a repo doesn't commit
 

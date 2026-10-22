@@ -313,6 +313,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/setup-fix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What Fix setup would change for an item parked on a setup problem
+         * @description The problem it stopped on, and the change to its repo in factory.yaml that the repo's own files (Dockerfile, compose file, CI) suggest. Changes is empty when they suggest none.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The proposal */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SetupFix"];
+                    };
+                };
+                404: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+                502: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        /**
+         * Apply Fix setup
+         * @description Saves the change to factory.yaml if it is still the version shown, asks for a restart (which waits for running jobs, and lets no new one start), and queues the item's retry, which so runs on the new setup. Needs the password, or a request from this machine (403 otherwise), as settings do.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        version: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["Action"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/approve-estimate": {
         parameters: {
             query?: never;
@@ -3300,7 +3369,7 @@ export interface components {
         };
         Choice: {
             /** @enum {string} */
-            action: "continue" | "retry" | "tier_up" | "park";
+            action: "fix_setup" | "continue" | "retry" | "tier_up" | "park";
             label: string;
             /** @description harness/model it would run on; empty for park */
             model: string;
@@ -4057,6 +4126,25 @@ export interface components {
             };
             /** @description The last Try these checks, or null */
             try: components["schemas"]["WizardTry"] | null;
+        };
+        SetupFix: {
+            repo: string;
+            /** @description What the job's sandbox lacks */
+            problem: string;
+            /** @description The output line that showed it */
+            line: string;
+            /** @description Each change, for people; empty when the repo's files suggest none */
+            changes: string[];
+            /** @description The repo's entry in factory.yaml now */
+            before: string;
+            /** @description With the changes */
+            after: string;
+            notes: string[];
+            /** @description factory.yaml's version as read; applying sends it back */
+            version: string;
+            writable: boolean;
+            /** @description Why it can't be applied here, when it can't */
+            reason: string;
         };
         ImageBuild: {
             /** @description Its path in the repo; empty for Dockerfile */

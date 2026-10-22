@@ -36,7 +36,7 @@ test("the floor puts what needs you first, with live work and repo chips", async
   await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(2);
   await expect(needs).not.toContainText("YAML anchors");
   await page.getByRole("button", { name: "All repos" }).click();
-  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(7);
+  await expect(needs.getByTestId("card").filter({ visible: true })).toHaveCount(8);
   if (phone(info)) {
     await noSidewaysScroll(page);
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeVisible();
@@ -290,6 +290,22 @@ test("a stopped item says what happened, job by job, and Split it asks chat for 
   await expect(you).toContainText("Paginate the audit log API");
   await expect(you).toContainText(/Its build stopped: The build failed.*log \(job #\d+\)/);
   await expect(you).toContainText(/each with parent \d+/);
+});
+
+test("an item parked on a setup problem leads with Fix setup, which shows the change from the repo's files", async ({ page }, info) => {
+  await page.goto("/app/line");
+  const needs = page.getByTestId("board").getByRole("region", { name: "Needs you" });
+  await needs.getByTestId("card").filter({ hasText: "Export the audit log as CSV" }).filter({ visible: true }).getByRole("link", { name: /Export the audit log/ }).click();
+  const choices = page.getByTestId("status").getByTestId("choices");
+  await expect(choices.getByRole("button").first()).toHaveText("Fix setup");
+  await choices.getByRole("button", { name: "Fix setup" }).click();
+  const fix = page.getByTestId("fix-setup");
+  await expect(fix).toContainText("a service the checks need (such as a database) isn't running");
+  await expect(fix).toContainText("PG::ConnectionBad");
+  await expect(fix).toContainText("Start db (postgres:16) for every build and check");
+  await expect(fix).toContainText("Set PGHOST=db, so the app finds it");
+  await expect(fix.getByRole("button", { name: "Apply and retry" })).toBeEnabled();
+  if (phone(info)) await noSidewaysScroll(page);
 });
 
 test("a build that ran out of turns says so at the top, and Split it waits for chat", async ({ page }) => {

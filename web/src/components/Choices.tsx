@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { act, type Choice } from "@/api/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { act, getJSON, type Choice, type SetupFix } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [continuing, setContinuing] = useState(false);
+  const [fixing, setFixing] = useState(false);
   const [extra, setExtra] = useState(0);
   const [note, setNote] = useState("");
   const press = async (name: string, path: string, body?: unknown) => {
@@ -36,6 +37,9 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
   };
   const run = (c: Choice) => {
     switch (c.action) {
+      case "fix_setup":
+        setFixing(!fixing);
+        return;
       case "continue":
         setContinuing(!continuing);
         return;
@@ -49,7 +53,8 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
       }
     }
   };
-  const shown = choices.filter((c) => c.available || c.action === "continue");
+  const shown = choices.filter((c) => (c.available || c.action === "continue") && (c.action !== "fix_setup" || itemId));
+  const lead = (c: Choice) => c.action === "continue" || c.action === "fix_setup";
   // The help explains the buttons shown, and lists apart the choices that
   // aren't offered with why, so it never reads as more buttons than there are.
   const hidden = choices.filter((c) => !shown.includes(c));
@@ -85,10 +90,10 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
           <Button
             key={c.action}
             size={inverse ? "default" : "sm"}
-            variant={c.action === "continue" ? (inverse ? "inverse" : "default") : inverse ? "inverse-outline" : "outline"}
+            variant={lead(c) ? (inverse ? "inverse" : "default") : inverse ? "inverse-outline" : "outline"}
             disabled={!!busy || !c.available}
             title={(c.available ? c.explain : c.why) + (c.model ? ` Model: ${c.model}.` : "")}
-            aria-expanded={c.action === "continue" ? continuing : undefined}
+            aria-expanded={c.action === "continue" ? continuing : c.action === "fix_setup" ? fixing : undefined}
             onClick={() => run(c)}
           >
             {c.label}
@@ -97,6 +102,7 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
         ))}
         {children}
       </div>
+      {fixing && itemId && <FixSetup itemId={itemId} press={press} busy={!!busy} />}
       {continuing && (
         <form
           className="space-y-2 rounded-md border bg-card p-3"
@@ -143,6 +149,63 @@ export function Choices({ jobId, itemId, choices, compact, inverse, children }: 
         <p role="status" className={cn("text-sm", msg.ok ? "text-success" : "text-destructive")}>
           {msg.text}
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fix setup: what the job's sandbox lacked, and the change to factory.yaml
+ * the repo's own files suggest, for a person to apply.
+ */
+function FixSetup({ itemId, press, busy }: { itemId: number; press: (name: string, path: string, body?: unknown) => Promise<void>; busy: boolean }) {
+  const { data: fix, error, isLoading } = useQuery({ queryKey: ["setup-fix", itemId], queryFn: () => getJSON<SetupFix>(`/items/${itemId}/setup-fix`) });
+  if (isLoading) return <p className="text-sm text-muted-foreground">Reading the repo's files…</p>;
+  if (error || !fix) return <p className="text-sm text-destructive">{error instanceof Error ? error.message : "Couldn't read the repo's files."}</p>;
+  return (
+    <div className="space-y-3 rounded-md border bg-card p-3 text-sm" data-testid="fix-setup">
+      <div className="space-y-1">
+        <p>The checks can't run in the factory's sandbox: {fix.problem}.</p>
+        <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{fix.line}</pre>
+      </div>
+      {fix.changes.length > 0 ? (
+        <div className="space-y-1">
+          <p className="font-medium">From the repo's files, for {fix.repo} in factory.yaml:</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {fix.changes.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p>
+          The repo's Dockerfile and compose file don't say what's missing, so there's nothing to change from here. Add it to {fix.repo} in factory.yaml (a service
+          under <code>services:</code>, or a job image that has it), then press Retry.
+        </p>
+      )}
+      {fix.notes.map((n) => (
+        <p key={n} className="text-xs text-muted-foreground">
+          {n}
+        </p>
+      ))}
+      {fix.changes.length > 0 && (
+        <>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-muted-foreground">factory.yaml before and after</summary>
+            <div className="mt-1 grid gap-2 md:grid-cols-2">
+              <pre className="min-w-0 overflow-x-auto rounded-md bg-muted p-2 font-mono">{fix.before}</pre>
+              <pre className="min-w-0 overflow-x-auto rounded-md bg-muted p-2 font-mono">{fix.after}</pre>
+            </div>
+          </details>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" disabled={busy || !fix.writable} onClick={() => void press("fix_setup", `/items/${itemId}/setup-fix`, { version: fix.version })}>
+              Apply and retry
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {fix.writable ? "Saves it, restarts the factory once running jobs finish (rebuilding the job image if it changed), then retries." : fix.reason}
+            </span>
+          </div>
+        </>
       )}
     </div>
   );

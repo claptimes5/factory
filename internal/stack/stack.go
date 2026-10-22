@@ -25,8 +25,9 @@ type Suggestion struct {
 	Stack     string // for people, e.g. "Ruby on Rails"
 	ImageFrom string // base for the job image; "" is the default image
 	// ImageBuild builds the base from the repo's own Dockerfile instead
-	// of ImageFrom.
+	// of ImageFrom, and Secrets are the build secrets that Dockerfile uses.
 	ImageBuild *config.ImageBuild
+	Secrets    []string
 	Install    string            // dependency install command
 	Required   []string          // gate names, in order
 	Commands   map[string]string // gate name -> command
