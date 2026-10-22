@@ -318,8 +318,8 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
     const line = stopped && errorLine(stopped.detail);
     return {
       tone: "attention",
-      title: stopped ? `Next: ${stopped.title.replace(/`/g, "")}: fix that, then check again` : "Next: fix what stopped the check, then check again",
-      body: `${line ? `It failed with: ${line} ` : ""}The check stopped there, so it says nothing about the repo past that point. That's usually the factory's setup (Docker, a service, a command in factory.yaml), not the repo's code; if it was a one-off, like Docker restarting, checking again is all it takes.`,
+      title: "Next: run the setup check again",
+      body: `The last check stopped partway${stopped ? `: ${stopped.title.replace(/`/g, "").replace(/^Couldn't/, "it couldn't")}` : ""}${line ? ` (${line.replace(/\.$/, "")})` : ""}. That's usually a one-off, like Docker restarting, so checking again is often all it takes. If it stops the same way again, the error says what to fix in the factory's setup.`,
       actions: check,
       at: step && `step:${step.key}`,
       human: true,

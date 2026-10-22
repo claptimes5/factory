@@ -161,17 +161,23 @@ export function HomeScreen() {
         <>
           <SetupLead r={unready[0]} data={readiness} more={unready.length - 1} />
           {needs.length > 0 && (
-            <section aria-label="Needs you" className="flex flex-col gap-2">
-              <h2 className="text-body font-semibold">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h2>
-              {ordered(needs) && <p className="text-body-sm text-muted-foreground">{orderLine(needs)}</p>}
-              {needs.some((c) => c.setup === "held" || c.setup === "base") && (
-                <p className="text-body-sm text-muted-foreground">What waits for setup or the base branch can't pass its checks until they're fixed; it starts by itself then, or Retry it.</p>
-              )}
-              <ol className="flex flex-col divide-y rounded-card border bg-surface">
+            // Folded: setup is the one thing to do now, and these wait their turn.
+            <section aria-label="Needs you">
+            <details className="group rounded-card border bg-surface">
+              <summary className="flex cursor-pointer items-center justify-between gap-3 p-3 text-body-sm text-muted-foreground md:px-4">
+                <span>
+                  After that, {needs.length === 1 ? "1 more thing needs" : `${needs.length} more things need`} you
+                </span>
+                <span className="text-meta group-open:hidden">Show</span>
+                <span className="hidden text-meta group-open:inline">Hide</span>
+              </summary>
+              {ordered(needs) && <p className="border-t px-3 pt-3 text-body-sm text-muted-foreground md:px-4">{orderLine(needs)}</p>}
+              <ol className="flex flex-col divide-y">
                 {needs.map((c, i) => (
                   <NeedRow key={c.id} c={c} n={ordered(needs) ? i + 1 : undefined} />
                 ))}
               </ol>
+            </details>
             </section>
           )}
         </>
@@ -364,17 +370,10 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
   const title = next.title.replace(/^(Ready\. )?Next: |^Working on it: /, "");
   return (
     <section aria-label="Setup" className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
-        {r.total > 0 && (
-          <span className="shrink-0 text-body-sm text-muted-foreground">
-            {r.done} of {r.total} steps done
-          </span>
-        )}
-      </div>
+      <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
       <article data-testid="setup-lead" className="lead flex flex-col gap-3 rounded-card border border-live-border bg-ink p-5 text-ink-foreground md:p-6">
         <div className="text-meta font-semibold text-ink-attention">
-          {next.running ? "Setup · working on it now" : next.human ? "Setup · needs you · new tasks wait until it's done" : "Setup · new tasks wait until it's done"}
+          {next.running ? "Working on it now" : next.human ? "Do this first: nothing new starts until setup is done" : "Nothing new starts until setup is done"}
         </div>
         <p className="flex items-center gap-2.5 text-title-sm font-semibold md:text-title">
           {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
@@ -387,14 +386,15 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
             <RunProgress r={r} last />
           </div>
         )}
-        <div className="mt-1 flex flex-wrap gap-2">
+        {/* One button; the details are a link, so nothing competes with it. */}
+        <div className="mt-1 flex flex-wrap items-center gap-4">
           <NextActions next={next} busy={busy} run={run} inverse />
-          <Button size="sm" variant="inverse-outline" asChild>
-            <Link to="/setup">{r.state === "incomplete" ? "See the whole error" : "See every step"}</Link>
-          </Button>
+          <Link to="/setup" className="text-body-sm text-ink-muted underline hover:text-ink-foreground">
+            {r.state === "incomplete" ? "See the error" : "See every step"}
+          </Link>
         </div>
         {msg && <p className="text-body-sm text-ink-muted">{msg.text}</p>}
-        {!msg && !r.checking && (r.check_error || r.result) && <p className="text-body-sm text-ink-muted">{r.check_error || r.result}</p>}
+        {!msg && !r.checking && r.check_error && <p className="text-body-sm text-ink-muted">{r.check_error}</p>}
       </article>
       {more > 0 && (
         <p className="px-1 text-body-sm text-muted-foreground">

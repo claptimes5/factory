@@ -56,9 +56,13 @@ test("a check that couldn't finish says which command stopped it and its error",
   });
   await page.goto("/app/");
   const card = page.getByTestId("setup-lead");
-  await expect(card).toContainText("Couldn't run test: fix that, then check again");
-  await expect(card).toContainText("It failed with: ActiveRecord::DatabaseConnectionError: There is an issue connecting with your hostname: db.");
-  await expect(card.getByRole("link", { name: "See the whole error" })).toBeVisible();
+  await expect(card).toContainText("Run the setup check again");
+  await expect(card).toContainText(
+    "The last check stopped partway: it couldn't run test (ActiveRecord::DatabaseConnectionError: There is an issue connecting with your hostname: db).",
+  );
+  // One button; the error is a link beside it.
+  await expect(card.getByRole("button")).toHaveText(["Check again"]);
+  await expect(card.getByRole("link", { name: "See the error" })).toBeVisible();
 });
 
 test("while a person's part of setup is left, Home leads with it and ranks the rest by what blocks it", async ({ page }, info) => {
@@ -67,19 +71,21 @@ test("while a person's part of setup is left, Home leads with it and ranks the r
   const lead = page.getByRole("region", { name: "Setup", exact: true });
   await expect(lead.getByRole("heading", { level: 1 })).toHaveText("Finish setting up api");
   const card = lead.getByTestId("setup-lead");
-  await expect(card).toContainText("Setup · needs you · new tasks wait until it's done");
+  await expect(card).toContainText("Do this first: nothing new starts until setup is done");
+  await expect(lead).not.toContainText("steps done");
   await expect(card).toContainText("Test can't reach a service it needs");
   await expect(card.getByRole("button", { name: "Check again" })).toBeVisible();
   await expect(card.getByRole("link", { name: "See every step" })).toHaveAttribute("href", /\/app\/setup$/);
-  // One lead: no setup banner repeating it, and the decisions are a list under it.
+  // One lead: no setup banner repeating it, and the decisions fold under it, a click away.
   await expect(page.getByRole("group", { name: "Notices" }).getByRole("region", { name: "Setup", exact: true })).toHaveCount(0);
   const needs = page.getByRole("region", { name: "Needs you" });
-  await expect(needs.getByRole("heading", { level: 2 })).toHaveText("8 things need you");
+  await expect(needs.getByText("After that, 8 more things need you")).toBeVisible();
   await expect(needs.getByTestId("decision")).toHaveCount(0);
   const rows = needs.getByRole("listitem");
+  await expect(rows.first()).toBeHidden();
+  await needs.getByText("After that, 8 more things need you").click();
   await expect(rows.first()).toContainText("Parser drops the last token");
   await expect(rows.last()).toContainText("Waits for setup");
-  await expect(needs).toContainText("it starts by itself then");
   await shot(page, info, "home-setup");
   if (phone(info)) {
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -172,6 +178,7 @@ test("Home numbers what needs you in order: what other work waits for first, wha
   });
   await page.goto("/app/");
   const needs = page.getByRole("region", { name: "Needs you" });
+  await needs.getByText(/^After that/).click();
   await expect(needs).toContainText(
     "In this order: changes to review, then what other work waits for, then the rest, then what waits for setup or the base branch.",
   );
