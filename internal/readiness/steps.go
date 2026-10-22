@@ -151,6 +151,26 @@ func (r *Report) Holds(issue, parent int) bool {
 	return r != nil && !r.Ready && !r.Incomplete && r.Fixes(issue, parent) == nil
 }
 
+// RedOnBase are the checks a build's failure (a gates verdict line first)
+// failed that the report found failing on the base branch too, so every
+// change fails them: no model gets past them.
+func (r *Report) RedOnBase(failure string) []string {
+	line, _, _ := strings.Cut(failure, "\n")
+	if r == nil || !strings.HasPrefix(line, "GATES: FAIL") {
+		return nil
+	}
+	var red []string
+	for _, f := range strings.Fields(line) {
+		gate, ok := strings.CutSuffix(f, "=fail")
+		if ok && slices.ContainsFunc(r.Findings, func(b Finding) bool {
+			return b.Level == Blocker && b.Issue != nil && b.Issue.Key == "check:"+gate
+		}) {
+			red = append(red, gate)
+		}
+	}
+	return red
+}
+
 // Path is where Save keeps repo's latest report in dir.
 func Path(dir, repo string) string {
 	return filepath.Join(dir, strings.ReplaceAll(repo, "/", "__")+".json")

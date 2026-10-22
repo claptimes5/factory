@@ -14,7 +14,7 @@ repo's `factory.yaml`:
 | Gate | What it checks |
 | --- | --- |
 | `install` (optional) | Runs first, with the network on. If it fails, nothing else runs. |
-| Diff guard | The change stays under `max_changed_lines` and touches no `protected_paths`: the factory's own controls and files that steer agents. |
+| Diff guard | The change stays under `max_changed_lines` and touches no `protected_paths`: the factory's own controls and files that steer agents. Files a tool writes (lockfiles and RuboCop's `.rubocop_todo.yml`) don't count toward the size limit. |
 | Required checks | Each name in `gates.required` runs its command from `gates.commands`: here `types` (`go vet`), `lint` (`golangci-lint`), `test` (`go test -race`) and `build`. A required gate with no command is misconfigured and fails. |
 | [Proves-fix](#test-proves-fix) | The new tests must fail on the old code. |
 | [Coverage floor](#coverage-floor) | Touched packages can't end up less covered. |
@@ -679,9 +679,19 @@ split into too; the factory then stops working on their items.
 
 ### Lint that fails on the base branch: a baseline
 
-A repo with years of lint debt fails `lint` on its base branch, so every
-change fails it, and a fix too big for one build can't be split into
-pieces that each pass a whole-repo lint. So when the linter is RuboCop
+A repo with years of lint debt fails `lint` on its base branch. When the
+linter counts its offenses (RuboCop's "N offenses detected"), a change
+that fails lint is held to the base commit: the factory runs lint there
+too, and the change passes if it adds no offenses to those already
+there. When it adds some, the failure says how many, so the next attempt
+knows which to fix. So the setup check counts lint failing on the base
+branch as a gap in the repo's score, not a blocker, and work goes on. A
+linter with no count fails every change instead, as any check that fails
+on the base branch does.
+
+The old offenses still mean lint can't hold the code to its rules, and a
+fix too big for one build can't be split into pieces that each pass a
+whole-repo lint. So when the linter is RuboCop
 (`bundle exec rubocop` or `bin/rubocop`), lint finds more than 50
 offenses and there's no baseline yet, the issue the check filed for lint
 is fixed with a baseline: when the factory picks it up, instead of
