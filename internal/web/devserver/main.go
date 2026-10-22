@@ -33,6 +33,7 @@ import (
 	"github.com/claptimes5/factory/internal/preview"
 	"github.com/claptimes5/factory/internal/push"
 	"github.com/claptimes5/factory/internal/readiness"
+	"github.com/claptimes5/factory/internal/stack"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -191,6 +192,14 @@ func main() {
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
+		// 116 stopped because its checks had no database; its compose file has one.
+		SetupPark: func(_ context.Context, it *store.WorkItem) (pipeline.Park, bool) {
+			return pipeline.Park{CantFix: true, Setup: "service", Line: setupLine}, it.IssueNumber == 116 && it.Stage == state.Parked
+		},
+		Detect: func(context.Context, string) (*stack.Suggestion, error) {
+			return &stack.Suggestion{Services: map[string]config.Service{"db": {Image: "postgres:16", Ready: "pg_isready -U postgres"}},
+				Env: map[string]string{"PGHOST": "db"}, Notes: []string{"Its services and the settings that find them come from docker-compose.yml."}}, nil
+		},
 		SteerUnsupported: func(j *store.Job) string {
 			if j.Kind != "implement" || j.Harness != "claude" {
 				return "Only a running Claude build takes messages."
@@ -293,6 +302,7 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 		{"acme/api", 112, "Add SSO sign-in to the admin app", state.Parked, "L"},       // its build ran out of turns
 		{"acme/api", 113, "Make the lint check pass on main", state.Implementing, "S"}, // from the readiness check
 		{"acme/api", 115, "Paginate the audit log API", state.Parked, "M"},             // its build failed, then its retry was cancelled
+		{"acme/api", 116, "Export the audit log as CSV", state.Parked, "S"},            // its checks couldn't reach a database
 	}
 	ids := map[int]int64{}
 	for i, x := range items {
@@ -315,6 +325,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 				reason = "Should anchors merge across files, or only within one? The issue does not say."
 				if x.issue == 115 {
 					reason = "Its retry was cancelled from the dashboard. Nothing runs until you choose what's next: retry it, or leave it parked."
+				}
+				if x.issue == 116 {
+					reason = "The checks can't run in the factory's sandbox: a service the checks need (such as a database) isn't running. The output shows:\n\n```\n" + setupLine + "\n```\n\n" +
+						"Neither the code nor a stronger model can fix this. Add what's missing to acme/api in factory.yaml (a service under `services:`, or a job image that has it), then press Retry."
 				}
 				if x.issue == 112 {
 					reason = "Its build (sonnet) stopped: it ran out of turns (80 of 80) before it finished. Its work is kept on the factory's machine (nothing was pushed), so it doesn't restart on its own: running out again is likely without a change. " +
@@ -342,6 +356,10 @@ func seed(ctx context.Context, st *store.Store, jobs string) error {
 	}
 	// 115's build failed its gates, and you cancelled its retry.
 	if err := seedCancelledRetry(ctx, st, ids[115]); err != nil {
+		return err
+	}
+	// 116's checks couldn't reach a database the factory doesn't start.
+	if err := seedSetupPark(ctx, st, ids[116]); err != nil {
 		return err
 	}
 	job := func(issue int, kind, model string, end state.JobState, cost float64, verdict string) (int64, error) {
@@ -612,6 +630,21 @@ func seedCancelledRetry(ctx context.Context, st *store.Store, item int64) error 
 	return st.CancelQueued(ctx, retry, "human", "cancelled from the control room")
 }
 
+// setupLine is what 116's checks printed when they couldn't reach a database.
+const setupLine = `connection to server at "127.0.0.1", port 5432 failed: Connection refused (PG::ConnectionBad)`
+
+// seedSetupPark adds a build whose test check couldn't reach a database.
+func seedSetupPark(ctx context.Context, st *store.Store, item int64) error {
+	id, err := st.EnqueueJob(ctx, store.Job{ItemID: &item, Kind: "implement", Harness: "claude", Model: "haiku", BudgetUSD: 2, Attempt: 1})
+	if err != nil {
+		return err
+	}
+	if _, err := st.ClaimJob(ctx); err != nil {
+		return err
+	}
+	return st.FinishJob(ctx, id, store.Result{State: state.Failed, CostUSD: 0.4, Error: "GATES: FAIL diff_guard=pass install=pass test=fail\n\n### test: fail\nexit 1\n" + setupLine})
+}
+
 // seedStopped adds a build that ran out of turns: its log, how it
 // stopped, its note and the work it kept.
 func seedStopped(ctx context.Context, st *store.Store, jobs string, item int64) error {
@@ -662,6 +695,10 @@ func sampleChoices(st *store.Store) func(ctx context.Context, id int64) []web.AP
 			return nil
 		}
 		var out []web.APIChoice
+		if it.IssueNumber == 116 {
+			out = append(out, web.APIChoice{Action: "fix_setup", Label: "Fix setup", Available: true,
+				Explain: "Shows the change to factory.yaml that gives its checks what they lack, read from the repo's Dockerfile and compose file, for you to apply."})
+		}
 		if _, err := os.Stat(filepath.Join(filepath.Dir(j.LogPath), "kept", "kept.json")); err == nil && j.LogPath != "" {
 			out = append(out, web.APIChoice{Action: "continue", Label: "Continue", Model: "claude/sonnet", Available: true,
 				Explain: "Picks up where it stopped, in the checkout it kept and the same Claude session, on claude/sonnet, with a fresh 80 turns and $15.00; you can add up to 200% more. A note you write goes to it first, for example to narrow the scope. Nothing is pushed until its checks pass."})

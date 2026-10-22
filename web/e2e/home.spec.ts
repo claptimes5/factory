@@ -49,7 +49,7 @@ test("while a person's part of setup is left, Home leads with it and ranks the r
   // One lead: no setup banner repeating it, and the decisions are a list under it.
   await expect(page.getByRole("group", { name: "Notices" }).getByRole("region", { name: "Setup", exact: true })).toHaveCount(0);
   const needs = page.getByRole("region", { name: "Needs you" });
-  await expect(needs.getByRole("heading", { level: 2 })).toHaveText("7 things need you");
+  await expect(needs.getByRole("heading", { level: 2 })).toHaveText("8 things need you");
   await expect(needs.getByTestId("decision")).toHaveCount(0);
   const rows = needs.getByRole("listitem");
   await expect(rows.first()).toContainText("Parser drops the last token");
@@ -66,7 +66,7 @@ test("Home shows what needs you one decision at a time, reviews first, with the 
   await allSetUp(page);
   await page.goto("/app/");
   const needs = page.getByRole("region", { name: "Needs you" });
-  await expect(needs.getByRole("heading", { level: 1 })).toHaveText("7 things need you");
+  await expect(needs.getByRole("heading", { level: 1 })).toHaveText("8 things need you");
   const top = needs.getByTestId("decision");
   await expect(top).toHaveCount(1);
   await expect(top).toContainText("Review · web#101");
@@ -79,7 +79,7 @@ test("Home shows what needs you one decision at a time, reviews first, with the 
   await expect(top.getByRole("link", { name: /1\. Review api#91/ })).toBeVisible();
   // The line, with you as its last station.
   const line = page.getByRole("region", { name: "The line" });
-  await expect(line.getByRole("listitem", { name: "You: 7" })).toBeVisible();
+  await expect(line.getByRole("listitem", { name: "You: 8" })).toBeVisible();
   await line.getByRole("link", { name: "See the whole line" }).click();
   await expect(page).toHaveURL(/\/app\/line$/);
   await expect(page.getByTestId("board")).toBeVisible();

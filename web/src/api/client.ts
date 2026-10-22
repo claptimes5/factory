@@ -37,6 +37,7 @@ export type Tuning = S["Tuning"];
 export type TuningProposal = S["TuningProposal"];
 export type TuningChange = S["TuningChange"];
 export type Choice = S["Choice"];
+export type SetupFix = S["SetupFix"];
 export type Stop = S["Stop"];
 export type TranscriptEntry = S["TranscriptEntry"];
 export type Wizard = S["Wizard"];

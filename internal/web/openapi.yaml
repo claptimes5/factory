@@ -73,6 +73,31 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Action" }
         "409": { $ref: "#/components/responses/Action" }
+  /items/{id}/setup-fix:
+    get:
+      summary: What Fix setup would change for an item parked on a setup problem
+      description: The problem it stopped on, and the change to its repo in factory.yaml that the repo's own files (Dockerfile, compose file, CI) suggest. Changes is empty when they suggest none.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: The proposal, content: { application/json: { schema: { $ref: "#/components/schemas/SetupFix" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Apply Fix setup
+      description: Saves the change to factory.yaml if it is still the version shown, asks for a restart (which waits for running jobs, and lets no new one start), and queues the item's retry, which so runs on the new setup. Needs the password, or a request from this machine (403 otherwise), as settings do.
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties: { version: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Action" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /items/{id}/approve-estimate:
     post:
       summary: Approve an item whose cost estimate or plan waits for a human's OK
@@ -1217,7 +1242,7 @@ components:
       type: object
       required: [action, label, model, explain, available, why]
       properties:
-        action: { type: string, enum: [continue, retry, tier_up, park] }
+        action: { type: string, enum: [fix_setup, continue, retry, tier_up, park] }
         label: { type: string }
         model: { type: string, description: "harness/model it would run on; empty for park" }
         explain: { type: string, description: What it does, in plain words }
@@ -1947,6 +1972,20 @@ components:
           oneOf:
             - $ref: "#/components/schemas/WizardTry"
             - type: "null"
+    SetupFix:
+      type: object
+      required: [repo, problem, line, changes, before, after, notes, version, writable, reason]
+      properties:
+        repo: { type: string }
+        problem: { type: string, description: What the job's sandbox lacks, in a sentence }
+        line: { type: string, description: The output line that showed it }
+        changes: { type: array, items: { type: string }, description: "Each change, for people; empty when the repo's files suggest none" }
+        before: { type: string, description: "The repo's entry in factory.yaml now" }
+        after: { type: string, description: With the changes }
+        notes: { type: array, items: { type: string } }
+        version: { type: string, description: "factory.yaml's version as read; applying sends it back" }
+        writable: { type: boolean }
+        reason: { type: string, description: "Why it can't be applied here, when it can't" }
     ImageBuild:
       type: object
       required: [dockerfile, target, context, args, secrets]

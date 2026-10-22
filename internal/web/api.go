@@ -86,7 +86,7 @@ type APIItemRef struct {
 // APIChoice is one thing a person can do next with a job that ended,
 // said plainly, with the model it would run on.
 type APIChoice struct {
-	Action    string `json:"action"` // continue, retry, tier_up or park
+	Action    string `json:"action"` // fix_setup, continue, retry, tier_up or park
 	Label     string `json:"label"`
 	Model     string `json:"model"` // harness/model; "" for park
 	Explain   string `json:"explain"`
@@ -847,6 +847,8 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/log", s.apiLog)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/terminal", s.apiTerminal)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", s.apiRetry)
+	mux.HandleFunc("GET /api/v1/items/{id}/setup-fix", s.apiSetupFix)
+	mux.HandleFunc("POST /api/v1/items/{id}/setup-fix", s.apiApplySetupFix)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.apiCancel)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/continue", s.apiContinue)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/steer", s.apiSteer)

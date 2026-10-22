@@ -28,7 +28,9 @@ import (
 	"github.com/claptimes5/factory/internal/compare"
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/metrics"
+	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/push"
+	"github.com/claptimes5/factory/internal/stack"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -74,6 +76,11 @@ type Server struct {
 	// ImageWait says an item on repo waits for its job image to build,
 	// and why; "" when it doesn't (may be nil).
 	ImageWait func(repo string) string
+	// SetupPark is the setup problem a parked item stopped on, and Detect
+	// reads a repo's files for what its setup should be: with both, Fix
+	// setup offers the change (may be nil).
+	SetupPark func(ctx context.Context, it *store.WorkItem) (pipeline.Park, bool)
+	Detect    func(ctx context.Context, repo string) (*stack.Suggestion, error)
 	AwaitCap  int
 	Attach    func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
 	// CompareDir holds `factory compare` reports, one directory per run.

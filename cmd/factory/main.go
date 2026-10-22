@@ -47,6 +47,7 @@ import (
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/sentry"
 	"github.com/claptimes5/factory/internal/state"
+	"github.com/claptimes5/factory/internal/stack"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
 )
@@ -589,6 +590,15 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.DiskLow = p.DiskLow
 	if builder != nil {
 		srv.ImageWait = func(repo string) string { return builder.Waiting(cfg, repo) }
+	}
+	// Fix setup reads the repo's files as setup does.
+	srv.SetupPark = p.SetupPark
+	srv.Detect = func(ctx context.Context, repo string) (*stack.Suggestion, error) {
+		ts, err := tokens(cfg, repo)
+		if err != nil {
+			return nil, err
+		}
+		return stack.Detect(ctx, ghFiles{newForge(cfg, repo, ts)})
 	}
 	// The setup screen reads the readiness check's reports, and can run it
 	// again: on the daemon's context, so it stops when the daemon does.

@@ -75,7 +75,8 @@ func dockerfile(s *Suggestion, read func(string) string, ci string) string {
 			}
 		}
 	}
-	for _, id := range SecretIDs(df) {
+	s.Secrets = SecretIDs(df)
+	for _, id := range s.Secrets {
 		note := "Its Dockerfile uses the build secret " + id
 		if src := ciFrom[id]; src != "" {
 			note += ", which its CI takes from " + src
