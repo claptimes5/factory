@@ -76,7 +76,7 @@ func (c *Config) SecurityRoute(built ...Route) Route {
 	first := -1
 	_, set := c.Routing["security"]
 	for i, r := range cands {
-		if sameAsAny(r, reviewers) && !(set && i == 0) {
+		if sameAsAny(r, reviewers) && (!set || i > 0) {
 			continue
 		}
 		if first < 0 {
