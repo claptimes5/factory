@@ -870,14 +870,19 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		return w.tryChecks(cfg, in)
 	case "labels":
 		return w.createLabels(ctx, cfg)
-	case "claude", "codex":
+	case "claude", "codex", "claude/disconnect", "codex/disconnect":
 		before := harnessesIn(w.vals())
 		var msg string
 		var err error
-		if action == "claude" {
+		switch action {
+		case "claude":
 			msg, err = w.saveClaude(in.Key, in.Anyway)
-		} else {
+		case "codex":
 			msg, err = w.saveCodex(cfg, in.Mode, in.Key)
+		case "claude/disconnect":
+			msg, err = w.disconnect([]string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}, nil, "Claude")
+		case "codex/disconnect":
+			msg, err = w.disconnect([]string{"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "FACTORY_CODEX_AUTH"}, nil, "Codex")
 		}
 		if err != nil {
 			return "", err

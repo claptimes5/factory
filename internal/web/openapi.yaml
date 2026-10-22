@@ -847,6 +847,14 @@ paths:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /setup/claude/disconnect:
+    post:
+      summary: Remove Claude's saved API key or subscription token
+      description: Deletes it from factory.env and routes every job to Codex if it's connected. A key exported where the factory starts still applies.
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /setup/codex:
     post:
       summary: Choose how Codex signs in, clearing the keys Codex would use instead
@@ -861,6 +869,18 @@ paths:
               properties:
                 mode: { type: string, enum: [api-key, chatgpt, access-token] }
                 key: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/codex/disconnect:
+    post:
+      summary: Remove how Codex signs in
+      description: |
+        Deletes Codex's keys and its ChatGPT plan setting from factory.env, and
+        routes every job to Claude if it's connected. The saved ChatGPT
+        sign-in stays, so choosing the plan again needs no new sign-in. A key
+        exported where the factory starts still applies.
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }

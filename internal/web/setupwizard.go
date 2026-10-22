@@ -41,7 +41,7 @@ type Wizard interface {
 // WizardActions are the page's buttons, each POST /api/v1/setup/<action>.
 var WizardActions = []string{
 	"machine/check", "repos", "github/install-check", "github/existing-app", "github/token", "github/disconnect",
-	"access/check", "base-branch", "labels", "gitlab/token", "gitlab/disconnect", "checks/save", "checks/try", "claude", "codex",
+	"access/check", "base-branch", "labels", "gitlab/token", "gitlab/disconnect", "checks/save", "checks/try", "claude", "claude/disconnect", "codex", "codex/disconnect",
 	"codex/sign-in", "codex/sign-in/cancel", "notify", "notify/test", "sentry", "images/build", "finish",
 }
 

@@ -1095,6 +1095,11 @@ function ClaudeStep({ w, ro }: { w: Wizard; ro: boolean }) {
             Use it anyway
           </Button>
         )}
+        {c.role && (
+          <Button size="sm" variant="ghost" disabled={ro || !!busy} onClick={() => run("claude/disconnect")}>
+            Disconnect
+          </Button>
+        )}
       </div>
       <Message msg={msg} />
     </>
@@ -1151,7 +1156,7 @@ function CodexStep({ w, ro }: { w: Wizard; ro: boolean }) {
           <SecretField id="wizard-codex-token" label="Codex access token" saved={c.access_token} value={key} set={setKey} disabled={ro} />
         </>
       )}
-      <div>
+      <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           disabled={ro || !!busy}
@@ -1159,8 +1164,13 @@ function CodexStep({ w, ro }: { w: Wizard; ro: boolean }) {
             if (await run("codex", { mode, key })) setKey("");
           }}
         >
-          {busy ? "Saving…" : "Save"}
+          {busy === "codex" ? "Saving…" : "Save"}
         </Button>
+        {c.role && (
+          <Button size="sm" variant="ghost" disabled={ro || !!busy} onClick={() => run("codex/disconnect")}>
+            {busy === "codex/disconnect" ? "Disconnecting…" : "Disconnect"}
+          </Button>
+        )}
       </div>
       <Message msg={msg} />
     </>

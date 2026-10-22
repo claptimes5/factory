@@ -297,6 +297,13 @@ func TestWizardModelKeys(t *testing.T) {
 	if _, err := w.Do(ctx, "codex", web.WizardInput{Mode: codexAccessToken}); err == nil {
 		t.Fatal("an access token is needed")
 	}
+	// Disconnecting Codex leaves Claude doing everything.
+	if msg, err := w.Do(ctx, "codex/disconnect", web.WizardInput{}); err != nil || !strings.Contains(msg, "Claude now builds and reviews") {
+		t.Fatalf("codex/disconnect: %q %v", msg, err)
+	}
+	if st := w.State(ctx, false); st.Codex.Role != "" || st.Claude.Role != "builds and reviews" || step(st, "codex").State != "optional" {
+		t.Fatalf("after codex/disconnect: codex %+v, claude %+v", st.Codex, st.Claude)
+	}
 
 	if _, err := w.Do(ctx, "notify", web.WizardInput{URL: "https://example.com/hook"}); err == nil {
 		t.Fatal("an unknown notifier must be refused")
