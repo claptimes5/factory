@@ -1330,5 +1330,14 @@ npm run build                       # regenerate types, typecheck, build into in
 npm run e2e                         # Playwright on desktop and phone sizes
 ```
 
+Run the e2e tests with `npm run e2e`, not `npx playwright test`: it starts
+the devserver first. Before Playwright starts its own, it connects to the
+port to see whether one is running, and on WSL2 with mirrored networking a
+connect to a closed port hangs instead of being refused, so that check
+waits over two minutes before any test runs. Pass Playwright's arguments
+after `--`: `npm run e2e -- e2e/home.spec.ts`. A devserver that's already
+running is reused, so restart it after `npm run build`: it serves the app
+it was built with.
+
 Commit the rebuilt `internal/web/app` with your change; CI checks it is
 current.

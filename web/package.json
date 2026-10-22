@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "check-styles": "node scripts/check-styles.mjs",
     "build": "npm run gen && tsc --noEmit && npm run check-styles && vite build",
-    "e2e": "playwright test"
+    "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",
