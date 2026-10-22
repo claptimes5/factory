@@ -507,6 +507,31 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /settings/check:
+    post:
+      summary: What saving these changes would say, without writing
+      description: |
+        Checks changes against factory.yaml as it is now, as a save would,
+        so the form can show what's wrong while it's edited.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [changes]
+              properties:
+                changes:
+                  type: array
+                  items:
+                    type: object
+                    required: [path, value]
+                    properties:
+                      path: { type: array, items: { type: string } }
+                      value: { $ref: "#/components/schemas/SettingValue" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SettingsCheck" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /settings/preset:
     post:
       summary: Set how hard the factory works
@@ -1889,7 +1914,7 @@ components:
         fields: { type: array, items: { $ref: "#/components/schemas/Setting" } }
     Settings:
       type: object
-      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups, presets, preset, builder, reviewer, harnesses]
+      required: [path, writable, reason, version, changed, restart_pending, restart_waits_for, running_jobs, groups, presets, preset, builder, reviewer, harnesses, warnings]
       properties:
         path: { type: string, description: The config file }
         writable: { type: boolean }
@@ -1905,6 +1930,13 @@ components:
         builder: { type: string, description: The harness that builds }
         reviewer: { type: string, description: "The harness that reviews; the builder's with only one" }
         harnesses: { type: array, items: { type: string }, description: "Harnesses with a key or sign-in, which routes may name" }
+        warnings: { type: array, items: { type: string }, description: "What the file loads with but is worth a second look, such as the security pass on a reviewer's model" }
+    SettingsCheck:
+      type: object
+      required: [error, warnings]
+      properties:
+        error: { type: string, description: "Why a save would be refused, one problem a line; empty when it would load" }
+        warnings: { type: array, items: { type: string } }
     Preset:
       type: object
       required: [key, name, summary]

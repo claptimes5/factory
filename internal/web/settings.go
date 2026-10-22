@@ -77,6 +77,15 @@ type APISettings struct {
 	Builder   string   `json:"builder"`
 	Reviewer  string   `json:"reviewer"`
 	Harnesses []string `json:"harnesses"`
+	// Warnings are what the file loads with but is worth a second look.
+	Warnings []string `json:"warnings"`
+}
+
+// APISettingsCheck is what a save would say, without writing: Error is
+// why it would be refused, or "".
+type APISettingsCheck struct {
+	Error    string   `json:"error"`
+	Warnings []string `json:"warnings"`
 }
 
 // APIPreset is one rung of how hard the factory works.
@@ -137,13 +146,14 @@ func (s *Server) settings(r *http.Request) (APISettings, []config.SettingGroup, 
 	} else {
 		out.RunningJobs, _ = s.Store.CountJobs(ctx, state.Running, "")
 	}
-	out.Presets, out.Harnesses = []APIPreset{}, []string{}
+	out.Presets, out.Harnesses, out.Warnings = []APIPreset{}, []string{}, []string{}
 	for _, p := range config.Presets {
 		out.Presets = append(out.Presets, APIPreset{Key: p.Key, Name: p.Name, Summary: p.Summary})
 	}
 	if c, err := config.Parse(b); err == nil {
 		out.Builder, out.Reviewer = c.Harnesses()
 		out.Preset, _ = config.PresetNow(b)
+		out.Warnings = append(out.Warnings, c.Warnings()...)
 	}
 	if s.Harnesses != nil {
 		out.Harnesses = s.Harnesses()
@@ -222,32 +232,85 @@ func (s *Server) saveChanges(r *http.Request, in []config.Change, version string
 	if version != cur.Version {
 		return APISettings{}, http.StatusConflict, errors.New("factory.yaml changed since this page loaded it; reload to see what changed")
 	}
+	changes, err := coerce(groups, in)
+	if err != nil {
+		return APISettings{}, http.StatusBadRequest, err
+	}
+	return s.writeChanges(r, src, changes)
+}
+
+// coerce checks each change is a setting the screen lists, and fits it.
+func coerce(groups []config.SettingGroup, in []config.Change) ([]config.Change, error) {
 	var changes []config.Change
 	for _, c := range in {
 		f, ok := config.FindSetting(groups, c.Path)
 		if !ok {
-			return APISettings{}, http.StatusBadRequest, errors.New(strings.Join(c.Path, ".") + " can't be changed here; edit factory.yaml")
+			return nil, errors.New(strings.Join(c.Path, ".") + " can't be changed here; edit factory.yaml")
 		}
 		v, err := f.Coerce(c.Value)
 		if err != nil {
-			return APISettings{}, http.StatusBadRequest, err
+			return nil, err
 		}
 		changes = append(changes, config.Change{Path: c.Path, Value: v})
 	}
-	return s.writeChanges(r, src, changes)
+	return changes, nil
+}
+
+// apiCheckSettings says what saving changes to factory.yaml as it is now
+// would say, as the form is edited, and writes nothing.
+func (s *Server) apiCheckSettings(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(w, r) {
+		return
+	}
+	if s.ConfigPath == "" {
+		apiErr(w, http.StatusNotFound, "this control room has no config file to edit")
+		return
+	}
+	var in struct {
+		Changes []config.Change `json:"changes"`
+	}
+	if err := s.readBody(r, &in); err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out := APISettingsCheck{Warnings: []string{}}
+	_, groups, src, err := s.settings(r)
+	if err == nil {
+		var changes []config.Change
+		if changes, err = coerce(groups, in.Changes); err == nil {
+			var c *config.Config
+			if c, _, err = s.edited(src, changes); err == nil {
+				out.Warnings = append(out.Warnings, c.Warnings()...)
+			}
+		}
+	}
+	if err != nil {
+		out.Error = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// edited is src, factory.yaml as read, with changes applied, if the whole
+// file still loads, as the daemon will load it.
+func (s *Server) edited(src []byte, changes []config.Change) (*config.Config, []byte, error) {
+	out, err := config.Edit(src, changes)
+	if err != nil {
+		return nil, nil, err
+	}
+	dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
+	c, err := config.ParseIn(out, dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, out, nil
 }
 
 // writeChanges applies changes to src, factory.yaml as read, and writes
 // it if it still loads. The caller holds settingsMu and checked the
 // version.
 func (s *Server) writeChanges(r *http.Request, src []byte, changes []config.Change) (APISettings, int, error) {
-	out, err := config.Edit(src, changes)
+	_, out, err := s.edited(src, changes)
 	if err != nil {
-		return APISettings{}, http.StatusBadRequest, err
-	}
-	// The whole file must still load, as the daemon will load it.
-	dir, _ := filepath.Abs(filepath.Dir(s.ConfigPath))
-	if _, err := config.ParseIn(out, dir); err != nil {
 		return APISettings{}, http.StatusBadRequest, err
 	}
 	if err := writeAtomic(s.ConfigPath, out); err != nil {
