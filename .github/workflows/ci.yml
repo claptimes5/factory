@@ -42,17 +42,11 @@ jobs:
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Playwright's image carries the browsers and the system libraries they
-    # need, so no run waits on an apt mirror. Its tag must match the
-    # @playwright/test version in web/package-lock.json.
-    container: mcr.microsoft.com/playwright:v1.63.0-noble
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      # The container runs as root over a checkout it doesn't own.
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -65,8 +59,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - name: playwright image matches @playwright/test
-        run: grep -q "playwright:v$(node -p "require('@playwright/test/package.json').version")-noble" ../.github/workflows/ci.yml
       # The built app and the generated API types are committed so the Go
       # build needs no Node; fail if either is stale.
       - name: build
@@ -75,6 +67,19 @@ jobs:
         run: |
           git status --porcelain -- . ../internal/web/app
           test -z "$(git status --porcelain -- . ../internal/web/app)"
+      # The browser is cached by Playwright's version and the runner image.
+      # On a hit nothing is installed: the runner already has the libraries
+      # headless Chromium needs, and apt-get on every run cost minutes
+      # whenever the Ubuntu mirror was slow.
+      - id: pwver
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pwver.outputs.v }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
       - name: playwright (desktop and phone)
         run: npm run e2e
       - uses: actions/upload-artifact@v4
