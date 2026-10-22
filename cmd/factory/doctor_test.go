@@ -70,6 +70,17 @@ func (m *fakeMachine) doctor(cfg *config.Config) *doctor {
 	return &doctor{cfg: cfg, plat: platform{family: "debian"},
 		run: func(_ context.Context, name string, args ...string) (string, error) {
 			k := strings.Join(append([]string{name}, args...), " ")
+			if len(args) == 5 && args[1] == "inspect" && args[2] == "--format" {
+				// Keyed by the tag; a built image of ours is built as the config says.
+				k = "docker image inspect " + args[4]
+				if _, set := m.out[k]; !set && !m.fail[k] {
+					for _, im := range jobImages(cfg) {
+						if im.tag == args[4] {
+							return im.source(), nil
+						}
+					}
+				}
+			}
 			if m.fail[k] {
 				return m.out[k], errors.New("exit status 1")
 			}
@@ -145,6 +156,9 @@ func TestDoctorChecks(t *testing.T) {
 		{"image missing", func(_ *testing.T, m *fakeMachine, _ *config.Config) {
 			m.fail["docker image inspect factory-job:latest"] = true
 		}, fail, "Job image factory-job:latest (for o/r) isn't built", "./factory images"},
+		{"image stale", func(_ *testing.T, m *fakeMachine, _ *config.Config) {
+			m.out["docker image inspect factory-job:latest"] = "from=ruby:3.3-bookworm"
+		}, fail, "Job image factory-job:latest (for o/r) was built from something other than factory.yaml says now", "./factory images"},
 		{"orchestrator image missing", func(_ *testing.T, m *fakeMachine, cfg *config.Config) {
 			cfg.Repos[0].ImageFrom = "ruby:3.4-bookworm"
 			cfg.Repos[0].Image = "factory-job-o__r:latest"

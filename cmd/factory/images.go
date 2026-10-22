@@ -79,7 +79,7 @@ func (b *imageBuilder) status() (running bool, log, result string, failed bool) 
 func missingImages(cfg *config.Config) []jobImage {
 	var out []jobImage
 	for _, im := range jobImages(cfg) {
-		if runCmd(io.Discard, "docker", "image", "inspect", im.tag) != nil {
+		if !im.isBuilt() {
 			out = append(out, im)
 		}
 	}
