@@ -691,11 +691,20 @@ func (c *Client) ListDir(ctx context.Context, dir string) ([]string, error) {
 
 // ReadFile returns a file's contents on the default branch.
 func (c *Client) ReadFile(ctx context.Context, path string) (string, error) {
+	return c.ReadFileAt(ctx, path, "")
+}
+
+// ReadFileAt returns a file's contents on a branch ("" is the default).
+func (c *Client) ReadFileAt(ctx context.Context, path, ref string) (string, error) {
 	var f struct {
 		Content  string `json:"content"`
 		Encoding string `json:"encoding"`
 	}
-	if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/contents/"+escapePath(path), nil, &f); err != nil {
+	q := ""
+	if ref != "" {
+		q = "?ref=" + url.QueryEscape(ref)
+	}
+	if err := c.do(ctx, "GET", "/repos/"+c.Repo+"/contents/"+escapePath(path)+q, nil, &f); err != nil {
 		return "", err
 	}
 	if f.Encoding != "base64" {

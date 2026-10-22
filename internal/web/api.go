@@ -71,7 +71,8 @@ type APIItem struct {
 	// Setup is how it stands to its repo's setup while the readiness
 	// check has found blockers: "blocks" when it fixes one (nothing else
 	// runs on the repo until they're fixed), "held" when it waits for
-	// them, else "". SetupNote says so in a sentence.
+	// them, "image" when its jobs wait for its job image to build, else
+	// "". SetupNote says so in a sentence.
 	Setup     string `json:"setup"`
 	SetupNote string `json:"setup_note"`
 }
@@ -561,6 +562,11 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}
 	a.Setup, a.SetupNote = s.setupOf(ctx, it)
+	if a.Setup == "" && s.ImageWait != nil && it.Stage != state.Done && it.Stage != state.Parked {
+		if n := s.ImageWait(it.Repo); n != "" {
+			a.Setup, a.SetupNote = "image", n
+		}
+	}
 	a.Choices = []APIChoice{}
 	if it.Stage == state.Parked {
 		a.ChoiceJobID, a.Choices = s.itemChoices(ctx, it.ID)

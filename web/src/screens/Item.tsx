@@ -43,6 +43,11 @@ export function ItemScreen() {
           <StationStamps it={it} jobs={jobs} />
         </div>
         <WaitsFor items={it.waits_for} plan={it.plan_waiting} className="mt-1 text-sm" />
+        {it.setup === "image" && (
+          <p className="mt-1 text-sm text-text-2" data-testid="image-wait">
+            {it.setup_note}
+          </p>
+        )}
         {/* One card for where it stands and what you can do: what happened, then the buttons, with the raw error out of the way. */}
         {(happened || note || choices) && (
           <Card className="mt-4 border-warning-border bg-warning-bg/60" data-testid="status">

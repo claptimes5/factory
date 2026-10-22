@@ -43,7 +43,7 @@ const kindOrder: Record<Kind, number> = { review: 0, plan: 1, cost: 2, choice: 3
 /** While a repo's setup isn't done, what fixes it comes first and what waits for it last. */
 const setupOrder = (c: CardT) => (c.setup === "blocks" ? 0 : c.setup === "held" ? 2 : 1);
 
-const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Waits for setup" };
+const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image" };
 
 /** A decision's one-line ask, for the "next" list. */
 function ask(c: CardT): string {
@@ -360,7 +360,7 @@ function NeedRow({ c }: { c: CardT }) {
       <Link to={`/items/${c.id}`} className="text-body font-medium hover:underline">
         {c.title}
       </Link>
-      {c.setup === "blocks" && c.setup_note && <p className="text-body-sm text-text-2">{c.setup_note}</p>}
+      {(c.setup === "blocks" || c.setup === "image") && c.setup_note && <p className="text-body-sm text-text-2">{c.setup_note}</p>}
     </li>
   );
 }

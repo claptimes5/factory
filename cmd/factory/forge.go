@@ -25,6 +25,7 @@ type forge interface {
 	DefaultBranch(ctx context.Context) (string, error)
 	ListDir(ctx context.Context, dir string) ([]string, error)
 	ReadFile(ctx context.Context, path string) (string, error)
+	ReadFileAt(ctx context.Context, path, ref string) (string, error)
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 }
 
