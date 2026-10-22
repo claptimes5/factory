@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleDashed, ExternalLink, Loader2, UserRound, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, ExternalLink, Loader2, UserRound, XCircle } from "lucide-react";
 import { act, getJSON } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Ago, clock, Elapsed, ErrorBox, Inline, Loading, PageTitle } from "@/components/common";
@@ -464,10 +464,13 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
       {(last ? steps.slice(-1) : steps).map((p, i, all) => {
         const now = i === all.length - 1 && r.checking;
         const bad = p.text.startsWith("failed ") || p.text.startsWith("couldn't ");
+        const known = p.text.startsWith("failed ") && redOnBase(r, /`(.+?)`/.exec(p.text)?.[1] ?? "");
         return (
           <li key={i} className="flex items-start gap-2">
             {now ? (
               <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" aria-label="Doing now" />
+            ) : known ? (
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-label="Fails on the base branch too" />
             ) : bad ? (
               <XCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" aria-label="Failed" />
             ) : (
@@ -475,6 +478,7 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
             )}
             <span className="min-w-0 break-words">
               <Inline text={p.text.charAt(0).toUpperCase() + p.text.slice(1)} />
+              {known && <span className="text-warning"> · {knownLine(r, "it", known).replace(/^it/, "It")}</span>}
               {now && (
                 <span className="text-muted-foreground">
                   {" "}
@@ -489,6 +493,18 @@ export function RunProgress({ r, last }: { r: RepoReadiness; last?: boolean }) {
   );
 }
 
+/**
+ * The issue filed for command cmd failing on the base branch, when the
+ * last check found it: every check fails it the same way until that's merged.
+ */
+function redOnBase(r: RepoReadiness, cmd: string): FindingT | undefined {
+  const gate = r.last_runs.find((x) => x.command === cmd)?.gate;
+  return gate ? r.work.find((f) => f.key === `check:${gate}` && f.status !== "done") : undefined;
+}
+
+/** "Lint fails on master too; #17 fixes it." */
+const knownLine = (r: RepoReadiness, label: string, f: FindingT) => `${label} fails on ${r.branch} too${f.issue ? `; #${f.issue} fixes it` : ""}.`;
+
 const gateName: Record<string, string> = { install: "Install", types: "Types", lint: "Lint", test: "Tests", build: "Build" };
 
 /**
@@ -496,7 +512,7 @@ const gateName: Record<string, string> = { install: "Install", types: "Types", l
  * counting) and still to come, from what the last check ran.
  */
 export function CheckSteps({ r }: { r: RepoReadiness }) {
-  type S = { cmd: string; label: string; state: "done" | "failed" | "now" | "next"; secs?: number; since?: string; was?: number };
+  type S = { cmd: string; label: string; state: "done" | "failed" | "known" | "now" | "next"; secs?: number; since?: string; was?: number };
   const last = (cmd: string) => r.last_runs.find((x) => x.command === cmd);
   // What this check has started, in order, then what the last one ran that it hasn't yet.
   const steps: S[] = [];
@@ -510,7 +526,8 @@ export function CheckSteps({ r }: { r: RepoReadiness }) {
       steps.push(st);
     }
     const took = m[3] ?? m[4];
-    Object.assign(st, { state: m[1] === "running" ? "now" : m[1] === "passed" ? "done" : "failed", since: p.at, secs: took ? seconds(took) : undefined });
+    const failed = m[1] === "failed" && redOnBase(r, m[2]) ? "known" : "failed";
+    Object.assign(st, { state: m[1] === "running" ? "now" : m[1] === "passed" ? "done" : failed, since: p.at, secs: took ? seconds(took) : undefined });
   }
   for (const x of r.last_runs)
     if (!steps.some((st) => st.cmd === x.command)) steps.push({ cmd: x.command, label: gateName[x.gate] ?? x.gate, state: "next", was: x.seconds });
@@ -522,10 +539,16 @@ export function CheckSteps({ r }: { r: RepoReadiness }) {
         {steps.map((st, i) => (
           <li
             key={i}
-            aria-label={`${st.label}: ${{ done: "passed", failed: "failed", now: "running", next: "to come" }[st.state]}`}
+            aria-label={`${st.label}: ${{ done: "passed", failed: "failed", known: "fails on the base branch too", now: "running", next: "to come" }[st.state]}`}
             className={cn(
               "flex min-w-24 items-center gap-2 rounded-control border px-3 py-2 text-body-sm",
-              st.state === "now" ? "border-primary bg-primary/10 font-semibold" : st.state === "next" ? "border-dashed opacity-60" : "border-border",
+              st.state === "now"
+                ? "border-primary bg-primary/10 font-semibold"
+                : st.state === "known"
+                  ? "border-warning/40 bg-warning/10"
+                  : st.state === "next"
+                    ? "border-dashed opacity-60"
+                    : "border-border",
             )}
           >
             {st.state === "now" ? (
@@ -534,6 +557,8 @@ export function CheckSteps({ r }: { r: RepoReadiness }) {
               <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
             ) : st.state === "failed" ? (
               <XCircle className="size-4 shrink-0 text-destructive" aria-hidden />
+            ) : st.state === "known" ? (
+              <AlertTriangle className="size-4 shrink-0 text-warning" aria-hidden />
             ) : (
               <CircleDashed className="size-4 shrink-0" aria-hidden />
             )}
@@ -544,6 +569,11 @@ export function CheckSteps({ r }: { r: RepoReadiness }) {
           </li>
         ))}
       </ol>
+      {/* A failure the base branch has too isn't news: say so, and what fixes it. */}
+      {steps.map((st) => {
+        const f = st.state === "known" && redOnBase(r, st.cmd);
+        return f && <p key={st.cmd} className="text-meta text-warning">{knownLine(r, st.label, f)}</p>;
+      })}
       {r.checking_since && (
         <p className="text-meta">
           <span className="font-mono tabular-nums">

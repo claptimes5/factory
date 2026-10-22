@@ -41,12 +41,15 @@ async function personsPartLeft(page: Page) {
 }
 
 /** A check of api going: install and types passed, lint running, tests still to come. */
-async function checkGoing(page: Page) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function checkGoing(page: Page, tweak: (r: any) => void = () => {}) {
+  // Fixed once: the page polls, and a check that restarts its clock each poll never counts.
+  const start = Date.now();
+  const at = (s: number) => new Date(start - s * 1000).toISOString();
   await page.route(/\/api\/v1\/readiness$/, async (route) => {
     const res = await route.fetch();
     const body = await res.json();
     const r = body.repos[0];
-    const at = (s: number) => new Date(Date.now() - s * 1000).toISOString();
     Object.assign(r, { state: "incomplete", checking: true, checking_since: at(70), checking_why: "", check_waits: "", image: null });
     r.last_runs = [
       { gate: "install", command: "bundle install", passed: true, seconds: 26 },
@@ -61,9 +64,24 @@ async function checkGoing(page: Page) {
       { at: at(28), text: "passed `pnpm run typecheck` in 11s" },
       { at: at(28), text: "running `bundle exec rubocop`" },
     ];
+    tweak(r);
     await route.fulfill({ response: res, json: body });
   });
 }
+
+test("a failure the base branch has too shows as known, with what fixes it, not as news", async ({ page }) => {
+  await checkGoing(page, (r) => {
+    r.branch = "master";
+    r.progress.push({ at: r.progress[4].at, text: "failed `bundle exec rubocop` in 59s (exit 1)" }, { at: r.progress[4].at, text: "running `bin/rails test`" });
+    r.work = [{ key: "check:lint", level: "blocker", area: "checks", title: "`lint` fails on master", detail: "", issue: 17, issue_url: "", status: "needs_you",
+      split_done: 0, split_total: 0, item_id: 7, item_stage: "parked" }];
+  });
+  await page.goto("/app/");
+  const card = page.getByTestId("setup-lead");
+  await expect(card.getByRole("listitem", { name: "Lint: fails on the base branch too" })).toBeVisible();
+  await expect(card.getByRole("listitem", { name: "Tests: running" })).toBeVisible();
+  await expect(card).toContainText("Lint fails on master too; #17 fixes it.");
+});
 
 test("a check going shows its commands as they pass, its time counting, and nothing to press", async ({ page }) => {
   await checkGoing(page);
