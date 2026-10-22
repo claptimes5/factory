@@ -2268,6 +2268,8 @@ export interface paths {
                         install?: string;
                         /** @description Empty for the default job image */
                         image_from?: string;
+                        /** @description Builds the job image from the repo's own Dockerfile instead of image_from; null or absent for none */
+                        image_build?: components["schemas"]["ImageBuild"] | null;
                         /** @description Gate name to command; an empty command drops the gate */
                         commands: {
                             [key: string]: string;
@@ -4040,6 +4042,8 @@ export interface components {
             saved: boolean;
             /** @description The base image its job image is built on; empty for the default */
             image_from: string;
+            /** @description The repo's own Dockerfile its job image is built from instead, or null */
+            image_build: components["schemas"]["ImageBuild"] | null;
             install: string;
             /** @description The suggested install when it differs */
             suggested_install: string;
@@ -4053,6 +4057,22 @@ export interface components {
             };
             /** @description The last Try these checks, or null */
             try: components["schemas"]["WizardTry"] | null;
+        };
+        ImageBuild: {
+            /** @description Its path in the repo; empty for Dockerfile */
+            dockerfile: string;
+            /** @description The stage to build; empty for the last */
+            target: string;
+            /** @description The build context's path in the repo; empty for its root */
+            context: string;
+            /** @description Its --build-arg values, or null */
+            args: {
+                [key: string]: string;
+            } | null;
+            /** @description Its build secrets by id, each a file on this machine (a path in files.from's checkout, or absolute), or null */
+            secrets: {
+                [key: string]: string;
+            } | null;
         };
         WizardService: {
             name: string;

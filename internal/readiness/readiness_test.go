@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -250,12 +251,18 @@ func TestServicesHint(t *testing.T) {
 			t.Fatal("filed a code issue for a missing service")
 		}
 	}
-	// With services configured, or a failure of another kind, it's the code's.
+	// With services configured, the env doesn't point the tests at them:
+	// still the setup's to fix, and still no issue.
 	rp := repo("", "test")
 	rp.Services = map[string]config.Service{"postgres": {Image: "postgres:16"}}
 	r = Assess(context.Background(), Input{Repo: rp, SHA: "abc1234567", Dir: dir, Exec: exec})
-	if !strings.Contains(titles(r, Blocker), "`test` fails on main") {
+	if !strings.Contains(titles(r, Blocker), "`test` can't run in the factory's sandbox") || slices.ContainsFunc(r.Issues(), func(is Issue) bool { return is.Key == "check:test" }) {
 		t.Fatalf("with services: %s", titles(r, Blocker))
+	}
+	if !slices.ContainsFunc(r.Steps(), func(s Step) bool {
+		return slices.ContainsFunc(s.Blockers, func(f Finding) bool { return f.Area == "setup" })
+	}) {
+		t.Fatalf("no step shows the setup blocker: %+v", r.Steps())
 	}
 }
 

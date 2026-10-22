@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/web"
 )
 
@@ -128,7 +129,8 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 			c.Env["DATABASE_URL"] = "postgres://postgres:factory@postgres:5432/test"
 		}
 		{
-			c.Stack, c.Install, c.ImageFrom = "Ruby on Rails", "bundle install", "ruby:3.4-bookworm"
+			// Its Dockerfile has a test stage, so the job image is built from it.
+			c.Stack, c.Install, c.ImageBuild = "Ruby on Rails", "bundle install", &config.ImageBuild{Target: "test"}
 			sug := map[string][2]string{"lint": {"bundle exec rubocop", ""}, "test": {"bin/rails db:prepare test", "AGENTS.md"}}
 			if r != "acme/api" {
 				c.Stack, c.Install, c.ImageFrom = "React (Vite)", "npm ci", ""

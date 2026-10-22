@@ -123,7 +123,16 @@ func newWizard(ctx context.Context, cfgPath, envPath string, setupMode bool, res
 		done: make(chan struct{}), bg: ctx, exported: envMap(startEnv), cfg: cfg,
 		access: map[string]web.APIWizardAccess{}, pending: map[string]pendingApp{}}
 	if builder == nil {
-		builder = &imageBuilder{}
+		// Before setup is done the credentials are on this page, not in
+		// the environment, so an image built from a repo's Dockerfile
+		// clones it with them.
+		builder = &imageBuilder{tokens: func(cfg *config.Config, repo string) (github.TokenSource, error) {
+			if c := w.clients(cfg, w.vals()); c != nil {
+				_, ts, err := c(repo)
+				return ts, err
+			}
+			return tokens(cfg, repo)
+		}}
 	}
 	w.builder = builder
 	w.machineCheck = func(ctx context.Context, cfg *config.Config) []finding {
@@ -1564,13 +1573,13 @@ func byGateOrder(a, b string) int {
 // wizardChecks is a repo's checks for the page: the saved ones, each with
 // the suggestion beside it when that differs, or the suggestion.
 func wizardChecks(r config.Repo, s *stack.Suggestion) web.APIWizardChecks {
-	c := web.APIWizardChecks{Repo: r.Name, Saved: r.Gates != nil, ImageFrom: r.ImageFrom, Gates: []web.APIWizardGate{}, Notes: []string{}}
+	c := web.APIWizardChecks{Repo: r.Name, Saved: r.Gates != nil, ImageFrom: r.ImageFrom, ImageBuild: r.ImageBuild, Gates: []web.APIWizardGate{}, Notes: []string{}}
 	sug := map[string]string{}
 	if s != nil {
 		c.Stack, sug = s.Stack, s.Commands
 		c.Notes = append(c.Notes, s.Notes...)
 		if !c.Saved {
-			c.ImageFrom, c.Install = s.ImageFrom, s.Install
+			c.ImageFrom, c.ImageBuild, c.Install = s.ImageFrom, s.ImageBuild, s.Install
 		} else if s.Install != r.Gates.Install {
 			c.SuggestedInstall = s.Install
 		}
@@ -1669,7 +1678,10 @@ func applyChecks(r config.Repo, in web.WizardInput, s *stack.Suggestion) (config
 			r.Env[k] = strings.TrimSpace(v)
 		}
 	}
-	r.Gates, r.ImageFrom = &g, strings.TrimSpace(in.ImageFrom)
+	r.Gates, r.ImageFrom, r.ImageBuild = &g, strings.TrimSpace(in.ImageFrom), in.ImageBuild
+	if r.ImageBuild != nil {
+		r.ImageFrom = "" // the Dockerfile is the base
+	}
 	return r, nil
 }
 
@@ -1728,7 +1740,7 @@ func (w *wizard) tryChecks(cfg *config.Config, in web.WizardInput) (string, erro
 		return "", err
 	}
 	// The saved job image: a new base needs a save and a build first.
-	r.ImageFrom = cfg.Repos[i].ImageFrom
+	r.ImageFrom, r.ImageBuild = cfg.Repos[i].ImageFrom, cfg.Repos[i].ImageBuild
 	c := *cfg
 	c.Repos = slices.Clone(cfg.Repos)
 	c.Repos[i] = r

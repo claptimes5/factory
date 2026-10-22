@@ -187,7 +187,9 @@ Every image the factory builds has the label `io.factory.built=1`. A
 rebuild leaves the old copy without a tag, so the factory removes those
 old copies after each build, when `serve` starts, and about once an
 hour. It only removes unused images with that label, never your own.
-An image a repo names with `image` (and no `image_from`) is yours to
+An image built from a repo's own Dockerfile (`image_build`) gets a second
+image under it, `factory-base-<owner>__<name>`, which is labeled and
+removed the same way. An image a repo names with `image` (and no `image_from`) is yours to
 build: the factory only tells you when it is missing.
 
 ## Checking your setup

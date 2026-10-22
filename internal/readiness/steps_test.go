@@ -133,12 +133,3 @@ func TestAccessStep(t *testing.T) {
 		t.Fatalf("an unasked host has a step: %+v", s)
 	}
 }
-
-// A long failure keeps its start, where the error is, and its end.
-func TestExcerptKeepsTheError(t *testing.T) {
-	out := "bin/rails aborted!\nActiveRecord::ConnectionNotEstablished: no database\n" + strings.Repeat("/gems/rake/task.rb:241:in 'each'\n", 400) + "Tasks: TOP => db:prepare\n"
-	got := excerpt(out, 3000)
-	if len(got) > 3010 || !strings.Contains(got, "ConnectionNotEstablished: no database") || !strings.HasSuffix(got, "Tasks: TOP => db:prepare\n") {
-		t.Fatalf("excerpt = %q", got)
-	}
-}

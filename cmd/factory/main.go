@@ -136,6 +136,10 @@ func run(args []string) error {
 		if fs.NArg() > 2 || (fs.NArg() == 2 && !force) {
 			return usage()
 		}
+		// A repo whose image is built from its own Dockerfile is cloned.
+		if err := loadEnvFile(*envPath); err != nil {
+			return err
+		}
 		return buildImages(os.Stdout, cfg, force)
 	}
 	if err := loadEnvFile(*envPath); err != nil {

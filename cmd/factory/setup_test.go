@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
 )
 
@@ -751,6 +752,51 @@ func TestImagesForPreviews(t *testing.T) {
 	ims := jobImages(cfg)
 	if len(ims) != 2 || !strings.Contains(strings.Join(ims[0].buildArgs("d"), " "), "--build-arg PLAYWRIGHT=1") || strings.Contains(strings.Join(ims[1].buildArgs("d"), " "), "PLAYWRIGHT") {
 		t.Fatalf("images %+v", ims)
+	}
+}
+
+// A repo whose image is built from its own Dockerfile gets its own tag
+// and base, and the base is built from a clone, which needs its token.
+func TestImageFromTheRepoDockerfile(t *testing.T) {
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	y := strings.Replace(string(b), "repo: o/r", "repos:\n  - name: o/api\n    image_build: {target: test}\n", 1)
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Orchestrator.On, cfg.Tuning.Every, cfg.Grooming.Every = false, 0, 0
+	ims := jobImages(cfg)
+	if len(ims) != 1 || ims[0].tag != "factory-job-o__api:latest" || ims[0].from != "factory-base-o__api:latest" || ims[0].build.Target != "test" {
+		t.Fatalf("images %+v", ims)
+	}
+	if args := strings.Join(ims[0].buildArgs("d"), " "); !strings.Contains(args, "--build-arg BASE=factory-base-o__api:latest") {
+		t.Fatalf("build args %s", args)
+	}
+	var ran []string
+	run := func(_ context.Context, _ io.Writer, name string, args ...string) error {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	noToken := func(*config.Config, string) (github.TokenSource, error) { return nil, errors.New("no token") }
+	err = ims[0].make(context.Background(), io.Discard, cfg, "d", noToken, run)
+	if err == nil || !strings.Contains(err.Error(), "cloning o/api for its Dockerfile: no token") || len(ran) != 0 {
+		t.Fatalf("err %v, ran %q", err, ran)
+	}
+}
+
+// A base image's PATH into its own copy of the app points at the checkout.
+func TestMovePath(t *testing.T) {
+	for _, c := range []struct{ path, wd, want string }{
+		{"/app/bin:/usr/local/bundle/bin:/usr/bin", "/app", "/work/bin:/usr/local/bundle/bin:/usr/bin"},
+		{"/application/bin:/usr/bin", "/app", ""},
+		{"/usr/bin", "/", ""},
+		{"/work/bin:/usr/bin", "/work", ""},
+	} {
+		got, moved := movePath(c.path, c.wd)
+		if (c.want == "") == moved || (moved && got != c.want) {
+			t.Errorf("movePath(%q, %q) = %q, %v", c.path, c.wd, got, moved)
+		}
 	}
 }
 

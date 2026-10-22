@@ -176,8 +176,15 @@ func (u *uninstaller) images() ([]web.APIUninstallImage, []web.APIUninstallKept,
 			own = append(own, withTag(r.Image))
 		}
 	}
+	var tags []string
 	for _, j := range jobImages(u.cfg) {
-		tag := withTag(j.tag)
+		tags = append(tags, j.tag)
+		if j.build != nil {
+			tags = append(tags, j.from) // after the job image built on it
+		}
+	}
+	for _, tag := range tags {
+		tag := withTag(tag)
 		if slices.Contains(own, tag) || slices.ContainsFunc(out, func(im web.APIUninstallImage) bool { return im.Ref == tag }) {
 			continue
 		}

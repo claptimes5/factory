@@ -62,6 +62,30 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 	return nil
 }
 
+// parkSetup parks an item whose checks can't run in the job's sandbox,
+// saying what's missing, and marks the park as one no model can get past.
+func (p *Pipeline) parkSetup(ctx context.Context, it *store.WorkItem, f *gates.Fault) error {
+	reason := fmt.Sprintf("The checks can't run in the factory's sandbox: %s. The output shows:\n\n```\n%s\n```\n\n"+
+		"Neither the code nor a stronger model can fix this. Add what's missing to %s in factory.yaml (a service under `services:`, or a job image that has it), then press Retry.",
+		f.What(), f.Line, it.Repo)
+	if err := p.park(ctx, it, reason); err != nil {
+		return err
+	}
+	data, _ := json.Marshal(map[string]any{"model_cant_fix": true, "setup": f.Kind, "line": f.Line})
+	return p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "park", Reason: reason, Data: string(data)})
+}
+
+// setupFault is the first failed result's sign of a sandbox that lacks
+// what the checks need.
+func setupFault(rs []gates.Result) *gates.Fault {
+	for _, r := range rs {
+		if r.Status != gates.Pass && r.Fault != nil {
+			return r.Fault
+		}
+	}
+	return nil
+}
+
 // unparkHow says, on a parked issue, the ways to bring it back. The
 // comment is public, so it names the dashboard page in words rather than
 // an address that may be internal.
@@ -198,6 +222,15 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		}
 		return nil
 	}
+	// A failure the sandbox caused fails the same way on every model, so
+	// it parks for the setup to be fixed instead of going to the next.
+	failSetup := func(run agentRun, msg string, f *gates.Fault) error {
+		if p.stopIfCancelled(ctx, j, it, run) {
+			return nil
+		}
+		p.finish(ctx, j, run, state.Failed, "", msg)
+		return p.parkSetup(ctx, it, f)
+	}
 
 	is, err := p.issue(ctx, it)
 	if notApproved(err) {
@@ -332,6 +365,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		return fail(run, state.Failed, "builder verdict: "+err.Error())
 	}
 	if v.Status == "blocked" {
+		if sp := strings.TrimSpace(v.SetupProblem); sp != "" {
+			return failSetup(run, "builder reported blocked: "+v.Blocker, &gates.Fault{Line: sp})
+		}
 		return fail(run, state.Failed, "builder reported blocked: "+v.Blocker)
 	}
 
@@ -389,6 +425,9 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	p.warn(p.Store.SetGateResults(ctx, j.ID, toStore(results)), "SetGateResults")
 	line := gates.VerdictLine(results)
 	if !gates.Passed(results) {
+		if f := setupFault(results); f != nil {
+			return failSetup(run, line+"\n\n"+gateDetails(results), f)
+		}
 		return fail(run, state.Failed, line+"\n\n"+gateDetails(results))
 	}
 	if len(members) == 1 {
@@ -469,7 +508,7 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.R
 		case err != nil:
 			r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
 		case code != 0:
-			r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
+			r.Status, r.Detail, r.Fault = gates.Fail, fmt.Sprintf("exit %d\n%s", code, gates.Excerpt(out, 3000)), gates.SetupFault(out)
 		default:
 			if note := snap.tamperNote(gateDir); note != "" {
 				r.Status, r.Detail = gates.Fail, note

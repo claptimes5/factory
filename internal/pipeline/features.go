@@ -117,7 +117,7 @@ func (p *Pipeline) featureCheck(ctx context.Context, jobID int64, repo, gateDir,
 	case err != nil:
 		r.Status, r.Detail = gates.Fail, "could not run: "+err.Error()
 	case code != 0:
-		r.Status, r.Detail = gates.Fail, fmt.Sprintf("exit %d\n%s", code, tail(out, 3000))
+		r.Status, r.Detail, r.Fault = gates.Fail, fmt.Sprintf("exit %d\n%s", code, gates.Excerpt(out, 3000)), gates.SetupFault(out)
 	default:
 		if note := snap.tamperNote(gateDir); note != "" {
 			r.Status, r.Detail, r.code = gates.Fail, note, 0

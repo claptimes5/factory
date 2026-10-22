@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/claptimes5/factory/internal/config"
 )
 
 // The get-started page walks through what `factory setup` asks in the
@@ -58,11 +60,14 @@ type WizardInput struct {
 	// checks/save and checks/try: the repo's install, base image, gate
 	// commands, the services to start (by name, from those shown) and its
 	// environment.
-	Install   string            `json:"install"`
-	ImageFrom string            `json:"image_from"`
-	Commands  map[string]string `json:"commands"`
-	Services  []string          `json:"services"`
-	Env       map[string]string `json:"env"`
+	Install   string `json:"install"`
+	ImageFrom string `json:"image_from"`
+	// ImageBuild, when set, builds the job image from the repo's own
+	// Dockerfile instead of on ImageFrom.
+	ImageBuild *config.ImageBuild `json:"image_build"`
+	Commands   map[string]string  `json:"commands"`
+	Services   []string           `json:"services"`
+	Env        map[string]string  `json:"env"`
 }
 
 // APIWizard is the get-started page.
@@ -124,7 +129,10 @@ type APIWizardChecks struct {
 	// Saved: factory.yaml has the repo's own checks.
 	Saved     bool   `json:"saved"`
 	ImageFrom string `json:"image_from"`
-	Install   string `json:"install"`
+	// ImageBuild is set when the job image is built from the repo's own
+	// Dockerfile; null otherwise.
+	ImageBuild *config.ImageBuild `json:"image_build"`
+	Install    string             `json:"install"`
 	// SuggestedInstall is the suggested install when it differs.
 	SuggestedInstall string          `json:"suggested_install"`
 	Gates            []APIWizardGate `json:"gates"`

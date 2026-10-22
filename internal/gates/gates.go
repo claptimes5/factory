@@ -30,6 +30,9 @@ type Result struct {
 	// Testing section. It is never stored: it can quote secrets, so the
 	// pipeline redacts it before it goes anywhere.
 	Output string
+	// Fault is set on a failure the sandbox caused, not the code. Like
+	// Output, it is never stored.
+	Fault *Fault
 }
 
 // OutputTail is how much of a passing command's output Run keeps: far
@@ -72,7 +75,7 @@ func Run(ctx context.Context, required []string, commands map[string]string, exe
 		case err != nil:
 			out = append(out, Result{Gate: g, Status: Fail, Detail: "could not run: " + err.Error()})
 		case code != 0:
-			out = append(out, Result{Gate: g, Status: Fail, Detail: fmt.Sprintf("exit %d\n%s", code, tail(output, 4000))})
+			out = append(out, Result{Gate: g, Status: Fail, Detail: fmt.Sprintf("exit %d\n%s", code, Excerpt(output, 4000)), Fault: SetupFault(output)})
 		default:
 			out = append(out, Result{Gate: g, Status: Pass, Output: TailLines(output, OutputTail)})
 		}
@@ -298,11 +301,20 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return out.String(), nil
 }
 
-func tail(s string, n int) string {
+// Excerpt keeps at most about n bytes of a failed command's output, in
+// whole lines: its start, where most errors say what went wrong, and its
+// end, where the rest do, with "…" between them.
+func Excerpt(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return "…" + s[len(s)-n:]
+	head := s[:n/3]
+	if i := strings.LastIndexByte(head, '\n'); i >= 0 {
+		head = head[:i+1]
+	} else {
+		head = ""
+	}
+	return head + TailLines(s[len(head):], n-len(head))
 }
 
 // TailLines keeps at most the last n bytes of s, in whole lines: when it

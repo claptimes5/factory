@@ -857,6 +857,7 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
   const { busy, msg, run } = useAction();
   const [install, setInstall] = useState(c.install);
   const [image, setImage] = useState(c.image_from);
+  const [build, setBuild] = useState(c.image_build);
   const [cmds, setCmds] = useState<Record<string, string>>(() => Object.fromEntries(c.gates.map((g) => [g.gate, g.command])));
   // Saved services stay on; suggested ones start on while none are saved.
   const [svcs, setSvcs] = useState<string[]>(() => {
@@ -864,7 +865,7 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
     return (saved.length > 0 ? saved : c.services).map((s) => s.name);
   });
   const [env, setEnv] = useState<Record<string, string>>(() => ({ ...c.env }));
-  const body = { repo: c.repo, install, image_from: image, commands: cmds, services: svcs, env };
+  const body = { repo: c.repo, install, image_from: image, image_build: build, commands: cmds, services: svcs, env };
   const names = [...c.gates.map((g) => g.gate), ...standardGates.filter((g) => !c.gates.some((x) => x.gate === g))];
   const id = (s: string) => `checks-${c.repo.replace(/[^a-z0-9]/gi, "-")}-${s}`;
   if (!c.stack && !c.saved) {
@@ -933,7 +934,43 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
           <span className="text-xs text-muted-foreground">Each service is reached by its name as the host, such as postgres.</span>
         </div>
       )}
-      <TextField id={id("image")} label="Job image built on" value={image} set={setImage} disabled={ro} placeholder="the factory's default image" help="A Docker image with the repo's language, such as ruby:3.4-bookworm." />
+      {build ? (
+        <div className="flex min-w-0 flex-col gap-1" data-testid="image-build">
+          <span className="text-sm font-medium">Job image</span>
+          <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            Built from the repo's <Code>{build.dockerfile || "Dockerfile"}</Code>
+            {build.target && (
+              <>
+                , stage <Code>{build.target}</Code>
+              </>
+            )}
+            <Button size="sm" variant="outline" className="h-7" disabled={ro} onClick={() => setBuild(null)}>
+              Use a public image instead
+            </Button>
+          </span>
+        </div>
+      ) : (
+        <TextField
+          id={id("image")}
+          label="Job image built on"
+          value={image}
+          set={setImage}
+          disabled={ro}
+          placeholder="the factory's default image"
+          help={
+            c.image_build ? (
+              <span className="flex flex-wrap items-center gap-2">
+                A Docker image with the repo's language, such as ruby:3.4-bookworm.
+                <Button size="sm" variant="outline" className="h-7" disabled={ro} onClick={() => setBuild(c.image_build)}>
+                  Build it from the repo's Dockerfile
+                </Button>
+              </span>
+            ) : (
+              "A Docker image with the repo's language, such as ruby:3.4-bookworm."
+            )
+          }
+        />
+      )}
       {c.notes.map((n) => (
         <p key={n} className="text-xs text-muted-foreground">
           {n}

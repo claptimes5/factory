@@ -72,7 +72,9 @@ type Run struct {
 	Command  string        `json:"command"`
 	Passed   bool          `json:"passed"`
 	Duration time.Duration `json:"duration"`
-	Output   string        `json:"output,omitempty"` // the end of it, when it failed or ran no tests
+	Output   string        `json:"output,omitempty"` // its start and end, when it failed or ran no tests
+	// Fault is set when it failed because the sandbox lacks what it needs.
+	Fault *gates.Fault `json:"-"`
 }
 
 // Report is the result for one repository.
@@ -215,7 +217,7 @@ func Assess(ctx context.Context, in Input) *Report {
 			if err != nil {
 				out += "\n" + err.Error()
 			}
-			x.Output = excerpt(out, 3000)
+			x.Output, x.Fault = gates.Excerpt(out, 3000), gates.SetupFault(out)
 		}
 		r.Runs = append(r.Runs, x)
 		switch {
@@ -241,7 +243,10 @@ func Assess(ctx context.Context, in Input) *Report {
 		if !ok {
 			return r.finish()
 		}
-		if !x.Passed {
+		if !x.Passed && x.Fault != nil {
+			installed = false
+			r.add(setupFinding("install", x))
+		} else if !x.Passed {
 			installed = false
 			r.add(Finding{Level: Blocker, Area: "install", Title: "Install fails on " + r.Branch,
 				Detail: "`" + g.Install + "` failed, so no other check can run.\n\n" + fence(x.Output),
@@ -300,6 +305,11 @@ func Assess(ctx context.Context, in Input) *Report {
 			allPassed, filesHit = false, true
 			r.add(Finding{Level: Blocker, Area: "files", Title: "`" + name + "` fails without " + missing + ", which git doesn't track",
 				Detail: filesDetail(in, include) + "\n\n" + fence(x.Output)})
+		} else if !x.Passed && x.Fault != nil {
+			// Like a missing service: no change to the code fixes it, so
+			// no issue for a builder.
+			allPassed = false
+			r.add(setupFinding(name, x))
 		} else if !x.Passed {
 			allPassed = false
 			title := "`" + name + "` fails on " + r.Branch
@@ -796,14 +806,11 @@ var knownServices = []struct {
 	{"mongo", "mongo:7", "", "mongosh --quiet --eval 'db.runCommand({ping:1})'", []string{"image: mongo", "mongodb://"}, []string{"mongo", "27017"}},
 }
 
-// connRefused is how a check that can't reach a service usually fails.
-var connRefused = regexp.MustCompile(`(?i)connection refused|econnrefused|could not connect to server|could not translate host name|can't connect to (local )?mysql|getaddrinfo|name or service not known|no such host|redis::cannotconnecterror|server selection timed out`)
-
 // servicesHint suggests services for factory.yaml when a check failed
 // the way one does that can't reach a database, the repo has none
 // configured, and its files say which it uses; "" otherwise.
 func servicesHint(dir string, files []string, repo config.Repo, output string) string {
-	if len(repo.Services) > 0 || !connRefused.MatchString(output) {
+	if len(repo.Services) > 0 || !gates.ConnRefused.MatchString(output) {
 		return ""
 	}
 	var text strings.Builder
@@ -836,6 +843,13 @@ func servicesHint(dir string, files []string, repo config.Repo, output string) s
 	return "The check couldn't connect to a service, and the repo's files point at the ones below. The factory starts services for every build and check when factory.yaml lists them under the repo; each is reached by its name as the host (`postgres:5432`), so point the test settings at it in the repo's `env:` (for example `DATABASE_URL`):\n\n```yaml\nrepos:\n  - name: " + repo.Name + "\n    services:\n" + snippet.String() + "```"
 }
 
+// setupFinding is the blocker for a check that failed because the job's
+// sandbox lacks a service, library or program it needs.
+func setupFinding(gate string, x Run) Finding {
+	return Finding{Level: Blocker, Area: "setup", Title: "`" + gate + "` can't run in the factory's sandbox: " + x.Fault.What(),
+		Detail: "The output shows:\n\n" + fence(x.Fault.Line) + "\nThis is the factory's setup to fix, not the repo's code: add what's missing to the repo in factory.yaml (a service under `services:`, or a job image that has it), then run the check again.\n\n" + fence(x.Output)}
+}
+
 func featureMap(files []string) bool {
 	return has(files, func(f string) bool {
 		l := strings.ToLower(f)
@@ -860,17 +874,6 @@ func fence(s string) string {
 		f += "`"
 	}
 	return f + "\n" + s + "\n" + f + "\n"
-}
-
-// excerpt keeps about n bytes of a command's output: its start, where an
-// error usually says what went wrong (a stack trace's message comes before
-// its frames), and its end, where a summary is.
-func excerpt(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	head, end := n/3, n-n/3
-	return strings.ToValidUTF8(s[:head], "") + "\n…\n" + strings.ToValidUTF8(s[len(s)-end:], "")
 }
 
 // Save writes the report as JSON next to the factory's data.

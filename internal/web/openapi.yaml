@@ -665,6 +665,11 @@ paths:
                 repo: { type: string }
                 install: { type: string }
                 image_from: { type: string, description: "Empty for the default job image" }
+                image_build:
+                  description: Builds the job image from the repo's own Dockerfile instead of image_from; null or absent for none
+                  oneOf:
+                    - $ref: "#/components/schemas/ImageBuild"
+                    - type: "null"
                 commands: { type: object, additionalProperties: { type: string }, description: "Gate name to command; an empty command drops the gate" }
                 services: { type: array, items: { type: string }, description: "The services to start, by name, from those the page shows" }
                 env: { type: object, additionalProperties: { type: string } }
@@ -1920,12 +1925,17 @@ components:
         summary: { type: string }
     WizardChecks:
       type: object
-      required: [repo, stack, saved, image_from, install, suggested_install, gates, notes, services, env, try]
+      required: [repo, stack, saved, image_from, image_build, install, suggested_install, gates, notes, services, env, try]
       properties:
         repo: { type: string }
         stack: { type: string, description: "What the repo looks like, such as Ruby on Rails; empty until the access check has read its files" }
         saved: { type: boolean, description: factory.yaml has the repo's own checks }
         image_from: { type: string, description: "The base image its job image is built on; empty for the default" }
+        image_build:
+          description: The repo's own Dockerfile its job image is built from instead, or null
+          oneOf:
+            - $ref: "#/components/schemas/ImageBuild"
+            - type: "null"
         install: { type: string }
         suggested_install: { type: string, description: "The suggested install when it differs" }
         gates: { type: array, items: { $ref: "#/components/schemas/WizardGate" } }
@@ -1937,6 +1947,19 @@ components:
           oneOf:
             - $ref: "#/components/schemas/WizardTry"
             - type: "null"
+    ImageBuild:
+      type: object
+      required: [dockerfile, target, context, args, secrets]
+      properties:
+        dockerfile: { type: string, description: "Its path in the repo; empty for Dockerfile" }
+        target: { type: string, description: "The stage to build; empty for the last" }
+        context: { type: string, description: "The build context's path in the repo; empty for its root" }
+        args:
+          description: Its --build-arg values, or null
+          oneOf: [{ type: object, additionalProperties: { type: string } }, { type: "null" }]
+        secrets:
+          description: Its build secrets by id, each a file on this machine (a path in files.from's checkout, or absolute), or null
+          oneOf: [{ type: object, additionalProperties: { type: string } }, { type: "null" }]
     WizardService:
       type: object
       required: [name, image, saved]

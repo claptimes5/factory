@@ -189,8 +189,15 @@ repo.
 
 `factory setup` reads each repo's files and suggests checks and a job image
 for its stack: Rails, Ruby, Node (Vite, Next.js, React), Python, Rust or Go.
-If the repo has a dev container with an `image`, the job image is built on
-that. You confirm each suggestion, and setup writes it to `factory.yaml`.
+If the repo's `Dockerfile` has a stage for its tests (`test`, `ci`,
+`development` or `dev`), the job image is built from that stage, so the
+checks have the system libraries and programs the app has installed.
+Otherwise, a dev container that builds from a Dockerfile is used, then a
+dev container's `image`, then a public image for the stack. If the repo
+has a compose file, the services it runs (Postgres, MySQL, Redis, Mongo)
+and the app's settings that find them (`PGHOST`, `DATABASE_URL` and the
+like) are suggested from it, with its own names and credentials. You
+confirm each suggestion, and setup writes it to `factory.yaml`.
 For a Rails API and a Vite frontend it writes something like:
 
 ```yaml
@@ -217,6 +224,7 @@ repos:
 | --- | --- |
 | `install` | Runs first on each commit's export, with the network on. If it fails, nothing else runs. The builder is told to run it too, along with the repo's own check commands. |
 | `image_from` | The base for the repo's job image: any Debian or Ubuntu image with the toolchain. `factory serve` builds the missing images as it starts, and jobs wait for them; `./factory images` builds them too (`--rebuild` rebuilds them all). Old copies are removed ([Job images](setup.md#job-images)). |
+| `image_build` | Builds the base from the repo's own Dockerfile instead of `image_from`: `dockerfile` and `context` are paths in the repo (default `Dockerfile` and its root), `target` is the stage (default the last), `args` its `--build-arg` values and `secrets` its build secrets (`RUN --mount=type=secret`) by id, each a file: a path in `files.from`'s checkout, or an absolute one. Setup takes `args` from the CI line that builds the same stage, and names any secret the Dockerfile uses for you to set. `./factory images` clones the base branch with the factory's token and builds it on this machine's Docker, outside the jobs' sandbox, as you would build the app's image yourself; then the factory's tools go on top. The stage must be Debian or Ubuntu, and its entrypoint is ignored. Entries on its `PATH` into its own copy of the app (such as `/app/bin`) point at the checkout instead, and if it has the app's gems installed (its `BUNDLE_PATH`), each checkout's `vendor/bundle` starts from them, so `bundle install` only builds what a change adds: a test stage often has no compiler. A change to the Dockerfile takes `./factory images --rebuild`. |
 | `image` | An image you build yourself, when there's no `image_from`. It needs the agent CLIs, so start it from `deploy/job-image/Dockerfile` with `--build-arg BASE=...`. |
 | `env` | Set in the repo's agent and gate containers. A top-level `env` applies to every repo. Agents can read it, so it is not for secrets. |
 
@@ -273,6 +281,13 @@ If a check fails because it can't connect to a database and the repo has
 no services, the readiness check says so. It suggests the services to add,
 read from the repo's `docker-compose.yml` or `config/database.yml`, instead
 of filing an issue for a builder, who can't edit `factory.yaml`.
+The same goes for any check that fails because the job's sandbox lacks
+something: a refused connection to a database or cache, a system library
+that can't be loaded, a program that isn't installed. Readiness reports it
+as a setup blocker with no issue. A build that fails that way, or whose
+builder reports it, parks at once with the line that shows it, rather than
+trying the next model. Add what's missing (a service, or a job image that
+has it), then press Retry.
 
 ## Files a repo doesn't commit
 
@@ -414,7 +429,10 @@ The defaults lean on the cheap models where a miss is cheap to retry:
 - Small builds start on Haiku 5.5 and climb to Sonnet, then Opus, after two
   failed attempts at a tier (`escalation.max_attempts_per_tier`, 2 by
   default). The tiers are `escalation.implement`. After the last tier, the
-  item parks. A build that runs out of turns or hits its dollar cap isn't
+  item parks. A build whose checks fail because the sandbox lacks a
+  service, system library or program they need (see
+  [Services](#services-databases-and-the-like)) parks at once instead:
+  every model would fail the same way. A build that runs out of turns or hits its dollar cap isn't
   a failed attempt: it keeps its work and waits for you (see
   [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget)).
 - Text-only (`XS`) builds use `routing.implement.XS`, Haiku by default (see
