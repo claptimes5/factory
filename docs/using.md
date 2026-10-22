@@ -1339,5 +1339,12 @@ after `--`: `npm run e2e -- e2e/home.spec.ts`. A devserver that's already
 running is reused, so restart it after `npm run build`: it serves the app
 it was built with.
 
+`npm run e2e` prints how long the devserver took to come up and how long
+Playwright took. A run of the whole suite that passes but takes longer than
+its budget (180s; it usually takes 70-100s) fails, so a stall like the one
+above shows up in CI instead of only on the machine it happens on. The budget is
+`budgetSeconds` in `web/scripts/e2e.mjs`: find what slowed the suite before
+raising it.
+
 Commit the rebuilt `internal/web/app` with your change; CI checks it is
 current.
