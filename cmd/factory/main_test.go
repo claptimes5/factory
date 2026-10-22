@@ -127,6 +127,16 @@ func TestEstimateCellAndPlanBilled(t *testing.T) {
 			t.Errorf("codex signed in by %q: plan %v, want %v", mode, !want, want)
 		}
 	}
+	// Spend shows only when a harness in use bills by use: Codex with no
+	// credentials at all doesn't, one with an API key does.
+	cfg := &config.Config{Routing: map[string]config.Route{"implement.M": {Harness: "claude"}, "review": {Harness: "codex"}}}
+	billed := planBilled(plan, none, codexAPIKey)
+	if !onlyPlans(cfg, billed, plan) {
+		t.Error("a subscription and an unset Codex show spend")
+	}
+	if onlyPlans(cfg, billed, map[string]map[string]string{"claude": plan["claude"], "codex": {"OPENAI_API_KEY": "sk-x"}}) {
+		t.Error("a Codex API key doesn't show spend")
+	}
 }
 
 // status says what to do about each item that waits for your OK, with

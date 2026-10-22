@@ -505,11 +505,12 @@ func connected(secrets map[string]map[string]string, plans map[string]bool) []st
 	return out
 }
 
-// onlyPlans says every harness the routing uses runs on a subscription
-// plan: no job costs dollars, so the dashboard shows plan usage instead.
-func onlyPlans(cfg *config.Config, billed map[string]bool) bool {
+// onlyPlans says no harness the routing uses bills by use: each runs on
+// a subscription plan, or has no credentials at all (its jobs can't run,
+// so they cost nothing). The dashboard then shows plan usage, not spend.
+func onlyPlans(cfg *config.Config, billed map[string]bool, sec map[string]map[string]string) bool {
 	for _, r := range cfg.Routing {
-		if !billed[r.Harness] {
+		if !billed[r.Harness] && len(sec[r.Harness]) > 0 {
 			return false
 		}
 	}
@@ -601,7 +602,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	}
 	go srv.FollowReadiness(ctx, 5*time.Minute)
 	srv.Plans, srv.PauseAtUsage = planHarnesses(cfg, p.PlanBilled), cfg.PauseAtUsage()
-	srv.PlansOnly = onlyPlans(cfg, p.PlanBilled)
+	srv.PlansOnly = onlyPlans(cfg, p.PlanBilled, p.Secrets)
 	srv.Harnesses = func() []string { return connected(p.Secrets, p.PlanBilled) }
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
