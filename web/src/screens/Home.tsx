@@ -9,7 +9,7 @@ import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
-import { NextActions, nextStep, RunProgress, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
+import { NextActions, nextStep, RunProgress, setupActivity, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type Readiness = components["schemas"]["Readiness"];
@@ -140,7 +140,7 @@ export function HomeScreen() {
 
       <CatchUp />
 
-      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => r.checking) ? 1 : 0} />
+      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => setupActivity(r)) ? 1 : 0} />
 
       <Earned />
 
@@ -314,7 +314,7 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
         <p className="text-body-sm text-ink-muted">{next.body}</p>
         {next.running && (
           <div className="flex flex-col gap-1 text-body-sm text-ink-muted">
-            <p>Started {duration(r.checking_since)} ago.</p>
+            <p>Started {duration(setupActivity(r)?.since ?? r.checking_since)} ago.</p>
             <RunProgress r={r} last />
           </div>
         )}

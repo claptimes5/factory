@@ -589,7 +589,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
 	srv.DiskLow = p.DiskLow
 	if builder != nil {
-		srv.ImageWait = func(repo string) string { return builder.Waiting(cfg, repo) }
+		srv.ImageBuilding = func(repo string) *web.APIImageBuild { return builder.Status(cfg, repo) }
 	}
 	// Fix setup reads the repo's files as setup does.
 	srv.SetupPark = p.SetupPark

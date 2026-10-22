@@ -562,9 +562,9 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)
 	}
 	a.Setup, a.SetupNote = s.setupOf(ctx, it)
-	if a.Setup == "" && s.ImageWait != nil && it.Stage != state.Done && it.Stage != state.Parked {
-		if n := s.ImageWait(it.Repo); n != "" {
-			a.Setup, a.SetupNote = "image", n
+	if a.Setup == "" && s.ImageBuilding != nil && it.Stage != state.Done && it.Stage != state.Parked {
+		if b := s.ImageBuilding(it.Repo); b != nil {
+			a.Setup, a.SetupNote = "image", "Waits for its job image, which is being built: "+b.Why+". It starts by itself when the build is done."
 		}
 	}
 	a.Choices = []APIChoice{}

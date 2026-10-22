@@ -190,15 +190,39 @@ test("a setup run in progress shows the same on every screen, with its time coun
   });
   await page.goto("/app/line");
   const banner = await notice(page, "Setup");
-  await expect(banner).toContainText(/Checking api, started 1m ago/);
+  await expect(banner).toContainText(/Checking api's main, started 1m ago\. Why check again: main moved from 1a2b3c4 to 5d6e7f8\./);
   await expect(banner.getByRole("link", { name: "Watch it" })).toHaveAttribute("href", /\/app\/setup$/);
   // The line shows it as work under way, as it would a job.
-  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Checking api");
+  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Checking api's main");
 
   await page.goto("/app/setup");
   const next = page.getByRole("region", { name: "Setup of acme/api" }).getByTestId("next-step");
-  await expect(next).toContainText("Working on it: checking api");
-  await expect(next).toContainText("Started 1m ago. The factory started it: main moved from 1a2b3c4 to 5d6e7f8.");
+  await expect(next).toContainText("Working on it: checking api's main");
+  await expect(next).toContainText("Started 1m ago");
+  await expect(next).toContainText("Why check again: main moved from 1a2b3c4 to 5d6e7f8.");
+});
+
+test("while a repo's job image builds, every screen says so and why, and its check says it waits for it", async ({ page }) => {
+  await page.route("**/api/v1/readiness", async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    Object.assign(body.repos[0], {
+      checking: true,
+      check_waits: "its job image to build",
+      checking_since: new Date(Date.now() - 120_000).toISOString(),
+      checking_why: "Started by itself: main moved from 1a2b3c4 to 5d6e7f8.",
+      image: { why: "factory.yaml changed what it's built from", since: new Date(Date.now() - 90_000).toISOString(), step: "[test 3/5] COPY --from=build /app /app" },
+    });
+    await route.fulfill({ response: r, json: body });
+  });
+  await page.goto("/app/line");
+  const banner = await notice(page, "Setup");
+  await expect(banner).toContainText("Building api's job image, started 1m ago. Because factory.yaml changed what it's built from. Its jobs wait for it.");
+  await expect(banner).toContainText("Then it checks main in it. Why check again: main moved from 1a2b3c4 to 5d6e7f8.");
+  await expect(banner).toContainText("Now at [test 3/5] COPY --from=build /app /app");
+  await expect(page.getByTestId("setup-run").filter({ visible: true })).toContainText("Building api's job image");
+  await page.goto("/app/setup");
+  await expect(page.getByRole("region", { name: "Setup of acme/api" }).getByRole("status").first()).toContainText("Building its image");
 });
 
 test("a token that can't open pull requests comes first, on Setup and Home, before any work", async ({ page }) => {

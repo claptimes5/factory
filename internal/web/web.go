@@ -73,9 +73,9 @@ type Server struct {
 	DailyCap float64
 	// DiskLow says why jobs aren't starting for lack of disk (may be nil).
 	DiskLow func() string
-	// ImageWait says an item on repo waits for its job image to build,
-	// and why; "" when it doesn't (may be nil).
-	ImageWait func(repo string) string
+	// ImageBuilding is the build of repo's job image going now, or nil
+	// (may be nil): its jobs, its check included, wait for it.
+	ImageBuilding func(repo string) *APIImageBuild
 	// SetupPark is the setup problem a parked item stopped on, and Detect
 	// reads a repo's files for what its setup should be: with both, Fix
 	// setup offers the change (may be nil).

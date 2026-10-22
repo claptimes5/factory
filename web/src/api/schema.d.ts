@@ -3219,6 +3219,13 @@ export interface components {
             /** @description Why it can't, or empty */
             check_note: string;
         };
+        ImageBuildRun: {
+            /** @description Why it's built: it isn't built yet, factory.yaml changed what it's built from, the repo's Dockerfile changed */
+            why: string;
+            since: string;
+            /** @description The Dockerfile step it's on, such as [test 3/5] COPY ...; empty before the first */
+            step: string;
+        };
         RepoReadiness: {
             repo: string;
             /** @enum {string} */
@@ -3247,6 +3254,10 @@ export interface components {
             result: string;
             /** @description The readiness job of the check going */
             check_job: number | null;
+            /** @description What a check that's queued, not running, waits for (its job image to build, a free slot); empty when it runs or there's none. checking_since is then when it was queued */
+            check_waits: string;
+            /** @description The build of its job image going now, or null; its jobs, its check included, wait for it */
+            image: components["schemas"]["ImageBuildRun"] | null;
             /** @description What started the run going, when the factory did by itself; else empty */
             checking_why: string;
             /** @description What the check going (or the last one) has done so far, a step at a time, oldest first */

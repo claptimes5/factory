@@ -9,7 +9,7 @@ import { FoundBy } from "@/components/FoundBy";
 import { Badge } from "@/components/ui/badge";
 import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef, stageName } from "@/lib/utils";
-import { useReadiness } from "@/screens/Setup";
+import { setupActivity, useReadiness } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
 type RepoReadiness = components["schemas"]["RepoReadiness"];
@@ -27,7 +27,7 @@ export function BoardScreen() {
   });
   const repos = useOverview().data?.repos ?? [];
   const repo = useRepo(repos);
-  const setupRun = useReadiness().data?.repos.find((r) => r.checking && (!repo || r.repo === repo));
+  const setupRun = useReadiness().data?.repos.find((r) => setupActivity(r) && (!repo || r.repo === repo));
   const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
   const [showDone, setShowDone] = useState(false);
   const [cols, held] = useMemo(() => {
@@ -255,9 +255,11 @@ function SetupRunCard({ r }: { r: RepoReadiness }) {
         Setup · {repoName(r.repo) || r.repo}
       </div>
       <Link to="/setup" className="text-body-sm font-semibold after:absolute after:inset-0 hover:underline">
-        Checking {repoName(r.repo) || r.repo}
+        {setupActivity(r)?.title}
       </Link>
-      <span className="text-meta text-muted-foreground">{duration(r.checking_since)}</span>
+      <span className="text-meta text-muted-foreground">
+        {duration(setupActivity(r)?.since ?? r.checking_since)} · {setupActivity(r)?.detail}
+      </span>
     </article>
   );
 }
