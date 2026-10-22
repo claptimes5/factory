@@ -40,6 +40,27 @@ async function personsPartLeft(page: Page) {
   });
 }
 
+test("a check that couldn't finish says which command stopped it and its error", async ({ page }) => {
+  await page.route(/\/api\/v1\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const r = body.repos[0];
+    Object.assign(r, { state: "incomplete", checking: false, done: 0 });
+    r.steps[0].state = "failing";
+    r.steps[0].blockers = [
+      { key: "", level: "blocker", area: "checks", title: "Couldn't run `test`",
+        detail: "This is a problem with the factory's setup.\n\n```\nCreated database\n\u001b[0mERROR FooTest#test_1\nMinitest::UnexpectedError:   ActiveRecord::DatabaseConnectionError: There is an issue connecting with your hostname: db.\n```",
+        issue: 0, issue_url: "", status: "none", split_done: 0, split_total: 0, item_id: null, item_stage: "" },
+    ];
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/app/");
+  const card = page.getByTestId("setup-lead");
+  await expect(card).toContainText("Couldn't run test: fix that, then check again");
+  await expect(card).toContainText("It failed with: ActiveRecord::DatabaseConnectionError: There is an issue connecting with your hostname: db.");
+  await expect(card.getByRole("link", { name: "See the whole error" })).toBeVisible();
+});
+
 test("while a person's part of setup is left, Home leads with it and ranks the rest by what blocks it", async ({ page }, info) => {
   await personsPartLeft(page);
   await page.goto("/app/");
@@ -151,7 +172,9 @@ test("Home numbers what needs you in order: what other work waits for first, wha
   });
   await page.goto("/app/");
   const needs = page.getByRole("region", { name: "Needs you" });
-  await expect(needs).toContainText("In this order: changes to review, then what other work waits for, then the rest.");
+  await expect(needs).toContainText(
+    "In this order: changes to review, then what other work waits for, then the rest, then what waits for setup or the base branch.",
+  );
   const rows = needs.getByRole("listitem");
   await expect(rows.first()).toContainText("1.");
   await expect(rows.first()).toContainText("Parser drops the last token");

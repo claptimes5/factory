@@ -30,7 +30,7 @@ var stageEdges = map[Stage][]Stage{
 	Implementing:  {Reviewing, Parked, Blocked},
 	Reviewing:     {Implementing, AwaitingHuman, Parked},
 	AwaitingHuman: {Done, Implementing, Parked},
-	Parked:        {Triage, Ready, Epic, Done},
+	Parked:        {Triage, Ready, Reviewing, Epic, Done}, // Reviewing: Retry on a review that couldn't finish
 	Blocked:       {Ready, Parked, Done},
 	Epic:          {Done, Parked},
 	Done:          {},
