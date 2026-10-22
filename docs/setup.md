@@ -21,6 +21,7 @@ it.
 | Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
 | Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
 | git | any recent | Worktrees and pushes. |
+| ttyd | any recent | The dashboard's browser terminal into a running job (the attach button). Ubuntu 22.04+ and Debian 12+ have it in apt; elsewhere see [ttyd's install notes](https://github.com/tsl0922/ttyd#installation). |
 | Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
 | Claude (an API key or subscription token), Codex (an OpenAI API key or a ChatGPT plan), or both | | Either one runs everything. With both, the one you connect first builds and the other reviews what it builds. |
 
@@ -53,10 +54,13 @@ Then open http://127.0.0.1:8080/app/get-started and follow the steps (see
 in a script, run `./factory setup` in a terminal instead: it asks the same
 things (see [What setup asks for](#what-setup-asks-for)).
 
-`scripts/install.sh` checks Go, git and Docker (and Node with `--web`), and
+`scripts/install.sh` checks Go, git, Docker and ttyd (and Node with `--web`), and
 for anything missing or too old prints the command that fixes it on your
-system: apt, dnf, pacman, Docker Desktop's WSL integration, or brew. It
-installs nothing and never uses sudo itself. When Go and git are there it
+system: apt, dnf, pacman, Docker Desktop's WSL integration, or brew. In
+a terminal it then asks "Run it now?" for each one: yes runs exactly the
+command shown (which may use sudo) and checks again afterwards; no, the
+default, leaves it to you, so you can install Go with asdf or mise, say.
+Run without a terminal (in a script), it only prints. When Go and git are there it
 builds `./factory`. To build by hand instead:
 
 ```sh
@@ -210,8 +214,7 @@ Checking this machine, factory.yaml and factory.env:
   ✓ Claude: subscription token
   ✓ Codex: OpenAI API key
   ✓ GitHub: app 123456, key /home/you/factory/factory-app.pem
-  ! ttyd isn't installed (optional: browser terminals into running jobs)
-      sudo apt install ttyd
+  ✓ ttyd
   ✓ Dashboard port 127.0.0.1:8080 is free
 
 Fix the ✗ lines and run ./factory doctor again. More in docs/setup.md#checking-your-setup.

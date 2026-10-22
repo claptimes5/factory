@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
@@ -1104,11 +1106,39 @@ func TestAskPassIsPrivateAndConcurrent(t *testing.T) {
 			t.Fatal("askpass created more than once")
 		}
 	}
-	cmd := exec.Command(paths[0])
-	cmd.Env = []string{"FACTORY_GIT_PASSWORD=s3cret"}
-	out, err := cmd.Output()
+	// A parallel test's fork can hold the new file open a moment
+	// (golang/go#22315): text file busy, until its child execs.
+	var out []byte
+	for range 50 {
+		cmd := exec.Command(paths[0])
+		cmd.Env = []string{"FACTORY_GIT_PASSWORD=s3cret"}
+		if out, err = cmd.Output(); !errors.Is(err, syscall.ETXTBSY) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil || strings.TrimSpace(string(out)) != "s3cret" {
 		t.Fatalf("askpass printed %q: %v", out, err)
+	}
+}
+
+// Each start shares one askpass file in the data directory, and sweeps
+// the per-start ones earlier versions left behind.
+func TestAskPassLeavesNothingBehind(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "factory-askpass-123.sh")
+	os.WriteFile(stale, nil, 0o700)
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(stale, old, old)
+	a, err := (&Git{AskPassDir: dir}).askPass()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := (&Git{AskPassDir: dir}).askPass()
+	left, _ := filepath.Glob(filepath.Join(dir, "factory-askpass*"))
+	if a != b || len(left) != 1 || left[0] != a {
+		t.Fatalf("askpass %s and %s; left %v", a, b, left)
 	}
 }
 

@@ -71,7 +71,7 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 		Machine: []web.APIWizardFinding{
 			{Status: "pass", What: "git 2.50.1"},
 			{Status: "pass", What: "Docker not needed (runner.kind: local)"},
-			{Status: "warn", What: "ttyd isn't installed (optional: browser terminals into running jobs)", Fix: "sudo apt-get install ttyd"},
+			{Status: "warn", What: "web.listen 127.0.0.1:8080 is taken; is ./factory serve already running?", Fix: "ss -ltnp | grep :8080"},
 		}}
 	if out.Labels == nil {
 		out.Labels = []web.APIWizardLabel{}

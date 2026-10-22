@@ -515,8 +515,8 @@ func (p *Pipeline) canContinue(ctx context.Context, jobID int64) (*store.Job, *s
 }
 
 // continueTurns is a continue's turn cap.
-func (p *Pipeline) continueTurns(c *ContinueInput) int {
-	t := p.Cfg.Budgets.MaxTurns
+func (p *Pipeline) continueTurns(c *ContinueInput, size string) int {
+	t := p.Cfg.BuildTurns(size)
 	if c != nil && c.Extra > 0 {
 		t = int(float64(t)*(1+c.Extra) + 0.5)
 	}
@@ -673,12 +673,13 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 			}
 			c.Explain = fmt.Sprintf("Picks up where it stopped, in the checkout it kept and %s, on %s, with a fresh %d turns and $%.2f; you can add up to %d%% more. "+
 				"A note you write goes to it first, for example to narrow the scope. Nothing is pushed until its checks pass.",
-				session, c.Model, p.Cfg.Budgets.MaxTurns, budget, int(MaxContinueExtra*100))
+				session, c.Model, p.Cfg.BuildTurns(size), budget, int(MaxContinueExtra*100))
 		}
 		if c.Action != "" {
 			out = append(out, c)
 		}
 	}
+	cantFix := p.modelCantFix(ctx, it)
 	for _, up := range []bool{false, true} {
 		c := Choice{Action: "retry", Label: "Retry"}
 		if up {
@@ -688,6 +689,8 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 			rp, err := p.planRetry(ctx, "human", jobID, up)
 			if err != nil {
 				c.Why = err.Error()
+			} else if up && cantFix {
+				c.Why = "A stronger model wouldn't help: what stopped it is outside the code (see why it's parked). Fix that, then Retry."
 			} else {
 				c.Available = true
 				c.Model = rp.route.Harness + "/" + rp.route.Model
@@ -708,6 +711,31 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 	return append(out, park)
 }
 
+// modelCantFix reports whether the orchestrator parked item it, since its
+// last job was queued, saying no model could get past what stopped it.
+func (p *Pipeline) modelCantFix(ctx context.Context, it *store.WorkItem) bool {
+	if it.Stage != state.Parked {
+		return false
+	}
+	evs, err := p.Store.Events(ctx, it.ID)
+	if err != nil {
+		return false
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		switch evs[i].Type {
+		case "job_queued":
+			return false
+		case "park":
+			var a struct {
+				CantFix bool `json:"model_cant_fix"`
+			}
+			_ = json.Unmarshal([]byte(evs[i].Data), &a)
+			return a.CantFix
+		}
+	}
+	return false
+}
+
 // retryExplain says what a retry would do.
 func (p *Pipeline) retryExplain(rp *retryPlan, j *store.Job) string {
 	model := rp.route.Harness + "/" + rp.route.Model
@@ -725,8 +753,8 @@ func (p *Pipeline) retryExplain(rp *retryPlan, j *store.Job) string {
 	if rp.tier {
 		was := j.Model
 		return fmt.Sprintf("Starts the build over from scratch on %s, one model tier up (it was %s), with %d turns and $%.2f. Anything this job did is dropped.",
-			start, was, p.Cfg.Budgets.MaxTurns, budget) + " It runs on " + model + "."
+			start, was, p.Cfg.BuildTurns(rp.size), budget) + " It runs on " + model + "."
 	}
 	return fmt.Sprintf("Starts the build over from scratch on %s, on %s, with %d turns and $%.2f. Anything this job did is dropped.",
-		start, model, p.Cfg.Budgets.MaxTurns, budget)
+		start, model, p.Cfg.BuildTurns(rp.size), budget)
 }

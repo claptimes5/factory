@@ -210,7 +210,7 @@ function CatchUp() {
   );
 }
 
-/** The decision on top: what it is, why it needs you, and its actions, on the ink card. */
+/** The decision on top: what it is, why it needs you, and its actions, on the lead card. */
 function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater?: () => void }) {
   const kind = kindOf(c);
   const meta =
@@ -225,14 +225,14 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
   );
   const prs = c.prs.length > 1 ? c.prs : c.pr_url ? [{ url: c.pr_url, ref: `PR #${c.prs[0]?.number ?? c.pr_number}` }] : [];
   return (
-    <div className={cn("relative", stacked && "pb-4")}>
+    <div className={cn("lead relative", stacked && "pb-4")}>
       {stacked && (
         <>
-          <div aria-hidden className="absolute inset-x-6 bottom-0 h-10 rounded-card bg-ink/20" />
-          <div aria-hidden className="absolute inset-x-3 bottom-2 h-10 rounded-card bg-ink/45" />
+          <div aria-hidden className="absolute inset-x-6 bottom-0 h-10 rounded-card border border-live-border bg-ink/60" />
+          <div aria-hidden className="absolute inset-x-3 bottom-2 h-10 rounded-card border border-live-border bg-ink" />
         </>
       )}
-      <article data-testid="decision" className="relative flex flex-col gap-3 rounded-card bg-ink p-5 text-ink-foreground md:p-6">
+      <article data-testid="decision" className="relative flex flex-col gap-3 rounded-card border border-live-border bg-ink p-5 text-ink-foreground md:p-6">
         <div className="flex flex-wrap items-center gap-x-2 text-meta font-semibold text-ink-attention">
           {kindLabel[kind]} · <span className="font-mono font-medium">{shortRef(c.ref)}</span>
         </div>
@@ -303,7 +303,7 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
           </span>
         )}
       </div>
-      <article data-testid="setup-lead" className="flex flex-col gap-3 rounded-card bg-ink p-5 text-ink-foreground md:p-6">
+      <article data-testid="setup-lead" className="lead flex flex-col gap-3 rounded-card border border-live-border bg-ink p-5 text-ink-foreground md:p-6">
         <div className="text-meta font-semibold text-ink-attention">
           {next.running ? "Setup · working on it now" : next.human ? "Setup · needs you · new tasks wait until it's done" : "Setup · new tasks wait until it's done"}
         </div>

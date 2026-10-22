@@ -294,9 +294,13 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	}
 	x := p.sessionFor(ctx, j, in.FixRound, in.Continue)
 	x.repo = members[0]
-	x.maxTurns = p.Cfg.Budgets.MaxTurns
+	size := it.Complexity
+	if in.Size != "" {
+		size = in.Size
+	}
+	x.maxTurns = p.Cfg.BuildTurns(size)
 	if c := in.Continue; c != nil {
-		x.maxTurns = p.continueTurns(c)
+		x.maxTurns = p.continueTurns(c, size)
 		cont := p.continueText(c, kept, x.maxTurns, j.BudgetUSD, data.OutDir)
 		full := strings.TrimRight(prompt, "\n") + "\n\n" + cont
 		prompt = full

@@ -45,7 +45,7 @@ test("the get-started page lists each step and opens the first that needs attent
   // This machine: each check, with the fix for what isn't right.
   await openStep(page, "machine");
   await expect(step(page, "machine").getByTestId("machine-finding")).toHaveCount(3);
-  await expect(step(page, "machine")).toContainText("sudo apt-get install ttyd");
+  await expect(step(page, "machine")).toContainText("ss -ltnp | grep :8080");
   await step(page, "machine").getByRole("button", { name: "Check again" }).click();
   await expect(step(page, "machine").getByRole("status")).toContainText("Checked this machine again.");
 

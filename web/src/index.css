@@ -21,10 +21,12 @@
 /*
  * Factory's design tokens (docs/plans/design-system.md). Calm and warm:
  * a paper-grey page, white surfaces, one blue for work that's moving,
- * orange for what needs you, green for what went live. The ink card is
- * a decision waiting for you: charcoal on the light theme (pure black
- * was too harsh on the paper page), light on the dark one, so it is the
- * strongest thing on either. Every text pair holds 4.5:1. The older
+ * orange for what needs you, green for what went live. Ink is the main
+ * button and tooltips: charcoal on the light theme, light on the dark one.
+ * The lead card (a decision waiting for you, the setup step) is the blue
+ * tint of work that's moving, with an outline, so it leads without a
+ * block of charcoal on the page; inside it the ink-* names mean its own
+ * colors. Every text pair holds 4.5:1. The older
  * names below (card, text-2, live-*, warning-*) are the same roles,
  * kept so screens not yet rebuilt follow the new look.
  */
@@ -91,6 +93,21 @@
   --ink-border: #d4d4d8;
   --ink-attention: #c2410c;
   --ring: #8ab4f8;
+}
+
+.lead {
+  --ink: #eff4ff;
+  --ink-foreground: #17171a;
+  --ink-muted: #3f3f46;
+  --ink-border: #7f9ad6;
+  --ink-attention: #c2410c;
+}
+.dark .lead {
+  --ink: #16203a;
+  --ink-foreground: #ededef;
+  --ink-muted: #c9c9cf;
+  --ink-border: #5a78c0;
+  --ink-attention: #fb923c;
 }
 
 @theme inline {

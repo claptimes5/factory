@@ -748,7 +748,7 @@ values below are this repo's.
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
 | `pause_at_usage` | Holds a harness's jobs once a subscription usage window is this full, in percent (default 95). See below. |
 | `confirm_over` | Dollars. An item whose cost estimate is over this waits for your OK before it's built (default 0, off). See [Asking before costly builds](#asking-before-costly-builds). |
-| `max_turns` | Turns (model calls) per build (default 80); other steps such as triage and review keep a cap of 80. A build that runs out, or hits its `per_job` cap, stops and waits for you; see [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget). |
+| `max_turns` | Turns (model calls) per build, by size: `{XS: 40, S: 80, M: 150, L: 300}`; one number sets every size. Other steps such as triage and review keep a cap of 80. A build that runs out, or hits its `per_job` cap, stops and waits for you; see [When a build runs out of turns or budget](using.md#when-a-build-runs-out-of-turns-or-budget). The defaults are a starting point, set above what builds usually take, so that the turn cap, which warns the builder to commit and note what's left, comes before the dollar cap, which doesn't. Raise or lower them as you see how your builds run. |
 
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the

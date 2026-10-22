@@ -173,7 +173,7 @@ func TestDoctorChecks(t *testing.T) {
 			t.Setenv("FACTORY_GITHUB_APP_KEY", filepath.Join(t.TempDir(), "none.pem"))
 		}, fail, "FACTORY_GITHUB_APP_KEY", "./factory setup"},
 		{"no ttyd", func(_ *testing.T, m *fakeMachine, _ *config.Config) { m.missing["ttyd"] = true },
-			warn, "ttyd isn't installed", "sudo apt install ttyd"},
+			fail, "ttyd isn't installed", "sudo apt install ttyd"},
 		{"port taken", func(_ *testing.T, m *fakeMachine, _ *config.Config) { m.busy = true },
 			warn, "is taken", "ss -ltnp | grep :8080"},
 	} {
@@ -328,6 +328,9 @@ esac`,
 		if err == nil {
 			t.Errorf("Go %s: exit 0", tc.goVersion)
 		}
+		if !strings.Contains(string(out), "✓ ttyd") && !strings.Contains(string(out), "sudo apt install ttyd") {
+			t.Errorf("Go %s: no ttyd line in:\n%s", tc.goVersion, out)
+		}
 		for _, w := range append(tc.want, "✓ git 2.43.0", "! Docker 27.5.1", "runner.egress.mode: open") {
 			if !strings.Contains(string(out), w) {
 				t.Errorf("Go %s: no %q in:\n%s", tc.goVersion, w, out)
@@ -349,7 +352,6 @@ func TestReportHealth(t *testing.T) {
 	cfg, _ := config.Load(testConfig(t, "o/r"))
 	m := healthy()
 	m.out[dockerVersion] = "27.5.1"
-	m.missing["ttyd"] = true
 	d := m.doctor(cfg)
 	d.serving = true
 	var sent []string

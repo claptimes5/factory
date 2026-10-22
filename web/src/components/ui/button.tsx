@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 
 // Buttons are 44px tall on a phone, so a thumb finds them, and tighter
 // on a desk. The main action is ink (dark on light, light on dark);
-// inverse sits on an ink card, where the main action is the light one.
+// inverse sits on the lead card (see index.css), where it follows the
+// card's own ink colors.
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 cursor-pointer",
   {
