@@ -188,8 +188,13 @@ missing too: each records what it was built on (`image_from`, the
 `image_build` settings, whether it has Chromium for previews) in the label
 `io.factory.source`, so after you change one and restart, `serve` builds
 that image again by itself. Images built before the label existed are
-rebuilt once. A change inside the repo's Dockerfile isn't seen this way;
-rebuild with `./factory images --rebuild`.
+rebuilt once. An image built from the repo's own Dockerfile
+(`image_build`) also records the Dockerfile's hash in
+`io.factory.dockerfile`. Every five minutes `serve` reads that Dockerfile
+on the base branch, and when it has changed, rebuilds the image the same
+way: a notification says so, the repo's items show "Waits for its image"
+with the reason, and its jobs wait. If the rebuild fails, you're told, and
+jobs keep running on the old image until it builds.
 
 Every image the factory builds has the label `io.factory.built=1`. A
 rebuild leaves the old copy without a tag, so the factory removes those

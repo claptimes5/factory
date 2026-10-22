@@ -273,6 +273,9 @@ func run(args []string) error {
 				return err
 			}
 			autoBuild(ctx, cfg, builder, p.Notify)
+			if cfg.Runner.Kind == "docker" {
+				go dockerfileLoop(ctx, cfg, builder, p.Notify)
+			}
 			go deliveries.catchUpLoop(ctx)
 			if cfg.Runner.Kind == "docker" {
 				go pruneLoop(ctx, cfg)
@@ -584,6 +587,9 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		Hosts: append([]string{host}, cfg.Web.Hosts...), CompareDir: filepath.Join(cfg.Path(cfg.DataDir), "compare")}
 	srv.JobsDir = filepath.Join(cfg.Path(cfg.DataDir), "jobs")
 	srv.DiskLow = p.DiskLow
+	if builder != nil {
+		srv.ImageWait = func(repo string) string { return builder.Waiting(cfg, repo) }
+	}
 	// The setup screen reads the readiness check's reports, and can run it
 	// again: on the daemon's context, so it stops when the daemon does.
 	srv.ReadinessDir, srv.IntakeLabel = readinessDir(cfg), cfg.Intake.Label

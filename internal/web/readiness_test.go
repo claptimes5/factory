@@ -304,3 +304,36 @@ func TestSplitBlockerAndWorkWaitingForSetup(t *testing.T) {
 		t.Fatalf("task = %q %q", d.Item.Setup, d.Item.SetupNote)
 	}
 }
+
+// While a repo's job image builds, its items say they wait for it, and why.
+func TestItemWaitsForItsImage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	st := storetest.Open(t, filepath.Join(dir, "f.db"))
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/r", 12, "Add a report")
+	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
+	building := "Waits for its job image, which is being built: the repo's Dockerfile changed on main. It starts by itself when the build is done."
+	s := &Server{Store: st, Actions: &fakeActions{}, Repos: []string{"o/r"}, ImageWait: func(repo string) string {
+		if repo == "o/r" {
+			return building
+		}
+		return ""
+	}}
+	h, err := s.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := httpServer(t, h)
+	var d APIItemDetail
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(it.ID, 10), &d)
+	if d.Item.Setup != "image" || d.Item.SetupNote != building {
+		t.Fatalf("item = %q %q", d.Item.Setup, d.Item.SetupNote)
+	}
+	// Done, it waits for nothing.
+	st.SetStage(ctx, it.ID, state.Done, "daemon", "")
+	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(it.ID, 10), &d)
+	if d.Item.Setup != "" {
+		t.Fatalf("done item = %q", d.Item.Setup)
+	}
+}

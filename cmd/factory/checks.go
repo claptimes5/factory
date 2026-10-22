@@ -267,8 +267,14 @@ func (im jobImage) makeBase(ctx context.Context, out io.Writer, cfg *config.Conf
 		return err
 	}
 	df := cmp.Or(im.build.Dockerfile, "Dockerfile")
+	content, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(df)))
+	if err != nil {
+		return fmt.Errorf("%s has no %s on %s: %w", repo, df, rc.BaseBranch, err)
+	}
 	fmt.Fprintf(out, "Building %s from %s's %s at %s...\n", im.from, repo, df, rc.BaseBranch)
-	args := []string{"build", "-t", im.from, "--label", imageLabel + "=1", "-f", filepath.Join(src, filepath.FromSlash(df))}
+	// The job image built on it inherits the label, so serve can tell
+	// when the Dockerfile has changed since (see dockerfileLoop).
+	args := []string{"build", "-t", im.from, "--label", imageLabel + "=1", "--label", dockerfileLabel + "=" + dockerfileHash(string(content)), "-f", filepath.Join(src, filepath.FromSlash(df))}
 	if im.build.Target != "" {
 		args = append(args, "--target", im.build.Target)
 	}
@@ -289,9 +295,8 @@ func (im jobImage) makeBase(ctx context.Context, out io.Writer, cfg *config.Conf
 		err = fmt.Errorf("building %s from its %s: %w", repo, df, err)
 		// A secret it isn't given is just absent in the build, so the
 		// step that reads it fails without naming it.
-		b, _ := os.ReadFile(filepath.Join(src, filepath.FromSlash(df)))
 		var missing []string
-		for _, id := range stack.SecretIDs(string(b)) {
+		for _, id := range stack.SecretIDs(string(content)) {
 			if im.build.Secrets[id] == "" {
 				missing = append(missing, id)
 			}

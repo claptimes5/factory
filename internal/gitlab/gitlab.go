@@ -715,6 +715,11 @@ func (c *Client) ReadFile(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return c.ReadFileAt(ctx, path, ref)
+}
+
+// ReadFileAt returns a file's contents on a branch.
+func (c *Client) ReadFileAt(ctx context.Context, path, ref string) (string, error) {
 	var f struct {
 		Content  string `json:"content"`
 		Encoding string `json:"encoding"`

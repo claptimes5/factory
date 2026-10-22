@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +41,7 @@ type imageBuilder struct {
 	mu       sync.Mutex
 	running  bool
 	building []string // tags this build still has to make
+	why      string   // why they're built, for the items that wait
 	log      *tailBuffer
 	result   string
 	failed   bool
@@ -57,6 +61,22 @@ func (b *imageBuilder) onDone(f func()) {
 
 // errBuildRunning refuses a second build while one runs.
 var errBuildRunning = errors.New("a build is already running")
+
+// Waiting says, for an item on repo, that its jobs wait for its job image
+// to build, and why; "" when they don't.
+func (b *imageBuilder) Waiting(cfg *config.Config, repo string) string {
+	rc, ok := cfg.RepoConf(repo)
+	if !ok {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !slices.Contains(b.building, rc.Image) {
+		return ""
+	}
+	why := cmp.Or(b.why, "it isn't built yet")
+	return "Waits for its job image, which is being built: " + why + ". It starts by itself when the build is done."
+}
 
 // Building names the images being built now.
 func (b *imageBuilder) Building() []string {
@@ -90,21 +110,27 @@ func missingImages(cfg *config.Config) []jobImage {
 // (which may be nil) with how it went and what it built. It reports how
 // many it is building; none when every one is built.
 func (b *imageBuilder) start(cfg *config.Config, done func(err error, built []string)) (int, error) {
+	return b.startThese(cfg, missingImages, "", done)
+}
+
+// startThese is start for the images pick names, built or not; why says
+// why, for the items that wait ("" when they aren't built yet).
+func (b *imageBuilder) startThese(cfg *config.Config, pick func(*config.Config) []jobImage, why string, done func(err error, built []string)) (int, error) {
 	b.mu.Lock()
 	if b.running {
 		b.mu.Unlock()
 		return 0, errBuildRunning
 	}
-	b.running = true // held while missingImages looks, so two starts can't race
+	b.running = true // held while pick looks, so two starts can't race
 	b.mu.Unlock()
-	missing := missingImages(cfg)
+	missing := pick(cfg)
 	b.mu.Lock()
 	if len(missing) == 0 {
 		b.running = false
 		b.mu.Unlock()
 		return 0, nil
 	}
-	b.building, b.log, b.result, b.failed = nil, &tailBuffer{max: 16 << 10}, "", false
+	b.building, b.log, b.result, b.failed, b.why = nil, &tailBuffer{max: 16 << 10}, "", false, why
 	for _, im := range missing {
 		b.building = append(b.building, im.tag)
 	}
@@ -196,6 +222,84 @@ func autoBuild(ctx context.Context, cfg *config.Config, b *imageBuilder, notify 
 		slog.Warn("job images", "err", err)
 	} else if n > 0 {
 		slog.Info("building missing job images in the background; jobs that need them wait", "count", n)
+	}
+}
+
+// dockerfileEvery is how often serve looks for a change to a Dockerfile
+// a job image is built from.
+var dockerfileEvery = 5 * time.Minute
+
+// dockerfileLabel holds the hash of the Dockerfile an image was built from.
+const dockerfileLabel = "io.factory.dockerfile"
+
+func dockerfileHash(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
+}
+
+// dockerfileChanged are the built images whose repo's Dockerfile, on its
+// base branch, isn't the one they were built from. One that isn't built
+// is autoBuild's, and a repo that can't be read now is looked at next time.
+func dockerfileChanged(ctx context.Context, cfg *config.Config) []jobImage {
+	var out []jobImage
+	for _, im := range jobImages(cfg) {
+		if im.build == nil {
+			continue
+		}
+		var b strings.Builder
+		if runCmd(&b, "docker", "image", "inspect", "--format", `{{index .Config.Labels "`+dockerfileLabel+`"}}`, im.tag) != nil {
+			continue
+		}
+		repo := im.repos[0]
+		rc, _ := cfg.RepoConf(repo)
+		ts, err := tokens(cfg, repo)
+		if err != nil {
+			continue
+		}
+		df, err := newForge(cfg, repo, ts).ReadFileAt(ctx, cmp.Or(im.build.Dockerfile, "Dockerfile"), rc.BaseBranch)
+		if err != nil {
+			slog.Warn("reading a job image's Dockerfile", "repo", repo, "err", err)
+			continue
+		}
+		if dockerfileHash(df) != strings.TrimSpace(b.String()) {
+			out = append(out, im)
+		}
+	}
+	return out
+}
+
+// dockerfileLoop rebuilds, now and every dockerfileEvery until ctx ends,
+// the job images whose repo's Dockerfile has changed, and says so: their
+// jobs wait for the new image, as for a missing one. While another build
+// runs it looks again next time.
+func dockerfileLoop(ctx context.Context, cfg *config.Config, b *imageBuilder, notify func(context.Context, string)) {
+	t := time.NewTicker(dockerfileEvery)
+	defer t.Stop()
+	for {
+		if changed := dockerfileChanged(ctx, cfg); len(changed) > 0 {
+			rc, _ := cfg.RepoConf(changed[0].repos[0])
+			why := "the repo's Dockerfile changed on " + rc.BaseBranch
+			_, err := b.startThese(cfg, func(*config.Config) []jobImage { return changed }, why, func(err error, _ []string) {
+				if err != nil {
+					msg := "Couldn't rebuild a job image after its Dockerfile changed: " + err.Error() + ". Its jobs run on the old image until it builds; see the dashboard's get-started page."
+					slog.Error(msg)
+					notify(ctx, msg)
+				}
+			})
+			if err == nil {
+				for _, im := range changed {
+					rc, _ = cfg.RepoConf(im.repos[0])
+					msg := fmt.Sprintf("Rebuilding the job image for %s: its Dockerfile changed on %s. Its jobs wait for the new image.", im.repos[0], rc.BaseBranch)
+					slog.Info(msg)
+					notify(ctx, msg)
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }
 

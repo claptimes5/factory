@@ -278,7 +278,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       <div className="flex items-center gap-2.5">
         <span className="font-mono text-caption text-muted-foreground">{shortRef(c.ref)}</span>
         <Badge variant="attention">{pr ? "PR ready" : plan ? "Plan check" : held ? "Cost check" : chooser ? "Your call" : "Question"}</Badge>
-        {c.setup && <Badge variant={c.setup === "blocks" ? "warning" : "secondary"}>{c.setup === "blocks" ? "Blocks setup" : "Waits for setup"}</Badge>}
+        {c.setup && <Badge variant={c.setup === "blocks" ? "warning" : "secondary"}>{{ blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image" }[c.setup]}</Badge>}
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {pr
             ? [c.model, c.cost_usd > 0 && money(c.cost_usd)].filter(Boolean).join(" · ")
@@ -287,7 +287,7 @@ function NeedsYouCard({ card: c }: { card: CardT }) {
       </div>
       <CardLink card={c} className="text-title-sm leading-tight font-semibold" />
       <FoundBy source={c.self_started} className="text-muted-foreground" />
-      {c.setup === "blocks" && c.setup_note && <p className="text-sm leading-relaxed text-text-2">{c.setup_note}</p>}
+      {(c.setup === "blocks" || c.setup === "image") && c.setup_note && <p className="text-sm leading-relaxed text-text-2">{c.setup_note}</p>}
       {pr ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-2">
           {c.gates_total > 0 && (

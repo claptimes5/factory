@@ -1205,7 +1205,7 @@ components:
           type: array
           description: "The items it depends on that aren't done: it isn't built until they are, whatever is approved"
           items: { $ref: "#/components/schemas/ItemRef" }
-        setup: { type: string, enum: ["", blocks, held], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty" }
+        setup: { type: string, enum: ["", blocks, held, image], description: "While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; else empty" }
         setup_note: { type: string, description: "Why, in a sentence" }
     ItemRef:
       type: object

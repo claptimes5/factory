@@ -70,9 +70,12 @@ type Server struct {
 	PRURL    func(repo string, n int) string
 	DailyCap float64
 	// DiskLow says why jobs aren't starting for lack of disk (may be nil).
-	DiskLow  func() string
-	AwaitCap int
-	Attach   func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
+	DiskLow func() string
+	// ImageWait says an item on repo waits for its job image to build,
+	// and why; "" when it doesn't (may be nil).
+	ImageWait func(repo string) string
+	AwaitCap  int
+	Attach    func(ctx context.Context, jobID int64) (string, error) // returns a URL or a command
 	// CompareDir holds `factory compare` reports, one directory per run.
 	CompareDir string
 	// Hosts are extra Host header values to accept (a Tailscale name or

@@ -3287,10 +3287,10 @@ export interface components {
             /** @description The items it depends on that aren't done: it isn't built until they are, whatever is approved */
             waits_for: components["schemas"]["ItemRef"][];
             /**
-             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; else empty
+             * @description While the repo's readiness check has found blockers: blocks when it fixes one, held when it waits for them; image when its jobs wait for its job image to build; else empty
              * @enum {string}
              */
-            setup: "" | "blocks" | "held";
+            setup: "" | "blocks" | "held" | "image";
             /** @description Why, in a sentence */
             setup_note: string;
         };

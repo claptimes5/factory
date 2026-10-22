@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -357,5 +359,72 @@ func TestImageBuiltFromAnotherBaseIsMissing(t *testing.T) {
 	// Built before images had the label: built again once.
 	if im := (jobImage{tag: "x", from: "y"}); im.current("", nil) || !im.current("from=y\n", nil) || im.current("from=y", errors.New("no such image")) {
 		t.Fatal("current is wrong")
+	}
+}
+
+// An image built from a repo's Dockerfile is rebuilt once the Dockerfile
+// on the base branch isn't the one it was built from, and its items say
+// they wait for it.
+func TestDockerfileChangeRebuildsTheImage(t *testing.T) {
+	df := "FROM ruby:3.4 AS test\n"
+	var refs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/api/contents/Dockerfile" {
+			http.NotFound(w, r)
+			return
+		}
+		refs = append(refs, r.URL.Query().Get("ref"))
+		fakeContents(w, map[string]string{"Dockerfile": df}, "Dockerfile")
+	}))
+	t.Cleanup(srv.Close)
+	oldAPI := githubAPI
+	githubAPI = srv.URL
+	t.Cleanup(func() { githubAPI = oldAPI })
+	t.Setenv("FACTORY_GITHUB_APP_ID", "")
+	t.Setenv("GITHUB_TOKEN", "ghp_x")
+
+	label := "" // the image's dockerfile label; "-" for no image
+	old := runCmd
+	runCmd = func(out io.Writer, _ string, args ...string) error {
+		if len(args) > 1 && args[1] == "inspect" {
+			if label == "-" {
+				return errors.New("no such image")
+			}
+			io.WriteString(out, label+"\n")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runCmd = old })
+
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "repo: o/r", "repos:\n  - {name: o/api, base_branch: release, image_build: {target: test}}\n", 1)), 0o644)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	label = dockerfileHash(df)
+	if c := dockerfileChanged(ctx, cfg); len(c) != 0 {
+		t.Fatalf("unchanged, rebuilds %+v", c)
+	}
+	if strings.Join(refs, ",") != "release" {
+		t.Fatalf("read the Dockerfile at %v, not the base branch", refs)
+	}
+	df = "FROM ruby:3.4 AS test\nRUN apt-get install -y ffmpeg\n"
+	if c := dockerfileChanged(ctx, cfg); len(c) != 1 || c[0].tag != "factory-job-o__api:latest" {
+		t.Fatalf("changed, rebuilds %+v", c)
+	}
+	label = "-" // not built: that's autoBuild's to build
+	if c := dockerfileChanged(ctx, cfg); len(c) != 0 {
+		t.Fatalf("missing, rebuilds %+v", c)
+	}
+
+	bl := &imageBuilder{building: []string{"factory-job-o__api:latest"}, why: "the repo's Dockerfile changed on release"}
+	if w := bl.Waiting(cfg, "o/api"); w != "Waits for its job image, which is being built: the repo's Dockerfile changed on release. It starts by itself when the build is done." {
+		t.Fatalf("waiting %q", w)
+	}
+	if w := (&imageBuilder{}).Waiting(cfg, "o/api"); w != "" {
+		t.Fatalf("nothing building, waiting %q", w)
 	}
 }
