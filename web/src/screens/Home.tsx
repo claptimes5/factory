@@ -95,7 +95,7 @@ function orderLine(cs: CardT[]): string {
   const parts = [
     cs.some((c) => kindOf(c) === "review") && "changes to review",
     cs.some((c) => c.unblocks.length > 0) && "what other work waits for",
-    "the rest",
+    cs.some((c) => kindOf(c) !== "review" && c.unblocks.length === 0 && c.setup !== "held" && c.setup !== "base") && "the rest",
     cs.some((c) => c.setup === "held" || c.setup === "base") && "what waits for setup or the base branch",
   ].filter(Boolean);
   return `In this order: ${parts.join(", then ")}.`;
@@ -161,17 +161,23 @@ export function HomeScreen() {
         <>
           <SetupLead r={unready[0]} data={readiness} more={unready.length - 1} />
           {needs.length > 0 && (
-            <section aria-label="Needs you" className="flex flex-col gap-2">
-              <h2 className="text-body font-semibold">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h2>
-              {ordered(needs) && <p className="text-body-sm text-muted-foreground">{orderLine(needs)}</p>}
-              {needs.some((c) => c.setup === "held" || c.setup === "base") && (
-                <p className="text-body-sm text-muted-foreground">What waits for setup or the base branch can't pass its checks until they're fixed; it starts by itself then, or Retry it.</p>
-              )}
-              <ol className="flex flex-col divide-y rounded-card border bg-surface">
+            // Folded: setup is the one thing to do now, and these wait their turn.
+            <section aria-label="Needs you">
+            <details className="group rounded-card border bg-surface">
+              <summary className="flex cursor-pointer items-center justify-between gap-3 p-3 text-body-sm text-muted-foreground md:px-4">
+                <span>
+                  After that, {needs.length === 1 ? "1 more thing needs" : `${needs.length} more things need`} you
+                </span>
+                <span className="text-meta group-open:hidden">Show</span>
+                <span className="hidden text-meta group-open:inline">Hide</span>
+              </summary>
+              {ordered(needs) && <p className="border-t px-3 pt-3 text-body-sm text-muted-foreground md:px-4">{orderLine(needs)}</p>}
+              <ol className="flex flex-col divide-y">
                 {needs.map((c, i) => (
                   <NeedRow key={c.id} c={c} n={ordered(needs) ? i + 1 : undefined} />
                 ))}
               </ol>
+            </details>
             </section>
           )}
         </>
@@ -203,7 +209,10 @@ export function HomeScreen() {
 
       <CatchUp />
 
-      <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => setupActivity(r)) ? 1 : 0} />
+      {/* While setup leads nothing new starts, so the line would only repeat what's folded above. */}
+      {!(unready.length > 0 && readiness) && (
+        <LineStrip moving={moving} you={needs.length} stuck={stuck.length} setup={readiness?.repos.some((r) => setupActivity(r)) ? 1 : 0} />
+      )}
 
       <Earned />
 
@@ -364,17 +373,10 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
   const title = next.title.replace(/^(Ready\. )?Next: |^Working on it: /, "");
   return (
     <section aria-label="Setup" className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
-        {r.total > 0 && (
-          <span className="shrink-0 text-body-sm text-muted-foreground">
-            {r.done} of {r.total} steps done
-          </span>
-        )}
-      </div>
+      <h1 className="text-display font-semibold tracking-tight">Finish setting up {repoName(r.repo) || r.repo}</h1>
       <article data-testid="setup-lead" className="lead flex flex-col gap-3 rounded-card border border-live-border bg-ink p-5 text-ink-foreground md:p-6">
         <div className="text-meta font-semibold text-ink-attention">
-          {next.running ? "Setup · working on it now" : next.human ? "Setup · needs you · new tasks wait until it's done" : "Setup · new tasks wait until it's done"}
+          {next.running ? "Working on it now" : next.human ? "Do this first: nothing new starts until setup is done" : "Nothing new starts until setup is done"}
         </div>
         <p className="flex items-center gap-2.5 text-title-sm font-semibold md:text-title">
           {next.running && <span className="pulse inline-block size-2.5 shrink-0 rounded-full bg-ink-foreground" aria-hidden />}
@@ -387,14 +389,15 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
             <RunProgress r={r} last />
           </div>
         )}
-        <div className="mt-1 flex flex-wrap gap-2">
+        {/* One button; the details are a link, so nothing competes with it. */}
+        <div className="mt-1 flex flex-wrap items-center gap-4">
           <NextActions next={next} busy={busy} run={run} inverse />
-          <Button size="sm" variant="inverse-outline" asChild>
-            <Link to="/setup">{r.state === "incomplete" ? "See the whole error" : "See every step"}</Link>
-          </Button>
+          <Link to="/setup" className="text-body-sm text-ink-muted underline hover:text-ink-foreground">
+            {r.state === "incomplete" ? "See the error" : "See every step"}
+          </Link>
         </div>
         {msg && <p className="text-body-sm text-ink-muted">{msg.text}</p>}
-        {!msg && !r.checking && (r.check_error || r.result) && <p className="text-body-sm text-ink-muted">{r.check_error || r.result}</p>}
+        {!msg && !r.checking && r.check_error && <p className="text-body-sm text-ink-muted">{r.check_error}</p>}
       </article>
       {more > 0 && (
         <p className="px-1 text-body-sm text-muted-foreground">
@@ -443,25 +446,31 @@ function NeedRow({ c, n }: { c: CardT; n?: number }) {
   );
 }
 
-/** The line at a glance: how many jobs are at each station, you being the last. */
+/**
+ * The line at a glance: how many jobs are at each station. What waits on
+ * you or is stuck isn't moving, so it's off the line, said first.
+ */
 function LineStrip({ moving, you, stuck, setup }: { moving: { key: string; label: string; cards: CardT[] }[]; you: number; stuck: number; setup: number }) {
   // A setup run (a check, a lint baseline) is work too.
   const working = moving.reduce((n, s) => n + s.cards.filter((c) => c.live).length, 0) + setup;
+  const off = [you > 0 && `${you} waiting on you`, stuck > 0 && `${stuck} stuck`].filter(Boolean);
   return (
     <section aria-label="The line" className="flex flex-col gap-4 rounded-card border bg-surface p-4 md:p-5">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-body-sm font-semibold">On the line</h2>
-        <span className="text-meta text-muted-foreground">
-          {working === 0 ? "Nothing running" : `${working} working`}
-          {stuck > 0 ? `, ${stuck} stuck` : you > 0 ? `, ${you} waiting on you` : ", nothing stuck"}
-        </span>
+        <span className="text-meta text-muted-foreground">{working === 0 ? "Nothing running" : `${working} working`}</span>
       </div>
-      <ol className="grid grid-cols-4 gap-2">
-        {[...moving.map((s) => ({ key: s.key, label: s.label, n: s.cards.length, cards: s.cards })), { key: "you", label: "You", n: you, cards: [] as CardT[] }].map((s) => (
-          <li key={s.key} className="flex min-w-0 flex-col gap-2" aria-label={`${s.label}: ${s.n}`}>
-            <span className={cn("h-1 rounded-full", s.key === "you" ? (s.n > 0 ? "bg-ink" : "bg-border") : s.n > 0 ? "bg-primary" : "bg-border")} />
-            <span className={cn("text-meta", s.key === "you" ? "font-semibold" : "text-muted-foreground")}>
-              {s.label} <span className="font-mono">{s.n}</span>
+      {off.length > 0 && (
+        <p aria-label="Off the line" className="rounded-md bg-muted px-3 py-2 text-body-sm text-muted-foreground">
+          <span className="font-semibold text-foreground">Off the line:</span> {off.join(", ")}. Nothing moves on these until they're unblocked.
+        </p>
+      )}
+      <ol className="grid grid-cols-3 gap-2">
+        {moving.map((s) => (
+          <li key={s.key} className="flex min-w-0 flex-col gap-2" aria-label={`${s.label}: ${s.cards.length}`}>
+            <span className={cn("h-1 rounded-full", s.cards.length > 0 ? "bg-primary" : "bg-border")} />
+            <span className="text-meta text-muted-foreground">
+              {s.label} <span className="font-mono">{s.cards.length}</span>
             </span>
             <ul className="hidden flex-col gap-1.5 md:flex">
               {s.cards.slice(0, 3).map((c) => (
