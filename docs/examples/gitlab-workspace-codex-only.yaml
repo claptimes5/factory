@@ -48,7 +48,7 @@ intake:
 runner:
   kind: docker
   image: factory-job:latest
-  cpus: "2"
+  # cpus: "4"               # per job and per service; left out, the cores shared by budgets.concurrent_jobs
   memory: 4g
 
 # The model names are placeholders: use the ones your sign-in offers
