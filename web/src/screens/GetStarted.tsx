@@ -22,6 +22,7 @@ import {
   machineCheckStalled,
   postJSON,
   useWizard,
+  useWizardMode,
   wizardDo,
   type Wizard,
   type WizardAccess,
@@ -30,7 +31,7 @@ import {
   type WizardSecret,
   type WizardStep,
 } from "@/api/client";
-import { Ago, ErrorBox, Loading, PageTitle } from "@/components/common";
+import { Ago, ErrorBox, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -229,7 +230,8 @@ const stateText: Record<string, [string, "success" | "warning" | "secondary"]> =
   optional: ["Optional", "secondary"],
 };
 
-function StepIcon({ state }: { state: string }) {
+function StepIcon({ state, checking }: { state: string; checking?: boolean }) {
+  if (checking) return <Loader2 aria-hidden className="size-5 shrink-0 animate-spin text-muted-foreground" />;
   if (state === "done") return <CheckCircle2 aria-hidden className="size-5 shrink-0 text-success" />;
   if (state === "attention") return <AlertCircle aria-hidden className="size-5 shrink-0 text-warning" />;
   return <Circle aria-hidden className="size-5 shrink-0 text-muted-foreground" />;
@@ -241,23 +243,27 @@ function StepCard({
   open,
   toggle,
   next,
+  checking,
   children,
 }: {
   step: WizardStep;
   n: number;
+  /** Its check is still running: the card says so and holds a placeholder for what it'll show. */
+  checking?: string;
   open: boolean;
   toggle: () => void;
   /** The next step that needs something, offered once this one is done. */
   next?: { n: number; step: WizardStep; go: () => void };
   children: ReactNode;
 }) {
-  const [label, variant] = stateText[step.state] ?? [step.state, "secondary"];
+  const [label, variant] = checking ? ["Checking", "secondary" as const] : (stateText[step.state] ?? [step.state, "secondary"]);
   return (
     <li
       id={`card-${step.key}`}
       data-testid="wizard-step"
       data-key={step.key}
-      data-state={step.state}
+      data-state={checking ? "checking" : step.state}
+      aria-busy={!!checking || undefined}
       className={cn("scroll-mt-4 rounded-card border bg-card transition-colors", open && step.state === "attention" && "border-primary/40")}
     >
       <h2>
@@ -267,7 +273,7 @@ function StepCard({
           onClick={toggle}
           className="flex w-full min-w-0 cursor-pointer items-start gap-3 p-4 text-left"
         >
-          <StepIcon state={step.state} />
+          <StepIcon state={step.state} checking={!!checking} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className="text-body font-semibold">
@@ -275,15 +281,15 @@ function StepCard({
               </span>
               <Badge variant={variant}>{label}</Badge>
             </span>
-            <span className="text-meta break-words text-text-2">{step.summary}</span>
+            <span className="text-meta break-words text-text-2">{checking || step.summary}</span>
           </span>
           <ChevronDown aria-hidden className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
         </button>
       </h2>
       {open && (
         <div id={`step-${step.key}`} className="flex min-w-0 flex-col gap-3 border-t px-4 pt-3 pb-4">
-          {children}
-          {step.state !== "attention" && next && (
+          {checking && step.key !== "machine" ? <StepSkeleton /> : children}
+          {!checking && step.state !== "attention" && next && (
             <div className="flex justify-end border-t pt-3">
               <Button size="sm" variant="outline" onClick={next.go}>
                 Next: {next.n}. {next.step.title} <ArrowRight aria-hidden />
@@ -293,6 +299,18 @@ function StepCard({
         </div>
       )}
     </li>
+  );
+}
+
+/** Grey bars where a step's body will be once its check is back. */
+function StepSkeleton() {
+  return (
+    <div role="status" aria-label="Checking" className="flex flex-col gap-2.5 py-1">
+      {["w-11/12", "w-3/4", "w-1/2"].map((w) => (
+        <div key={w} className={cn("h-3 animate-pulse rounded-full bg-muted", w)} />
+      ))}
+      <div className="mt-1 h-8 w-32 animate-pulse rounded-control bg-muted" />
+    </div>
   );
 }
 
@@ -1536,8 +1554,22 @@ const bodies: Record<string, (p: { w: Wizard; ro: boolean }) => ReactNode> = {
   finish: (p) => <FinishStep {...p} />,
 };
 
+// What these steps say depends on the live look at the forges, so until it
+// is back the page shows them as checking, and the rest as saved.
+const forgeChecking: Record<string, string> = {
+  github: "Checking the factory can reach GitHub…",
+  gitlab: "Checking the factory can reach GitLab…",
+  checks: "Reading each repo's files…",
+  finish: "Waiting for the steps above…",
+};
+
 export function GetStartedScreen() {
-  const { data, error, isLoading } = useWizard();
+  // The saved setup (the layout already has it) draws the page at once;
+  // the live look fills in each step as its check comes back.
+  const live = useWizard();
+  const saved = useWizardMode();
+  const data = live.data ?? saved.data;
+  const error = live.data ? null : (live.error ?? saved.error);
   const [params, setParams] = useSearchParams();
   // GitHub's answer shows once: kept here, and taken out of the address so
   // a reload or a shared link doesn't show it again.
@@ -1548,7 +1580,8 @@ export function GetStartedScreen() {
   }, [params, setParams]);
   // The first step that needs something is open; toggled are the ones the person opened or closed.
   const [toggled, setToggled] = useState<Record<string, boolean>>(back || backErr ? { github: true } : {});
-  const first = data ? (data.steps.find((s) => s.state === "attention")?.key ?? "finish") : "";
+  // Nothing opens until the live look says which step needs something, so the open card doesn't jump.
+  const first = live.data ? (live.data.steps.find((s) => s.state === "attention")?.key ?? "finish") : "";
   // A step finished while open stays open, so what it did stays in view, and the next one opens below it.
   const prevFirst = useRef("");
   useEffect(() => {
@@ -1557,18 +1590,23 @@ export function GetStartedScreen() {
     if (p && p !== first) setToggled((t) => (p in t ? t : { ...t, [p]: true }));
     prevFirst.current = first;
   }, [first]);
-  if (isLoading) return <Loading what="Reading the setup" />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
   const w = data;
   const ro = !w.writable;
+  const machineChecking = w.machine_checked_at === "" && !machineCheckStalled();
+  const checking = (s: WizardStep): string | undefined => {
+    if (!live.data && forgeChecking[s.key]) return forgeChecking[s.key];
+    if (machineChecking && (s.key === "machine" || (s.key === "images" && !w.images?.building))) return s.summary;
+  };
   const isOpen = (key: string) => toggled[key] ?? key === first;
   const goTo = (key: string) => {
     setToggled((t) => ({ ...t, [key]: true }));
     requestAnimationFrame(() => document.getElementById(`card-${key}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   const required = w.steps.filter((s) => s.state !== "optional" && s.key !== "finish");
-  const doneCount = required.filter((s) => s.state === "done").length;
+  const doneCount = required.filter((s) => s.state === "done" && !checking(s)).length;
+  const anyChecking = w.steps.some((s) => checking(s));
   return (
     <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-4" data-testid="get-started">
       <div>
@@ -1591,6 +1629,7 @@ export function GetStartedScreen() {
         <div className="flex items-baseline justify-between gap-2 text-sm">
           <span className="font-medium">
             {doneCount === required.length ? "Every required step is done" : `${doneCount} of ${required.length} required steps done`}
+            {anyChecking && <span className="font-normal text-muted-foreground"> · checking…</span>}
           </span>
           <details className="text-xs text-muted-foreground">
             <summary className="cursor-pointer">Where it's saved</summary>
@@ -1641,6 +1680,7 @@ export function GetStartedScreen() {
               open={isOpen(s.key)}
               toggle={() => setToggled((t) => ({ ...t, [s.key]: !isOpen(s.key) }))}
               next={j >= 0 ? { n: j + 1, step: w.steps[j], go: () => goTo(w.steps[j].key) } : undefined}
+              checking={checking(s)}
             >
               {bodies[s.key]?.({ w, ro })}
             </StepCard>
