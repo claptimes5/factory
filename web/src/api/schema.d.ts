@@ -2762,6 +2762,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/setup/claude/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Claude's saved API key or subscription token
+         * @description Deletes it from factory.env and routes every job to Codex if it's connected. A key exported where the factory starts still applies.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/setup/codex": {
         parameters: {
             query?: never;
@@ -2791,6 +2824,42 @@ export interface paths {
                     };
                 };
             };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/codex/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove how Codex signs in
+         * @description Deletes Codex's keys and its ChatGPT plan setting from factory.env, and
+         *     routes every job to Claude if it's connected. The saved ChatGPT
+         *     sign-in stays, so choosing the plan again needs no new sign-in. A key
+         *     exported where the factory starts still applies.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
             responses: {
                 200: components["responses"]["WizardResult"];
                 400: components["responses"]["Error"];

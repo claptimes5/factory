@@ -193,6 +193,8 @@ func (w *wizard) State(context.Context, bool) web.APIWizard {
 	case w.codexMode == "chatgpt":
 		step("codex", "Codex", "attention", "ChatGPT plan, not signed in yet")
 		out.Warnings = append(out.Warnings, "Codex isn't signed in to ChatGPT, so Codex jobs wait until you sign in.")
+	case w.codexMode == "":
+		step("codex", "Codex", "optional", "Optional: with Claude too, one reviews what the other builds")
 	default:
 		step("codex", "Codex", "done", "Saved")
 	}
@@ -329,6 +331,12 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		}
 		w.claude, w.changed = k, true
 		return "Saved the key.", nil
+	case "claude/disconnect":
+		w.claude, w.changed = "", true
+		return "Removed Claude's saved credentials from factory.env.", nil
+	case "codex/disconnect":
+		w.codexMode, w.signedIn, w.changed = "", false, true
+		return "Removed Codex's saved credentials from factory.env. Claude now builds and reviews.", nil
 	case "codex":
 		switch in.Mode {
 		case "api-key", "access-token":
