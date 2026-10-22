@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -173,9 +174,46 @@ func usesRunnerImage(cfg *config.Config) bool {
 	return cfg.Orchestrator.On || cfg.Tuning.Every > 0 || cfg.Grooming.Every > 0
 }
 
+// sourceLabel records what a job image was built from, so one built from
+// something factory.yaml no longer says (another image_from, say) counts
+// as not built, and serve builds it again.
+const sourceLabel = "io.factory.source"
+
+// source is what im is built from, for sourceLabel.
+func (im jobImage) source() string {
+	s := "from=" + im.from
+	if im.playwright {
+		s += " playwright"
+	}
+	if im.build != nil {
+		b, _ := json.Marshal(im.build) // map keys sorted, so it's stable
+		s += " build=" + string(b)
+	}
+	return s
+}
+
+// inspectArgs read an image's sourceLabel; current says whether what they
+// gave (or err, when there's no such image) is a build of im as it is now.
+// Every image jobImages lists is the factory's to build, so one with no
+// label, built before there was one, is built again once.
+func (im jobImage) inspectArgs() []string {
+	return []string{"image", "inspect", "--format", `{{index .Config.Labels "` + sourceLabel + `"}}`, im.tag}
+}
+
+func (im jobImage) current(out string, err error) bool {
+	return err == nil && strings.TrimSpace(out) == im.source()
+}
+
+// isBuilt says whether im is built as factory.yaml says now.
+func (im jobImage) isBuilt() bool {
+	var b strings.Builder
+	err := runCmd(&b, "docker", im.inspectArgs()...)
+	return im.current(b.String(), err)
+}
+
 func (im jobImage) buildArgs(dir string) []string {
 	// The label lets pruneImages clean up old copies of only our images.
-	a := []string{"build", "-t", im.tag, "--label", imageLabel + "=1"}
+	a := []string{"build", "-t", im.tag, "--label", imageLabel + "=1", "--label", sourceLabel + "=" + im.source()}
 	if im.from != "" {
 		a = append(a, "--build-arg", "BASE="+im.from)
 	}
@@ -325,7 +363,7 @@ func buildImages(out io.Writer, cfg *config.Config, force bool) error {
 	}
 	built := false
 	for _, im := range jobImages(cfg) {
-		if !force && runCmd(io.Discard, "docker", "image", "inspect", im.tag) == nil {
+		if !force && im.isBuilt() {
 			fmt.Fprintf(out, "%s is built.\n", im.tag)
 			continue
 		}

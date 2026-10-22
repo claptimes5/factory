@@ -810,7 +810,7 @@ func appClients(vals map[string]string) clientFor {
 func setupImages(p *prompter, cfg *config.Config) bool {
 	var missing []jobImage
 	for _, im := range jobImages(cfg) {
-		if runCmd(io.Discard, "docker", "image", "inspect", im.tag) != nil {
+		if !im.isBuilt() {
 			missing = append(missing, im)
 		}
 	}

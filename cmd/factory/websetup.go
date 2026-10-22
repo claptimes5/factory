@@ -605,8 +605,8 @@ func (w *wizard) checkMachine(ctx context.Context) {
 	images := map[string]bool{}
 	if cfg.Runner.Kind == "docker" {
 		for _, im := range jobImages(cfg) {
-			_, err := runOutput(ctx, "docker", "image", "inspect", im.tag) // gives up on a hung Docker
-			images[im.tag] = err == nil
+			out, err := runOutput(ctx, "docker", im.inspectArgs()...) // gives up on a hung Docker
+			images[im.tag] = im.current(out, err)
 		}
 	}
 	w.mu.Lock()

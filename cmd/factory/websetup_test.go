@@ -341,6 +341,7 @@ func TestWizardBuildsImages(t *testing.T) {
 		case len(args) > 1 && args[0] == "image" && args[1] == "inspect":
 			select {
 			case <-built:
+				io.WriteString(out, "from=") // built on the default base
 				return nil
 			default:
 				return errors.New("no such image")

@@ -399,11 +399,13 @@ func TestSetupSuggestsChecks(t *testing.T) {
 		"o/web": {"package.json": `{"scripts":{"build":"vite build","test":"vitest"},"devDependencies":{"vite":"^8"}}`, "package-lock.json": "{}"},
 	}}
 	var built []string
-	f.runCmd = func(_ io.Writer, name string, args ...string) error {
+	f.runCmd = func(w io.Writer, name string, args ...string) error {
 		cmd := strings.Join(args, " ")
 		switch {
-		case strings.HasPrefix(cmd, "image inspect factory-job-o__api"):
+		case strings.HasPrefix(cmd, "image inspect") && strings.HasSuffix(cmd, " factory-job-o__api:latest"):
 			return errors.New("no such image")
+		case strings.HasPrefix(cmd, "image inspect"):
+			io.WriteString(w, "from=") // the default image, built
 		case strings.HasPrefix(cmd, "build"):
 			built = append(built, cmd)
 		}
@@ -434,7 +436,7 @@ func TestSetupSuggestsChecks(t *testing.T) {
 	if web.Image != cfg.Runner.Image || strings.Join(web.Gates.Required, ",") != "test,build" || web.Gates.DiffGuard.MaxChangedLines == 0 {
 		t.Fatalf("o/web = %+v %+v", web, web.Gates)
 	}
-	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --label io.factory.built=1 --build-arg BASE=ruby:3.3.6-bookworm ") {
+	if len(built) != 1 || !strings.HasPrefix(built[0], "build -t factory-job-o__api:latest --label io.factory.built=1 --label io.factory.source=from=ruby:3.3.6-bookworm --build-arg BASE=ruby:3.3.6-bookworm ") {
 		t.Fatalf("built %q", built)
 	}
 	if !strings.Contains(out, "o/api looks like Ruby on Rails") || !strings.Contains(out, "Jobs for o/api run in the image factory-job-o__api:latest") {
@@ -567,6 +569,21 @@ func testConfig(t *testing.T, repo string) string {
 	return path
 }
 
+// builtAsConfigured answers an image inspect as Docker would for an image
+// built as the config at cfgPath says now.
+func builtAsConfigured(out io.Writer, cfgPath string, args []string) {
+	if len(args) < 2 || args[1] != "inspect" {
+		return
+	}
+	if cfg, err := config.Load(cfgPath); err == nil {
+		for _, im := range jobImages(cfg) {
+			if im.tag == args[len(args)-1] {
+				io.WriteString(out, im.source())
+			}
+		}
+	}
+}
+
 // runSetup drives setup with scripted answers against a fake GitHub.
 func runSetup(t *testing.T, f *fakeGitHub, answers ...string) (cfgPath, envPath, out string) {
 	t.Helper()
@@ -574,7 +591,10 @@ func runSetup(t *testing.T, f *fakeGitHub, answers ...string) (cfgPath, envPath,
 	t.Cleanup(srv.Close)
 	oldAPI, oldWeb, oldRun := githubAPI, githubWeb, runCmd
 	githubAPI, githubWeb = srv.URL, "https://github.example"
-	runCmd = func(io.Writer, string, ...string) error { return nil } // Docker works, image built
+	runCmd = func(out io.Writer, _ string, args ...string) error { // Docker works, images built
+		builtAsConfigured(out, cfgPath, args)
+		return nil
+	}
 	if f.runCmd != nil {
 		runCmd = f.runCmd
 	}

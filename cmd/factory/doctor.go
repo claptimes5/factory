@@ -312,9 +312,9 @@ func (d *doctor) images(ctx context.Context) []finding {
 	if d.cfg.Runner.Kind != "docker" || !d.dockerUp {
 		return nil
 	}
-	ours := map[string]bool{}
+	ours := map[string]jobImage{}
 	for _, im := range jobImages(d.cfg) {
-		ours[im.tag] = true
+		ours[im.tag] = im
 	}
 	var out []finding
 	var built []string
@@ -328,8 +328,17 @@ func (d *doctor) images(ctx context.Context) []finding {
 			return
 		}
 		seen[image] = true
-		if _, err := d.run(ctx, "docker", "image", "inspect", image); err == nil {
+		im, own := ours[image]
+		if !own {
+			if _, err := d.run(ctx, "docker", "image", "inspect", image); err == nil {
+				built = append(built, image)
+				return
+			}
+		} else if label, err := d.run(ctx, "docker", im.inspectArgs()...); im.current(label, err) {
 			built = append(built, image)
+			return
+		} else if err == nil && !slices.Contains(building, image) {
+			out = append(out, finding{fail, fmt.Sprintf("Job image %s (for %s) was built from something other than factory.yaml says now", image, n), fixBuildImages})
 			return
 		}
 		if slices.Contains(building, image) {
@@ -338,7 +347,7 @@ func (d *doctor) images(ctx context.Context) []finding {
 			return
 		}
 		fix := fixBuildImages
-		if !ours[image] {
+		if !own {
 			fix = "build it yourself: " + n + "'s image names one the factory doesn't build\n(docs/configuration.md#each-repos-toolchain-and-checks)"
 		}
 		out = append(out, finding{fail, fmt.Sprintf("Job image %s (for %s) isn't built", image, n), fix})

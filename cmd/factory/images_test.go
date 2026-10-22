@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ type fakeDocker struct {
 	mu       sync.Mutex
 	cmds     []string
 	built    map[string]bool
+	labels   map[string]string // the source label each build gave
 	down     bool
 	failTag  string
 	gate     chan struct{}
@@ -40,7 +42,8 @@ func (d *fakeDocker) run(out io.Writer, name string, args ...string) error {
 	case len(args) > 2 && args[0] == "image" && args[1] == "inspect":
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.built[args[2]] {
+		if tag := args[len(args)-1]; d.built[tag] {
+			io.WriteString(out, d.labels[tag])
 			return nil
 		}
 		return errors.New("no such image")
@@ -58,6 +61,14 @@ func (d *fakeDocker) run(out io.Writer, name string, args ...string) error {
 		}
 		d.mu.Lock()
 		d.built[tag] = true
+		if d.labels == nil {
+			d.labels = map[string]string{}
+		}
+		for i, a := range args {
+			if l, ok := strings.CutPrefix(a, sourceLabel+"="); ok && args[i-1] == "--label" {
+				d.labels[tag] = l
+			}
+		}
 		d.mu.Unlock()
 	case len(args) > 1 && args[0] == "image" && args[1] == "prune":
 		io.WriteString(out, "Total reclaimed space: 1.2GB\n")
@@ -94,6 +105,9 @@ func useDocker(t *testing.T, d *fakeDocker) {
 	if d.built == nil {
 		d.built = map[string]bool{}
 	}
+	if d.labels == nil {
+		d.labels = map[string]string{}
+	}
 	old, oldCtx := runCmd, runCmdContext
 	runCmd = d.run
 	runCmdContext = d.runContext
@@ -111,7 +125,7 @@ func imagesConfig(t *testing.T) *config.Config {
 
 func TestBuildArgsLabelTheImage(t *testing.T) {
 	a := strings.Join(jobImage{tag: "x:latest", from: "ruby:3"}.buildArgs("dir"), " ")
-	if a != "build -t x:latest --label io.factory.built=1 --build-arg BASE=ruby:3 dir" {
+	if a != "build -t x:latest --label io.factory.built=1 --label io.factory.source=from=ruby:3 --build-arg BASE=ruby:3 dir" {
 		t.Fatal(a)
 	}
 }
@@ -310,5 +324,38 @@ func TestImageBuildTimesOut(t *testing.T) {
 	b.wait()
 	if running, _, result, failed := b.status(); running || !failed || !strings.Contains(result, "took over") || len(b.Building()) != 0 {
 		t.Fatalf("status %v %q %v, building %v", running, result, failed, b.Building())
+	}
+}
+
+// An image built before factory.yaml named another base counts as missing,
+// so serve builds it again; one the factory didn't build is left alone.
+func TestImageBuiltFromAnotherBaseIsMissing(t *testing.T) {
+	d := &fakeDocker{}
+	useDocker(t, d)
+	path := testConfig(t, "o/r")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "repo: o/r", "repos:\n  - {name: o/api, image_from: ruby:3.4-bookworm}\n", 1)), 0o644)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Orchestrator.On, cfg.Tuning.Every, cfg.Grooming.Every = false, 0, 0
+	if err := buildImages(io.Discard, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if m := missingImages(cfg); len(m) != 0 {
+		t.Fatalf("just built, missing %+v", m)
+	}
+	cfg.Repos[0].ImageFrom = "ruby:3.3-bookworm"
+	if m := missingImages(cfg); len(m) != 1 || m[0].tag != "factory-job-o__api:latest" {
+		t.Fatalf("after a new base, missing %+v", m)
+	}
+	cfg.Repos[0].ImageFrom = "ruby:3.4-bookworm"
+	if m := missingImages(cfg); len(m) != 0 {
+		t.Fatalf("back to its base, missing %+v", m)
+	}
+	// Built before images had the label: built again once.
+	if im := (jobImage{tag: "x", from: "y"}); im.current("", nil) || !im.current("from=y\n", nil) || im.current("from=y", errors.New("no such image")) {
+		t.Fatal("current is wrong")
 	}
 }

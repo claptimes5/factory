@@ -183,6 +183,14 @@ your phone, and those jobs fail as they would without the image. You can
 also build them from the dashboard's get-started page, or with
 `./factory images` (`--rebuild` rebuilds them all).
 
+An image built from something `factory.yaml` no longer says counts as
+missing too: each records what it was built on (`image_from`, the
+`image_build` settings, whether it has Chromium for previews) in the label
+`io.factory.source`, so after you change one and restart, `serve` builds
+that image again by itself. Images built before the label existed are
+rebuilt once. A change inside the repo's Dockerfile isn't seen this way;
+rebuild with `./factory images --rebuild`.
+
 Every image the factory builds has the label `io.factory.built=1`. A
 rebuild leaves the old copy without a tag, so the factory removes those
 old copies after each build, when `serve` starts, and about once an
