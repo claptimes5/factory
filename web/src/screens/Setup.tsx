@@ -383,7 +383,7 @@ export function useReadinessRun(r: RepoReadiness) {
   return { busy, msg, run };
 }
 
-/** A next step's buttons; inverse on an ink card. */
+/** A next step's buttons; inverse on the lead card. */
 export function NextActions({ next, busy, run, inverse }: { next: Next; busy: boolean; run: (path: string, body: Record<string, unknown>) => void; inverse?: boolean }) {
   if (next.actions.length === 0) return null;
   return (

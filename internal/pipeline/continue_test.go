@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/state"
@@ -61,10 +62,10 @@ func TestStoppedBuildKeepsWorkAndWaits(t *testing.T) {
 		t.Fatalf("it restarted: %d jobs, %d calls", len(jobs), e.claude.calls["implement"])
 	}
 	j := jobs[0]
-	if j.State != state.Failed || !strings.Contains(j.Error, "ran out of turns (80 of 80)") || !strings.Contains(j.Error, "work is kept") {
+	if j.State != state.Failed || !strings.Contains(j.Error, "ran out of turns (150 of 150)") || !strings.Contains(j.Error, "work is kept") {
 		t.Fatalf("job = %s %q", j.State, j.Error)
 	}
-	if e.claude.turns[0] != 80 {
+	if e.claude.turns[0] != 150 {
 		t.Fatalf("max turns = %v", e.claude.turns)
 	}
 	dir := e.p.jobDir(j.ID)
@@ -98,7 +99,7 @@ func TestStoppedBuildKeepsWorkAndWaits(t *testing.T) {
 	for _, ch := range e.p.Choices(ctx, j.ID) {
 		got[ch.Action] = ch
 	}
-	if c := got["continue"]; !c.Available || c.Model != "claude/sonnet" || !strings.Contains(c.Explain, "80 turns") {
+	if c := got["continue"]; !c.Available || c.Model != "claude/sonnet" || !strings.Contains(c.Explain, "150 turns") {
 		t.Fatalf("continue = %+v", c)
 	}
 	if c := got["retry"]; !c.Available || c.Model != "claude/sonnet" || !strings.Contains(c.Explain, "from scratch") {
@@ -109,6 +110,17 @@ func TestStoppedBuildKeepsWorkAndWaits(t *testing.T) {
 	}
 	if c := got["park"]; c.Available || !strings.Contains(c.Why, "parked now") {
 		t.Fatalf("park = %+v", c)
+	}
+	// Parked as something no model can fix: no stronger model on offer.
+	e.p.Store.AddEvent(ctx, store.Event{Actor: "orchestrator", ItemID: j.ItemID, Type: "park", Reason: "no master key", Data: `{"model_cant_fix":true}`})
+	for _, ch := range e.p.Choices(ctx, j.ID) {
+		got[ch.Action] = ch
+	}
+	if c := got["tier_up"]; c.Available || !strings.Contains(c.Why, "stronger model wouldn't help") {
+		t.Fatalf("tier up = %+v", c)
+	}
+	if c := got["retry"]; !c.Available || c.Model != "claude/sonnet" {
+		t.Fatalf("retry = %+v", c)
 	}
 }
 
@@ -147,14 +159,14 @@ func TestContinueResumesInKeptCheckout(t *testing.T) {
 	if cont.Attempt != stopped.Attempt || cont.Model != stopped.Model || cont.BudgetUSD != 9 {
 		t.Fatalf("continue job = attempt %d model %s budget %v", cont.Attempt, cont.Model, cont.BudgetUSD)
 	}
-	if e.claude.turns[1] != 120 {
+	if e.claude.turns[1] != 225 {
 		t.Fatalf("turns = %v", e.claude.turns)
 	}
 	if got := e.claude.resumes; len(got) != 2 || got[1] != "session-0" {
 		t.Fatalf("resumes = %q", got)
 	}
 	prompt := e.claude.prompts["implement"][1]
-	for _, want := range []string{"Continue where you stopped", "Left: the test.", "Only add Add; skip the docs.", "120 turns and $9.00"} {
+	for _, want := range []string{"Continue where you stopped", "Left: the test.", "Only add Add; skip the docs.", "225 turns and $9.00"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}
@@ -260,12 +272,12 @@ func (h *turnsSeen) Run(ctx context.Context, req harness.RunRequest, ev chan<- h
 	return h.Harness.Run(ctx, req, ev)
 }
 
-// budgets.max_turns is the builder's; the other stages keep theirs.
+// budgets.max_turns, by size, is the builder's; the other stages keep theirs.
 func TestMaxTurnsConfig(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
-	e.p.Cfg.Budgets.MaxTurns = 33
+	e.p.Cfg.Budgets.MaxTurns = config.TurnCaps{"M": 33}
 	seen := &turnsSeen{caps: map[string]int{}}
 	for name, h := range e.p.Harnesses {
 		e.p.Harnesses[name] = &turnsSeen{Harness: h, caps: seen.caps}

@@ -778,19 +778,29 @@ func (s *Server) itemChoices(ctx context.Context, itemID int64) (*int64, []APICh
 	if err != nil {
 		return nil, []APIChoice{}
 	}
+	var pick *store.Job
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := jobs[i]
 		if store.IsSubKind(j.Kind) || !j.State.Terminal() {
 			continue
 		}
-		cs := s.Choices(ctx, j.ID)
-		if cs == nil {
-			cs = []APIChoice{}
+		// One cancelled before it did anything (an escalation the
+		// orchestrator stopped, say) isn't the attempt to act on.
+		if j.State == state.Cancelled && j.TokensIn == 0 && pick == nil {
+			pick = j
+			continue
 		}
-		id := j.ID
-		return &id, cs
+		pick = j
+		break
 	}
-	return nil, []APIChoice{}
+	if pick == nil {
+		return nil, []APIChoice{}
+	}
+	cs := s.Choices(ctx, pick.ID)
+	if cs == nil {
+		cs = []APIChoice{}
+	}
+	return &pick.ID, cs
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {

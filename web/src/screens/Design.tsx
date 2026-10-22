@@ -42,7 +42,7 @@ const colors = [
   ["attention", "bg-attention", "Needs you"],
   ["success", "bg-success", "Went live, passed"],
   ["destructive", "bg-destructive", "Broken, failed"],
-  ["ink", "bg-ink", "A decision waiting for you"],
+  ["ink", "bg-ink", "The main button, tooltips"],
 ] as const;
 
 const sizes = [
@@ -110,9 +110,9 @@ export function DesignScreen() {
           <Button>Default</Button>
           <Button size="sm">Small</Button>
         </div>
-        <div className="flex flex-col gap-3 rounded-card bg-ink p-4 text-ink-foreground">
+        <div className="lead flex flex-col gap-3 rounded-card border border-live-border bg-ink p-4 text-ink-foreground">
           <span className="text-meta font-semibold text-ink-attention">Needs you · acme/web#41</span>
-          <span className="text-title-sm font-semibold">On an ink card, the main action is the light one</span>
+          <span className="text-title-sm font-semibold">On the lead card, a decision waiting for you</span>
           <div className="flex flex-wrap gap-2">
             <Button variant="inverse">Look at it</Button>
             <Button variant="inverse-outline">Merge</Button>

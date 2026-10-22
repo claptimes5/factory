@@ -813,7 +813,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				return "ok", p.closeSplit(ctx, it, kids, actor, a.Reason)
 			})},
 		{Name: "park", Description: "Park an item for a human, with the reason they will read: at most two short, plain sentences saying what stopped it and what they can do about it.",
-			InputSchema: schema(`"item":{"type":"integer"},`+reasonProp, "item", "reason"),
+			InputSchema: schema(`"item":{"type":"integer"},"model_cant_fix":{"type":"boolean","description":"True when no model, however strong, gets past this: a secret, service or setting missing from the build sandbox, or a question only a person can answer. The dashboard then offers no stronger model."},`+reasonProp, "item", "reason"),
 			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a itemArgs
 				if err := json.Unmarshal(raw, &a); err != nil {

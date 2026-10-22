@@ -419,10 +419,11 @@ type Config struct {
 		// when triage's cost estimate (its p75) is over this many
 		// dollars. 0, the default, never holds one.
 		ConfirmOver float64 `yaml:"confirm_over,omitempty"`
-		// MaxTurns caps the turns (model calls) of one build, as Claude's
-		// --max-turns; default 80. Other steps keep a cap of 80. A build that runs out stops,
+		// MaxTurns caps the turns (model calls) of one build by size, as
+		// Claude's --max-turns; see DefaultMaxTurns. One number sets every
+		// size. Other steps keep a cap of 80. A build that runs out stops,
 		// keeps its work and waits for a person to continue it.
-		MaxTurns int `yaml:"max_turns,omitempty"`
+		MaxTurns TurnCaps `yaml:"max_turns,omitempty"`
 	} `yaml:"budgets"`
 
 	Pricing map[string]Price `yaml:"pricing"`
@@ -635,8 +636,13 @@ func (c *Config) defaults() {
 	if c.Budgets.MinFreeDiskGB == 0 {
 		c.Budgets.MinFreeDiskGB = 10
 	}
-	if c.Budgets.MaxTurns == 0 {
-		c.Budgets.MaxTurns = 80
+	if c.Budgets.MaxTurns == nil {
+		c.Budgets.MaxTurns = TurnCaps{}
+	}
+	for size, n := range DefaultMaxTurns {
+		if c.Budgets.MaxTurns[size] == 0 {
+			c.Budgets.MaxTurns[size] = n
+		}
 	}
 	if c.Runner.WSLDrive == "" {
 		c.Runner.WSLDrive = "/mnt/c"
@@ -967,8 +973,10 @@ func (c *Config) Validate() error {
 	if c.Budgets.PauseAtUsage < 0 || c.Budgets.PauseAtUsage > 100 {
 		bad("budgets.pause_at_usage is a percentage up to 100, or 0 for the default")
 	}
-	if c.Budgets.MaxTurns < 0 {
-		bad("budgets.max_turns must be > 0, or left out for 80")
+	for size, n := range c.Budgets.MaxTurns {
+		if n < 0 {
+			bad("budgets.max_turns.%s must be > 0, or left out for %d", size, DefaultMaxTurns[size])
+		}
 	}
 	if c.Budgets.DailyTotal <= 0 {
 		bad("budgets.daily_total must be > 0")
@@ -1272,6 +1280,45 @@ func (c *Config) Path(p string) string {
 		return p
 	}
 	return filepath.Join(c.dir, p)
+}
+
+// DefaultMaxTurns are the builds' turn caps by size. They're a starting
+// point, not a measurement: the dollar cap (budgets.per_job) is what a
+// build can't go past, and stops it without warning, while running out of
+// turns warns it to commit and note what's left so it can be continued.
+// So these sit above what a build of each size usually takes.
+var DefaultMaxTurns = TurnCaps{"XS": 40, "S": 80, "M": 150, "L": 300}
+
+// TurnCaps are turn caps by size. In YAML, one number sets every size.
+type TurnCaps map[string]int
+
+func (t *TurnCaps) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		var v int
+		if err := n.Decode(&v); err != nil {
+			return err
+		}
+		*t = TurnCaps{}
+		for size := range DefaultMaxTurns {
+			(*t)[size] = v
+		}
+		return nil
+	}
+	var m map[string]int
+	if err := n.Decode(&m); err != nil {
+		return err
+	}
+	*t = m
+	return nil
+}
+
+// BuildTurns is the turn cap of a build of the given size; an unknown
+// size gets M's, as its route does.
+func (c *Config) BuildTurns(size string) int {
+	if n := c.Budgets.MaxTurns[size]; n > 0 {
+		return n
+	}
+	return c.Budgets.MaxTurns["M"]
 }
 
 // Implement returns the route for an implement job of the given complexity

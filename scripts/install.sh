@@ -1,11 +1,13 @@
 #!/bin/sh
 # Checks what the factory needs on this machine, then builds ./factory.
 #
-#   sh scripts/install.sh          check Go, git and Docker, then build
+#   sh scripts/install.sh          check Go, git, Docker and ttyd, then build
 #   sh scripts/install.sh --web    also check Node, to rebuild the dashboard
 #
-# It installs nothing and never uses sudo: for anything missing it prints
-# the command to run. Once built, ./factory doctor checks the rest.
+# For anything missing it prints the command that installs it and, in a
+# terminal, asks before running it; say no to install it your own way
+# (asdf, mise, your package manager). It runs nothing without a yes.
+# Once built, ./factory doctor checks the rest.
 # shellcheck disable=SC2016 # fix lines print $PATH and $USER as typed
 set -u
 
@@ -13,10 +15,11 @@ web=0
 for a in "$@"; do
 	case $a in
 	--web) web=1 ;;
-	-h | --help) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 0 ;;
 	*) echo "install.sh: unknown option $a (try --help)" >&2; exit 2 ;;
 	esac
 done
+self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0") # to run it again after an install
 cd "$(dirname "$0")/.." || exit 1
 
 failed=0  # any ✗
@@ -25,6 +28,20 @@ pass() { printf '  ✓ %s\n' "$1"; }
 warn() { printf '  ! %s\n' "$1"; shift; fixes "$@"; }
 bad() { printf '  ✗ %s\n' "$1"; shift; fixes "$@"; failed=1; }
 fixes() { for l in "$@"; do printf '      %s\n' "$l"; done; }
+
+# offer CMD: in a terminal, ask to run CMD, the fix just printed. A yes
+# runs it and the checks run again once all are done.
+ran=0
+offer() {
+	[ -n "$1" ] && [ -t 0 ] && [ -t 1 ] || return 0
+	printf '      Run it now? [y/N] '
+	read -r a || return 0
+	case $a in
+	[yY]*)
+		printf '      $ %s\n' "$1"
+		if sh -c "$1"; then ran=1; else echo "      That didn't work; run it yourself, or install it your own way."; fi ;;
+	esac
+}
 
 # The version number in a tool's output: 27.5.1 in
 # "Docker version 27.5.1, build 9f9e405", 1.26.3 in "go1.26.3".
@@ -55,15 +72,16 @@ elif [ -r "${INSTALL_OS_RELEASE:=/etc/os-release}" ]; then # tests point it else
 fi
 grep -qi microsoft /proc/version 2>/dev/null && wsl=1
 
-pkg() {
+# pkgcmd NAME is the command that installs NAME here, "" if we don't know.
+pkgcmd() {
 	case $family in
 	debian) echo "sudo apt install $1" ;;
 	fedora) echo "sudo dnf install $1" ;;
 	arch) echo "sudo pacman -S $1" ;;
 	mac) echo "brew install $1" ;;
-	*) echo "install $1 with your system's package manager" ;;
 	esac
 }
+pkg() { c=$(pkgcmd "$1"); echo "${c:-install $1 with your system's package manager}"; }
 getdocker='curl -fsSL https://get.docker.com | sh   (Docker'"'"'s own packages; a distro'"'"'s may be older than 28)'
 
 echo "Checking what the factory needs:"
@@ -88,8 +106,8 @@ esac
 # older Go is already there).
 go_bad() {
 	case $family in
-	arch) bad "$1" "sudo pacman -Syu go" ;;
-	mac) if [ "${2:-}" = old ]; then bad "$1" "brew upgrade go"; else bad "$1" "brew install go"; fi ;;
+	arch) bad "$1" "sudo pacman -Syu go"; offer "sudo pacman -Syu go" ;;
+	mac) if [ "${2:-}" = old ]; then bad "$1" "brew upgrade go"; offer "brew upgrade go"; else bad "$1" "brew install go"; offer "brew install go"; fi ;;
 	*)
 		rm=
 		if [ "${2:-}" = old ]; then
@@ -98,9 +116,11 @@ go_bad() {
 			fedora) rm="and remove the distro's older Go if it came from dnf: sudo dnf remove golang" ;;
 			esac
 		fi
-		bad "$1" "sudo rm -rf /usr/local/go && curl -fsSL https://go.dev/dl/go$tool.linux-$arch.tar.gz | sudo tar -C /usr/local -xz" \
+		gocmd="sudo rm -rf /usr/local/go && curl -fsSL https://go.dev/dl/go$tool.linux-$arch.tar.gz | sudo tar -C /usr/local -xz"
+		bad "$1" "$gocmd" \
 			'export PATH=/usr/local/go/bin:$PATH   (first, so it wins over any other Go; add it to ~/.profile too)' \
-			${rm:+"$rm"} "(more at https://go.dev/doc/install)" ;;
+			${rm:+"$rm"} "(more at https://go.dev/doc/install)"
+		offer "$gocmd" ;;
 	esac
 	nobuild=1
 }
@@ -139,6 +159,7 @@ if command -v git >/dev/null 2>&1; then
 	pass "git $(ver "$(git --version)")"
 else
 	bad "git isn't installed" "$(pkg git)"
+	offer "$(pkgcmd git)"
 	nobuild=1
 fi
 
@@ -147,10 +168,13 @@ if ! command -v docker >/dev/null 2>&1; then
 		bad "Docker isn't installed" "install Docker Desktop for Windows and turn on Settings > Resources > WSL integration for this distro," "or install Docker inside WSL: $getdocker" "(docs/setup.md#windows-wsl2)"
 	elif [ "$family" = mac ]; then
 		bad "Docker isn't installed" "brew install --cask docker-desktop"
+		offer "brew install --cask docker-desktop"
 	elif [ "$family" = arch ]; then
 		bad "Docker isn't installed" "sudo pacman -S docker && sudo systemctl enable --now docker"
+		offer "sudo pacman -S docker && sudo systemctl enable --now docker"
 	else
 		bad "Docker isn't installed" "$getdocker" "then: sudo systemctl enable --now docker"
+		offer "curl -fsSL https://get.docker.com | sh && sudo systemctl enable --now docker"
 	fi
 elif ! out=$(docker version --format '{{.Server.Version}}' 2>&1); then
 	case $out in
@@ -174,6 +198,14 @@ else
 	fi
 fi
 
+# ttyd: the dashboard's terminals into running jobs. Not needed to build.
+if command -v ttyd >/dev/null 2>&1; then
+	pass "ttyd"
+else
+	bad "ttyd isn't installed: the dashboard's attach button needs it for a terminal into a running job" "$(pkg ttyd)"
+	offer "$(pkgcmd ttyd)"
+fi
+
 if [ $web = 1 ]; then
 	if ! command -v node >/dev/null 2>&1; then
 		nodefix="nvm install 22   (https://github.com/nvm-sh/nvm; apt's nodejs is too old)"
@@ -187,6 +219,11 @@ if [ $web = 1 ]; then
 fi
 
 echo
+if [ $ran = 1 ]; then
+	echo "Checking again with what was just installed:"
+	echo
+	PATH=/usr/local/go/bin:$PATH exec sh "$self" "$@"
+fi
 if [ $nobuild = 1 ]; then
 	echo "Fix the ✗ lines above, then run sh scripts/install.sh again."
 	exit 1

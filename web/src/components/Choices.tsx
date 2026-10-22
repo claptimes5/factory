@@ -16,7 +16,7 @@ const extras: [number, string][] = [
  * was kept), Retry, Tier up and Park, each saying what it does and which
  * model it runs on. Every press goes through the daemon's own checks.
  * Compact shows the explanations on request, or right away for one button;
- * otherwise they are listed. Inverse is for the ink card; children go at
+ * otherwise they are listed. Inverse is for the lead card; children go at
  * the end of the button row.
  */
 export function Choices({ jobId, itemId, choices, compact, inverse, children }: { jobId: number; itemId?: number; choices: Choice[]; compact?: boolean; inverse?: boolean; children?: React.ReactNode }) {

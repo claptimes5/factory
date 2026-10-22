@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/claptimes5/factory/internal/diffrisk"
 	"github.com/claptimes5/factory/internal/github"
@@ -28,7 +29,7 @@ type Git struct {
 	RemoteURL  string             // e.g. https://github.com/owner/repo.git, or a local path in tests
 	Tokens     github.TokenSource // nil for unauthenticated remotes
 	Author     string             // "name <email>" for commits the daemon makes
-	AskPassDir string             // where the askpass script is created ("" = os.TempDir)
+	AskPassDir string             // where the askpass script lives ("" = a fresh file in os.TempDir)
 	// User is the username sent with the token: x-access-token (GitHub's)
 	// when empty; GitLab takes oauth2.
 	User string
@@ -83,24 +84,59 @@ func (g *Git) run(ctx context.Context, dir string, stdout io.Writer, args ...str
 }
 
 func (g *Git) askPass() (string, error) {
-	g.askOnce.Do(func() {
-		// A fresh, private file: a predictable shared path could be planted.
-		f, err := os.CreateTemp(g.AskPassDir, "factory-askpass-*.sh")
-		if err != nil {
-			g.askErr = err
-			return
-		}
-		// Username is in the URL; the password comes from env.
-		_, err = f.WriteString("#!/bin/sh\nprintf '%s\\n' \"$FACTORY_GIT_PASSWORD\"\n")
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err == nil {
-			err = os.Chmod(f.Name(), 0o700)
-		}
-		g.askPath, g.askErr = f.Name(), err
-	})
+	g.askOnce.Do(func() { g.askPath, g.askErr = writeAskPass(g.AskPassDir) })
 	return g.askPath, g.askErr
+}
+
+const askPassScript = "#!/bin/sh\nprintf '%s\\n' \"$FACTORY_GIT_PASSWORD\"\n" // the password comes from env
+
+// writeAskPass writes the askpass script into dir, and returns its path.
+// In a directory of the factory's own (the data directory) it is one file,
+// factory-askpass.sh, replaced whole by a rename, so every process and
+// every start shares it rather than leaving one behind each. In the shared
+// temp directory it is a fresh private file: a predictable path there
+// could be planted.
+func writeAskPass(dir string) (string, error) {
+	path := filepath.Join(dir, "factory-askpass.sh")
+	if dir != "" {
+		if b, err := os.ReadFile(path); err == nil && string(b) == askPassScript {
+			if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm() == 0o700 {
+				sweepAskPass(dir)
+				return path, nil
+			}
+		}
+	}
+	f, err := os.CreateTemp(dir, "factory-askpass-*.sh")
+	if err != nil {
+		return "", err
+	}
+	_, err = f.WriteString(askPassScript)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(f.Name(), 0o700)
+	}
+	if err != nil || dir == "" {
+		return f.Name(), err
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	sweepAskPass(dir)
+	return path, nil
+}
+
+// sweepAskPass removes the factory-askpass-*.sh earlier versions left in
+// dir, one per start; one an hour old is no other process's mid-write.
+func sweepAskPass(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "factory-askpass-*.sh"))
+	for _, o := range old {
+		if fi, err := os.Stat(o); err == nil && time.Since(fi.ModTime()) > time.Hour {
+			_ = os.Remove(o)
+		}
+	}
 }
 
 func (g *Git) remote() string {

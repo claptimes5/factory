@@ -697,3 +697,22 @@ func TestRiskSettings(t *testing.T) {
 		}
 	}
 }
+
+// Turn caps are by size, defaulted; one number, as older configs have,
+// sets every size.
+func TestMaxTurns(t *testing.T) {
+	b, _ := exampleYAML()
+	for _, tc := range []struct {
+		yaml     string
+		xs, m, l int
+	}{
+		{"", 40, 150, 300},
+		{"\n  max_turns: 60", 60, 60, 60},
+		{"\n  max_turns: {M: 200}", 40, 200, 300},
+	} {
+		c, err := ParseIn([]byte(strings.Replace(string(b), "\nbudgets:", "\nbudgets:"+tc.yaml, 1)), "../..")
+		if err != nil || c.BuildTurns("XS") != tc.xs || c.BuildTurns("M") != tc.m || c.BuildTurns("L") != tc.l || c.BuildTurns("?") != tc.m {
+			t.Fatalf("%q: %v %v", tc.yaml, c.Budgets.MaxTurns, err)
+		}
+	}
+}

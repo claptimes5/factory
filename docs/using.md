@@ -204,8 +204,9 @@ one).
 
 ### When a build runs out of turns or budget
 
-A build has `budgets.max_turns` turns (80 by default; other steps such
-as triage and review keep their own 80) and its size's
+A build has its size's `budgets.max_turns` turns (40, 80, 150 and 300
+for XS to L by default; other steps such as triage and review keep their
+own 80) and its size's
 `budgets.per_job` dollars. Ten turns before the end, the factory tells
 Claude to stop starting new work, commit what it has and write what's
 done and what's left to a note. If it still runs out, it doesn't restart
@@ -247,8 +248,9 @@ dashboard for "Classic control room" to go back to it):
 - **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
 - **Board:** items by stage, with model and cost.
 - **Job view:** live log over SSE, gate results, verdict, cost; buttons to
-  retry, retry one tier up, cancel, and attach a terminal (with `ttyd`
-  installed; otherwise it shows the `docker exec` command).
+  retry, retry one tier up, cancel, and attach a terminal (through `ttyd`;
+  without it, or on a dashboard served beyond this machine, it shows the
+  `docker exec` command instead).
 - **Orchestrator log** and **Spend** (today, 7 days, cost per merged PR).
 - **Compare:** the reports from [`factory compare`](#comparing-skill-sets).
 

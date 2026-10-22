@@ -65,7 +65,7 @@ var servingData = []string{"jobs", "readiness", "compare", "sessions", "cache"}
 // dataPrefixes the starts of the names it makes there.
 var (
 	dataNames    = []string{"jobs", "readiness", "compare", "sessions", "cache", "sync", "codex", "backups", "web.secret"}
-	dataPrefixes = []string{"factory.db", "todos-", "eval-", "capture-", "factory-askpass-", "readiness-"}
+	dataPrefixes = []string{"factory.db", "todos-", "eval-", "capture-", "factory-askpass", "readiness-"}
 )
 
 // Plan is what removing the factory would remove. It changes nothing.
