@@ -83,6 +83,7 @@ test("while a person's part of setup is left, Home leads with it and ranks the r
   await expect(needs.getByTestId("decision")).toHaveCount(0);
   const rows = needs.getByRole("listitem");
   await expect(rows.first()).toBeHidden();
+  await expect(page.getByRole("region", { name: "The line" })).toHaveCount(0);
   await needs.getByText("After that, 8 more things need you").click();
   await expect(rows.first()).toContainText("Parser drops the last token");
   await expect(rows.last()).toContainText("Waits for setup");
@@ -108,9 +109,10 @@ test("Home shows what needs you one decision at a time, reviews first, with the 
   await top.getByRole("button", { name: "Later" }).click();
   await expect(top).toContainText("Show order totals on the checkout page");
   await expect(top.getByRole("link", { name: /1\. Review api#91/ })).toBeVisible();
-  // The line, with you as its last station.
+  // What waits on you is off the line, said before its stations, not one of them.
   const line = page.getByRole("region", { name: "The line" });
-  await expect(line.getByRole("listitem", { name: "You: 8" })).toBeVisible();
+  await expect(line.getByLabel("Off the line")).toContainText("8 waiting on you");
+  await expect(line.getByRole("listitem", { name: /^You:/ })).toHaveCount(0);
   await line.getByRole("link", { name: "See the whole line" }).click();
   await expect(page).toHaveURL(/\/app\/line$/);
   await expect(page.getByTestId("board")).toBeVisible();
