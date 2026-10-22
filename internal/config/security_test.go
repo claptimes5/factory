@@ -94,13 +94,22 @@ func TestSecurityConfigIsChecked(t *testing.T) {
 	}
 	c = load(t)
 	c.Routing["security"] = c.Routing["review"]
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "the security pass needs a model of its own") {
-		t.Fatalf("security on the reviewer's model: %v", err)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("security on the reviewer's model is a warning, not an error: %v", err)
+	}
+	if w := c.Warnings(); len(w) != 1 || !strings.Contains(w[0], "as routing.review does") {
+		t.Fatalf("security on the reviewer's model: %v", w)
+	}
+	if r, rv := c.SecurityRoute(), c.Routing["review"]; r.Harness != rv.Harness || r.Model != rv.Model {
+		t.Fatalf("set on the reviewer's model, the security pass still runs there: %+v", r)
 	}
 	c = load(t)
 	c.Routing["security"] = Route{Harness: "codex", Model: "gpt-6.1-sol", Effort: "high"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "as routing.review does") {
-		t.Fatalf("security on the reviewer's model at another effort: %v", err)
+	if w := c.Warnings(); len(w) != 1 || !strings.Contains(w[0], "as routing.review does") {
+		t.Fatalf("security on the reviewer's model at another effort: %v", w)
+	}
+	if w := load(t).Warnings(); len(w) != 0 {
+		t.Fatalf("factory.yaml warns: %v", w)
 	}
 	c = load(t)
 	c.Security.Paths = []string{"db/", "*.sql"}

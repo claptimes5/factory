@@ -287,3 +287,33 @@ func TestApplyPreset(t *testing.T) {
 		t.Fatalf("codex without a key = %d %s", code, body)
 	}
 }
+
+// A check says what a save would, as the form is edited, and writes
+// nothing; the security pass on a reviewer's model is only a warning.
+func TestSettingsCheck(t *testing.T) {
+	t.Parallel()
+	base, path, _, _ := settingsSetup(t, "127.0.0.1:8080")
+	orig, _ := os.ReadFile(path)
+	for _, c := range []struct{ body, err, warn string }{
+		{`{"changes":[{"path":["budgets","daily_total"],"value":70}]}`, "", ""},
+		{`{"changes":[{"path":["routing","review","fast"],"value":true}]}`, "routing.review: fast mode is Claude's", ""},
+		{`{"changes":[{"path":["routing","security","harness"],"value":"codex"},{"path":["routing","security","model"],"value":"gpt-6.1-sol"}]}`, "", "routing.security runs on codex/gpt-6.1-sol, as routing.review does"},
+	} {
+		var got APISettingsCheck
+		code, body := postJSON(t, base+"/api/v1/settings/check", "", c.body)
+		if err := json.Unmarshal([]byte(body), &got); code != 200 || err != nil {
+			t.Fatalf("%s: %d %s", c.body, code, body)
+		}
+		if !strings.Contains(got.Error, c.err) || (c.err == "") != (got.Error == "") || !strings.Contains(strings.Join(got.Warnings, "\n"), c.warn) || (c.warn == "") != (len(got.Warnings) == 0) {
+			t.Errorf("%s: %+v", c.body, got)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != string(orig) {
+		t.Fatal("a check wrote the file")
+	}
+	code, body := postJSON(t, base+"/api/v1/settings", "", `{"version":"`+ConfigVersion(orig)+`","changes":[{"path":["routing","security","harness"],"value":"codex"},{"path":["routing","security","model"],"value":"gpt-6.1-sol"}]}`)
+	var st APISettings
+	if err := json.Unmarshal([]byte(body), &st); code != 200 || err != nil || len(st.Warnings) != 1 {
+		t.Fatalf("saving the security pass on the reviewer's model: %d %s", code, body)
+	}
+}

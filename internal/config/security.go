@@ -56,7 +56,8 @@ var reviewRoutes = []string{"review", "review.medium_risk", "review.high_risk"}
 // on the routes given (its implement jobs' harnesses and models): the
 // first of routing.security, the critic's route and the implement routes,
 // strongest first, that is neither a reviewer's model nor one that built
-// the item. So by default it is another vendor's model than the
+// the item; routing.security set on a reviewer's model is still used (see
+// Warnings). So by default it is another vendor's model than the
 // reviewer's, and never the model whose code it reads. With every one
 // ruled out, it is the first that isn't a reviewer's.
 func (c *Config) SecurityRoute(built ...Route) Route {
@@ -73,8 +74,9 @@ func (c *Config) SecurityRoute(built ...Route) Route {
 	}
 	reviewers := c.reviewers()
 	first := -1
+	_, set := c.Routing["security"]
 	for i, r := range cands {
-		if sameAsAny(r, reviewers) {
+		if sameAsAny(r, reviewers) && !(set && i == 0) {
 			continue
 		}
 		if first < 0 {
@@ -108,19 +110,29 @@ func (c *Config) checkSecurity() []error {
 			errs = append(errs, fmt.Errorf("security: glob %q: %v", g, err))
 		}
 	}
-	if r, ok := c.Routing["security"]; ok {
-		for _, rk := range reviewRoutes {
-			if rv, ok := c.Routing[rk]; ok && rv.Harness == r.Harness && sameModel(r.Harness, rv.Model, r.Model) {
-				errs = append(errs, fmt.Errorf("routing.security runs on %s/%s, as routing.%s does: the security pass needs a model of its own, to catch what the reviewer's misses", r.Harness, r.Model, rk))
-				break
-			}
+	// Left out, what it falls back to: never a reviewer's.
+	if _, set := c.Routing["security"]; !set {
+		if r := c.SecurityRoute(); sameAsAny(r, c.reviewers()) {
+			errs = append(errs, fmt.Errorf("the security pass would run on %s/%s, a reviewer's model: set routing.security", r.Harness, r.Model))
 		}
 	}
-	// What it runs on when left out, or a builder's: never a reviewer's.
-	if r := c.SecurityRoute(); sameAsAny(r, c.reviewers()) {
-		errs = append(errs, fmt.Errorf("the security pass would run on %s/%s, a reviewer's model: set routing.security to another", r.Harness, r.Model))
-	}
 	return errs
+}
+
+// Warnings are what loads but is worth a second look: routing.security on
+// a reviewer's model. Each pass is a job of its own in a fresh session, so
+// it still runs, but it shares that reviewer's blind spots.
+func (c *Config) Warnings() []string {
+	r, ok := c.Routing["security"]
+	if !ok {
+		return nil
+	}
+	for _, rk := range reviewRoutes {
+		if rv, ok := c.Routing[rk]; ok && rv.Harness == r.Harness && sameModel(r.Harness, rv.Model, r.Model) {
+			return []string{fmt.Sprintf("routing.security runs on %s/%s, as routing.%s does: each runs as a job of its own, but a second model would catch more of what the reviewer misses", r.Harness, r.Model, rk)}
+		}
+	}
+	return nil
 }
 
 func (c *Config) reviewers() []Route {

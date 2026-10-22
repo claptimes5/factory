@@ -1793,6 +1793,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What saving these changes would say, without writing
+         * @description Checks changes against factory.yaml as it is now, as a save would,
+         *     so the form can show what's wrong while it's edited.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        changes: {
+                            path: string[];
+                            value: components["schemas"]["SettingValue"];
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SettingsCheck"];
+                    };
+                };
+                400: components["responses"]["Error"];
+                404: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings/preset": {
         parameters: {
             query?: never;
@@ -4083,6 +4134,13 @@ export interface components {
             reviewer: string;
             /** @description Harnesses with a key or sign-in, which routes may name */
             harnesses: string[];
+            /** @description What the file loads with but is worth a second look, such as the security pass on a reviewer's model */
+            warnings: string[];
+        };
+        SettingsCheck: {
+            /** @description Why a save would be refused, one problem a line; empty when it would load */
+            error: string;
+            warnings: string[];
         };
         Preset: {
             key: string;
