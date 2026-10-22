@@ -67,8 +67,10 @@ jobs:
         run: |
           git status --porcelain -- . ../internal/web/app
           test -z "$(git status --porcelain -- . ../internal/web/app)"
-      # The browser is cached by Playwright's version and the runner image;
-      # the system libraries it needs are installed either way.
+      # The browser is cached by Playwright's version and the runner image.
+      # On a hit nothing is installed: the runner already has the libraries
+      # headless Chromium needs, and apt-get on every run cost minutes
+      # whenever the Ubuntu mirror was slow.
       - id: pwver
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
@@ -78,8 +80,6 @@ jobs:
           key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pwver.outputs.v }}
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
-      - if: steps.playwright.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
       - name: playwright (desktop and phone)
         run: npm run e2e
       - uses: actions/upload-artifact@v4
