@@ -95,7 +95,7 @@ function orderLine(cs: CardT[]): string {
   const parts = [
     cs.some((c) => kindOf(c) === "review") && "changes to review",
     cs.some((c) => c.unblocks.length > 0) && "what other work waits for",
-    "the rest",
+    cs.some((c) => kindOf(c) !== "review" && c.unblocks.length === 0 && c.setup !== "held" && c.setup !== "base") && "the rest",
     cs.some((c) => c.setup === "held" || c.setup === "base") && "what waits for setup or the base branch",
   ].filter(Boolean);
   return `In this order: ${parts.join(", then ")}.`;
