@@ -51,7 +51,7 @@ intake:
 runner:
   kind: docker
   image: factory-job:latest              # docker build -t factory-job:latest deploy/job-image
-  # cpus: "4"               # per job and per service; left out, the cores shared by budgets.concurrent_jobs
+  # cpus: "4"                            # per job and per service; left out, the cores shared by budgets.concurrent_jobs
   memory: 4g
 
 # Haiku and Sonnet build, and a build that keeps failing escalates to
