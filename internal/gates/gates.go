@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -109,6 +110,26 @@ func VerdictLine(rs []Result) string {
 	return "GATES: " + v + " " + strings.Join(parts, " ")
 }
 
+// generated are files a tool writes, not a person: the size cap doesn't
+// count them, since a small change can rewrite them whole (a lockfile, or
+// RuboCop's todo list when a change drops what it lists).
+var generated = []string{"go.sum", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+	"Gemfile.lock", "uv.lock", "poetry.lock", "Pipfile.lock", "Cargo.lock", ".rubocop_todo.yml"}
+
+// offenses is RuboCop's count of what it found.
+var offenses = regexp.MustCompile(`(\d+) offenses? detected`)
+
+// Offenses is how many offenses a linter's output counts (RuboCop's
+// summary), or -1 when it doesn't say.
+func Offenses(out string) int {
+	m := offenses.FindAllStringSubmatch(out, -1)
+	if m == nil {
+		return -1
+	}
+	n, _ := strconv.Atoi(m[len(m)-1][1])
+	return n
+}
+
 // Guard is the diff guard's configuration.
 type Guard struct {
 	MaxChangedLines int
@@ -168,7 +189,7 @@ func DiffGuard(ctx context.Context, repoDir, base, head string, g Guard) Result 
 	total := 0
 	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 3 || path.Base(f[2]) == "go.sum" {
+		if len(f) < 3 || contains(generated, path.Base(f[2])) {
 			continue
 		}
 		if f[0] == "-" { // binary file

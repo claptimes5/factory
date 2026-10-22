@@ -48,3 +48,30 @@ func TestTasksWaitForSetup(t *testing.T) {
 		t.Fatalf("the task didn't start once setup passed: %s", st)
 	}
 }
+
+// A build that fails a check the setup check found failing on the base
+// branch too parks after one try: no model gets past it, so it isn't
+// retried or offered a tier up. (Incomplete, the check holds nothing.)
+func TestFailingWhatFailsOnBaseParks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	red := &readiness.Report{Repo: "o/r", Branch: "main", Started: time.Now(), Incomplete: true, Findings: []readiness.Finding{
+		{Level: readiness.Blocker, Area: "checks", Title: "`test` fails on main", Issue: &readiness.Issue{Key: "check:test"}}}}
+	if _, err := readiness.Save(ReadinessDir(e.p.Cfg), red); err != nil {
+		t.Fatal(err)
+	}
+	e.addIssue(2)
+	e.claude.builds = []func(string) error{badBuild, goodBuild}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	if it.Stage != state.Parked || len(jobs) != 1 {
+		t.Fatalf("stage = %s after %d builds", it.Stage, len(jobs))
+	}
+	for _, c := range e.p.Choices(ctx, jobs[0].ID) {
+		if c.Action == "tier_up" && c.Available {
+			t.Fatalf("tier up offered: %+v", c)
+		}
+	}
+}

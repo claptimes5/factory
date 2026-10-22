@@ -190,8 +190,9 @@ When an item's build ran out of turns or budget, timed out, or went over
 the diff size limit, or the item was parked with no build to blame, it may
 be too big for one build. A build that failed a check isn't offered a
 split: smaller pieces fail it too. When that check fails on the base branch
-as well, as the setup check found, What happened says so: make it pass
-there first, or take it out of the required gates until it does. **Split it** in the What
+as well, as the setup check found, the build parks after that one try
+instead of moving to a stronger model, and What happened says so: make it
+pass there first, or take it out of the required gates until it does. **Split it** in the What
 happened box starts a new [chat](#chat-opening-issues-with-the-orchestrator)
 with the orchestrator's model and sends it a message naming the item,
 its issue and what happened, with the failed run's job to read. The
@@ -362,7 +363,9 @@ says how many are running. They get up to 10 minutes to finish.
   as one that [runs out of turns](#when-a-build-runs-out-of-turns-or-budget)
   does, and is queued again to continue from it when the factory starts:
   its job says "Cut short when the factory shut down. Its work is kept".
-  Any other job (triage, a review) runs again from the start.
+  Any other job (triage, a review) runs again from the start. A build
+  the Ctrl-C cut short before its model ran (while it cloned, say) runs
+  again at the same attempt: a shutdown doesn't count as a failed try.
 - **Ctrl-C a third time** quits at once. A build cut off then starts over
   on the next start, as after a crash; its item's history says "the
   factory stopped while it ran, so it runs again from the start".

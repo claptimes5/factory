@@ -92,6 +92,10 @@ func TestDiffGuard(t *testing.T) {
 		{"nolint", func(d string) { write(t, d, "a.go", "package a\nvar x = 1 //nolint\n") }, "//nolint"},
 		{"binary", func(d string) { write(t, d, "blob.bin", "\x00\x01\x02") }, "changes 100 lines"},
 		{"too big", func(d string) { write(t, d, "b.go", "package a\n"+strings.Repeat("// x\n", 30)) }, "changes 31 lines"},
+		{"generated", func(d string) {
+			write(t, d, ".rubocop_todo.yml", strings.Repeat("# x\n", 30))
+			write(t, d, "web/pnpm-lock.yaml", strings.Repeat("x: 1\n", 30))
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

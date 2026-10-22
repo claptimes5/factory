@@ -317,8 +317,15 @@ func Assess(ctx context.Context, in Input) *Report {
 				// Not the old offenses again: what came after the baseline.
 				title += ": " + sinceBaseline(x.Output)
 			}
-			r.add(Finding{Level: Blocker, Area: "checks", Title: title,
-				Detail: "Every change would fail this check, whatever it does.\n\n" + fence(x.Output),
+			level, detail := Blocker, "Every change would fail this check, whatever it does."
+			if n := gates.Offenses(x.Output); name == "lint" && n >= 0 {
+				// The gate holds a change to the offenses already here
+				// (see the pipeline's lintVsBase), so work goes on.
+				level = Gap
+				detail = fmt.Sprintf("A change passes it as long as it adds no offenses to the %d already here, so work goes on, but lint can't hold the code to its rules until they're fixed.", n)
+			}
+			r.add(Finding{Level: level, Area: "checks", Title: title,
+				Detail: detail + "\n\n" + fence(x.Output),
 				Issue: &Issue{Key: "check:" + name, Title: fmt.Sprintf("Make the %s check pass on %s", name, r.Branch),
 					Body: fmt.Sprintf("The factory runs `%s` as a required check, and it fails on `%s` before any change:\n\n%s\n"+
 						"Fix the cause so it passes. Don't skip, delete or loosen tests or lint rules to get there; if a failure is a real bug, fix the bug.", cmd, r.Branch, fence(x.Output))}})
@@ -420,9 +427,6 @@ func Assess(ctx context.Context, in Input) *Report {
 	return r.finish()
 }
 
-// offenses is RuboCop's count of what it found.
-var offenses = regexp.MustCompile(`(\d+) offenses? detected`)
-
 // Offenses is how many offenses the run of gate counted (RuboCop's
 // summary), or -1 when it didn't say.
 func (r *Report) Offenses(gate string) int {
@@ -430,8 +434,7 @@ func (r *Report) Offenses(gate string) int {
 		if x.Gate != gate {
 			continue
 		}
-		if m := offenses.FindStringSubmatch(x.Output); m != nil {
-			n, _ := strconv.Atoi(m[1])
+		if n := gates.Offenses(x.Output); n >= 0 {
 			return n
 		}
 	}
@@ -440,14 +443,14 @@ func (r *Report) Offenses(gate string) int {
 
 // sinceBaseline says what lint found, with a baseline in: new offenses.
 func sinceBaseline(out string) string {
-	m := offenses.FindStringSubmatch(out)
-	switch {
-	case m == nil:
+	switch n := gates.Offenses(out); n {
+	case -1:
 		return "new offenses since the baseline"
-	case m[1] == "1":
+	case 1:
 		return "1 new offense since the baseline"
+	default:
+		return strconv.Itoa(n) + " new offenses since the baseline"
 	}
-	return m[1] + " new offenses since the baseline"
 }
 
 // worktreeInclude are the paths dir's .worktreeinclude names, as written

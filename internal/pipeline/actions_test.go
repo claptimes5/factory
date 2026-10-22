@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -59,11 +60,33 @@ func TestRetryTierUpAttempt(t *testing.T) {
 	if len(next) != 1 || next[0].Model != "opus" || next[0].Attempt != 3 {
 		t.Fatalf("next = %+v", next)
 	}
+	// The retry hears why the job it retries failed.
+	var in ImplementInput
+	if err := jsonUnmarshal(next[0].Input, &in); err != nil || first.Error == "" || !strings.HasPrefix(in.PreviousFailure, first.Error) {
+		t.Fatalf("retry input %s lacks %q (%v)", next[0].Input, first.Error, err)
+	}
 	if err := e.p.Park(ctx, it.ID, "not now"); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := e.p.Store.CountJobs(ctx, state.Queued, ""); n != 0 {
 		t.Fatalf("park should cancel the queued job, %d left", n)
+	}
+}
+
+// A build cut short by a Ctrl-C (its git killed before the daemon cancels
+// anything) runs again at the same attempt instead of using one up.
+func TestInterruptedBuildKeepsItsAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(2)
+	e.claude.builds = []func(string) error{func(string) error { return errors.New("git clone: signal: interrupt") }, goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	if it.Stage != state.AwaitingHuman || len(jobs) != 2 || jobs[1].State != state.Cancelled || jobs[0].Attempt != 1 {
+		t.Fatalf("stage %s, jobs %+v", it.Stage, jobs)
 	}
 }
 

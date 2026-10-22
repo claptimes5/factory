@@ -16,6 +16,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/gates"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/verdict"
@@ -73,6 +74,30 @@ func (p *Pipeline) parkSetup(ctx context.Context, it *store.WorkItem, f *gates.F
 	}
 	data, _ := json.Marshal(map[string]any{"model_cant_fix": true, "setup": f.Kind, "line": f.Line})
 	return p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "park", Reason: reason, Data: string(data)})
+}
+
+// parkRedOnBase parks an item whose build failed checks that fail on the
+// base branch too, as the setup check found: every change fails them, so
+// no model, however strong, gets past them.
+func (p *Pipeline) parkRedOnBase(ctx context.Context, it *store.WorkItem, r *readiness.Report, msg string) error {
+	reason := fmt.Sprintf("The build failed %s, which fails on %s too, as the setup check found, so every change fails it and a stronger model wouldn't help. "+
+		"Make it pass on %s first (see Setup), or take it out of the required gates in factory.yaml, then press Retry.\n\n```\n%s\n```",
+		strings.Join(r.RedOnBase(msg), " and "), r.Branch, r.Branch, truncate(msg, 3000))
+	if err := p.park(ctx, it, reason); err != nil {
+		return err
+	}
+	return p.Store.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "park", Reason: reason, Data: `{"model_cant_fix":true}`})
+}
+
+// interrupted says whether a job failed with msg because the factory is
+// shutting down. A Ctrl-C reaches the job's git before the daemon cancels
+// anything, so a child killed by it counts too.
+func interrupted(ctx context.Context, stopping bool, msg string) bool {
+	if ctx.Err() != nil && stopping {
+		return true
+	}
+	first, _, _ := strings.Cut(msg, "\n")
+	return !strings.HasPrefix(first, "GATES:") && (strings.Contains(first, "signal: interrupt") || strings.Contains(first, "signal: terminated"))
 }
 
 // setupFault is the first failed result's sign of a sandbox that lacks
@@ -188,6 +213,17 @@ func runFailure(run agentRun) (state.JobState, string, bool) {
 
 // --- implement ---
 
+// priorFailure is what the next build hears about implement job id's
+// failure msg: the failure, and what the job's builder said it did, which
+// often says why (a check that already failed on the base branch, say).
+func (p *Pipeline) priorFailure(id int64, msg string) string {
+	var v verdict.Implement
+	if _, err := verdict.Load(filepath.Join(p.jobDir(id), "out", "verdict.json"), "", &v); err == nil && strings.TrimSpace(v.Summary) != "" {
+		msg += "\n\nThat attempt's builder said of its work:\n\n> " + strings.ReplaceAll(strings.TrimSpace(v.Summary), "\n", "\n> ")
+	}
+	return msg
+}
+
 func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.WorkItem) error {
 	dir := p.jobDir(j.ID)
 	out := filepath.Join(dir, "out")
@@ -209,9 +245,17 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		if p.stopIfCancelled(ctx, j, it, run) {
 			return nil
 		}
+		// The factory stopping ended it, not the task: it runs again at
+		// the same attempt.
+		if interrupted(ctx, p.stopping.Load(), msg) && p.requeueSame(ctx, j, run, j.Input, "Cut short when the factory shut down.", shutdownNote, 5) {
+			return nil
+		}
 		p.finish(ctx, j, run, st, "", msg)
+		if r, _ := readiness.Load(ReadinessDir(p.Cfg), it.Repo); len(r.RedOnBase(msg)) > 0 {
+			return p.parkRedOnBase(ctx, it, r, msg)
+		}
 		next := in
-		next.PreviousFailure = msg
+		next.PreviousFailure = p.priorFailure(j.ID, msg)
 		next.Continue = nil // the next attempt starts over
 		ok, err := p.enqueueImplement(ctx, it, j.Attempt+1, next)
 		if err != nil {
@@ -525,6 +569,9 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.R
 		}
 		return code, out, err
 	})...)
+	for i := range results {
+		p.lintVsBase(ctx, jobID, pt, &results[i])
+	}
 	if g.ProvesFix != "" {
 		results = append(results, p.provesFix(ctx, jobID, pt, g.ProvesFix))
 	}
@@ -546,6 +593,52 @@ func (p *Pipeline) verify(ctx context.Context, jobID int64, pt *part) ([]gates.R
 		}
 	}
 	return results, blast, nil
+}
+
+// lintVsBase holds a failing lint to the base commit's offenses: a change
+// that adds none to those already there passes, so lint that fails across
+// the base branch doesn't fail every change. It needs a count of offenses
+// (RuboCop's summary); without one, the lint fails as before.
+func (p *Pipeline) lintVsBase(ctx context.Context, jobID int64, pt *part, r *gates.Result) {
+	if r.Gate != "lint" || r.Status != gates.Fail || r.Fault != nil {
+		return
+	}
+	n := gates.Offenses(r.Detail)
+	if n < 0 {
+		return
+	}
+	g := p.repoConf(pt.repo).Gates
+	m, err := func() (int, error) {
+		dir := filepath.Join(p.jobDir(jobID), "lint-base"+pt.sfx())
+		if err := p.git(pt.repo).Export(ctx, pt.ws.Repo, pt.base, dir); err != nil {
+			return 0, err
+		}
+		if _, err := p.copyFilesInto(ctx, pt.repo, dir); err != nil {
+			return 0, err
+		}
+		if g.Install != "" {
+			if code, _, err := p.gateExec(ctx, jobID, dir, g.Install, gateRun{repo: pt.repo, install: true}); err != nil || code != 0 {
+				return 0, fmt.Errorf("its install failed (exit %d %v)", code, err)
+			}
+		}
+		code, out, err := p.gateExec(ctx, jobID, dir, g.Commands["lint"], gateRun{repo: pt.repo})
+		if err == nil && code == 0 {
+			return 0, nil
+		}
+		if m := gates.Offenses(out); err == nil && m >= 0 {
+			return m, nil
+		}
+		return 0, fmt.Errorf("it gave no count of offenses (exit %d %v)", code, err)
+	}()
+	switch {
+	case err != nil:
+		r.Detail = "factory: couldn't count lint offenses on the base commit, so they all count: " + err.Error() + "\n" + r.Detail
+	case n <= m:
+		r.Status = gates.Pass
+		r.Detail = fmt.Sprintf("lint fails on the base commit too, with %d offenses; this change leaves %d, so it adds none", m, n)
+	default:
+		r.Detail = fmt.Sprintf("the base commit has %d lint offenses and this change has %d: it adds %d. Fix those; the rest were there before it.\n%s", m, n, n-m, r.Detail)
+	}
 }
 
 // provesFix reverts the non-test code to base, keeps the changed tests, and

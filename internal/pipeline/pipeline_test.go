@@ -618,6 +618,42 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 	}
 }
 
+// Lint that fails on the base commit passes a change that adds no
+// offenses, and fails one that adds some, saying how many.
+func TestLintHeldToTheBaseOffenses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setupWith(t, map[string]string{"offenses.txt": "a\nb\nc\n"})
+	e.p.Cfg.Gates.Required = append(e.p.Cfg.Gates.Required, "lint")
+	e.p.Cfg.Gates.Commands["lint"] = `n=$(wc -l < offenses.txt); echo "9 files inspected, $n offenses detected"; [ "$n" -eq 0 ]`
+	e.addIssue(2)
+	worse := func(work string) error {
+		writeFile(work, "offenses.txt", "a\nb\nc\nd\n")
+		return goodBuild(work)
+	}
+	e.claude.builds = []func(string) error{worse, goodBuild}
+	e.codex.reviews = []string{pass}
+	e.p.Drain(ctx)
+	it := e.item(t, 2)
+	if it.Stage != state.AwaitingHuman {
+		t.Fatalf("stage = %s", it.Stage)
+	}
+	if pr := e.claude.prompts["implement"][1]; !strings.Contains(pr, "the base commit has 3 lint offenses and this change has 4: it adds 1") {
+		t.Fatalf("retry prompt:\n%s", pr)
+	}
+	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+	gr, _ := e.p.Store.GateResults(ctx, jobs[0].ID)
+	var lint store.GateResult
+	for _, g := range gr {
+		if g.Gate == "lint" {
+			lint = g
+		}
+	}
+	if lint.Status != "pass" || !strings.Contains(lint.Detail, "with 3 offenses; this change leaves 3") {
+		t.Fatalf("lint = %+v", lint)
+	}
+}
+
 // A gate failure retries the builder with the failure attached.
 func TestGateFailureRetriesWithFailure(t *testing.T) {
 	t.Parallel()
@@ -631,8 +667,8 @@ func TestGateFailureRetriesWithFailure(t *testing.T) {
 	if it.Stage != state.AwaitingHuman {
 		t.Fatalf("stage = %s", it.Stage)
 	}
-	if !strings.Contains(e.claude.prompts["implement"][1], "GATES: FAIL") {
-		t.Fatal("retry prompt should carry the gate failure")
+	if pr := e.claude.prompts["implement"][1]; !strings.Contains(pr, "GATES: FAIL") || !strings.Contains(pr, "builder said of its work:\n\n> did it") {
+		t.Fatal("retry prompt should carry the gate failure and what the builder said it did")
 	}
 	jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
 	if len(jobs) != 2 || jobs[1].State != state.Failed || jobs[0].Attempt != 2 {

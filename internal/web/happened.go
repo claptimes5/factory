@@ -107,25 +107,13 @@ func (s *Server) whatHappened(it *store.WorkItem, jobs []*store.Job, evs []store
 // baseRedNote names the checks a failed build failed that the setup
 // check found failing on the base branch too.
 func (s *Server) baseRedNote(repo string, j *store.Job) string {
-	line, _, _ := strings.Cut(j.Error, "\n")
-	if !strings.HasPrefix(line, "GATES: FAIL") {
-		return ""
-	}
 	rep, err := readiness.Load(s.ReadinessDir, repo)
 	if s.ReadinessDir == "" || err != nil || rep == nil {
 		return ""
 	}
 	var red []string
-	for _, f := range strings.Fields(line) {
-		gate, ok := strings.CutSuffix(f, "=fail")
-		if !ok {
-			continue
-		}
-		for _, b := range rep.Findings {
-			if b.Level == readiness.Blocker && b.Issue != nil && b.Issue.Key == "check:"+gate {
-				red = append(red, "`"+gate+"`")
-			}
-		}
+	for _, gate := range rep.RedOnBase(j.Error) {
+		red = append(red, "`"+gate+"`")
 	}
 	if len(red) == 0 {
 		return ""

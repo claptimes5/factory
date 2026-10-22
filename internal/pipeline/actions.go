@@ -96,6 +96,10 @@ func (p *Pipeline) planRetry(ctx context.Context, actor string, jobID int64, tie
 			_ = jsonUnmarshal(j.Input, &rp.in)
 		}
 		rp.in.Continue = nil // a retry starts over
+		// It hears why this job failed, not the one before it.
+		if j.Error != "" && j.State != state.Cancelled {
+			rp.in.PreviousFailure = p.priorFailure(j.ID, j.Error)
+		}
 		rp.size = it.Complexity
 		if rp.in.Size != "" {
 			rp.size = rp.in.Size // a rethink's build, or a fix round after one
