@@ -12,6 +12,28 @@ import { ago, cn, repoName, shortSha } from "@/lib/utils";
 
 type Readiness = components["schemas"]["Readiness"];
 type RepoReadiness = components["schemas"]["RepoReadiness"];
+
+/**
+ * What the factory is doing for a repo's setup now, said plainly: its job
+ * image building, then its check of the base branch, queued or running,
+ * with why; null when neither. Every screen says it the same way.
+ */
+export function setupActivity(r: RepoReadiness): { title: string; since: string; detail: string } | null {
+  const name = repoName(r.repo) || r.repo;
+  const again = r.checking_why.replace(/^Started by itself: /, "").replace(/\.$/, "");
+  const why = again ? `Why check again: ${again}.` : "You asked for it.";
+  if (r.image) {
+    const then = r.checking ? ` Then it checks ${r.branch} in it. ${why}` : "";
+    return {
+      title: `Building ${name}'s job image`,
+      since: r.image.since,
+      detail: `Because ${r.image.why}. Its jobs wait for it.${then}${r.image.step ? ` Now at ${r.image.step}` : ""}`,
+    };
+  }
+  if (!r.checking) return null;
+  if (r.check_waits) return { title: `${name}'s check of ${r.branch} waits for ${r.check_waits}`, since: r.checking_since, detail: why };
+  return { title: `Checking ${name}'s ${r.branch}`, since: r.checking_since, detail: `${why} It installs it on a fresh copy and runs its checks.` };
+}
 type Step = components["schemas"]["ReadinessStep"];
 type FindingT = components["schemas"]["ReadinessFinding"];
 
@@ -20,7 +42,7 @@ export const useReadiness = () =>
   useQuery({
     queryKey: ["readiness"],
     queryFn: () => getJSON<Readiness>("/readiness"),
-    refetchInterval: (q) => (q.state.data?.repos.some((r) => r.checking) ? 3_000 : 30_000),
+    refetchInterval: (q) => (q.state.data?.repos.some((r) => r.checking || r.image) ? 3_000 : 30_000),
   });
 
 /** A finding's detail: paragraphs, with command output in fenced blocks shown as is. */
@@ -257,12 +279,13 @@ export function nextStep(r: RepoReadiness, data: Readiness): Next {
   const settled = (f: FindingT) => f.status === "done" || (f.status === "split" && f.split_total > 0 && f.split_done === f.split_total);
   const merged = r.work.filter(settled);
   const check: NextAction[] = data.can_check && !r.checking ? [{ label: r.state === "unchecked" ? "Check now" : "Check again", primary: true, run: ["/readiness/check", {}] }] : [];
-  if (r.checking) {
+  const doing = setupActivity(r);
+  if (r.checking || doing) {
     const failing = r.steps.find((st) => st.state === "failing");
     return {
       tone: "info",
-      title: `Working on it: checking ${repoName(r.repo) || r.repo}`,
-      body: `It installs ${r.repo} on a fresh copy of ${r.branch} and runs its checks, then files what a change can fix for the factory. It takes a few minutes; this updates by itself.`,
+      title: `Working on it: ${doing ? doing.title.charAt(0).toLowerCase() + doing.title.slice(1) : `checking ${repoName(r.repo) || r.repo}`}`,
+      body: `${doing ? doing.detail + " " : ""}The check files what a change can fix for the factory; until it's done, the fixes from the last check are on hold. It takes a few minutes; this updates by itself.`,
       actions: [],
       running: true,
       // A check is about what's failing, which it looks at again.
@@ -466,8 +489,7 @@ function NextBox({ next, r, busy, run, id }: { next: Next; r: RepoReadiness; bus
       </p>
       {next.running && (
         <p className="text-meta text-muted-foreground">
-          Started <Ago ts={r.checking_since} />
-          {r.checking_why && `. ${r.checking_why.replace(/^Started by itself: /, "The factory started it: ")}`}
+          Started <Ago ts={setupActivity(r)?.since ?? r.checking_since} />
         </p>
       )}
       <p className="text-text-2">{next.body}</p>
@@ -516,10 +538,10 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
           )}
         </div>
         <div className="flex flex-col items-end gap-1.5">
-          {r.checking ? (
+          {setupActivity(r) ? (
             <span role="status" className="flex items-center gap-2 text-sm text-primary-soft">
-              <Loader2 className="size-4 animate-spin" aria-hidden /> Checking now, started{" "}
-              <Ago ts={r.checking_since} />
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {r.image ? "Building its image" : r.check_waits ? "Check queued" : "Checking now"}, started{" "}
+              <Ago ts={setupActivity(r)!.since} />
             </span>
           ) : data.can_check ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={check}>
@@ -692,11 +714,11 @@ export function useSetupNotice(): Notice | null {
   // Home leads with setup itself while a person's part is left.
   const here = path === "/setup" || (path === "/" && !!data?.repos.some(yourPartLeft));
   if (!data || here) return null;
-  const running = data.repos.find((r) => r.checking);
-  const doing = running && (
+  const now = data.repos.map(setupActivity).find((a) => a !== null);
+  const doing = now && (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
-      Checking {repoName(running.repo) || running.repo}, started <Ago ts={running.checking_since} />.
+      <span className="font-medium">{now.title}</span>, started <Ago ts={now.since} />. {now.detail}
       <Link to="/setup" className="font-medium underline underline-offset-2">
         Watch it
       </Link>
@@ -735,14 +757,22 @@ export function useSetupNotice(): Notice | null {
         tone: "attention",
         body: (
           <span className="flex flex-col gap-1">
-            <span className="min-w-0 break-words">
-              {w === 1 ? "A fix" : `${w} fixes`} for what fails on{" "}
-              {behind.length > 1 ? "the repos' base branches" : `${many ? repoName(behind[0].repo) + "'s " : ""}${behind[0].branch}`}{" "}
-              {w === 1 ? "waits" : "wait"} on you; new tasks wait until {w === 1 ? "it's" : "they're"} merged.{" "}
-              <Link to="/" className="font-medium underline underline-offset-2">
-                See {w === 1 ? "it" : "them"}
-              </Link>
-            </span>
+            {now ? (
+              <span className="min-w-0 break-words">
+                The last check found {w === 1 ? "a fix" : `${w} fixes`} for what fails on{" "}
+                {behind.length > 1 ? "the repos' base branches" : `${many ? repoName(behind[0].repo) + "'s " : ""}${behind[0].branch}`}. {w === 1 ? "It's" : "They're"} on
+                hold until the new check is done, since it may change {w === 1 ? "it" : "them"}.
+              </span>
+            ) : (
+              <span className="min-w-0 break-words">
+                {w === 1 ? "A fix" : `${w} fixes`} for what fails on{" "}
+                {behind.length > 1 ? "the repos' base branches" : `${many ? repoName(behind[0].repo) + "'s " : ""}${behind[0].branch}`}{" "}
+                {w === 1 ? "waits" : "wait"} on you; new tasks wait until {w === 1 ? "it's" : "they're"} merged.{" "}
+                <Link to="/" className="font-medium underline underline-offset-2">
+                  See {w === 1 ? "it" : "them"}
+                </Link>
+              </span>
+            )}
             {doing}
           </span>
         ),

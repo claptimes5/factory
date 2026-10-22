@@ -1105,9 +1105,16 @@ components:
         intake_label: { type: string, description: The label that hands an issue to the factory }
         can_check: { type: boolean, description: "This request may run the check here (behind the password or on this machine, with a daemon that can)" }
         check_note: { type: string, description: "Why it can't, or empty" }
+    ImageBuildRun:
+      type: object
+      required: [why, since, step]
+      properties:
+        why: { type: string, description: "Why it's built: it isn't built yet, factory.yaml changed what it's built from, the repo's Dockerfile changed" }
+        since: { type: string }
+        step: { type: string, description: "The Dockerfile step it's on, such as [test 3/5] COPY ...; empty before the first" }
     RepoReadiness:
       type: object
-      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, checking, checking_since, check_job, check_error, result, progress, checking_why]
+      required: [repo, state, checked_at, branch, sha, score, done, total, steps, work, extras, checking, checking_since, check_job, check_error, result, progress, checking_why, check_waits, image]
       properties:
         repo: { type: string }
         state: { type: string, enum: [unchecked, incomplete, not_ready, ready] }
@@ -1131,6 +1138,12 @@ components:
         check_error: { type: string, description: "Why the last check failed, or empty" }
         result: { type: string, description: "What the last check did, when it worked; else empty" }
         check_job: { type: [integer, "null"], description: The readiness job of the check going, or of the last one }
+        check_waits: { type: string, description: "What a check that's queued, not running, waits for (its job image to build, a free slot); empty when it runs or there's none. checking_since is then when it was queued" }
+        image:
+          description: The build of its job image going now, or null; its jobs, its check included, wait for it
+          oneOf:
+            - $ref: "#/components/schemas/ImageBuildRun"
+            - type: "null"
         checking_why: { type: string, description: "What started the run going, when the factory did by itself; else empty" }
         progress:
           type: array

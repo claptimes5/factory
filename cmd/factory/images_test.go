@@ -420,11 +420,13 @@ func TestDockerfileChangeRebuildsTheImage(t *testing.T) {
 		t.Fatalf("missing, rebuilds %+v", c)
 	}
 
-	bl := &imageBuilder{building: []string{"factory-job-o__api:latest"}, why: "the repo's Dockerfile changed on release"}
-	if w := bl.Waiting(cfg, "o/api"); w != "Waits for its job image, which is being built: the repo's Dockerfile changed on release. It starts by itself when the build is done." {
-		t.Fatalf("waiting %q", w)
+	bl := &imageBuilder{building: []string{"factory-job-o__api:latest"}, why: map[string]string{"factory-job-o__api:latest": "the repo's Dockerfile changed on release"},
+		log: &tailBuffer{max: 1 << 10}}
+	io.WriteString(bl.log, "#21 [build 9/9] RUN rm -rf tmp/cache\n#21 DONE 1.4s\n#22 [test 2/5] COPY --from=build /usr/local/bundle /usr/local/bundle\n")
+	if st := bl.Status(cfg, "o/api"); st == nil || st.Why != "the repo's Dockerfile changed on release" || st.Step != "[test 2/5] COPY --from=build /usr/local/bundle /usr/local/bundle" {
+		t.Fatalf("status %+v", st)
 	}
-	if w := (&imageBuilder{}).Waiting(cfg, "o/api"); w != "" {
-		t.Fatalf("nothing building, waiting %q", w)
+	if st := (&imageBuilder{}).Status(cfg, "o/api"); st != nil {
+		t.Fatalf("nothing building, status %+v", st)
 	}
 }

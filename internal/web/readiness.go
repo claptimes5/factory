@@ -39,6 +39,14 @@ type APIReadiness struct {
 	CheckNote string `json:"check_note"`
 }
 
+// APIImageBuild is a build of a repo's job image going now: why it's
+// built, since when, and the step it's on ("" before the first).
+type APIImageBuild struct {
+	Why   string `json:"why"`
+	Since string `json:"since"`
+	Step  string `json:"step"`
+}
+
 // APIRepoReadiness is one repo's latest readiness report.
 type APIRepoReadiness struct {
 	Repo string `json:"repo"`
@@ -65,6 +73,12 @@ type APIRepoReadiness struct {
 	CheckingSince string `json:"checking_since"`
 	CheckingWhy   string `json:"checking_why"`
 	CheckJob      *int64 `json:"check_job"`
+	// CheckWaits is what a check that's queued, not running, waits for
+	// ("its job image to build"), or "": then CheckingSince is when it
+	// was queued.
+	CheckWaits string `json:"check_waits"`
+	// Image is the build of its job image going now, or null.
+	Image *APIImageBuild `json:"image"`
 	// CheckError is why the last check failed, or "", and Result what it
 	// did when it worked.
 	CheckError string `json:"check_error"`
@@ -169,8 +183,11 @@ func (s *Server) lastCheck(rr *APIRepoReadiness, checks []*store.Job) {
 		switch {
 		case !j.State.Terminal():
 			rr.Checking, rr.CheckingSince = true, j.StartedAt
-			if rr.CheckingSince == "" {
-				rr.CheckingSince = j.QueuedAt
+			if j.State == state.Queued {
+				rr.CheckingSince, rr.CheckWaits = j.QueuedAt, "a free slot"
+				if rr.Image != nil {
+					rr.CheckWaits = "its job image to build"
+				}
 			}
 			if in.Why != "" {
 				rr.CheckingWhy = "Started by itself: " + in.Why + "."
@@ -201,6 +218,9 @@ func (s *Server) readiness(r *http.Request) APIReadiness {
 	checked, ready := 0, 0
 	for _, repo := range s.Repos {
 		rr := APIRepoReadiness{Repo: repo, State: "unchecked", Steps: []APIReadinessStep{}, Work: []APIReadinessFinding{}, Extras: []APIReadinessFinding{}, Progress: []APIProgress{}}
+		if s.ImageBuilding != nil {
+			rr.Image = s.ImageBuilding(repo)
+		}
 		s.lastCheck(&rr, checks)
 		rep, err := readiness.Load(s.ReadinessDir, repo)
 		if err != nil && rr.CheckError == "" {

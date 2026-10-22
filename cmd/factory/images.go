@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
+	"github.com/claptimes5/factory/internal/web"
 )
 
 // imageLabel marks every image the factory builds, so pruning old copies
@@ -41,7 +43,8 @@ type imageBuilder struct {
 	mu       sync.Mutex
 	running  bool
 	building []string // tags this build still has to make
-	why      string   // why they're built, for the items that wait
+	why      map[string]string // why each is built, by tag, for the page
+	since    time.Time
 	log      *tailBuffer
 	result   string
 	failed   bool
@@ -62,20 +65,39 @@ func (b *imageBuilder) onDone(f func()) {
 // errBuildRunning refuses a second build while one runs.
 var errBuildRunning = errors.New("a build is already running")
 
-// Waiting says, for an item on repo, that its jobs wait for its job image
-// to build, and why; "" when they don't.
-func (b *imageBuilder) Waiting(cfg *config.Config, repo string) string {
+// Status is the build of repo's job image going now, or nil: why, since
+// when, and the Dockerfile step its log is on.
+func (b *imageBuilder) Status(cfg *config.Config, repo string) *web.APIImageBuild {
 	rc, ok := cfg.RepoConf(repo)
 	if !ok {
-		return ""
+		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !slices.Contains(b.building, rc.Image) {
+		return nil
+	}
+	st := &web.APIImageBuild{Why: cmp.Or(b.why[rc.Image], "it isn't built yet"), Since: b.since.UTC().Format(time.RFC3339)}
+	if b.log != nil {
+		st.Step = buildStep(b.log.String())
+	}
+	return st
+}
+
+var stepRE = regexp.MustCompile(`(?m)^#\d+ (\[[^\]]+\] .*)$`)
+
+// buildStep is the last step a docker build's log started, such as
+// "[test 3/5] COPY --from=build /app /app", or "".
+func buildStep(log string) string {
+	m := stepRE.FindAllStringSubmatch(log, -1)
+	if len(m) == 0 {
 		return ""
 	}
-	why := cmp.Or(b.why, "it isn't built yet")
-	return "Waits for its job image, which is being built: " + why + ". It starts by itself when the build is done."
+	s := m[len(m)-1][1]
+	if len(s) > 100 {
+		s = strings.ToValidUTF8(s[:100], "") + "…"
+	}
+	return s
 }
 
 // Building names the images being built now.
@@ -124,13 +146,21 @@ func (b *imageBuilder) startThese(cfg *config.Config, pick func(*config.Config) 
 	b.running = true // held while pick looks, so two starts can't race
 	b.mu.Unlock()
 	missing := pick(cfg)
+	whys := map[string]string{}
+	for _, im := range missing {
+		whys[im.tag] = why
+		if why == "" && runCmd(io.Discard, "docker", "image", "inspect", im.tag) == nil {
+			// Built, but not as factory.yaml says now (see isBuilt).
+			whys[im.tag] = "factory.yaml changed what it's built from"
+		}
+	}
 	b.mu.Lock()
 	if len(missing) == 0 {
 		b.running = false
 		b.mu.Unlock()
 		return 0, nil
 	}
-	b.building, b.log, b.result, b.failed, b.why = nil, &tailBuffer{max: 16 << 10}, "", false, why
+	b.building, b.log, b.result, b.failed, b.why, b.since = nil, &tailBuffer{max: 16 << 10}, "", false, whys, time.Now()
 	for _, im := range missing {
 		b.building = append(b.building, im.tag)
 	}

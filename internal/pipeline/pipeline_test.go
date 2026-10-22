@@ -682,6 +682,16 @@ func TestSetupFailureParksInsteadOfRetrying(t *testing.T) {
 			if cs := e.p.Choices(ctx, jobs[0].ID); len(cs) == 0 || cs[0].Action != "fix_setup" || !cs[0].Available {
 				t.Fatalf("choices %+v: Fix setup isn't first", cs)
 			}
+			// While a check of main is on its way, nothing starts it again
+			// but parking stays.
+			if _, err := e.p.Store.EnqueueJob(ctx, store.Job{Kind: KindReadiness, Input: `{"repo":"o/r"}`}); err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range e.p.Choices(ctx, jobs[0].ID) {
+				if (c.Action == "fix_setup" || c.Action == "retry") && (c.Available || !strings.HasPrefix(c.Why, "Wait: a check of o/r's main is on its way")) {
+					t.Fatalf("while checking, %s: available %v, why %q", c.Action, c.Available, c.Why)
+				}
+			}
 			evs, _ := e.p.Store.Events(ctx, it.ID)
 			if !slices.ContainsFunc(evs, func(ev store.Event) bool {
 				return ev.Type == "park" && strings.Contains(ev.Reason, "No such file or directory - ffmpeg")

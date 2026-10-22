@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -713,7 +714,35 @@ func (p *Pipeline) Choices(ctx context.Context, jobID int64) []Choice {
 	case state.Done:
 		park.Why = "The item is done."
 	}
+	// While its repo's setup is changing, starting it again would run on
+	// what's going away, or fix what the coming check finds isn't broken.
+	if why := p.Settling(ctx, it.Repo); why != "" {
+		for i := range out {
+			if out[i].Available {
+				out[i].Available, out[i].Why = false, why
+			}
+		}
+	}
 	return append(out, park)
+}
+
+// Settling says why repo's work waits a moment, or "": its job image is
+// being built, or a check of its base branch is queued or running.
+func (p *Pipeline) Settling(ctx context.Context, repo string) string {
+	if slices.Contains(p.heldRepos(), repo) {
+		return "Wait: " + repo + "'s job image is being built, and its jobs wait for it. This is offered again once it's built."
+	}
+	checks, err := p.Store.ListJobs(ctx, store.JobFilter{Kind: KindReadiness, Limit: 20})
+	if err != nil {
+		return ""
+	}
+	for _, j := range checks {
+		var in ReadinessInput
+		if !j.State.Terminal() && json.Unmarshal([]byte(j.Input), &in) == nil && strings.EqualFold(in.Repo, repo) {
+			return "Wait: a check of " + repo + "'s " + p.repoConf(repo).BaseBranch + " is on its way, and may find this fixed or failing for another reason. This is offered again once it's done."
+		}
+	}
+	return ""
 }
 
 // modelCantFix reports whether the orchestrator parked item it, since its

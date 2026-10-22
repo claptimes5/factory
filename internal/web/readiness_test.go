@@ -314,11 +314,11 @@ func TestItemWaitsForItsImage(t *testing.T) {
 	it, _, _ := st.UpsertItem(ctx, "o/r", 12, "Add a report")
 	st.SetStage(ctx, it.ID, state.Ready, "daemon", "")
 	building := "Waits for its job image, which is being built: the repo's Dockerfile changed on main. It starts by itself when the build is done."
-	s := &Server{Store: st, Actions: &fakeActions{}, Repos: []string{"o/r"}, ImageWait: func(repo string) string {
+	s := &Server{Store: st, Actions: &fakeActions{}, Repos: []string{"o/r"}, ImageBuilding: func(repo string) *APIImageBuild {
 		if repo == "o/r" {
-			return building
+			return &APIImageBuild{Why: "the repo's Dockerfile changed on main"}
 		}
-		return ""
+		return nil
 	}}
 	h, err := s.Handler()
 	if err != nil {
@@ -335,5 +335,27 @@ func TestItemWaitsForItsImage(t *testing.T) {
 	getJSON(t, base+"/api/v1/items/"+strconv.FormatInt(it.ID, 10), &d)
 	if d.Item.Setup != "" {
 		t.Fatalf("done item = %q", d.Item.Setup)
+	}
+}
+
+// A check that's queued says what it waits for, not that it started.
+func TestQueuedCheckSaysWhatItWaitsFor(t *testing.T) {
+	t.Parallel()
+	base, st, s := readinessServer(t)
+	ctx := context.Background()
+	if _, err := st.EnqueueJob(ctx, store.Job{Kind: pipeline.KindReadiness, Input: `{"repo":"o/r","why":"main moved from abc1234 to def5678"}`}); err != nil {
+		t.Fatal(err)
+	}
+	var got APIReadiness
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if r := got.Repos[0]; !r.Checking || r.CheckWaits != "a free slot" || r.Image != nil {
+		t.Fatalf("queued: %+v", r)
+	}
+	s.ImageBuilding = func(repo string) *APIImageBuild {
+		return &APIImageBuild{Why: "factory.yaml changed what it's built from", Step: "[test 2/5] COPY . ."}
+	}
+	getJSON(t, base+"/api/v1/readiness", &got)
+	if r := got.Repos[0]; r.CheckWaits != "its job image to build" || r.Image == nil || r.Image.Why != "factory.yaml changed what it's built from" || !strings.Contains(r.CheckingWhy, "main moved") {
+		t.Fatalf("waiting for the image: %+v", r)
 	}
 }

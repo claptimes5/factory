@@ -183,6 +183,15 @@ your phone, and those jobs fail as they would without the image. You can
 also build them from the dashboard's get-started page, or with
 `./factory images` (`--rebuild` rebuilds them all).
 
+While an image builds, the Setup notice at the top of every screen says
+which repo's image, why (it isn't built yet, `factory.yaml` changed what
+it's built from, or the repo's Dockerfile changed) and the Dockerfile
+step it's on. A check of that repo's base branch waits for it and says
+so, rather than saying it started. Until both are done, the repo's
+parked items can't be retried, continued or fixed from the dashboard
+(Park still works), and fixes the last check found are shown on hold:
+the new check may find them fixed, or failing for another reason.
+
 An image built from something `factory.yaml` no longer says counts as
 missing too: each records what it was built on (`image_from`, the
 `image_build` settings, whether it has Chromium for previews) in the label
