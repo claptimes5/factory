@@ -56,6 +56,24 @@ test("the get-started page lists each step and opens the first that needs attent
   if (phone(info)) await noSidewaysScroll(page);
 });
 
+test("the page draws at once from the saved setup, and the steps the forges answer say they're checking until they do", async ({ page }) => {
+  let answer = () => {};
+  const held = new Promise<void>((r) => (answer = r));
+  await page.route(/\/api\/v1\/setup\?live=1$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto("/app/get-started");
+  await expect(step(page, "claude")).toContainText("API key saved");
+  await expect(step(page, "github")).toHaveAttribute("data-state", "checking");
+  await expect(step(page, "github")).toContainText("Checking the factory can reach GitHub");
+  const gh = await openStep(page, "github");
+  await expect(gh.getByRole("status", { name: "Checking" })).toBeVisible();
+  answer();
+  await expect(step(page, "github")).not.toHaveAttribute("data-state", "checking");
+  await expect(gh.getByRole("status", { name: "Checking" })).toHaveCount(0);
+});
+
 test("a key that doesn't look like Claude's is refused unless you say to use it", async ({ page }) => {
   await page.goto("/app/get-started");
   const claude = step(page, "claude");
