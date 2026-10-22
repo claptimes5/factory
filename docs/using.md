@@ -23,7 +23,7 @@ with push notifications (see [Notifications](#notifications)).
 
 | Screen | What it shows |
 | --- | --- |
-| **Home** | While a repo isn't set up, its one next step leads (see [How ready a repo is](quality.md#how-ready-a-repo-is)), with what needs you listed under it, the work that fixes setup first. Otherwise, what needs you, one decision at a time: a PR to review, a plan or a cost to OK, a question or your call on a parked item, each with its buttons. Reviews come first; **Later** sends one to the back, and the next two are listed. Below, the line at a glance (Queue, Build, Review, and You as the last station), a line when a repo has [earned more trust](#trust), "since you looked": what went live since Home was last marked seen (kept by the factory, so a phone and a desk agree), and a box that opens Ask. |
+| **Home** | While a repo isn't set up, its one next step leads (see [How ready a repo is](quality.md#how-ready-a-repo-is)), with what needs you listed under it in the order to do it, numbered: the work that fixes setup first. Otherwise, what needs you, one decision at a time: a PR to review, a plan or a cost to OK, a question or your call on a parked item, each with its buttons. Reviews come first, then whatever other work waits for ("Do first: #20 waits for it"), then the rest. Last comes what can't pass its checks until setup or the base branch is fixed ("Waits for the base branch": its build failed a check that fails on the base branch too, so Retry it once that's fixed). **Later** sends one to the back, and the next two are listed. Below, the line at a glance (Queue, Build, Review, and You as the last station), a line when a repo has [earned more trust](#trust), "since you looked": what went live since Home was last marked seen (kept by the factory, so a phone and a desk agree), and a box that opens Ask. |
 | **Ask the factory** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model from any screen, with suggestions to start from: beside the screen on a wide desk, a sheet over it on a laptop or phone. |
 | **The line** | The old Floor: what needs you, with each item's buttons, then a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
@@ -1329,6 +1329,15 @@ cd web && npm ci && npm run dev     # http://localhost:5173/app/
 npm run build                       # regenerate types, typecheck, build into internal/web/app
 npm run e2e                         # Playwright on desktop and phone sizes
 ```
+
+Run the e2e tests with `npm run e2e`, not `npx playwright test`: it starts
+the devserver first. Before Playwright starts its own, it connects to the
+port to see whether one is running, and on WSL2 with mirrored networking a
+connect to a closed port hangs instead of being refused, so that check
+waits over two minutes before any test runs. Pass Playwright's arguments
+after `--`: `npm run e2e -- e2e/home.spec.ts`. A devserver that's already
+running is reused, so restart it after `npm run build`: it serves the app
+it was built with.
 
 Commit the rebuilt `internal/web/app` with your change; CI checks it is
 current.

@@ -68,10 +68,13 @@ type APIItem struct {
 	// WaitsFor are the items it depends on that aren't done: it isn't
 	// built until they are, whatever is approved.
 	WaitsFor []APIItemRef `json:"waits_for"`
+	// Unblocks are the items not done that wait for it: what it holds up.
+	Unblocks []APIItemRef `json:"unblocks"`
 	// Setup is how it stands to its repo's setup while the readiness
 	// check has found blockers: "blocks" when it fixes one (nothing else
 	// runs on the repo until they're fixed), "held" when it waits for
-	// them, "image" when its jobs wait for its job image to build, else
+	// them, "image" when its jobs wait for its job image to build, "base"
+	// when it's parked on checks that fail on the base branch too, else
 	// "". SetupNote says so in a sentence.
 	Setup     string `json:"setup"`
 	SetupNote string `json:"setup_note"`
@@ -535,6 +538,17 @@ func (s *Server) estimatesByItem(ctx context.Context) map[int64]*store.Estimate 
 	return out
 }
 
+// openRefs names the items of ids that aren't done.
+func (s *Server) openRefs(ctx context.Context, ids []int64) []APIItemRef {
+	out := []APIItemRef{}
+	for _, id := range ids {
+		if it, err := s.Store.GetItem(ctx, id); err == nil && it.Stage != state.Done {
+			out = append(out, APIItemRef{ID: it.ID, Ref: s.ref(it.Repo, it.IssueNumber)})
+		}
+	}
+	return out
+}
+
 // apiItemWith is apiItem given the item's estimate, or nil.
 func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.Estimate) APIItem {
 	a := APIItem{
@@ -549,14 +563,12 @@ func (s *Server) apiItemWith(ctx context.Context, it *store.WorkItem, e *store.E
 		a.SelfStarted = pipeline.SelfSource(ap.ApprovedBy)
 	}
 	a.PRs, a.PRURL = s.linkedPRs(ctx, it)
-	a.WaitsFor = []APIItemRef{}
+	a.WaitsFor, a.Unblocks = []APIItemRef{}, []APIItemRef{}
 	if it.Stage != state.Done {
 		deps, _ := s.Store.Dependencies(ctx, it.ID)
-		for _, d := range deps {
-			if dep, err := s.Store.GetItem(ctx, d); err == nil && dep.Stage != state.Done {
-				a.WaitsFor = append(a.WaitsFor, APIItemRef{ID: dep.ID, Ref: s.ref(dep.Repo, dep.IssueNumber)})
-			}
-		}
+		a.WaitsFor = s.openRefs(ctx, deps)
+		dependents, _ := s.Store.Dependents(ctx, it.ID)
+		a.Unblocks = s.openRefs(ctx, dependents)
 	}
 	if it.Stage == state.Parked || it.Stage == state.Blocked {
 		a.BlockedNote = s.stageReason(ctx, it.ID, it.Stage)

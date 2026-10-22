@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ExternalLink, MessageCircle, ShieldCheck } from "lucide-react";
 import { postJSON, useBoard, useHome, useOverview, useTrust, type Card as CardT } from "@/api/client";
-import { ErrorBox, Loading, WaitsFor } from "@/components/common";
+import { ErrorBox, Inline, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
@@ -40,10 +40,20 @@ const kindLabel: Record<Kind, string> = { review: "Review", plan: "Approve a pla
 /** Reviews first (they're finished work), then plans and costs (work waiting to start), then questions. */
 const kindOrder: Record<Kind, number> = { review: 0, plan: 1, cost: 2, choice: 3, question: 4 };
 
-/** While a repo's setup isn't done, what fixes it comes first and what waits for it last. */
-const setupOrder = (c: CardT) => (c.setup === "blocks" ? 0 : c.setup === "held" ? 2 : 1);
+/**
+ * What fixes setup comes first; what waits for setup or for the base
+ * branch's checks comes last, since it can't pass before them.
+ */
+const setupOrder = (c: CardT) => (c.setup === "blocks" ? 0 : c.setup === "held" || c.setup === "base" ? 2 : 1);
 
-const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image" };
+/** Whether the order matters: something waits on another, or on setup. */
+const ordered = (cs: CardT[]) => cs.some((c) => c.unblocks.length > 0 || c.setup === "blocks" || c.setup === "held" || c.setup === "base");
+
+const setupLabel: Record<string, string> = { blocks: "Blocks setup", held: "Waits for setup", image: "Waits for its image", base: "Waits for the base branch" };
+
+/** "#20 waits for it" for an item others wait for, or "". */
+const holdsUp = (c: CardT) =>
+  c.unblocks.length === 0 ? "" : `${c.unblocks.map((u) => shortRef(u.ref)).join(", ")} ${c.unblocks.length === 1 ? "waits" : "wait"} for it`;
 
 /** A decision's one-line ask, for the "next" list. */
 function ask(c: CardT): string {
@@ -86,7 +96,12 @@ export function HomeScreen() {
 
   const held = (cols.get("blocked") ?? []).filter((k) => k.estimate_waiting || k.plan_waiting);
   const needs = [...(cols.get("awaiting_human") ?? []), ...held, ...(cols.get("parked") ?? [])].sort(
-    (a, b) => setupOrder(a) - setupOrder(b) || kindOrder[kindOf(a)] - kindOrder[kindOf(b)],
+    // Reviews first (finished work), then what other work waits for: answering it lets the factory move again.
+    (a, b) =>
+      setupOrder(a) - setupOrder(b) ||
+      Number(kindOf(b) === "review") - Number(kindOf(a) === "review") ||
+      b.unblocks.length - a.unblocks.length ||
+      kindOrder[kindOf(a)] - kindOrder[kindOf(b)],
   );
   // "Later" sends a decision to the back of the queue, for this visit.
   const queue = [...needs.filter((c) => !later.includes(c.id)), ...later.flatMap((id) => needs.filter((c) => c.id === id))];
@@ -102,12 +117,15 @@ export function HomeScreen() {
           {needs.length > 0 && (
             <section aria-label="Needs you" className="flex flex-col gap-2">
               <h2 className="text-body font-semibold">{needs.length === 1 ? "1 thing needs you" : `${needs.length} things need you`}</h2>
-              {needs.some((c) => c.setup === "held") && (
-                <p className="text-body-sm text-muted-foreground">What waits for setup can't pass its checks until setup is done; it starts by itself then.</p>
+              {needs.some((c) => c.unblocks.length > 0 || c.setup === "base") && (
+                <p className="text-body-sm text-muted-foreground">In this order: changes to review, then what other work waits for, then the rest.</p>
+              )}
+              {needs.some((c) => c.setup === "held" || c.setup === "base") && (
+                <p className="text-body-sm text-muted-foreground">What waits for setup or the base branch can't pass its checks until they're fixed; it starts by itself then, or Retry it.</p>
               )}
               <ol className="flex flex-col divide-y rounded-card border bg-surface">
-                {needs.map((c) => (
-                  <NeedRow key={c.id} c={c} />
+                {needs.map((c, i) => (
+                  <NeedRow key={c.id} c={c} n={ordered(needs) ? i + 1 : undefined} />
                 ))}
               </ol>
             </section>
@@ -125,6 +143,7 @@ export function HomeScreen() {
               {queue.slice(1, 3).map((c, i) => (
                 <li key={c.id} className="truncate">
                   {i === 0 ? "Next" : "Then"}: <Link to={`/items/${c.id}`} className="hover:text-foreground hover:underline">{ask(c)}</Link>
+                  {c.setup === "base" || c.setup === "held" ? ` (${setupLabel[c.setup].toLowerCase()})` : holdsUp(c) && ` (${holdsUp(c)})`}
                 </li>
               ))}
               {queue.length > 3 && <li>and {queue.length - 3} more</li>}
@@ -244,6 +263,12 @@ function Decision({ c, stacked, onLater }: { c: CardT; stacked: boolean; onLater
         {meta.some(Boolean) && <p className="text-body-sm text-ink-muted">{meta.filter(Boolean).join(" · ")}</p>}
         {c.live && <p className="text-body-sm text-ink-muted">{c.activity || "The factory is still working on it"} · {duration(c.live_since)}</p>}
         <WaitsFor items={c.waits_for} plan={c.plan_waiting} className="text-meta text-ink-muted" />
+        {holdsUp(c) && <p className="text-meta text-ink-muted">Do this first: {holdsUp(c)}.</p>}
+        {c.setup === "base" && c.setup_note && (
+          <p className="text-meta text-ink-muted">
+            <Inline text={c.setup_note} />
+          </p>
+        )}
         {kind === "choice" ? (
           <div className="mt-1">
             <Choices jobId={c.choice_job_id!} itemId={c.id} choices={c.choices} compact inverse>
@@ -340,10 +365,11 @@ function SetupLead({ r, data, more }: { r: RepoReadiness; data: Readiness; more:
 }
 
 /** One decision in the list under the setup lead: what it asks, and how it stands to setup. */
-function NeedRow({ c }: { c: CardT }) {
+function NeedRow({ c, n }: { c: CardT; n?: number }) {
   return (
     <li className="flex flex-col gap-1 p-3 md:px-4">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {n != null && <span className="text-meta font-semibold tabular-nums">{n}.</span>}
         <span className="text-meta font-semibold text-muted-foreground">{kindLabel[kindOf(c)]}</span>
         <span className="font-mono text-meta text-muted-foreground">{shortRef(c.ref)}</span>
         {c.setup && (
@@ -356,11 +382,16 @@ function NeedRow({ c }: { c: CardT }) {
             {setupLabel[c.setup]}
           </span>
         )}
+        {holdsUp(c) && <span className="rounded-full bg-warning/15 px-2 py-0.5 text-meta font-medium text-warning">Do first: {holdsUp(c)}</span>}
       </div>
       <Link to={`/items/${c.id}`} className="text-body font-medium hover:underline">
         {c.title}
       </Link>
-      {(c.setup === "blocks" || c.setup === "image") && c.setup_note && <p className="text-body-sm text-text-2">{c.setup_note}</p>}
+      {(c.setup === "blocks" || c.setup === "image" || c.setup === "base") && c.setup_note && (
+        <p className="text-body-sm text-text-2">
+          <Inline text={c.setup_note} />
+        </p>
+      )}
     </li>
   );
 }

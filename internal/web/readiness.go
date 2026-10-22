@@ -328,6 +328,12 @@ func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, strin
 		return "", ""
 	}
 	r, _ := readiness.Load(s.ReadinessDir, it.Repo)
+	if it.Stage == state.Parked {
+		if red := s.redOnBase(ctx, r, it.ID); len(red) > 0 {
+			return "base", fmt.Sprintf("Waits for %s: it failed %s, which fails on %s too, so no change passes until that's fixed there. Retry it then.",
+				r.Branch, strings.Join(red, " and "), r.Branch)
+		}
+	}
 	if r == nil || r.Ready || r.Incomplete {
 		return "", ""
 	}
@@ -342,6 +348,28 @@ func (s *Server) setupOf(ctx context.Context, it *store.WorkItem) (string, strin
 		return "held", "Waits for setup: every job on " + it.Repo + " would fail until its setup steps pass, so it starts by itself once they do."
 	}
 	return "blocks", "Fixes a setup blocker (" + strings.ReplaceAll(f.Title, "`", "") + "). Nothing else runs on " + it.Repo + " until the blockers are fixed."
+}
+
+// redOnBase are the checks item id's last build failed that fail on the
+// base branch too, as report r found.
+func (s *Server) redOnBase(ctx context.Context, r *readiness.Report, id int64) []string {
+	if r == nil {
+		return nil
+	}
+	jobs, err := s.Store.ListJobs(ctx, store.JobFilter{ItemID: id, Kind: "implement"})
+	if err != nil {
+		return nil
+	}
+	for _, j := range jobs { // newest first
+		if j.State == state.Failed {
+			var out []string
+			for _, g := range r.RedOnBase(j.Error) {
+				out = append(out, "`"+g+"`")
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 // workedBeyondSetup says whether the factory has an item that isn't for

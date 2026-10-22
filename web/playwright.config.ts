@@ -17,6 +17,7 @@ export default defineConfig({
     command: `go run ../internal/web/devserver -listen 127.0.0.1:${port}`,
     url: `http://127.0.0.1:${port}/api/v1/overview`,
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    // npm run e2e starts it first (see scripts/e2e.mjs), so it's this run's own.
+    reuseExistingServer: !process.env.CI || !!process.env.FACTORY_E2E_SERVER,
   },
 });

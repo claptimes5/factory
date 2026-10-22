@@ -154,10 +154,18 @@ func TestFailedChecksAreNotSplit(t *testing.T) {
 	if h, split := s.happenedFor(t, it.ID); split != nil || h.Note == "" {
 		t.Fatalf("after a failed check: split %+v, note %q (job #%d before)", split, h.Note, big)
 	}
+	// Parked on it, the item waits for the base branch, and says so.
+	if parked, _ := st.GetItem(ctx, it.ID); s.apiItem(ctx, parked).Setup != "base" || !strings.Contains(s.apiItem(ctx, parked).SetupNote, "Waits for master: it failed `lint`") {
+		t.Fatalf("parked on a red check: %+v", s.apiItem(ctx, parked))
+	}
 	// A check the base passes gets no note.
 	other, _, _ := st.UpsertItem(ctx, "o/r", 13, "Fix types")
 	endJob(t, st, other.ID, "implement", 1, state.Failed, "GATES: FAIL types=fail")
 	if h, _ := s.happenedFor(t, other.ID); h.Note != "" {
 		t.Fatalf("note for a check that passes on master = %q", h.Note)
+	}
+	st.SetStage(ctx, other.ID, state.Parked, "daemon", "")
+	if o, _ := st.GetItem(ctx, other.ID); s.apiItem(ctx, o).Setup == "base" {
+		t.Fatalf("parked on a check master passes: %+v", s.apiItem(ctx, o))
 	}
 }

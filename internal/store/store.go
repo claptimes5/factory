@@ -1088,6 +1088,24 @@ func (s *Store) Dependencies(ctx context.Context, itemID int64) ([]int64, error)
 	return out, rows.Err()
 }
 
+// Dependents returns the ids of items that depend on an item.
+func (s *Store) Dependents(ctx context.Context, itemID int64) ([]int64, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT item_id FROM dependencies WHERE depends_on_id = ? ORDER BY item_id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // EventsByActor returns the newest events by one actor, newest first.
 func (s *Store) EventsByActor(ctx context.Context, actor string, limit int) ([]Event, error) {
 	return s.EventsByActorFor(ctx, actor, 0, limit)

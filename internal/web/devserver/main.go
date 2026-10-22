@@ -534,6 +534,10 @@ new file mode 100644
 	if err := st.SetDependencies(ctx, ids[111], []int64{ids[103]}, "human", "billing builds on the rate limiter"); err != nil {
 		return err
 	}
+	// The Redis move waits for parked 104, so 104 comes first among what needs you.
+	if err := st.SetDependencies(ctx, ids[108], []int64{ids[104]}, "human", "the cache reads its config"); err != nil {
+		return err
+	}
 	if _, err := job(111, "triage", "haiku", state.Succeeded, 0.05, `{"decision":"ready","complexity":"L","risk":"low","question":"","summary":"Move billing into its own service behind the existing API."}`); err != nil {
 		return err
 	}

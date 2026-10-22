@@ -23,8 +23,8 @@ async function allSetUp(page: Page) {
   });
 }
 
-test("while a person's part of setup is left, Home leads with it and ranks the rest by what blocks it", async ({ page }, info) => {
-  // A service only a person can add to factory.yaml.
+/** A service only a person can add to factory.yaml: Home leads with setup and lists the rest under it. */
+async function personsPartLeft(page: Page) {
   await page.route(/\/api\/v1\/readiness$/, async (route) => {
     const res = await route.fetch();
     const body = await res.json();
@@ -38,6 +38,10 @@ test("while a person's part of setup is left, Home leads with it and ranks the r
     ];
     await route.fulfill({ response: res, json: body });
   });
+}
+
+test("while a person's part of setup is left, Home leads with it and ranks the rest by what blocks it", async ({ page }, info) => {
+  await personsPartLeft(page);
   await page.goto("/app/");
   const lead = page.getByRole("region", { name: "Setup", exact: true });
   await expect(lead.getByRole("heading", { level: 1 })).toHaveText("Finish setting up api");
@@ -128,4 +132,35 @@ test("Home's Ask box opens Ask", async ({ page }) => {
   await page.goto("/app/");
   await page.getByRole("button", { name: "Ask, or hand over a task…" }).click();
   await expect(page.getByTestId("ask").filter({ visible: true }).getByLabel("Message")).toBeVisible();
+});
+
+test("Home numbers what needs you in order: what other work waits for first, what waits for the base branch last, saying why", async ({ page }) => {
+  await personsPartLeft(page);
+  await page.route(/\/api\/v1\/board$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const col of body.columns)
+      for (const c of col.cards) {
+        c.setup = "";
+        if (c.title.startsWith("Show order totals")) {
+          c.setup = "base";
+          c.setup_note = "Waits for main: it failed `lint`, which fails on main too, so no change passes until that's fixed there. Retry it then.";
+        }
+      }
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/app/");
+  const needs = page.getByRole("region", { name: "Needs you" });
+  await expect(needs).toContainText("In this order: changes to review, then what other work waits for, then the rest.");
+  const rows = needs.getByRole("listitem");
+  await expect(rows.first()).toContainText("1.");
+  await expect(rows.first()).toContainText("Parser drops the last token");
+  // A review that waits for the base branch drops to the back, and says why.
+  await expect(rows.last()).toContainText("Show order totals");
+  await expect(rows.last()).toContainText("Waits for the base branch");
+  await expect(rows.last()).toContainText("it failed lint, which fails on main too");
+  // 104 holds up the Redis move: right after the review, ahead of plans and costs, and it says why.
+  await expect(rows.nth(1)).toContainText("2.");
+  await expect(rows.nth(1)).toContainText("Support YAML anchors");
+  await expect(rows.nth(1)).toContainText("Do first: api#108 waits for it");
 });
