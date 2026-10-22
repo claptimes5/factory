@@ -30,9 +30,12 @@ type steerable interface {
 	userLine(text string) []byte
 	// observe reads one line of output: echo is the text of a message from
 	// the input coming back (the CLI took it), ok whether the line was
-	// one; done when the run ended (a result), and stopped when it ended
-	// on a cap, after which no message is answered.
-	observe(line []byte) (echo string, ok, done, stopped bool)
+	// one; done when a turn ended (a result), and stopped when it ended
+	// on a cap, after which no message is answered. tasks is how many
+	// background tasks the agent has running, when the line says, else -1:
+	// a turn that ends with some still running isn't the run's end, since
+	// the agent takes another turn once they finish.
+	observe(line []byte) (echo string, ok, done, stopped bool, tasks int)
 }
 
 // idleClose is how long the input stays open after a result while a
@@ -54,6 +57,7 @@ type feeder struct {
 	closed  bool       // takes no more messages
 	queue   []feedLine // to write
 	unacked []string   // messages written or queued, not yet taken back
+	tasks   int        // the agent's background tasks running
 	timer   *time.Timer
 	wake    chan struct{}
 	gone    chan struct{}
@@ -149,9 +153,12 @@ func (f *feeder) write() {
 
 // saw is one line of the CLI's output.
 func (f *feeder) saw(line []byte) {
-	echo, ok, done, stopped := f.a.observe(line)
+	echo, ok, done, stopped, tasks := f.a.observe(line)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if tasks >= 0 {
+		f.tasks = tasks
+	}
 	if f.timer != nil {
 		f.timer.Stop() // it's working on what it was sent
 		f.timer = nil
@@ -169,11 +176,16 @@ func (f *feeder) saw(line []byte) {
 	if !done {
 		return
 	}
-	if stopped || len(f.unacked) == 0 {
+	switch {
+	case stopped:
 		f.closeLocked()
-		return
+	case f.tasks > 0:
+		// Another turn comes when they finish, and takes messages.
+	case len(f.unacked) == 0:
+		f.closeLocked()
+	default:
+		f.timer = time.AfterFunc(idleClose, f.close)
 	}
-	f.timer = time.AfterFunc(idleClose, f.close)
 }
 
 func (f *feeder) close() {

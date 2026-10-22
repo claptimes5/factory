@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/state"
+	"github.com/claptimes5/factory/internal/store"
 )
 
 // Home's catch-up shows what went live since it was last marked seen,
-// and nothing before the first time.
+// and nothing before the first time. An item done without a merge (its
+// issue closed) didn't go live.
 func TestHomeCatchUp(t *testing.T) {
 	t.Parallel()
 	srv, st, _, _ := setup(t)
@@ -28,6 +30,11 @@ func TestHomeCatchUp(t *testing.T) {
 		if err := st.SetStage(ctx, it.ID, s, "daemon", ""); err != nil {
 			t.Fatal(s, err)
 		}
+	}
+	st.AddEvent(ctx, store.Event{Actor: "daemon", ItemID: &it.ID, Type: "pr_merged"})
+	closed, _, _ := st.UpsertItem(ctx, "o/r", 3, "Closed by hand")
+	if err := st.SetStage(ctx, closed.ID, state.Done, "human", "its issue was closed"); err != nil {
+		t.Fatal(err)
 	}
 	getJSON(t, srv.URL+"/api/v1/home", &h)
 	if h.SeenAt == "" || len(h.WentLive) != 1 || h.WentLive[0].Title != "Fix flaky tests" {

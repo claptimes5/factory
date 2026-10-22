@@ -259,6 +259,28 @@ func TestFeederOrderAndEchoes(t *testing.T) {
 	}
 }
 
+// A turn that ends with a background task running isn't the end: the
+// agent takes another once it finishes, so messages still go in. The
+// turn after the tasks are done closes the input.
+func TestFeederStaysOpenForBackgroundTasks(t *testing.T) {
+	f, err := newFeeder(fakeSteer{}, "the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.release()
+	closed := func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.closed }
+	f.saw([]byte(`{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1"}]}`))
+	f.saw([]byte(`{"type":"result","subtype":"success"}`))
+	if closed() {
+		t.Fatal("closed with a background task running")
+	}
+	f.saw([]byte(`{"type":"system","subtype":"background_tasks_changed","tasks":[]}`))
+	f.saw([]byte(`{"type":"result","subtype":"success"}`))
+	if !closed() {
+		t.Fatal("input stayed open after the last turn")
+	}
+}
+
 func runSh(t *testing.T, script string) string {
 	t.Helper()
 	cmd := execCommand("sh", "-c", "sh "+shellQuote(script))

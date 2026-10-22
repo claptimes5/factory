@@ -154,26 +154,32 @@ func (claudeAdapter) userLine(text string) []byte {
 }
 
 // observe: a replayed message is a user line with text rather than tool
-// results; a result line ends the run.
-func (claudeAdapter) observe(line []byte) (echo string, ok, done, stopped bool) {
+// results; a result line ends a turn; background_tasks_changed lists the
+// background tasks still running.
+func (claudeAdapter) observe(line []byte) (echo string, ok, done, stopped bool, tasks int) {
 	var l struct {
 		Type    string `json:"type"`
 		Subtype string `json:"subtype"`
 		Message *struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
+		Tasks []json.RawMessage `json:"tasks"`
 	}
 	if json.Unmarshal(line, &l) != nil {
-		return "", false, false, false
+		return "", false, false, false, -1
 	}
 	switch l.Type {
+	case "system":
+		if l.Subtype == "background_tasks_changed" {
+			return "", false, false, false, len(l.Tasks)
+		}
 	case "user":
 		if l.Message == nil {
-			return "", false, false, false
+			return "", false, false, false, -1
 		}
 		var s string
 		if json.Unmarshal(l.Message.Content, &s) == nil {
-			return s, true, false, false
+			return s, true, false, false, -1
 		}
 		var blocks []struct {
 			Type string `json:"type"`
@@ -183,17 +189,17 @@ func (claudeAdapter) observe(line []byte) (echo string, ok, done, stopped bool) 
 		var text []string
 		for _, b := range blocks {
 			if b.Type == "tool_result" {
-				return "", false, false, false
+				return "", false, false, false, -1
 			}
 			if b.Type == "text" {
 				text = append(text, b.Text)
 			}
 		}
-		return strings.Join(text, ""), len(text) > 0, false, false
+		return strings.Join(text, ""), len(text) > 0, false, false, -1
 	case "result":
-		return "", false, true, stopReason(l.Subtype) != ""
+		return "", false, true, stopReason(l.Subtype) != "", -1
 	}
-	return "", false, false, false
+	return "", false, false, false, -1
 }
 
 // stopReason names the cap a result's subtype says the run hit, or "".

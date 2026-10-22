@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -18,7 +19,9 @@ const homeSeenKey = "home_seen"
 type APIHome struct {
 	// SeenAt is when someone last marked Home seen; "" before the first time.
 	SeenAt string `json:"seen_at"`
-	// WentLive are the items done since then, newest first; none before the first time.
+	// WentLive are the items whose change merged and that are done since
+	// then, newest first; none before the first time. One done another way
+	// (its issue closed, an epic whose children are) shipped nothing.
 	WentLive []APIItem `json:"went_live"`
 }
 
@@ -36,13 +39,19 @@ func (s *Server) apiHome(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		done = slices.DeleteFunc(done, func(it *store.WorkItem) bool { return it.UpdatedAt <= seen })
+		done = slices.DeleteFunc(done, func(it *store.WorkItem) bool { return it.UpdatedAt <= seen || !s.merged(ctx, it.ID) })
 		slices.SortFunc(done, func(a, b *store.WorkItem) int { return strings.Compare(b.UpdatedAt, a.UpdatedAt) })
 		for _, it := range done[:min(len(done), 20)] {
 			out.WentLive = append(out.WentLive, s.apiItem(ctx, it))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// merged says whether a PR of item id merged.
+func (s *Server) merged(ctx context.Context, id int64) bool {
+	evs, err := s.Store.Events(ctx, id)
+	return err == nil && slices.ContainsFunc(evs, func(e store.Event) bool { return e.Type == "pr_merged" })
 }
 
 // apiHomeSeen marks Home seen now: the catch-up starts again from here.
