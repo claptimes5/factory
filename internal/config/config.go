@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -162,6 +163,10 @@ type Repo struct {
 	// factory-job-<owner>__<name> unless Image says otherwise.
 	Image     string `yaml:"image,omitempty"`
 	ImageFrom string `yaml:"image_from,omitempty"`
+	// ImageBuild builds the base from the repo's own Dockerfile instead,
+	// at its base branch, so the checks run on what the app runs on. It
+	// takes the place of image_from. See ImageBuild.
+	ImageBuild *ImageBuild `yaml:"image_build,omitempty"`
 	// Env is set in this repo's agent and gate containers, on top of the
 	// top-level env. It is not for secrets: agents can read it.
 	Env map[string]string `yaml:"env,omitempty"`
@@ -190,6 +195,48 @@ type Repo struct {
 	// ConfirmOver replaces budgets.confirm_over for this repo; 0 turns
 	// it off here.
 	ConfirmOver *float64 `yaml:"confirm_over,omitempty"`
+}
+
+// ImageBuild is a Dockerfile in the repo that `factory images` builds a
+// repo's job image on: Dockerfile and Context are paths in the repo
+// (default Dockerfile and its root), Target a stage in it (default the
+// last). The stage must be Debian or Ubuntu, like image_from's images.
+// Args are its --build-arg values. Secrets are its build secrets (RUN
+// --mount=type=secret), by id, each a file: a path in files.from's
+// checkout, or an absolute one. They're never in the image or the repo.
+type ImageBuild struct {
+	Dockerfile string            `yaml:"dockerfile,omitempty" json:"dockerfile"`
+	Target     string            `yaml:"target,omitempty" json:"target"`
+	Context    string            `yaml:"context,omitempty" json:"context"`
+	Args       map[string]string `yaml:"args,omitempty" json:"args"`
+	Secrets    map[string]string `yaml:"secrets,omitempty" json:"secrets"`
+}
+
+// SecretFile is where build secret id's file is on this machine; "" when
+// the repo doesn't name one.
+func (c *Config) SecretFile(r Repo, id string) (string, error) {
+	p := r.ImageBuild.Secrets[id]
+	if p == "" || filepath.IsAbs(p) {
+		return p, nil
+	}
+	if r.Files == nil {
+		return "", fmt.Errorf("image_build.secrets.%s is a path in files.from's checkout, and the repo has no files.from", id)
+	}
+	from, err := c.FilesFrom(r.Files)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(from, filepath.FromSlash(p)), nil
+}
+
+// BaseImage is the tag `factory images` gives the image built from a
+// repo's Dockerfile, before the factory's tools go on top.
+func (r Repo) BaseImage() string {
+	return "factory-base-" + repoTag(r.Name) + ":latest"
+}
+
+func repoTag(name string) string {
+	return strings.ToLower(strings.NewReplacer("/", "__", ":", "-").Replace(name))
 }
 
 // Files are files a repo needs to build or test but doesn't commit, such
@@ -226,7 +273,7 @@ func (g Gates) MarshalYAML() (any, error) {
 
 // MarshalYAML writes a repo with no settings of its own as a bare name.
 func (r Repo) MarshalYAML() (any, error) {
-	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.SelfStart == nil && r.Files == nil && r.Preview == nil && r.ConfirmOver == nil {
+	if r.BaseBranch == "" && r.Image == "" && r.ImageFrom == "" && r.ImageBuild == nil && len(r.Env) == 0 && r.Gates == nil && len(r.Services) == 0 && len(r.Instructions) == 0 && r.AutoMerge == nil && r.SelfStart == nil && r.Files == nil && r.Preview == nil && r.ConfirmOver == nil {
 		return r.Name, nil
 	}
 	type plain Repo
@@ -829,6 +876,32 @@ func (c *Config) Validate() error {
 				bad("repo %s: instructions.%s: the steps are triage, implement, review, critic and security", r.Name, step)
 			}
 		}
+		if b := r.ImageBuild; b != nil {
+			if r.ImageFrom != "" {
+				bad("repo %s: set image_build or image_from, not both", r.Name)
+			}
+			for _, p := range []string{b.Dockerfile, b.Context} {
+				if c := path.Clean(p); p != "" && (path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")) {
+					bad("repo %s: image_build: %s must be a path inside the repo", r.Name, p)
+				}
+			}
+			if b.Target != "" && !stageName.MatchString(b.Target) {
+				bad("repo %s: image_build.target %q isn't a Dockerfile stage name", r.Name, b.Target)
+			}
+			for _, id := range sortedKeys(b.Secrets) {
+				p := b.Secrets[id]
+				switch {
+				case !stageName.MatchString(id):
+					bad("repo %s: image_build.secrets: %q isn't a secret id", r.Name, id)
+				case !filepath.IsAbs(p) && r.Files == nil:
+					bad("repo %s: image_build.secrets.%s is a path in files.from's checkout, so the repo needs files.from", r.Name, id)
+				case !filepath.IsAbs(p):
+					if _, err := CleanFilePath(p); err != nil {
+						bad("repo %s: image_build.secrets.%s: %v", r.Name, id, err)
+					}
+				}
+			}
+		}
 		if f := r.Files; f != nil {
 			if err := c.checkFiles(f); err != nil {
 				bad("repo %s: files: %v", r.Name, err)
@@ -1027,7 +1100,7 @@ func (c *Config) Validate() error {
 	}
 	for _, m := range svcs {
 		for name, s := range m {
-			if !serviceName.MatchString(name) {
+			if !ServiceName.MatchString(name) {
 				bad("services: %q must be a host name: lowercase letters, digits and dashes", name)
 			}
 			if s.Image == "" {
@@ -1068,7 +1141,10 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-var serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var stageName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// ServiceName is what a service may be called: its host name on the job's network.
+var ServiceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // RepoNames lists the repos the factory works on, the first being the one
 // commands use when you don't name one.
@@ -1142,8 +1218,8 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {
 		r.BaseBranch = c.BaseBranch
 	}
-	if r.Image == "" && r.ImageFrom != "" {
-		r.Image = "factory-job-" + strings.ToLower(strings.NewReplacer("/", "__", ":", "-").Replace(r.Name)) + ":latest"
+	if r.Image == "" && (r.ImageFrom != "" || r.ImageBuild != nil) {
+		r.Image = "factory-job-" + repoTag(r.Name) + ":latest"
 	}
 	if r.Image == "" {
 		r.Image = c.Runner.Image

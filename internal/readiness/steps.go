@@ -41,7 +41,7 @@ var steps = []struct {
 	{"access", "The factory's token can do its job",
 		"Every change ends with the factory opening a pull request, and it labels and comments on issues as it works.", []string{"access"}},
 	{"run", "The factory can install the repo and run its checks",
-		"Every job installs a fresh copy of {branch} and runs the repo's checks there, with the services and files they need.", []string{"install", "checks", "services", "files", "tests"}},
+		"Every job installs a fresh copy of {branch} and runs the repo's checks there, with the services and files they need.", []string{"install", "checks", "services", "setup", "files", "tests"}},
 }
 
 // Steps are the setup steps the report covers, in order: what a person

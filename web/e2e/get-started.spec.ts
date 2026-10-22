@@ -228,6 +228,17 @@ test("the checks step shows each repo's suggested checks, flags what its AGENTS.
   await expect(checks).toHaveAttribute("data-state", "done");
 });
 
+test("the checks step builds the job image from the repo's Dockerfile, or a public image instead", async ({ page }) => {
+  await page.goto("/app/get-started");
+  const checks = await openStep(page, "checks");
+  const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
+  await expect(api.getByTestId("image-build")).toContainText("Built from the repo's Dockerfile, stage test");
+  await api.getByRole("button", { name: "Use a public image instead" }).click();
+  await expect(api.getByLabel("Job image built on")).toBeVisible();
+  await api.getByRole("button", { name: "Build it from the repo's Dockerfile" }).click();
+  await expect(api.getByTestId("image-build")).toBeVisible();
+});
+
 test("the checks step tries the checks before saving, and shows what failed", async ({ page }, info) => {
   await page.goto("/app/get-started");
   const checks = await openStep(page, "checks");

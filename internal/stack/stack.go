@@ -22,13 +22,16 @@ type Files interface {
 
 // Suggestion is what Detect proposes for one repository.
 type Suggestion struct {
-	Stack     string            // for people, e.g. "Ruby on Rails"
-	ImageFrom string            // base for the job image; "" is the default image
-	Install   string            // dependency install command
-	Required  []string          // gate names, in order
-	Commands  map[string]string // gate name -> command
-	Go        bool              // a Go module: the top-level gates already fit
-	Notes     []string          // what it saw but can't set up yet
+	Stack     string // for people, e.g. "Ruby on Rails"
+	ImageFrom string // base for the job image; "" is the default image
+	// ImageBuild builds the base from the repo's own Dockerfile instead
+	// of ImageFrom.
+	ImageBuild *config.ImageBuild
+	Install    string            // dependency install command
+	Required   []string          // gate names, in order
+	Commands   map[string]string // gate name -> command
+	Go         bool              // a Go module: the top-level gates already fit
+	Notes      []string          // what it saw but can't set up yet
 	// Sources names the file a gate's command came from, such as
 	// AGENTS.md; a gate not in it was guessed from the repo's files.
 	Sources map[string]string
@@ -107,10 +110,19 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 			stacks = append(stacks, st)
 		}
 	}
-	devcontainer(ctx, s, f, names, read)
+	// A Dockerfile stage for the tests beats a dev container, which beats
+	// a public image.
+	note := dockerfile(s, read, ciText(ctx, f, has, read))
+	if s.ImageBuild == nil {
+		devcontainer(ctx, s, f, names, read)
+	}
+	if note != "" && s.ImageBuild == nil {
+		s.Notes = append(s.Notes, note)
+	}
 	if len(stacks) == 0 {
 		return nil, nil
 	}
+	compose(s, read)
 	// What the repo tells its agents beats a guess from its files.
 	for _, doc := range []string{"AGENTS.md", "CLAUDE.md"} {
 		for gate, cmd := range docCommands(read(doc)) {
@@ -288,20 +300,42 @@ func node(s *Suggestion, read func(string) string, has func(string) bool, add fu
 	return stack
 }
 
+// ciText is the repo's CI configuration, GitLab's and GitHub's, as one text.
+func ciText(ctx context.Context, f Files, has func(string) bool, read func(string) string) string {
+	text := read(".gitlab-ci.yml")
+	if has(".github/") {
+		names, _ := f.List(ctx, ".github/workflows/")
+		for _, n := range names {
+			if strings.HasSuffix(n, ".yml") || strings.HasSuffix(n, ".yaml") {
+				b, _ := f.Read(ctx, ".github/workflows/"+n)
+				text += "\n" + b
+			}
+		}
+	}
+	return text
+}
+
 // devcontainer uses the repo's dev container image as the job image's
 // base when it names one.
 func devcontainer(ctx context.Context, s *Suggestion, f Files, names []string, read func(string) string) {
 	raw := read(".devcontainer.json")
+	dir := "."
 	if raw == "" && slices.Contains(names, ".devcontainer/") {
 		raw, _ = f.Read(ctx, ".devcontainer/devcontainer.json")
+		dir = ".devcontainer"
 	}
 	if raw == "" {
 		return
 	}
 	var dc struct {
-		Image      string `json:"image"`
-		Build      any    `json:"build"`
+		Image string `json:"image"`
+		Build *struct {
+			Dockerfile string `json:"dockerfile"`
+			Context    string `json:"context"`
+			Target     string `json:"target"`
+		} `json:"build"`
 		DockerFile string `json:"dockerFile"`
+		Context    string `json:"context"`
 	}
 	if json.Unmarshal([]byte(stripComments(raw)), &dc) != nil {
 		s.Notes = append(s.Notes, "Its devcontainer.json couldn't be read, so the image is picked from the stack instead.")
@@ -311,8 +345,12 @@ func devcontainer(ctx context.Context, s *Suggestion, f Files, names []string, r
 	case dc.Image != "":
 		s.ImageFrom = dc.Image
 		s.Notes = append(s.Notes, "The job image is built on its dev container's image, "+dc.Image+".")
-	case dc.Build != nil || dc.DockerFile != "":
-		s.Notes = append(s.Notes, "Its dev container is built from a Dockerfile, which setup can't use yet, so the image is picked from the stack instead.")
+	case dc.Build != nil && dc.Build.Dockerfile != "":
+		s.ImageBuild, s.ImageFrom = devcontainerBuild(dir, dc.Build.Dockerfile, dc.Build.Context, dc.Build.Target), ""
+		s.Notes = append(s.Notes, "The job image is built from its dev container's Dockerfile, "+s.ImageBuild.Dockerfile+".")
+	case dc.DockerFile != "":
+		s.ImageBuild, s.ImageFrom = devcontainerBuild(dir, dc.DockerFile, dc.Context, ""), ""
+		s.Notes = append(s.Notes, "The job image is built from its dev container's Dockerfile, "+s.ImageBuild.Dockerfile+".")
 	}
 }
 

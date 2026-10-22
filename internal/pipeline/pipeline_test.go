@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -644,6 +645,47 @@ func TestGateFailureRetriesWithFailure(t *testing.T) {
 	}
 	if !failed {
 		t.Fatalf("gate results = %+v", gr)
+	}
+}
+
+// A check that fails because the sandbox lacks what it needs parks the
+// item for its setup instead of trying the next model, and so does a
+// builder that says so.
+func TestSetupFailureParksInsteadOfRetrying(t *testing.T) {
+	t.Parallel()
+	for name, build := range map[string]func(*env){
+		"gate": func(e *env) {
+			e.p.Cfg.Gates.Commands["test"] = `echo "Errno::ENOENT: No such file or directory - ffmpeg"; exit 1`
+		},
+		"builder": func(e *env) {
+			e.claude.implVerdict = `{"status":"blocked","summary":"s","tests_added":[],"blocker":"no ffmpeg","setup_problem":"Errno::ENOENT: No such file or directory - ffmpeg"}`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			e := setup(t)
+			build(e)
+			e.addIssue(2)
+			e.claude.builds = []func(string) error{goodBuild, goodBuild}
+			e.p.Drain(ctx)
+			it := e.item(t, 2)
+			if it.Stage != state.Parked {
+				t.Fatalf("stage = %s", it.Stage)
+			}
+			jobs, _ := e.p.Store.ListJobs(ctx, store.JobFilter{ItemID: it.ID, Kind: "implement"})
+			if len(jobs) != 1 {
+				t.Fatalf("%d implement jobs, want 1", len(jobs))
+			}
+			if !e.p.modelCantFix(ctx, it) {
+				t.Fatal("the park doesn't say no model can fix it")
+			}
+			evs, _ := e.p.Store.Events(ctx, it.ID)
+			if !slices.ContainsFunc(evs, func(ev store.Event) bool {
+				return ev.Type == "park" && strings.Contains(ev.Reason, "No such file or directory - ffmpeg")
+			}) {
+				t.Fatal("the park doesn't show the line")
+			}
+		})
 	}
 }
 

@@ -49,6 +49,9 @@ type Implement struct {
 	Summary    string   `json:"summary"`
 	TestsAdded []string `json:"tests_added"`
 	Blocker    string   `json:"blocker"`
+	// SetupProblem, when blocked, is the error line that shows the
+	// sandbox lacks a service, library or program the checks need.
+	SetupProblem string `json:"setup_problem,omitempty"`
 	// Pages are the app's pages the change touches, as paths, for its
 	// screenshots; only asked for when the repo has previews.
 	Pages []string `json:"pages,omitempty"`
@@ -471,6 +474,7 @@ var schemas = map[string]string{
  "summary":{"type":"string"},
  "tests_added":{"type":"array","items":{"type":"string"}},
  "blocker":{"type":"string"},
+ "setup_problem":{"type":"string"},
  "pages":{"type":"array","items":{"type":"string"}},
  "answers":{"type":"array","items":{"type":"object","additionalProperties":false,
    "required":["id","outcome","why"],

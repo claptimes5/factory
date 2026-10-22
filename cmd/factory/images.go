@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/github"
 )
 
 // imageLabel marks every image the factory builds, so pruning old copies
@@ -31,6 +32,9 @@ var pruneEvery = time.Hour
 // and the get-started page share one, so an image is never built twice at
 // once, and jobs that need an image wait while it builds.
 type imageBuilder struct {
+	// tokens reach a repo to clone it, for an image built from its own
+	// Dockerfile; nil is the credentials in the environment.
+	tokens   func(*config.Config, string) (github.TokenSource, error)
 	mu       sync.Mutex
 	running  bool
 	building []string // tags this build still has to make
@@ -143,7 +147,11 @@ func (b *imageBuilder) build(cfg *config.Config, images []jobImage, out io.Write
 		fmt.Fprintf(out, "Building %s for %s...\n", im.tag, joinAnd(im.repos))
 		// A hung build mustn't hold its jobs, and a restart, for ever.
 		ctx, cancel := context.WithTimeout(context.Background(), buildWait)
-		err := runCmdContext(ctx, out, "docker", im.buildArgs(dir)...)
+		tok := b.tokens
+		if tok == nil {
+			tok = tokens
+		}
+		err := im.make(ctx, out, cfg, dir, tok, runCmdContext)
 		timedOut := ctx.Err() != nil
 		cancel()
 		if timedOut {

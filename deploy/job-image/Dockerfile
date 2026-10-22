@@ -57,3 +57,10 @@ RUN mkdir -m 1777 -p /cache \
 ENV GOPATH=/tmp/go GOCACHE=/tmp/go-cache GOLANGCI_LINT_CACHE=/tmp/golangci-cache \
     CLAUDE_CODE_DISABLE_AUTOUPDATER=1 DISABLE_AUTOUPDATER=1
 WORKDIR /work
+
+# A base built from a repo's own Dockerfile may start its app through an
+# entrypoint script; jobs always run their own command, through this one.
+# It seeds a checkout's gems from the base's (its BUNDLE_PATH), if any.
+ENV FACTORY_IMAGE_GEMS=${BUNDLE_PATH}
+COPY --chmod=755 entry.sh /usr/local/bin/factory-entry
+ENTRYPOINT ["/usr/local/bin/factory-entry"]

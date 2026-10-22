@@ -12,7 +12,7 @@ features:
     paths: [internal/pipeline/stages.go, internal/pipeline/features.go, internal/pipeline/scenarios.go, internal/pipeline/tamper.go,
             internal/gates/, internal/verdict/, internal/features/, prompts/implement.md, prompts/review.md]
     tests: [internal/pipeline/pipeline_test.go, internal/pipeline/features_test.go, internal/pipeline/scenarios_test.go,
-            internal/gates/gates_test.go, internal/verdict/, internal/features/features_test.go]
+            internal/gates/gates_test.go, internal/gates/setup_test.go, internal/verdict/, internal/features/features_test.go]
     check: go test ./internal/pipeline/ ./internal/gates/ ./internal/verdict/ ./internal/features/
     risk: high
   - name: Git and isolation
@@ -42,7 +42,7 @@ features:
   - name: Setup and readiness
     description: Guided setup, stack detection, job images and the readiness check
     paths: [cmd/factory/setup.go, cmd/factory/checks.go, cmd/factory/readiness.go, cmd/factory/envfile.go, internal/stack/, internal/readiness/]
-    tests: [cmd/factory/setup_test.go, cmd/factory/readiness_test.go, internal/stack/stack_test.go, internal/readiness/readiness_test.go]
+    tests: [cmd/factory/setup_test.go, cmd/factory/readiness_test.go, internal/stack/stack_test.go, internal/stack/image_test.go, internal/readiness/readiness_test.go]
     check: go test ./cmd/factory/ ./internal/stack/ ./internal/readiness/
     risk: medium
   - name: Commands

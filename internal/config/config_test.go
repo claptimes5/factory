@@ -184,6 +184,13 @@ func TestRepoImagesAndEnvAreChecked(t *testing.T) {
 		"home":        {"repos:\n  - {name: o/a, env: {HOME: /x}}\n", "can't set HOME"},
 		"docker host": {"env: {DOCKER_HOST: tcp://x}\nrepos: [o/a]\n", "can't set DOCKER_HOST"},
 		"fine":        {"env: {RAILS_ENV: test}\nrepos: [o/a]\n", ""},
+		"build":       {"repos:\n  - {name: o/a, image_build: {dockerfile: docker/ci.Dockerfile, target: ci, context: docker}}\n", ""},
+		"both bases":  {"repos:\n  - {name: o/a, image_from: ruby:3.4-bookworm, image_build: {}}\n", "image_build or image_from, not both"},
+		"outside":     {"repos:\n  - {name: o/a, image_build: {dockerfile: ../Dockerfile}}\n", "inside the repo"},
+		"bad stage":   {"repos:\n  - {name: o/a, image_build: {target: \"a b\"}}\n", "isn't a Dockerfile stage"},
+		"secret":      {"repos:\n  - {name: o/a, files: {from: /src/a}, image_build: {secrets: {key: config/master.key}}}\n", ""},
+		"abs secret":  {"repos:\n  - {name: o/a, image_build: {secrets: {key: /etc/key}}}\n", ""},
+		"no from":     {"repos:\n  - {name: o/a, image_build: {secrets: {key: config/master.key}}}\n", "needs files.from"},
 	} {
 		_, err := Parse([]byte(c.repos + base))
 		if (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
