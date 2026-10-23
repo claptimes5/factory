@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -440,7 +441,7 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 	// Each repo's checks, saved or suggested: what every change must pass.
 	var unsaved, disagree []string
 	for _, r := range cfg.Repos {
-		c := wizardChecks(r, w.detected[r.Name])
+		c := wizardChecks(r, w.detected[r.Name], cfg.Gates)
 		if t := w.tries[r.Name]; t != nil {
 			cp := *t
 			cp.Steps = slices.Clone(t.Steps)
@@ -1579,10 +1580,24 @@ func byGateOrder(a, b string) int {
 }
 
 // wizardChecks is a repo's checks for the page: the saved ones, each with
-// the suggestion beside it when that differs, or the suggestion.
-func wizardChecks(r config.Repo, s *stack.Suggestion) web.APIWizardChecks {
+// the suggestion beside it when that differs, or the suggestion. A Go
+// module's suggestion is the top-level checks it would otherwise run, with
+// what its AGENTS.md or CLAUDE.md names over them.
+func wizardChecks(r config.Repo, s *stack.Suggestion, top config.Gates) web.APIWizardChecks {
 	c := web.APIWizardChecks{Repo: r.Name, Saved: r.Gates != nil, ImageFrom: r.ImageFrom, ImageBuild: r.ImageBuild, Gates: []web.APIWizardGate{}, Notes: []string{}}
 	sug := map[string]string{}
+	if s != nil && s.Go {
+		s2 := *s
+		s2.Install = cmp.Or(s.Install, top.Install)
+		s2.Commands = map[string]string{}
+		for _, g := range top.Required {
+			if cmd := top.Commands[g]; cmd != "" {
+				s2.Commands[g] = cmd
+			}
+		}
+		maps.Copy(s2.Commands, s.Commands)
+		s = &s2
+	}
 	if s != nil {
 		c.Stack, sug = s.Stack, s.Commands
 		c.Notes = append(c.Notes, s.Notes...)
