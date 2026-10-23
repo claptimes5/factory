@@ -19,7 +19,7 @@ runner:
   kind: docker                # docker | local (local runs CLIs on the host; dev only)
   image: factory-job:latest   # built from deploy/job-image
   network: ""                 # the egress proxy's way out; jobs reach only runner.egress hosts
-  cpus: "2"
+  # cpus: "4"                 # per job and per service; left out, the cores shared by budgets.concurrent_jobs
   memory: 4g
 
 routing:

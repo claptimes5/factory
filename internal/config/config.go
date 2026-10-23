@@ -8,8 +8,10 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -580,6 +582,12 @@ func ParseIn(b []byte, dir string) (*Config, error) {
 	return &c, c.Validate()
 }
 
+// autoCPUs is runner.cpus left out: this machine's cores shared by the
+// jobs that run at once, so a full line can't starve it.
+func autoCPUs(cores, jobs int) string {
+	return strconv.Itoa(max(1, cores/max(1, jobs)))
+}
+
 func (c *Config) defaults() {
 	if c.BaseBranch == "" {
 		c.BaseBranch = "main"
@@ -679,6 +687,9 @@ func (c *Config) defaults() {
 	c.planDefaults()
 	if c.Budgets.ConcurrentJobs == 0 {
 		c.Budgets.ConcurrentJobs = 3
+	}
+	if c.Runner.CPUs == "" {
+		c.Runner.CPUs = autoCPUs(runtime.NumCPU(), c.Budgets.ConcurrentJobs)
 	}
 	if c.Budgets.MinFreeDiskGB == 0 {
 		c.Budgets.MinFreeDiskGB = 10

@@ -723,3 +723,15 @@ func TestMaxTurns(t *testing.T) {
 		}
 	}
 }
+
+// runner.cpus left out shares this machine's cores among the jobs that run at once.
+func TestAutoCPUs(t *testing.T) {
+	for _, c := range []struct {
+		cores, jobs int
+		want        string
+	}{{24, 3, "8"}, {8, 3, "2"}, {2, 3, "1"}, {4, 0, "4"}} {
+		if got := autoCPUs(c.cores, c.jobs); got != c.want {
+			t.Errorf("autoCPUs(%d, %d) = %s, want %s", c.cores, c.jobs, got, c.want)
+		}
+	}
+}
