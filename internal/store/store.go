@@ -1150,6 +1150,49 @@ func (s *Store) SpendByKind(ctx context.Context, day, kind string) (float64, err
 	return v.Float64, err
 }
 
+// SpendOnRepos is what the jobs of repos (their items', or the repo their
+// input names) cost on a day.
+func (s *Store) SpendOnRepos(ctx context.Context, day string, repos []string) (float64, error) {
+	if len(repos) == 0 {
+		return 0, nil
+	}
+	args := []any{day}
+	for _, r := range repos {
+		args = append(args, strings.ToLower(r))
+	}
+	var v sql.NullFloat64
+	err := s.read.QueryRowContext(ctx, `SELECT SUM(cost_usd) FROM jobs WHERE substr(finished_at, 1, 10) = ?
+		AND lower(coalesce((SELECT repo FROM work_items WHERE id = jobs.item_id), CASE WHEN json_valid(input) THEN json_extract(input, '$.repo') END, '')) IN (`+
+		strings.TrimSuffix(strings.Repeat("?,", len(repos)), ",")+`)`, args...).Scan(&v)
+	return v.Float64, err
+}
+
+// SpendByKindIn is what jobs of a kind run for a workspace cost on a day:
+// those whose input names it, as the orchestrator's and chat's do.
+func (s *Store) SpendByKindIn(ctx context.Context, day, kind, workspace string) (float64, error) {
+	var v sql.NullFloat64
+	err := s.read.QueryRowContext(ctx, `SELECT SUM(cost_usd) FROM jobs WHERE kind = ? AND substr(finished_at, 1, 10) = ?
+		AND CASE WHEN json_valid(input) THEN json_extract(input, '$.workspace') END = ?`, kind, day, workspace).Scan(&v)
+	return v.Float64, err
+}
+
+// CountWorkspaceEventsSince counts events of a type at or after a time by
+// actors' jobs run for a workspace (their input names it).
+func (s *Store) CountWorkspaceEventsSince(ctx context.Context, typ, workspace, since string, actors ...string) (int, error) {
+	if len(actors) == 0 {
+		return 0, nil
+	}
+	args := []any{typ, since, workspace}
+	for _, a := range actors {
+		args = append(args, a)
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM events e JOIN jobs j ON j.id = e.job_id WHERE e.type = ? AND e.at >= ?
+		AND CASE WHEN json_valid(j.input) THEN json_extract(j.input, '$.workspace') END = ?
+		AND e.actor IN (`+strings.TrimSuffix(strings.Repeat("?,", len(actors)), ",")+`)`, args...).Scan(&n)
+	return n, err
+}
+
 // CountEventsSince counts events of a type by an actor at or after a time.
 func (s *Store) CountEventsSince(ctx context.Context, actor, typ, since string) (int, error) {
 	var n int

@@ -643,12 +643,15 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The chat with the orchestrator's model, whether it can reply now, and the chats so far
-         * @description Chat runs on the orchestrator's route and its daily budget, whether or not the orchestrator runs on its own schedule.
+         * The chat with the orchestrator's model, whether it can reply now, and a workspace's chats so far
+         * @description Chat runs on the orchestrator's route and its workspace's daily budget, whether or not the orchestrator runs on its own schedule. A chat reads and files issues in its workspace's repos only.
          */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Only this workspace's. Left out, every workspace's, or the factory's only one when it has one. */
+                    workspace?: components["parameters"]["Workspace"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -688,6 +691,8 @@ export interface paths {
                         /** Format: int64 */
                         chat_id?: number;
                         text?: string;
+                        /** @description The workspace a new chat works in; one already started keeps its own. Needed when the factory has several. */
+                        workspace?: string;
                     };
                 };
             };
@@ -1201,6 +1206,8 @@ export interface paths {
                 query?: {
                     /** @description Only this repo's items (owner/name), plus lines about no item */
                     repo?: string;
+                    /** @description Only this workspace's. Left out, every workspace's, or the factory's only one when it has one. */
+                    workspace?: components["parameters"]["Workspace"];
                 };
                 header?: never;
                 path?: never;
@@ -1240,6 +1247,8 @@ export interface paths {
                 query?: {
                     /** @description Only this item's decisions */
                     item?: number;
+                    /** @description Only this workspace's. Left out, every workspace's, or the factory's only one when it has one. */
+                    workspace?: components["parameters"]["Workspace"];
                 };
                 header?: never;
                 path?: never;
@@ -1489,7 +1498,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Trust: each repo's level on the ladder toward full automation, its record and practice runs */
+        /** Trust: each workspace's level on the ladder toward full automation, the record and practice runs of its repos */
         get: {
             parameters: {
                 query?: never;
@@ -1511,7 +1520,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Move a repo to a trust level (its auto_merge in factory.yaml), applied once the factory restarts */
+        /**
+         * Move a workspace to a trust level (its auto_merge and self_start in factory.yaml), applied once the factory restarts
+         * @description The levels set on its repos go, so the workspace's is theirs.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1522,7 +1534,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        repo: string;
+                        workspace: string;
                         /** @description 1 to 6; 7 isn't built yet */
                         level: number;
                     };
@@ -2385,6 +2397,84 @@ export interface paths {
                     "application/json": {
                         /** @description owner/name for GitHub, the project URL for GitLab, separated by commas */
                         repos: string;
+                        /** @description The workspace the repos added join; left out, each gets one of its own. A repo removed leaves its workspace. */
+                        workspace?: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/workspace/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a repo to a workspace in factory.yaml, or give it one of its own */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        /** @description A workspace's name, a new one to make, or empty for one of its own */
+                        workspace: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/workspace/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rename a workspace in factory.yaml, and its chats with it */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        workspace: string;
+                        /** @description Lowercase letters, digits and -, starting with a letter */
+                        name: string;
                     };
                 };
             };
@@ -3206,6 +3296,8 @@ export interface components {
             message: string;
         };
         Overview: {
+            /** @description The factory's workspaces, in order; the dashboard shows one at a time */
+            workspaces: components["schemas"]["Workspace"][];
             /** @description Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend */
             plans_only: boolean;
             /** @description Each repo's auto-merge breaker, where auto-merge is on or its breaker tripped */
@@ -3227,6 +3319,14 @@ export interface components {
             running: number;
             queued: number;
             version: string;
+        };
+        Workspace: {
+            name: string;
+            repos: string[];
+            /** @description Its own daily budget for builds and reviews; 0 for none */
+            daily_cap_usd: number;
+            /** @description What its builds and reviews cost today */
+            spent_today_usd: number;
         };
         Breaker: {
             repo: string;
@@ -3269,6 +3369,8 @@ export interface components {
             spent_today_usd: number;
             /** @description The most recent first */
             chats: components["schemas"]["ChatAt"][];
+            /** @description The workspace these are of; empty for every workspace */
+            workspace: string;
         };
         ChatAt: {
             /** Format: int64 */
@@ -3280,6 +3382,8 @@ export interface components {
             /** Format: int64 */
             id: number;
             title: string;
+            /** @description The workspace it works in; empty for a chat from before workspaces */
+            workspace: string;
             messages: components["schemas"]["ChatMessage"][];
             drafts: components["schemas"]["Draft"][];
             /** @description The run answering the last message, while it runs or when it failed; null once it answered */
@@ -3713,6 +3817,8 @@ export interface components {
             prompt: string;
             /** @description Why chat can't take it now, or empty */
             unavailable: string;
+            /** @description The item's workspace, which the chat that splits it starts in */
+            workspace: string;
         };
         Uninstall: {
             /** @description What looks like the factory's but stays, with why: a GitLab group's label, an intake label you made, a runner image not marked as the factory's */
@@ -4000,6 +4106,8 @@ export interface components {
         };
         Notification: {
             id: string;
+            /** @description The item's workspace; empty for one about the whole factory */
+            workspace: string;
             /** @enum {string} */
             kind: "needs_input" | "ready_for_review" | "budget";
             title: string;
@@ -4026,7 +4134,7 @@ export interface components {
         };
         Trust: {
             levels: components["schemas"]["TrustLevel"][];
-            repos: components["schemas"]["RepoTrust"][];
+            workspaces: components["schemas"]["WorkspaceTrust"][];
             /** @description Kinds of change that wait for a person at every level (risk.needs_person) */
             always_asks: string[];
             /** @description How far back the record and practice runs look */
@@ -4051,14 +4159,23 @@ export interface components {
             /** @description Changes it would have merged in the window, none gone wrong, before it's suggested */
             evidence: number;
         };
-        RepoTrust: {
+        RepoLevel: {
+            repo: string;
+            level: number;
+        };
+        WorkspaceTrust: {
+            workspace: string;
+            repos: string[];
+            /** @description No level of its own yet, and its repos are at different ones: level is the lowest */
+            mixed: boolean;
+            /** @description Its repos set lower than it by hand in factory.yaml */
+            stricter: components["schemas"]["RepoLevel"][];
             /** @description Level 6's record: issues the factory filed from its own findings in the window */
             proposed: number;
             /** @description Of those, how many a person took on (or level 6 started) */
             accepted: number;
             /** @description What starts on its own at level 6 (self_start.sources) */
             sources: string[];
-            repo: string;
             level: number;
             /** @description auto_merge is set by hand between levels; level is the highest it covers */
             custom: boolean;
@@ -4277,6 +4394,8 @@ export interface components {
             /** @description Empty while the first check runs */
             machine_checked_at: string;
             repos: string[];
+            /** @description The repos by workspace */
+            workspaces: components["schemas"]["WizardWorkspace"][];
             /** @description Each repo's last access check */
             access: components["schemas"]["WizardAccess"][];
             /** @description Each repo's checks, saved or suggested */
@@ -4310,6 +4429,12 @@ export interface components {
             setup_reason: string;
             /** @description When this process started, so a page waiting on a restart can tell the new one from the old */
             started_at: string;
+        };
+        WizardWorkspace: {
+            name: string;
+            repos: string[];
+            /** @description A repo's own, named for it, with nothing in factory.yaml */
+            own: boolean;
         };
         WizardStep: {
             /** @enum {string} */
@@ -4583,6 +4708,8 @@ export interface components {
     };
     parameters: {
         ID: number;
+        /** @description Only this workspace's. Left out, every workspace's, or the factory's only one when it has one. */
+        Workspace: string;
     };
     requestBodies: never;
     headers: never;

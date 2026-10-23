@@ -25,6 +25,7 @@ type wizard struct {
 
 	mu        sync.Mutex
 	repos     []string
+	inWS      map[string]string // each repo's workspace; one not here has its own
 	app       bool // the app is made
 	installed bool
 	token     string
@@ -47,8 +48,27 @@ type wizard struct {
 	tries map[string]*web.APIWizardTry
 }
 
+// workspaces are the repos by workspace, as the factory's config makes them.
+func (w *wizard) workspaces() []web.APIWizardWorkspace {
+	c := &config.Config{Workspaces: map[string]config.Workspace{}}
+	for _, r := range w.repos {
+		c.Repos = append(c.Repos, config.Repo{Name: r})
+		if ws, ok := w.inWS[r]; ok {
+			e := c.Workspaces[ws]
+			e.Repos = append(e.Repos, r)
+			c.Workspaces[ws] = e
+		}
+	}
+	out := []web.APIWizardWorkspace{}
+	for _, n := range c.WorkspaceNames() {
+		_, named := c.Workspaces[n]
+		out = append(out, web.APIWizardWorkspace{Name: n, Repos: c.WorkspaceRepos(n), Own: !named})
+	}
+	return out
+}
+
 func newWizard(r *restarter) *wizard {
-	return &wizard{restart: r, repos: []string{"acme/api", "acme/web"}, claude: "sk-ant-api03-devserverwxyz", codexMode: "chatgpt", pending: map[string]bool{},
+	return &wizard{restart: r, repos: []string{"acme/api", "acme/web"}, inWS: map[string]string{"acme/api": "acme", "acme/web": "acme"}, claude: "sk-ant-api03-devserverwxyz", codexMode: "chatgpt", pending: map[string]bool{},
 		saved: map[string]map[string]string{"acme/api": {"lint": "bundle exec rubocop", "test": "bundle exec rspec"}}}
 }
 
@@ -66,7 +86,7 @@ func (w *wizard) reach() bool { return (w.app && w.installed) || w.token != "" }
 func (w *wizard) State(context.Context, bool) web.APIWizard {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	out := web.APIWizard{ConfigPath: "/srv/factory/factory.yaml", EnvPath: "/srv/factory/factory.env", Repos: w.repos,
+	out := web.APIWizard{ConfigPath: "/srv/factory/factory.yaml", EnvPath: "/srv/factory/factory.env", Repos: w.repos, Workspaces: w.workspaces(),
 		MachineCheckedAt: time.Now().UTC().Format(time.RFC3339), LabelNames: labelNames, Labels: w.labels, Warnings: []string{},
 		Notify: secret(w.notify), Changed: w.changed,
 		Machine: []web.APIWizardFinding{
@@ -274,8 +294,27 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		if len(names) == 0 {
 			return "", errors.New("name at least one repository, as owner/name")
 		}
+		for _, n := range names {
+			if _, ok := w.inWS[n]; !ok && in.Workspace != "" && !slices.Contains(w.repos, n) {
+				w.inWS[n] = in.Workspace
+			}
+		}
 		w.repos, w.changed = names, true
 		return "Saved " + strings.Join(names, " and ") + " to factory.yaml.", nil
+	case "workspace/move":
+		if in.Workspace == "" {
+			delete(w.inWS, in.Repo)
+			return in.Repo + " has a workspace of its own now. It applies once the factory restarts.", nil
+		}
+		w.inWS[in.Repo] = in.Workspace
+		return in.Repo + " is in " + in.Workspace + " now. It applies once the factory restarts.", nil
+	case "workspace/rename":
+		for r, ws := range w.inWS {
+			if ws == in.Workspace {
+				w.inWS[r] = in.Name
+			}
+		}
+		return "Renamed " + in.Workspace + " to " + in.Name + ". It applies once the factory restarts.", nil
 	case "github/install-check":
 		if !w.app {
 			return "", errors.New("make or pick a GitHub App first")

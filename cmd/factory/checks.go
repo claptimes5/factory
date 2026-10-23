@@ -171,7 +171,7 @@ const runnerImageUsers = "the orchestrator, tuning and grooming"
 
 // usesRunnerImage says whether a job outside any repo can run.
 func usesRunnerImage(cfg *config.Config) bool {
-	return cfg.Orchestrator.On || cfg.Tuning.Every > 0 || cfg.Grooming.Every > 0
+	return cfg.AnyOrchestrator() || cfg.Tuning.Every > 0 || cfg.Grooming.Every > 0
 }
 
 // sourceLabel records what a job image was built from, so one built from

@@ -95,8 +95,8 @@ func (m *mcpClient) call(name string, args any) (string, bool) {
 func orchestratorOn(e *env) {
 	e.p.Cfg.Orchestrator.On = true
 	// Keep the clock triggers quiet unless a test wants them.
-	e.p.lastOrch = time.Now()
-	e.p.lastSummary = time.Now().Format("2006-01-02")
+	e.p.lastOrch = map[string]time.Time{"r": time.Now()}
+	e.p.lastSummary = map[string]string{"r": time.Now().Format("2006-01-02")}
 }
 
 // An epic is split into issues through the MCP tools; the dependent child
@@ -226,7 +226,7 @@ func TestEpicSplitsIntoOrderedIssues(t *testing.T) {
 
 func toolsByName(p *Pipeline, jobID int64) map[string]mcp.Tool {
 	m := map[string]mcp.Tool{}
-	for _, t := range p.OrchestratorTools(jobID) {
+	for _, t := range p.OrchestratorTools(jobID, p.Cfg.WorkspaceOf("o/r")) {
 		m[t.Name] = t
 	}
 	return m
@@ -313,8 +313,9 @@ func TestOrchestrateRequestsCoalesce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
+	orchestratorOn(e)
 	for i := 0; i < 3; i++ {
-		if err := e.p.Orchestrate(ctx, fmt.Sprintf("reason %d", i), i == 1); err != nil {
+		if err := e.p.Orchestrate(ctx, "r", fmt.Sprintf("reason %d", i), i == 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -330,10 +331,10 @@ func TestOrchestrateRequestsCoalesce(t *testing.T) {
 
 	// The orchestration budget is separate and, once spent, skips requests.
 	e.p.Cfg.Orchestrator.DailyBudget = 0
-	if err := e.p.Orchestrate(ctx, "more", false); err != nil {
+	if err := e.p.Orchestrate(ctx, "r", "more", false); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := e.p.Store.HasEvent(ctx, "orchestrate_skipped", "orchestration budget spent ($0.00 of $0.00): more"); !ok {
+	if ok, _ := e.p.Store.HasEvent(ctx, "orchestrate_skipped", "the orchestration budget is spent ($0.00 of $0.00): more"); !ok {
 		t.Fatal("a skipped request must be recorded")
 	}
 }
@@ -345,7 +346,7 @@ func TestFailuresAndSummaryTriggerOrchestrator(t *testing.T) {
 	ctx := context.Background()
 	e := setup(t)
 	orchestratorOn(e)
-	e.p.lastSummary = "" // the summary hour has passed today
+	e.p.lastSummary["r"] = "" // the summary hour has passed today
 	e.p.Cfg.Orchestrator.SummaryHour = 0
 	var sent []string
 	e.p.Notify = func(_ context.Context, msg string) { sent = append(sent, msg) }
@@ -514,10 +515,10 @@ func TestToolSchemasHaveRequiredList(t *testing.T) {
 // A GitLab repo may be named without its host; an ambiguous name is refused.
 func TestPickRepoWithoutHost(t *testing.T) {
 	p := &Pipeline{Cfg: &config.Config{Repos: []config.Repo{{Name: "gitlab.com/acme/api"}, {Name: "gitlab.example.com/acme/web"}, {Name: "git.example.org/acme/web"}}}}
-	if got, err := p.pickRepo("acme/api"); err != nil || got != "gitlab.com/acme/api" {
+	if got, err := p.pickRepo("api", "acme/api"); err != nil || got != "gitlab.com/acme/api" {
 		t.Fatalf("acme/api: %q %v", got, err)
 	}
-	if _, err := p.pickRepo("acme/web"); err == nil {
+	if _, err := p.pickRepo("web", "acme/web"); err == nil {
 		t.Fatal("acme/web matches two repos and should be refused")
 	}
 }
@@ -548,7 +549,7 @@ func TestChatClosesASplitItem(t *testing.T) {
 	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 9, "Make lint pass")
 	e.p.Store.SetStage(ctx, it.ID, state.Parked, "test", "")
 	tools := map[string]mcp.Tool{}
-	for _, tl := range e.p.ChatTools(1) {
+	for _, tl := range e.p.ChatTools(1, "r") {
 		tools[tl.Name] = tl
 	}
 	if _, err := callTool(t, tools, "close_split", map[string]any{"item": it.ID, "reason": "r"}); err == nil || !strings.Contains(err.Error(), "no child issues") {

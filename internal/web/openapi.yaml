@@ -189,8 +189,9 @@ paths:
         "409": { $ref: "#/components/responses/Action" }
   /chats:
     get:
-      summary: The chat with the orchestrator's model, whether it can reply now, and the chats so far
-      description: Chat runs on the orchestrator's route and its daily budget, whether or not the orchestrator runs on its own schedule.
+      summary: The chat with the orchestrator's model, whether it can reply now, and a workspace's chats so far
+      description: Chat runs on the orchestrator's route and its workspace's daily budget, whether or not the orchestrator runs on its own schedule. A chat reads and files issues in its workspace's repos only.
+      parameters: [{ $ref: "#/components/parameters/Workspace" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Chats" } } } }
     post:
@@ -210,6 +211,7 @@ paths:
               properties:
                 chat_id: { type: integer, format: int64 }
                 text: { type: string }
+                workspace: { type: string, description: "The workspace a new chat works in; one already started keeps its own. Needed when the factory has several." }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SentChat" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -356,6 +358,7 @@ paths:
           required: false
           schema: { type: string }
           description: Only this repo's items (owner/name), plus lines about no item
+        - { $ref: "#/components/parameters/Workspace" }
       responses:
         "200":
           description: OK
@@ -367,6 +370,7 @@ paths:
       summary: The orchestrator's decisions, newest first
       parameters:
         - { name: item, in: query, required: false, schema: { type: integer }, description: Only this item's decisions }
+        - { $ref: "#/components/parameters/Workspace" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Feed" } } } }
   /metrics:
@@ -401,20 +405,21 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Home" } } } }
   /trust:
     get:
-      summary: "Trust: each repo's level on the ladder toward full automation, its record and practice runs"
+      summary: "Trust: each workspace's level on the ladder toward full automation, the record and practice runs of its repos"
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Trust" } } } }
     post:
-      summary: Move a repo to a trust level (its auto_merge in factory.yaml), applied once the factory restarts
+      summary: Move a workspace to a trust level (its auto_merge and self_start in factory.yaml), applied once the factory restarts
+      description: The levels set on its repos go, so the workspace's is theirs.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [repo, level]
+              required: [workspace, level]
               properties:
-                repo: { type: string }
+                workspace: { type: string }
                 level: { type: integer, description: "1 to 6; 7 isn't built yet" }
       responses:
         "200":
@@ -702,6 +707,41 @@ paths:
               required: [repos]
               properties:
                 repos: { type: string, description: "owner/name for GitHub, the project URL for GitLab, separated by commas" }
+                workspace: { type: string, description: "The workspace the repos added join; left out, each gets one of its own. A repo removed leaves its workspace." }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/workspace/move:
+    post:
+      summary: Move a repo to a workspace in factory.yaml, or give it one of its own
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, workspace]
+              properties:
+                repo: { type: string }
+                workspace: { type: string, description: "A workspace's name, a new one to make, or empty for one of its own" }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/workspace/rename:
+    post:
+      summary: Rename a workspace in factory.yaml, and its chats with it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace, name]
+              properties:
+                workspace: { type: string }
+                name: { type: string, description: "Lowercase letters, digits and -, starting with a letter" }
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -993,6 +1033,12 @@ paths:
 components:
   parameters:
     ID: { name: id, in: path, required: true, schema: { type: integer } }
+    Workspace:
+      name: workspace
+      in: query
+      required: false
+      schema: { type: string }
+      description: Only this workspace's. Left out, every workspace's, or the factory's only one when it has one.
   responses:
     Error:
       description: Error
@@ -1016,8 +1062,9 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only, workspaces]
       properties:
+        workspaces: { type: array, items: { $ref: "#/components/schemas/Workspace" }, description: "The factory's workspaces, in order; the dashboard shows one at a time" }
         plans_only: { type: boolean, description: "Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend" }
         auto_merge:
           type: array
@@ -1038,6 +1085,14 @@ components:
         running: { type: integer }
         queued: { type: integer }
         version: { type: string }
+    Workspace:
+      type: object
+      required: [name, repos, daily_cap_usd, spent_today_usd]
+      properties:
+        name: { type: string }
+        repos: { type: array, items: { type: string } }
+        daily_cap_usd: { type: number, description: "Its own daily budget for builds and reviews; 0 for none" }
+        spent_today_usd: { type: number, description: What its builds and reviews cost today }
     Breaker:
       type: object
       required: [repo, on, tripped, tripped_at, reason, strikes, threshold, window_hours, cool_off_hours, can_reset]
@@ -1054,7 +1109,7 @@ components:
         can_reset: { type: boolean, description: "This request may reset it (tripped, and behind the password or on this machine)" }
     Chats:
       type: object
-      required: [available, unavailable, model, harness, plan, orchestrator_on, orchestrator_every, run_budget_usd, daily_budget_usd, spent_today_usd, chats]
+      required: [available, unavailable, model, harness, plan, orchestrator_on, orchestrator_every, run_budget_usd, daily_budget_usd, spent_today_usd, chats, workspace]
       properties:
         available: { type: boolean, description: A message sent now gets a reply }
         unavailable: { type: string, description: "Why chat can't reply now; empty when it can" }
@@ -1067,6 +1122,7 @@ components:
         daily_budget_usd: { type: number, description: Dollars per day across the orchestrator, tuning and chat }
         spent_today_usd: { type: number }
         chats: { type: array, items: { $ref: "#/components/schemas/ChatAt" }, description: The most recent first }
+        workspace: { type: string, description: "The workspace these are of; empty for every workspace" }
     ChatAt:
       type: object
       required: [id, title, updated_at]
@@ -1076,10 +1132,11 @@ components:
         updated_at: { type: string }
     Chat:
       type: object
-      required: [id, title, messages, drafts, reply]
+      required: [id, title, workspace, messages, drafts, reply]
       properties:
         id: { type: integer, format: int64 }
         title: { type: string }
+        workspace: { type: string, description: "The workspace it works in; empty for a chat from before workspaces" }
         messages: { type: array, items: { $ref: "#/components/schemas/ChatMessage" } }
         drafts: { type: array, items: { $ref: "#/components/schemas/Draft" } }
         reply:
@@ -1495,10 +1552,11 @@ components:
         job_id: { type: [integer, "null"], format: int64 }
     Split:
       type: object
-      required: [prompt, unavailable]
+      required: [prompt, unavailable, workspace]
       properties:
         prompt: { type: string, description: The chat message that asks for smaller issues, each with this item as parent }
         unavailable: { type: string, description: "Why chat can't take it now, or empty" }
+        workspace: { type: string, description: "The item's workspace, which the chat that splits it starts in" }
     Uninstall:
       type: object
       required: [labels, repos, kept, images, images_note, data, manual, refused, writable, reason]
@@ -1788,9 +1846,10 @@ components:
         estimates: { $ref: "#/components/schemas/Estimates" }
     Notification:
       type: object
-      required: [id, kind, title, detail, item_id, at, choice_job_id, choices]
+      required: [id, kind, title, detail, item_id, at, workspace, choice_job_id, choices]
       properties:
         id: { type: string }
+        workspace: { type: string, description: "The item's workspace; empty for one about the whole factory" }
         kind: { type: string, enum: [needs_input, ready_for_review, budget] }
         title: { type: string }
         detail: { type: string }
@@ -1815,10 +1874,10 @@ components:
         failed_at: { type: string, description: "When the last push to it failed; empty after one that worked" }
     Trust:
       type: object
-      required: [levels, repos, always_asks, window_days, can_change, reason, pending]
+      required: [levels, workspaces, always_asks, window_days, can_change, reason, pending]
       properties:
         levels: { type: array, items: { $ref: "#/components/schemas/TrustLevel" } }
-        repos: { type: array, items: { $ref: "#/components/schemas/RepoTrust" } }
+        workspaces: { type: array, items: { $ref: "#/components/schemas/WorkspaceTrust" } }
         always_asks: { type: array, items: { type: string }, description: "Kinds of change that wait for a person at every level (risk.needs_person)" }
         window_days: { type: integer, description: How far back the record and practice runs look }
         can_change: { type: boolean }
@@ -1836,14 +1895,23 @@ components:
         available: { type: boolean, description: The factory can work at this level today }
         needs: { type: string, description: "What a level not built yet would take, or empty" }
         evidence: { type: integer, description: "Changes it would have merged in the window, none gone wrong, before it's suggested" }
-    RepoTrust:
+    RepoLevel:
       type: object
-      required: [repo, level, custom, stepped_back, why, merged, automatic, reverted, broke_main, practice, proposed, accepted, sources, suggest, suggest_why]
+      required: [repo, level]
       properties:
+        repo: { type: string }
+        level: { type: integer }
+    WorkspaceTrust:
+      type: object
+      required: [workspace, repos, level, custom, mixed, stricter, stepped_back, why, merged, automatic, reverted, broke_main, practice, proposed, accepted, sources, suggest, suggest_why]
+      properties:
+        workspace: { type: string }
+        repos: { type: array, items: { type: string } }
+        mixed: { type: boolean, description: "No level of its own yet, and its repos are at different ones: level is the lowest" }
+        stricter: { type: array, items: { $ref: "#/components/schemas/RepoLevel" }, description: Its repos set lower than it by hand in factory.yaml }
         proposed: { type: integer, description: "Level 6's record: issues the factory filed from its own findings in the window" }
         accepted: { type: integer, description: "Of those, how many a person took on (or level 6 started)" }
         sources: { type: array, items: { type: string }, description: "What starts on its own at level 6 (self_start.sources)" }
-        repo: { type: string }
         level: { type: integer }
         custom: { type: boolean, description: "auto_merge is set by hand between levels; level is the highest it covers" }
         stepped_back: { type: boolean, description: "The breaker turned auto-merge off: level 1 until it's reset" }
@@ -2028,7 +2096,7 @@ components:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
     Wizard:
       type: object
-      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, checks, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, workspaces, access, checks, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
       properties:
         mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
         writable: { type: boolean, description: This request may save here }
@@ -2039,6 +2107,7 @@ components:
         machine: { type: array, items: { $ref: "#/components/schemas/WizardFinding" } }
         machine_checked_at: { type: string, description: "Empty while the first check runs" }
         repos: { type: array, items: { type: string } }
+        workspaces: { type: array, items: { $ref: "#/components/schemas/WizardWorkspace" }, description: The repos by workspace }
         access: { type: array, items: { $ref: "#/components/schemas/WizardAccess" }, description: Each repo's last access check }
         checks: { type: array, items: { $ref: "#/components/schemas/WizardChecks" }, description: "Each repo's checks, saved or suggested" }
         labels: { type: array, items: { $ref: "#/components/schemas/WizardLabel" }, description: What the last label creation did }
@@ -2057,6 +2126,13 @@ components:
         restart_waits_for: { type: string, description: "Other work the pending restart waits for; else empty" }
         setup_reason: { type: string, description: "Why the factory can't start, in setup mode; else empty" }
         started_at: { type: string, description: "When this process started, so a page waiting on a restart can tell the new one from the old" }
+    WizardWorkspace:
+      type: object
+      required: [name, repos, own]
+      properties:
+        name: { type: string }
+        repos: { type: array, items: { type: string } }
+        own: { type: boolean, description: "A repo's own, named for it, with nothing in factory.yaml" }
     WizardStep:
       type: object
       required: [key, title, state, summary]

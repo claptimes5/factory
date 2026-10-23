@@ -135,7 +135,7 @@ func (c *Config) PreviewFor(repo string) (Preview, bool) {
 	if !ok || r.Preview == nil || !c.Previews.On() {
 		return Preview{}, false
 	}
-	if n, _ := c.Workspace(repo); n != "" {
+	if n, _ := c.ChangeTogether(repo); n != "" {
 		return Preview{}, false
 	}
 	p := *r.Preview
@@ -190,7 +190,7 @@ func (c *Config) checkPreviews() []error {
 			continue
 		}
 		where := "repo " + r.Name + ": preview"
-		if n, _ := c.Workspace(r.Name); n != "" {
+		if n, _ := c.ChangeTogether(r.Name); n != "" {
 			bad("%s: previews aren't supported for a repo in a workspace yet (%s)", where, n)
 		}
 		if strings.TrimSpace(p.Start) == "" {

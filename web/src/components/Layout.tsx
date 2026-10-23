@@ -3,14 +3,16 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { Activity, History, House, ShieldCheck, LayoutGrid, LogOut, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
 import { useLiveUpdates, useNotifications, useOverview, useWizardMode, type Overview } from "@/api/client";
 import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/input";
 import { CommandPalette } from "@/components/CommandPalette";
 import { PlanUsageMeter } from "@/components/PlanUsage";
 import { Ask } from "@/components/Ask";
 import { NoticeArea } from "@/components/Notices";
 import { Dialog, DialogTitle, SheetContent } from "@/components/ui/dialog";
 import { useBrowserNotifications } from "@/lib/notify";
-import { setRepo, useRepo } from "@/lib/repo";
+import { setRepo } from "@/lib/repo";
 import { cn, money, repoName } from "@/lib/utils";
+import { setWorkspace, useScope, type Scope } from "@/lib/workspace";
 
 function useTheme() {
   const [dark, setDark] = useState(() => {
@@ -186,8 +188,9 @@ function FullLayout() {
   const path = useLocation().pathname;
   useEffect(() => setAskSheet(false), [path]);
   const inbox = n?.notifications.length ?? 0;
-  const repos = o?.repos ?? [];
-  const repo = useRepo(repos);
+  const scope = useScope();
+  const { repos, repo } = scope;
+  const ws = scope.workspaces.find((w) => w.name === scope.workspace);
   return (
     <div className="flex min-h-full">
       <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col gap-5 overflow-y-auto border-r bg-surface px-3 py-5 lg:flex">
@@ -195,6 +198,7 @@ function FullLayout() {
           <Logo className="size-6" />
           <span className="text-body font-semibold">Factory</span>
         </Link>
+        {scope.workspaces.length > 1 && <WorkspaceSwitcher scope={scope} id="workspace-side" />}
         <button
           onClick={() => setPalette(true)}
           className="flex h-9 cursor-pointer items-center gap-2 rounded-control border bg-background px-2.5 text-left text-body-sm text-muted-foreground hover:border-muted-foreground/40"
@@ -237,7 +241,10 @@ function FullLayout() {
         <div className="mt-auto flex flex-col gap-4 border-t px-2.5 pt-4">
           {o && <Running o={o} />}
           {/* On plans, no job costs dollars: their usage meters say what counts. */}
-          {o && !o.plans_only && <SpendMeter o={o} />}
+          {o && !o.plans_only && ws && ws.daily_cap_usd > 0 && (
+            <SpendMeter label={scope.workspaces.length > 1 ? ws.name : "This workspace"} spent={ws.spent_today_usd} cap={ws.daily_cap_usd} />
+          )}
+          {o && !o.plans_only && <SpendMeter label="Today" spent={o.spent_today_usd} cap={o.daily_cap_usd} />}
           <PlanUsageMeter stacked />
           <div className="-mx-2.5 flex items-center gap-1">
             <ThemeButton />
@@ -261,9 +268,10 @@ function FullLayout() {
             <ThemeButton />
             {o?.signed_in && <SignOut />}
           </div>
-          {repos.length > 1 && (
-            <div className="overflow-x-auto px-4 pb-2.5">
-              <RepoChips repos={repos} repo={repo} />
+          {(scope.workspaces.length > 1 || repos.length > 1) && (
+            <div className="flex items-center gap-2 overflow-x-auto px-4 pb-2.5">
+              {scope.workspaces.length > 1 && <WorkspaceSwitcher scope={scope} id="workspace-top" compact />}
+              {repos.length > 1 && <RepoChips repos={repos} repo={repo} />}
             </div>
           )}
         </header>
@@ -336,6 +344,24 @@ function SignOut() {
   );
 }
 
+/** The switcher: which workspace every screen shows. */
+function WorkspaceSwitcher({ scope, id, compact }: { scope: Scope; id: string; compact?: boolean }) {
+  return (
+    <div className={cn("flex flex-col gap-1", !compact && "px-1")}>
+      <label htmlFor={id} className={cn("text-meta text-muted-foreground", compact && "sr-only")}>
+        Workspace
+      </label>
+      <NativeSelect id={id} value={scope.workspace} onChange={(e) => setWorkspace(e.target.value)} className={cn("font-mono", compact && "h-9 w-auto shrink-0")}>
+        {scope.workspaces.map((w) => (
+          <option key={w.name} value={w.name}>
+            {w.name}
+          </option>
+        ))}
+      </NativeSelect>
+    </div>
+  );
+}
+
 function RepoChips({ repos, repo, wrap }: { repos: string[]; repo: string; wrap?: boolean }) {
   const chip = (value: string, label: string) => (
     <button
@@ -375,18 +401,18 @@ function Running({ o, className, compact }: { o: Overview; className?: string; c
   );
 }
 
-function SpendMeter({ o, className }: { o: Overview; className?: string }) {
-  const share = o.daily_cap_usd > 0 ? Math.min(1, o.spent_today_usd / o.daily_cap_usd) : 0;
+function SpendMeter({ label, spent, cap, className }: { label: string; spent: number; cap: number; className?: string }) {
+  const share = cap > 0 ? Math.min(1, spent / cap) : 0;
   const near = share >= 0.8;
   return (
     <div className={cn("flex flex-col gap-1.5", className)} title="Spent today (UTC) of the daily cap">
       <div className="flex justify-between gap-3 text-meta text-muted-foreground">
-        <span>Today</span>
+        <span className={cn(label !== "Today" && "font-mono")}>{label}</span>
         <span className={cn("font-mono", near ? "font-semibold text-warning" : "text-foreground")}>
-          {money(o.spent_today_usd)} / {money(o.daily_cap_usd)}
+          {money(spent)} / {money(cap)}
         </span>
       </div>
-      <div className="h-1 rounded-full bg-border" role="meter" aria-label="Spent today" aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <div className="h-1 rounded-full bg-border" role="meter" aria-label={label === "Today" ? "Spent today" : `${label} spent today`} aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
         <div className={cn("h-1 rounded-full", near ? "bg-warning-fill" : "bg-success-fill")} style={{ width: `${share * 100}%` }} />
       </div>
     </div>

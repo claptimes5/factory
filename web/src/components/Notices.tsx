@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { useSetupNotice } from "@/screens/Setup";
 import { cn, repoName } from "@/lib/utils";
+import { useScope } from "@/lib/workspace";
 
 /**
  * One place for what applies to every screen: main is red, the disk is
@@ -37,9 +38,14 @@ const toneIcon = {
   success: <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />,
 };
 
-export function NoticeArea({ o }: { o?: Overview }) {
+export function NoticeArea({ o: whole }: { o?: Overview }) {
   const [all, setAll] = useState(false);
   const setup = useSetupNotice();
+  // A repo's notices show in its workspace; the disk's everywhere.
+  const { workspace, workspaces } = useScope();
+  const mine = workspaces.find((w) => w.name === workspace)?.repos.map((r) => r.toLowerCase());
+  const here = (repo: string) => !mine || mine.includes(repo.toLowerCase());
+  const o = whole && { ...whole, main_health: whole.main_health.filter((h) => here(h.repo)), auto_merge: whole.auto_merge.filter((b) => here(b.repo)) };
   const notices = [...(o ? overviewNotices(o) : []), ...(setup ? [setup] : [])].sort((a, b) => order[a.tone] - order[b.tone]);
   if (notices.length === 0) return null;
   const shown = all ? notices : notices.slice(0, 1);

@@ -1,11 +1,11 @@
 import { Link, useSearchParams } from "react-router";
-import { type Comparison, useBoard, useCompare, useOverview } from "@/api/client";
+import { type Comparison, useBoard, useCompare } from "@/api/client";
 import { ActivityFeed, WeekStats } from "@/components/Activity";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { FoundBy } from "@/components/FoundBy";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRepo } from "@/lib/repo";
+import { useScope } from "@/lib/workspace";
 import { ago, money, shortRef, shortSha } from "@/lib/utils";
 import { Decisions } from "@/screens/Orchestrator";
 
@@ -18,7 +18,7 @@ const tabs = ["activity", "done", "decisions", "compare"] as const;
 export function HistoryScreen() {
   const [params, setParams] = useSearchParams();
   const tab = tabs.find((t) => t === params.get("tab")) ?? "activity";
-  const repo = useRepo(useOverview().data?.repos ?? []);
+  const { inScope } = useScope();
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4" data-testid="history">
       <PageTitle>History</PageTitle>
@@ -31,10 +31,10 @@ export function HistoryScreen() {
         </TabsList>
         <TabsContent value="activity" className="flex flex-col gap-5">
           <WeekStats />
-          <ActivityFeed repo={repo} />
+          <ActivityFeed />
         </TabsContent>
         <TabsContent value="done">
-          <Done repo={repo} />
+          <Done inScope={inScope} />
         </TabsContent>
         <TabsContent value="decisions">
           <Decisions />
@@ -47,12 +47,12 @@ export function HistoryScreen() {
   );
 }
 
-function Done({ repo }: { repo: string }) {
+function Done({ inScope }: { inScope: (repo: string) => boolean }) {
   const { data, error, isLoading } = useBoard();
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   const done = (data?.columns.find((c) => c.stage === "done")?.cards ?? [])
-    .filter((c) => !repo || c.repo === repo)
+    .filter((c) => inScope(c.repo))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   if (done.length === 0) return <Empty>Nothing done yet.</Empty>;
   return (

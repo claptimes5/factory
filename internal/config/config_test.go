@@ -327,10 +327,10 @@ func TestWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name, m := c.Workspace("o/WEB"); name != "shop" || !slices.Equal(m, []string{"o/api", "o/web"}) {
+	if name, m := c.ChangeTogether("o/WEB"); name != "shop" || !slices.Equal(m, []string{"o/api", "o/web"}) {
 		t.Fatalf("workspace = %s %v", name, m)
 	}
-	if name, m := c.Workspace("o/docs"); name != "" || m != nil {
+	if name, m := c.ChangeTogether("o/docs"); name != "" || m != nil {
 		t.Fatalf("o/docs is on its own: %s %v", name, m)
 	}
 	if ShortName("group/sub/Web") != "web" {
@@ -347,6 +347,248 @@ func TestWorkspaces(t *testing.T) {
 			t.Errorf("%q: err = %v, want %q", ws, err, want)
 		}
 	}
+}
+
+// A workspace is a project: named ones hold their repos, and a repo in
+// none has one of its own, named for it and kept off names in use. Only
+// the older list form, or change_together, makes its repos one change.
+func TestWorkspacesScopeRepos(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	repos := "repos: [o/api, o/web, o/docs, p/web, o/factory]\n"
+	c, err := Parse([]byte(repos + "workspaces:\n  shop: [o/api, o/web]\n  factory:\n    repos: [o/factory]\n    daily_total: 10\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.WorkspaceNames(); !slices.Equal(got, []string{"factory", "shop", "docs", "web"}) {
+		t.Fatalf("names = %v", got)
+	}
+	for repo, ws := range map[string]string{"O/Api": "shop", "o/factory": "factory", "o/docs": "docs", "p/web": "web", "x/y": ""} {
+		if got := c.WorkspaceOf(repo); got != ws {
+			t.Errorf("WorkspaceOf(%s) = %q, want %q", repo, got, ws)
+		}
+	}
+	if got := c.WorkspaceRepos("web"); !slices.Equal(got, []string{"p/web"}) {
+		t.Fatalf("web's repos = %v", got)
+	}
+	if w, ok := c.WorkspaceConf("factory"); !ok || w.DailyTotal != 10 || w.ChangeTogether {
+		t.Fatalf("factory = %+v %v", w, ok)
+	}
+	if n, m := c.ChangeTogether("o/factory"); n != "" || m != nil {
+		t.Fatalf("a workspace's repos don't change as one unless it says so: %s %v", n, m)
+	}
+	// Two repos' own workspaces with the same short name get apart.
+	c2, err := Parse([]byte("repos: [o/web, p/web]\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := c2.WorkspaceOf("o/web"), c2.WorkspaceOf("p/web"); a != "web" || b != "web-2" {
+		t.Fatalf("own workspaces = %s, %s", a, b)
+	}
+	for ws, want := range map[string]string{
+		"shop:\n    repos: [o/api]\n    change_together: true": "change_together needs at least two repos",
+		"shop:\n    repos: []":                                 "needs at least one repo",
+		"shop:\n    repos: [o/api]\n    daily_total: -1":       "daily_total is dollars",
+	} {
+		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", ws, err, want)
+		}
+	}
+	// The older form is written back as it was.
+	out, err := yaml.Marshal(map[string]Workspace{"shop": {Repos: []string{"o/api", "o/web"}, ChangeTogether: true}})
+	if err != nil || strings.TrimSpace(string(out)) != "shop:\n    - o/api\n    - o/web" {
+		t.Fatalf("marshal = %q %v", out, err)
+	}
+}
+
+// Trust is the workspace's: its level for each repo, a repo's own only
+// where it's stricter, with the merge method as the repo sets it; and
+// setting a workspace's level clears its repos' own.
+func TestWorkspaceTrust(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	y := `repos:
+  - o/api
+  - name: o/web
+    auto_merge: {up_to: low, max_size: XS, method: squash}
+  - name: o/docs
+    auto_merge: {up_to: medium, max_size: L}
+    self_start: {sources: [main_health, todos]}
+workspaces:
+  shop:
+    repos: [o/api, o/web, o/docs]
+    auto_merge: {up_to: low, max_size: M}
+    self_start: {sources: [main_health, dependabot], daily: 2}
+`
+	c, err := Parse([]byte(y + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]string{"o/api": "low M merge", "o/web": "low XS squash", "o/docs": "low M merge"} {
+		r, _ := c.RepoConf(repo)
+		if got := r.AutoMerge.UpTo + " " + r.AutoMerge.MaxSize + " " + r.AutoMerge.MergeMethod(); got != want {
+			t.Errorf("%s = %s, want %s", repo, got, want)
+		}
+	}
+	if r, _ := c.RepoConf("o/docs"); !slices.Equal(r.SelfStart.Sources, []string{"main_health"}) || r.SelfStart.DailyCap() != 2 {
+		t.Errorf("o/docs self_start = %+v", r.SelfStart)
+	}
+	if r, _ := c.RepoConf("o/api"); !slices.Equal(r.SelfStart.Sources, []string{"main_health", "dependabot"}) {
+		t.Errorf("o/api self_start = %+v", r.SelfStart)
+	}
+
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	os.WriteFile(path, []byte(y+base), 0o644)
+	if err := SetWorkspaceTrust(path, "shop", &AutoMerge{UpTo: "medium", MaxSize: "M"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// o/web was set lower by hand, and stays there with its merge method;
+	// o/docs's looser level goes.
+	for repo, want := range map[string]string{"o/api": "medium M merge", "o/web": "low XS squash", "o/docs": "medium M merge"} {
+		r, _ := c.RepoConf(repo)
+		if got := r.AutoMerge.UpTo + " " + r.AutoMerge.MaxSize + " " + r.AutoMerge.MergeMethod(); got != want || r.SelfStart != nil {
+			t.Errorf("%s after setting shop to 5 = %s %+v, want %s", repo, got, r.SelfStart, want)
+		}
+	}
+	// A repo's own workspace is written out by its name.
+	os.WriteFile(path, []byte("repos: [o/api, o/web]\n"+base), 0o644)
+	if err := SetWorkspaceTrust(path, "web", &AutoMerge{UpTo: "low", MaxSize: "S"}, &SelfStart{Sources: []string{"main_health"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = Load(path)
+	if w, ok := c.Workspaces["web"]; !ok || !slices.Equal(w.Repos, []string{"o/web"}) || w.AutoMerge.UpTo != "low" || w.SelfStart == nil {
+		t.Fatalf("web = %+v %v", w, ok)
+	}
+	if r, _ := c.RepoConf("o/api"); r.AutoMerge != c.AutoMerge {
+		t.Fatalf("o/api keeps the top level's: %+v", r.AutoMerge)
+	}
+}
+
+// Get started moves a repo between workspaces and renames them; one left
+// empty goes, and one left with a single repo no longer changes together.
+func TestMoveAndRenameWorkspaces(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	os.WriteFile(path, []byte("repos: [o/api, o/web, o/site]\nworkspaces:\n  shop: [o/api, o/web]\n"+base), 0o644)
+	load := func() *Config {
+		t.Helper()
+		c, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if err := SetRepoWorkspace(path, "o/web", "site"); err != nil {
+		t.Fatal(err)
+	}
+	c := load()
+	if c.WorkspaceOf("o/web") != "site" || !slices.Equal(c.WorkspaceRepos("site"), []string{"o/site", "o/web"}) || c.Workspaces["shop"].ChangeTogether {
+		t.Fatalf("after moving o/web to o/site's: %+v", c.Workspaces)
+	}
+	if err := SetRepoWorkspace(path, "o/api", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); c.WorkspaceOf("o/api") != "api" || len(c.Workspaces) != 1 {
+		t.Fatalf("after giving o/api its own: %+v", c.Workspaces)
+	}
+	if err := RenameWorkspace(path, "site", "web-team"); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); c.WorkspaceOf("o/site") != "web-team" || c.WorkspaceOf("o/web") != "web-team" {
+		t.Fatalf("after renaming: %+v", c.Workspaces)
+	}
+	if err := RenameWorkspace(path, "api", "web-team"); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("renaming onto a name in use = %v", err)
+	}
+	if err := SetRepoWorkspace(path, "o/api", "Bad Name"); err == nil {
+		t.Fatal("a bad name was taken")
+	}
+}
+
+// Trust never rises by accident: a repo's own is stricter for risk and
+// size each; a workspace with no level takes the lowest of its repos';
+// a repo moved keeps the level its workspace gave it; and a self_start
+// that names no sources only caps the workspace's.
+func TestWorkspaceTrustNeverRisesByAccident(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	parse := func(y string) *Config {
+		t.Helper()
+		c, err := Parse([]byte(y + base))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	level := func(c *Config, repo string) string {
+		r, _ := c.RepoConf(repo)
+		if r.AutoMerge == nil {
+			return "nil"
+		}
+		return r.AutoMerge.UpTo + " " + r.AutoMerge.MaxSize
+	}
+	c := parse("repos:\n  - name: o/a\n    auto_merge: {up_to: low, max_size: L}\nworkspaces:\n  w:\n    repos: [o/a]\n    auto_merge: {up_to: medium, max_size: S}\n")
+	if got := level(c, "o/a"); got != "low S" {
+		t.Fatalf("low/L under medium/S = %s, want low S", got)
+	}
+	c = parse("repos:\n  - name: o/a\n    auto_merge: {up_to: low, max_size: XS}\n  - name: o/b\n    auto_merge: {up_to: medium, max_size: M}\nworkspaces:\n  w: {repos: [o/a, o/b]}\n")
+	if a, b := level(c, "o/a"), level(c, "o/b"); a != "low XS" || b != "low XS" {
+		t.Fatalf("mixed: o/a %s, o/b %s, want both the lowest", a, b)
+	}
+	c = parse("repos: [o/a]\nworkspaces:\n  w:\n    repos: [o/a]\n    self_start: {sources: [main_health, dependabot]}\n" +
+		"")
+	c.Repos[0].SelfStart = &SelfStart{Daily: 1}
+	if r, _ := c.RepoConf("o/a"); !slices.Equal(r.SelfStart.Sources, []string{"main_health", "dependabot"}) || r.SelfStart.DailyCap() != 1 {
+		t.Fatalf("a cap-only self_start = %+v", r.SelfStart)
+	}
+
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	os.WriteFile(path, []byte("repos: [o/a, o/b]\nauto_merge: {up_to: medium, max_size: M}\nworkspaces:\n  oss:\n    repos: [o/a, o/b]\n    auto_merge: {up_to: none}\n"+base), 0o644)
+	if err := SetRepoWorkspace(path, "o/a", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c := must(Load(path)); level(c, "o/a") != "none " || c.WorkspaceOf("o/a") != "a" {
+		t.Fatalf("moved out of oss: %s in %s, want none", level(c, "o/a"), c.WorkspaceOf("o/a"))
+	}
+	// Moving a repo where it is already changes nothing.
+	before := must(os.ReadFile(path))
+	if err := SetRepoWorkspace(path, "o/b", "oss"); err != nil {
+		t.Fatal(err)
+	}
+	if after := must(os.ReadFile(path)); string(after) != string(before) {
+		t.Fatalf("a move to where it is rewrote the file:\n%s", after)
+	}
+	// Setting a level keeps a repo's own self_start, sources and caps.
+	os.WriteFile(path, []byte("repos:\n  - name: o/a\n    self_start: {sources: [main_health, todos], daily: 2}\n"+base), 0o644)
+	if err := SetWorkspaceTrust(path, "a", &AutoMerge{UpTo: "medium", MaxSize: "M"}, &SelfStart{Sources: DefaultSelfStartSources}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := must(Load(path)).RepoConf("o/a"); !slices.Equal(r.SelfStart.Sources, []string{"main_health", "todos"}) || r.SelfStart.DailyCap() != 2 {
+		t.Fatalf("self_start after level 6 = %+v", r.SelfStart)
+	}
+	// Workspaces named for their repos keep their names when another moves.
+	os.WriteFile(path, []byte("repos: [a/api, b/api, o/shop]\n"+base), 0o644)
+	if c := must(Load(path)); c.WorkspaceOf("b/api") != "api-2" {
+		t.Fatalf("b/api's = %s", c.WorkspaceOf("b/api"))
+	}
+	if err := SetRepoWorkspace(path, "a/api", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if c := must(Load(path)); c.WorkspaceOf("b/api") != "api-2" || c.WorkspaceOf("a/api") != "shop" {
+		t.Fatalf("after moving a/api: b/api in %s, a/api in %s", c.WorkspaceOf("b/api"), c.WorkspaceOf("a/api"))
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func TestCostOfPricesCachedInput(t *testing.T) {

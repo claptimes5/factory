@@ -16,7 +16,14 @@ To reach it from another machine, or to put a password on it, see
 [Control room login](security.md#control-room-login).
 
 On a desk, a sidebar holds the screens, search, the repo filter, what's
-running, the day's spend and plan usage. On a phone, tabs at the bottom do
+running, the day's spend and plan usage. With more than one
+[workspace](configuration.md#workspaces), a switcher at its top (on a
+phone, under the top bar) picks the one every screen shows: Home, The
+line, History, Trust, Setup, the Inbox, the orchestrator's decisions and
+Ask are that workspace's, and a link keeps it (`?ws=`). Home and the Inbox
+say what needs you in the others, with a link to switch. Opening an item
+switches to its workspace. The sidebar shows a workspace's own daily
+budget beside the factory's. On a phone, tabs at the bottom do
 (Home, Line, Ask, History, Settings), and Settings leads to the rest. The
 dashboard installs as a web app: on a phone, add it to the home screen
 (on an iPhone, Share, then Add to Home Screen) and it opens like an app,
@@ -400,6 +407,11 @@ work through the daemon's MCP tools. Its prompt is `prompts/orchestrate.md`.
 Turn it on with `orchestrator.enabled: true`. It is off by default in code,
 and on in this repo's `factory.yaml`, since it spends on its own schedule.
 
+Each [workspace](configuration.md#workspaces) has its own orchestrator. A
+run works on one workspace: it sees that workspace's items and repos, and
+nothing else. Each can be turned on or off, and given its own interval,
+daily budget and issue cap, under the workspace's `orchestrator:`.
+
 ### When it runs
 
 - On a new `factory:epic` issue.
@@ -412,8 +424,10 @@ and on in this repo's `factory.yaml`, since it spends on its own schedule.
 - Once a day after `summary_hour`, for the summary it sends to your
   notifier.
 
-One run at a time. Extra triggers, and any that piled up while the daemon
-was down, coalesce into one run.
+Each workspace's orchestrator runs on its own triggers: an epic, failures
+or stuck items there, its own interval, and its own daily summary. One run
+at a time per workspace. Extra triggers, and any that piled up while the
+daemon was down, coalesce into one run.
 
 ### What it can do
 
@@ -435,9 +449,11 @@ The orchestrator also:
 - may only add labels listed in `orchestrator.labels`;
 - reads only approved issue text (see [Who can start work](security.md#who-can-start-work));
 - has its own daily spending cap, which does not count against the build
-  budget.
-
-It sees every repo and names one when it opens an issue.
+  budget;
+- can't read or change another workspace's items, repos or jobs. In a
+  workspace of several repos it must name the repo for each issue it
+  opens: none is assumed. Ask is fenced the same way, in the workspace it
+  was started in.
 
 ### Chat: opening issues with the orchestrator
 
@@ -744,7 +760,8 @@ does the dashboard while a repo is red or flaky.
 
 ## Trust
 
-How much the factory may do on its own is a level for each repo, on a
+How much the factory may do on its own is a level for each
+[workspace](configuration.md#workspaces), for all of its repos, on a
 ladder toward full automation, on the dashboard's **Trust** screen:
 
 | Level | The factory may, on its own |
@@ -757,15 +774,21 @@ ladder toward full automation, on the dashboard's **Trust** screen:
 | 6 | Pick its own work: what it finds itself starts without your label, and merges itself under level 5's rules. |
 | 7 | Ship: release and deploy, with a canary and an automatic rollback. *Not built yet.* |
 
-Levels 1 to 5 are names for a repo's [`auto_merge`](configuration.md#auto-merge)
+Levels 1 to 5 are names for a workspace's [`auto_merge`](configuration.md#auto-merge)
 (`up_to` and `max_size`); level 6 adds its
 [`self_start`](configuration.md#picking-its-own-work). At every level, high-risk changes and the kinds
 in `risk.needs_person` (a migration, a new dependency, auth code, a
 deleted test) wait for you, and the [breaker](#auto-merge-guard-rails)
-steps a repo back to level 1 when its merges are reverted or break main,
-until you reset it.
+steps the workspace back to level 1 when a repo's merges are reverted or
+break main, until you reset it.
 
-**Earned, never taken.** For each repo the screen shows its record over
+A repo can be set lower than its workspace by hand, with its own
+`auto_merge` in `factory.yaml`: the stricter of the two applies, and the
+screen lists the repo under its workspace. A workspace with no level of
+its own yet takes the lowest of its repos'; the screen says so until you
+set one.
+
+**Earned, never taken.** For each workspace the screen shows its repos' record over
 the last 30 days (merged, merged by itself, reverted, broke main) and a
 practice run of each level: how many of those merged PRs that level would
 have merged on its own, and how many of them went wrong. When the next
@@ -773,8 +796,12 @@ level's practice run is long enough (5 changes for level 2, then 10, 20
 and 30) and none went wrong, the factory suggests it, on the screen and on
 Home. Level 6's practice run is different: of the issues the factory filed
 from its own findings in the window, how many you took on (it needs 10,
-and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the repo's own
-`auto_merge` to `factory.yaml`, and it applies once the factory restarts.
+and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the workspace's
+`auto_merge` and `self_start` to `factory.yaml` and applies once the
+factory restarts. Its repos set lower by hand keep their level; the
+others' own levels go, keeping their merge method and breaker. A repo
+moved to another workspace keeps the level its old one gave it, as its
+own, so a move never lets it merge more.
 
 The ladder follows research on agent autonomy: oversight moving from
 approving each action to watching and stepping in (Anthropic, [Measuring
@@ -793,12 +820,12 @@ schedule. Below level 6, what it finds waits for you: issues from the
 sources wait for your label, and main health's fixes and the
 orchestrator's issues are built but wait for you to merge them.
 
-At level 6, the findings from the repo's `self_start.sources` (main
+At level 6, the findings from the workspace's `self_start.sources` (main
 health and Dependabot when the Trust screen raises it) start without a
 label, approved as "the factory (dependabot)" and so on, and merge
-themselves under the repo's auto_merge. Up to 3 a day, and a fifth of
-the daily budget for that work, start this way; past either, they wait
-for your label. A tripped breaker stops it too. Home, The line and
+themselves under its auto_merge. Up to 3 a day, and a fifth of
+the daily budget for that work, start this way across the workspace's
+repos; past either, they wait for your label. A tripped breaker stops it too. Home, The line and
 History mark such work "Found by the factory".
 
 ## Auto-merge guard rails

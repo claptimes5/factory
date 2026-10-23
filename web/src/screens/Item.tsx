@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ChevronDown, ExternalLink, Scissors } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,11 +14,18 @@ import { StationStamps } from "@/components/StationStamps";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ago, cn, duration, money } from "@/lib/utils";
+import { setWorkspace, useScope } from "@/lib/workspace";
 
 export function ItemScreen() {
   const plansOnly = !!useOverview().data?.plans_only;
   const id = Number(useParams().id);
   const { data, error, isLoading } = useItem(id);
+  // An item opened from a link or a notification brings its workspace on screen.
+  const { workspace, workspaceOf } = useScope();
+  const itsWorkspace = data ? workspaceOf(data.item.repo) : "";
+  useEffect(() => {
+    if (itsWorkspace && itsWorkspace !== workspace) setWorkspace(itsWorkspace);
+  }, [itsWorkspace, workspace]);
   if (isLoading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   const { item: it, jobs, events, depends_on, issue_body, spec, estimate, plan, risk_reasons, needs_person, happened, split, children } = data!;
@@ -512,7 +519,7 @@ function SplitButton({ split }: { split: Split }) {
       // Chat may have become unavailable since the page loaded.
       const chats = await getJSON<components["schemas"]["Chats"]>("/chats");
       if (!chats.available) throw new Error(chats.unavailable);
-      const r = await postJSON<components["schemas"]["SentChat"]>("/chats", { chat_id: 0, text: split.prompt });
+      const r = await postJSON<components["schemas"]["SentChat"]>("/chats", { chat_id: 0, text: split.prompt, workspace: split.workspace });
       void navigate(`/orchestrator?chat=${r.chat_id}`);
     } catch (e) {
       setErr(e instanceof APIError || e instanceof Error ? e.message : String(e));

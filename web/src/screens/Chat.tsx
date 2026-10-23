@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ago, cn, money } from "@/lib/utils";
+import { useScope } from "@/lib/workspace";
 
 type Chats = components["schemas"]["Chats"];
 type ChatT = components["schemas"]["Chat"];
@@ -18,7 +19,11 @@ type Sent = components["schemas"]["SentChat"];
 
 const writing = (st?: string) => st === "queued" || st === "running";
 
-export const useChats = () => useQuery({ queryKey: ["chats"], queryFn: () => getJSON<Chats>("/chats") });
+/** The chats of the workspace on screen, and whether chat can reply there. */
+export const useChats = () => {
+  const { workspace } = useScope();
+  return useQuery({ queryKey: ["chats", workspace], queryFn: () => getJSON<Chats>(workspace ? `/chats?workspace=${encodeURIComponent(workspace)}` : "/chats") });
+};
 
 /** One chat. While its reply is written it polls, since drafts land mid-run. */
 const useChat = (id: number) =>
@@ -140,7 +145,7 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
     setSending(true);
     setMsg("");
     try {
-      const r = await postJSON<Sent>("/chats", { chat_id: chatId, text: again ? "" : text });
+      const r = await postJSON<Sent>("/chats", { chat_id: chatId, text: again ? "" : text, workspace: info.workspace });
       if (!again) setText("");
       await qc.invalidateQueries({ queryKey: ["chats"] });
       await qc.invalidateQueries({ queryKey: ["chat", r.chat_id] });

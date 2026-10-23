@@ -46,6 +46,7 @@ export type Wizard = S["Wizard"];
 export type WizardStep = S["WizardStep"];
 export type WizardAccess = S["WizardAccess"];
 export type WizardChecks = S["WizardChecks"];
+export type WizardWorkspace = S["WizardWorkspace"];
 export type WizardSecret = S["WizardSecret"];
 export type WizardResult = S["WizardResult"];
 export type WizardManifest = S["WizardManifest"];
@@ -121,8 +122,8 @@ export type Home = S["Home"];
 export const useHome = () => useQuery({ queryKey: ["home"], queryFn: () => getJSON<Home>("/home") });
 
 export type Trust = S["Trust"];
-export type RepoTrust = S["RepoTrust"];
-/** Each repo's trust level, its record and practice runs. */
+export type WorkspaceTrust = S["WorkspaceTrust"];
+/** Each workspace's trust level, and its repos' record and practice runs. */
 export const useTrust = () => useQuery({ queryKey: ["trust"], queryFn: () => getJSON<Trust>("/trust") });
 
 export const useBoard = (opts: { enabled?: boolean; refetchInterval?: number | ((q: { state: { data?: Board } }) => number) } = {}) =>
@@ -140,15 +141,23 @@ export const useJob = (id: number, opts: { enabled?: boolean } = {}) =>
 /** A stopped build's work against the base branch, as kept on the factory's machine. */
 export const useSavedDiff = (id: number, enabled: boolean) =>
   useQuery({ queryKey: ["saved-diff", id], queryFn: () => getJSON<Diff>(`/jobs/${id}/saved-diff`), enabled });
-export const useFeed = (item?: number) =>
+/** A query string of the params that are set. */
+const query = (params: Record<string, string | number | undefined>) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+};
+/** The orchestrator's decisions: one item's, or a workspace's. */
+export const useFeed = (item?: number, workspace = "") =>
   useQuery({
-    queryKey: ["feed", item ?? 0],
-    queryFn: () => getJSON<Feed>(item ? `/orchestrator?item=${item}` : "/orchestrator"),
+    queryKey: ["feed", item ?? 0, workspace],
+    queryFn: () => getJSON<Feed>(`/orchestrator${query({ item, workspace })}`),
   });
-export const useActivity = (repo = "") =>
+export const useActivity = (repo = "", workspace = "") =>
   useQuery({
-    queryKey: ["activity", repo],
-    queryFn: () => getJSON<Activity>(repo ? `/activity?repo=${encodeURIComponent(repo)}` : "/activity"),
+    queryKey: ["activity", repo, workspace],
+    queryFn: () => getJSON<Activity>(`/activity${query({ repo, workspace })}`),
   });
 export const useSpend = () => useQuery({ queryKey: ["spend"], queryFn: () => getJSON<Spend>("/spend") });
 export const useCompare = () =>

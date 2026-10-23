@@ -99,7 +99,11 @@ while open stays open, with a button to the next one that needs you.
    `group/project`, or paste its link or clone address. These are repos on
    GitHub or GitLab, not folders on your computer: the factory clones each
    into its data folder. The steps that follow are for the hosts your
-   repos are on.
+   repos are on. Repos are grouped in
+   [workspaces](configuration.md#workspaces), one project each: a repo you
+   add has one of its own unless you choose another. With several, each
+   repo's row says its workspace, and moving it is a choice there; a
+   workspace's **Rename** changes its name, its chats too.
 3. **GitHub:** "Create an app for me" sends you to GitHub with a new app
    filled in, with only the permissions the factory needs. Click "Create
    GitHub App" and GitHub brings you back; the app's key is saved next to

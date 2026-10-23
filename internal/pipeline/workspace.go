@@ -49,7 +49,7 @@ func (pt *part) gate(name string) string {
 // members are the repos an item's change may span, in merge order: its
 // workspace's, or only its own.
 func (p *Pipeline) members(it *store.WorkItem) []string {
-	if _, m := p.Cfg.Workspace(it.Repo); len(m) > 1 {
+	if _, m := p.Cfg.ChangeTogether(it.Repo); len(m) > 1 {
 		return m
 	}
 	return []string{it.Repo}

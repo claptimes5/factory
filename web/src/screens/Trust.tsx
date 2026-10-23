@@ -1,47 +1,39 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, RotateCcw, ShieldCheck } from "lucide-react";
-import { act, postJSON, useTrust, type RepoTrust, type Trust } from "@/api/client";
+import { act, postJSON, useTrust, type Trust, type WorkspaceTrust } from "@/api/client";
 import { ErrorBox, Loading, PageTitle } from "@/components/common";
 import { sourceName } from "@/components/FoundBy";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toast } from "@/components/ui/toaster";
 import { cn, repoName } from "@/lib/utils";
+import { useScope } from "@/lib/workspace";
 
-// Trust: how much the factory may do on its own, for each repo, on a
-// ladder toward full automation. It earns a level from its record, a
-// person raises it, and it steps back on its own (internal/web/trust.go).
+// Trust: how much the factory may do on its own, for each workspace, on a
+// ladder toward full automation. It earns a level from its repos' record,
+// a person raises it, and it steps back on its own (internal/web/trust.go).
 
 export function TrustScreen() {
   const { data, error, isLoading } = useTrust();
-  const [params, setParams] = useSearchParams();
+  const { workspace, workspaces } = useScope();
   if (isLoading) return <Loading what="Reading the factory's record" />;
   if (error) return <ErrorBox error={error} />;
   const t = data!;
-  const repo = t.repos.find((r) => r.repo === params.get("repo")) ?? t.repos[0];
+  const w = t.workspaces.find((x) => x.workspace === workspace) ?? t.workspaces[0];
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5" data-testid="trust">
       <div>
-        <PageTitle>Trust</PageTitle>
+        <PageTitle>Trust{workspaces.length > 1 && w ? ` · ${w.workspace}` : ""}</PageTitle>
         <p className="-mt-2 text-body-sm text-text-2">
-          How much the factory may do on its own, for each repo. It earns more as its record holds up, and steps back by itself when something goes
-          wrong. Only you raise it.
+          How much the factory may do on its own{w && w.repos.length > 1 ? ", with one level for every repo of the workspace" : ""}. It earns more as its
+          record holds up, and steps back by itself when something goes wrong. Only you raise it.
         </p>
       </div>
-      {t.repos.length > 1 && (
-        <SegmentedControl
-          label="Repository"
-          value={repo.repo}
-          onValueChange={(r) => setParams({ repo: r }, { replace: true })}
-          options={t.repos.map((r) => ({ value: r.repo, label: <span className="font-mono">{repoName(r.repo)}</span> }))}
-        />
-      )}
       {t.pending && <PendingRestart t={t} />}
-      {repo ? <RepoTrustView t={t} r={repo} /> : <p className="text-body-sm text-muted-foreground">No repositories yet.</p>}
+      {w ? <WorkspaceTrustView t={t} w={w} /> : <p className="text-body-sm text-muted-foreground">No repositories yet.</p>}
     </div>
   );
 }
@@ -72,13 +64,13 @@ function PendingRestart({ t }: { t: Trust }) {
   );
 }
 
-function RepoTrustView({ t, r }: { t: Trust; r: RepoTrust }) {
+function WorkspaceTrustView({ t, w: r }: { t: Trust; w: WorkspaceTrust }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(0);
   const move = async (level: number) => {
     setBusy(level);
     try {
-      const res = await postJSON<{ message: string; trust: Trust }>("/trust", { repo: r.repo, level });
+      const res = await postJSON<{ message: string; trust: Trust }>("/trust", { workspace: r.workspace, level });
       qc.setQueryData(["trust"], res.trust);
       toast.success(res.message);
     } catch (e) {
@@ -90,6 +82,38 @@ function RepoTrustView({ t, r }: { t: Trust; r: RepoTrust }) {
   const practice = new Map(r.practice.map((p) => [p.level, p]));
   return (
     <>
+      {r.repos.length > 1 && (
+        <p className="text-body-sm text-text-2" data-testid="trust-repos">
+          For {r.repos.map((x, i) => (
+            <span key={x}>
+              {i > 0 && (i === r.repos.length - 1 ? " and " : ", ")}
+              <span className="font-mono">{repoName(x)}</span>
+            </span>
+          ))}
+          .
+        </p>
+      )}
+      {r.mixed && (
+        <Alert variant="info">
+          <AlertTriangle aria-hidden />
+          <span>
+            Its repos were set to different levels, so they all merge at the lowest, {r.level}, until you choose one for the workspace. A repo set lower
+            than the one you choose keeps its own.
+          </span>
+        </Alert>
+      )}
+      {r.stricter.length > 0 && (
+        <p className="text-meta text-text-2" data-testid="trust-stricter">
+          Set lower by hand in factory.yaml:{" "}
+          {r.stricter.map((s, i) => (
+            <span key={s.repo}>
+              {i > 0 && ", "}
+              <span className="font-mono">{repoName(s.repo)}</span> at level {s.level}
+            </span>
+          ))}
+          . A repo stays at its own level when that's stricter.
+        </p>
+      )}
       {r.stepped_back && (
         <Alert variant="attention">
           <AlertTriangle aria-hidden />
@@ -199,11 +223,12 @@ function RepoTrustView({ t, r }: { t: Trust; r: RepoTrust }) {
           and anything high-risk, at every level.
         </p>
         <p>
-          <span className="font-semibold text-foreground">Steps back on its own:</span> reverts or a broken main turn auto-merge off for the repo until you
-          reset it, which also stops it starting its own work; the record starts again from there.
+          <span className="font-semibold text-foreground">Steps back on its own:</span> reverts or a broken main in any of its repos turn auto-merge off
+          for the workspace until you reset it, which also stops it starting its own work; the record starts again from there.
         </p>
         <p className="text-meta text-muted-foreground">
-          A level is a repo's auto_merge in factory.yaml; you can set it there too. <Link to="/settings" className="text-primary hover:underline">Settings</Link>
+          A level is the workspace's auto_merge in factory.yaml; you can set it there too, or set a repo lower.{" "}
+          <Link to="/settings" className="text-primary hover:underline">Settings</Link>
         </p>
       </section>
     </>

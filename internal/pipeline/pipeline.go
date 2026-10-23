@@ -210,15 +210,15 @@ type Pipeline struct {
 	healthNowFn func() time.Time                 // time.Now, for main's CI health
 	learnDayFn  func() string                    // store.Today, the day a learn job counts against
 
-	lastOrch    time.Time // last scheduled orchestrator request
-	lastSummary string    // day the daily summary was requested
-	lastDrain   time.Time // last drained-queue orchestrator request
-	tuneDue     time.Time // when the tuning cadence last fired
-	tuneHeld    string    // day a due tuning run waited for budget, to notify once
-	healthAt    time.Time // when main's CI was last read
-	groomDue    time.Time // when the grooming cadence last fired
-	groomHeld   string    // day a due grooming run waited for budget, to notify once
-	huntHeld    string    // day a due hunt waited for budget, to notify once
+	lastOrch    map[string]time.Time // each workspace's last scheduled orchestrator request
+	lastSummary map[string]string    // the day each workspace's daily summary was requested
+	lastDrain   time.Time            // last drained-queue orchestrator request
+	tuneDue     time.Time            // when the tuning cadence last fired
+	tuneHeld    string               // day a due tuning run waited for budget, to notify once
+	healthAt    time.Time            // when main's CI was last read
+	groomDue    time.Time            // when the grooming cadence last fired
+	groomHeld   string               // day a due grooming run waited for budget, to notify once
+	huntHeld    string               // day a due hunt waited for budget, to notify once
 	// groomChildAt is when sub-issues waiting for approval were last checked.
 	groomChildAt time.Time
 	// groomPollAt is when the labels of flagged issues were last read.
@@ -552,9 +552,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 		p.learnTriggers(ctx)
 		p.groomActions(ctx, time.Now())
 	}
-	if p.Cfg.Orchestrator.On {
-		p.orchestratorTriggers(ctx, time.Now())
-	}
+	p.orchestratorTriggers(ctx, time.Now())
 	p.tuneTrigger(ctx, time.Now())
 	p.healthTrigger(ctx, time.Now())
 	p.sourcesTrigger(ctx, time.Now(), async)
@@ -565,7 +563,7 @@ func (p *Pipeline) Tick(ctx context.Context, async bool) error {
 		if errors.Is(err, ErrDiskLow) && async {
 			return nil // said once already; the next tick looks again
 		}
-		if err == nil && j == nil && !claimed && p.Cfg.Orchestrator.On {
+		if err == nil && j == nil && !claimed && p.Cfg.AnyOrchestrator() {
 			p.drainedTrigger(ctx)
 			j, err = p.claimNext(ctx) // it may have queued an orchestrator run
 		}
@@ -640,6 +638,8 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 		p.diskHalt = false
 		p.notify(ctx, "There's room on disk again; jobs are starting.")
 	}
+	// A workspace whose own daily budget is spent waits; the rest go on.
+	held := append(p.heldRepos(), p.spentRepos(ctx)...)
 	spent, err := p.buildSpend(ctx)
 	if err != nil {
 		return nil, err
@@ -650,7 +650,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), held, p.heldForSetup(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -659,7 +659,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), held, p.heldForSetup(ctx))
 }
 
 // ReadinessDir is where the readiness check keeps each repo's report.
@@ -708,6 +708,34 @@ func (p *Pipeline) parentIssue(ctx context.Context, it *store.WorkItem) int {
 // heldRepos are the repos whose job image is being built, with the repos
 // that share a workspace with one; "" when the image of jobs for no repo
 // (the orchestrator's, tuning's) is.
+// spentRepos are the repos of every workspace whose own daily budget
+// (daily_total) is spent today; you're told once a day for each.
+func (p *Pipeline) spentRepos(ctx context.Context) []string {
+	var out []string
+	for _, ws := range p.Cfg.WorkspaceNames() {
+		w, _ := p.Cfg.WorkspaceConf(ws)
+		if w.DailyTotal <= 0 {
+			continue
+		}
+		repos := p.Cfg.WorkspaceRepos(ws)
+		spent, err := p.Store.SpendOnRepos(ctx, store.Today(), repos)
+		if err != nil {
+			p.warn(err, "SpendOnRepos")
+			continue
+		}
+		if spent < w.DailyTotal {
+			continue
+		}
+		out = append(out, repos...)
+		key := store.Today() + " " + ws
+		if seen, err := p.Store.HasEvent(ctx, "workspace_budget_spent", key); err == nil && !seen {
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "workspace_budget_spent", Reason: key}), "AddEvent")
+			p.alert(ctx, fmt.Sprintf("%s's daily budget is reached ($%.2f of $%.2f). Its jobs wait until midnight UTC; other workspaces go on.", ws, spent, w.DailyTotal))
+		}
+	}
+	return out
+}
+
 func (p *Pipeline) heldRepos() []string {
 	if p.Building == nil {
 		return nil
@@ -730,7 +758,7 @@ func (p *Pipeline) heldRepos() []string {
 			continue
 		}
 		add(r)
-		_, members := p.Cfg.Workspace(r)
+		_, members := p.Cfg.ChangeTogether(r)
 		for _, m := range members {
 			add(m)
 		}
@@ -903,7 +931,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 			}
 		}
 	}
-	if p.Cfg.Orchestrator.On {
+	if p.Cfg.OrchestratorFor(p.Cfg.WorkspaceOf(repo)).On {
 		p.warn(p.intakeEpics(ctx, repo), "epics")
 	}
 	p.warn(p.dropClosed(ctx, repo, issues), "closed issues")
@@ -937,7 +965,7 @@ func (p *Pipeline) intakeRepo(ctx context.Context, repo string) error {
 			if err := p.Store.SetStage(ctx, it.ID, state.Epic, "human", "factory:retry label added"); err != nil {
 				return err
 			}
-			p.warn(p.Orchestrate(ctx, fmt.Sprintf("epic %s (item %d) was unparked: %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
+			p.warn(p.Orchestrate(ctx, p.Cfg.WorkspaceOf(repo), fmt.Sprintf("epic %s (item %d) was unparked: %s", p.ref(repo, is.Number), it.ID, is.Title), false), "orchestrate")
 			continue
 		}
 		if err := p.Store.SetStage(ctx, it.ID, state.Triage, "human", "factory:retry label added"); err != nil {
@@ -1489,7 +1517,7 @@ func (p *Pipeline) finish(ctx context.Context, j *store.Job, run agentRun, st st
 	if err := p.Store.FinishJob(ctx, j.ID, p.result(ctx, j, run, st, verdict, errMsg)); err != nil {
 		p.log().Error("finish job", "job", j.ID, "err", err)
 	}
-	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.Orchestrator.On && !store.IsSubKind(j.Kind) {
+	if (st == state.Failed || st == state.TimedOut) && j.ItemID != nil && p.Cfg.AnyOrchestrator() && !store.IsSubKind(j.Kind) {
 		p.failedTwice(ctx, j)
 	}
 }
