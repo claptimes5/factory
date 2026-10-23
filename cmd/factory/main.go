@@ -46,8 +46,8 @@ import (
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
 	"github.com/claptimes5/factory/internal/sentry"
-	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/stack"
+	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
 )
@@ -674,7 +674,6 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return c.CheckRuns(ctx, sha)
 	}, 30*time.Second)
 	if cfg.Runner.Kind == "docker" {
-		srv.Attach = web.TTYDAttach(st, host)
 		srv.Exec = web.DockerExec(st)
 	}
 	// The get-started page, for changing what setup saved; Finish

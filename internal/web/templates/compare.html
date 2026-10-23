@@ -1,5 +1,0 @@
-{{template "head" .}}
-<h1>Skill comparisons</h1>
-<p class="mut">Run one with <code>factory compare ISSUE -skills a,b</code>.</p>
-<table>{{range .Runs}}<tr><td><a href="/compare/{{.ID}}">{{ref .Report.Repo .Report.Issue}} {{.Report.Title}}</a></td><td class="mut">{{.Report.Started.Format "2006-01-02 15:04"}}</td><td>{{range .Report.Arms}}<span class="mut">{{.Skillset}}:</span> {{if eq .Stage "awaiting_human"}}passed{{else}}{{.Stage}}{{end}} {{money .CostUSD}} · {{end}}</td></tr>{{else}}<tr><td class="mut">No comparisons yet.</td></tr>{{end}}</table>
-{{template "foot" .}}

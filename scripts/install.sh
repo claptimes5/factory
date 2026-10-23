@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks what the factory needs on this machine, then builds ./factory.
 #
-#   sh scripts/install.sh          check Go, git, Docker and ttyd, then build
+#   sh scripts/install.sh          check Go, git and Docker, then build
 #   sh scripts/install.sh --web    also check Node, to rebuild the dashboard
 #
 # For anything missing it prints the command that installs it and, in a
@@ -196,14 +196,6 @@ else
 	else
 		pass "Docker ${v:-works}"
 	fi
-fi
-
-# ttyd: the dashboard's terminals into running jobs. Not needed to build.
-if command -v ttyd >/dev/null 2>&1; then
-	pass "ttyd"
-else
-	bad "ttyd isn't installed: the dashboard's attach button needs it for a terminal into a running job" "$(pkg ttyd)"
-	offer "$(pkgcmd ttyd)"
 fi
 
 if [ $web = 1 ]; then

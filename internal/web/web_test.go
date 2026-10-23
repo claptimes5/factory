@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,8 +73,10 @@ func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	fa := &fakeActions{}
 	cmpDir := t.TempDir()
 	os.MkdirAll(filepath.Join(cmpDir, "5-run"), 0o755)
-	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.json"), []byte(`{"issue":5,"title":"Add it","arms":[{"skillset":"tdd","stage":"awaiting_human","cost_usd":1.5},{"skillset":"none","stage":"parked"}]}`), 0o644)
-	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.md"), []byte("# Skill comparison: <b>#5</b>"), 0o644)
+	os.WriteFile(filepath.Join(cmpDir, "5-run", "report.json"), []byte(`{"issue":5,"title":"Add it","started":"2026-10-01T10:00:00Z","arms":[{"skillset":"tdd","stage":"awaiting_human","cost_usd":1.5,"gates":[{"gate":"lint","status":"fail"}]},{"skillset":"none","stage":"parked"}]}`), 0o644)
+	os.MkdirAll(filepath.Join(cmpDir, "6-later"), 0o755)
+	os.WriteFile(filepath.Join(cmpDir, "6-later", "report.json"), []byte(`{"issue":6,"title":"Later","started":"2026-10-02T10:00:00Z","arms":[]}`), 0o644)
+	os.MkdirAll(filepath.Join(cmpDir, "7-broken"), 0o755)
 	s := &Server{Store: st, Actions: fa, Repos: []string{"o/r"}, DailyCap: 60, AwaitCap: 5, pollPeriod: 10 * time.Millisecond, CompareDir: cmpDir}
 	h, err := s.Handler()
 	if err != nil {
@@ -100,69 +101,50 @@ func get(t *testing.T, u string) string {
 	return string(b)
 }
 
-func TestPagesRender(t *testing.T) {
+func TestRootLeadsToTheDashboard(t *testing.T) {
 	t.Parallel()
-	srv, _, _, id := setup(t)
-	pages := map[string][]string{
-		"/":                 {"Needs you", "needs a human"},
-		"/board":            {"parked (1)"},
-		"/items/1":          {"Audit trail", "implement"},
-		"/jobs/" + itoa(id): {"gates failed", "boom", "sse-connect"},
-		"/orchestrator":     {"No orchestrator actions yet"},
-		"/spend":            {"$0.50"},
-		"/metrics":          {"Cost per merged PR", "First-pass rate"},
-		"/metrics.json":     {"\"cost_per_merged_usd\""},
-		"/compare":          {"#5 Add it", "tdd:</span> passed $1.50", "none:</span> parked"},
-		"/compare/5-run":    {"Skill comparison: &lt;b&gt;#5"},
+	srv, _, _, _ := setup(t)
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noFollow.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for path, wants := range pages {
-		body := get(t, srv.URL+path)
-		for _, w := range wants {
-			if !strings.Contains(body, w) {
-				t.Errorf("%s missing %q", path, w)
-			}
-		}
-		if strings.Contains(body, "<script>alert(1)") {
-			t.Errorf("%s does not escape issue titles", path)
-		}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/app/" {
+		t.Fatalf("/ = %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if body := get(t, srv.URL+"/metrics.json"); !strings.Contains(body, `"cost_per_merged_usd"`) {
+		t.Fatalf("/metrics.json = %s", body)
+	}
+	// A DNS-rebinding page reaches the server under its own name.
+	req, _ := http.NewRequest("GET", srv.URL+"/api/v1/board", nil)
+	req.Host = "evil.example"
+	if resp, _ = noFollow.Do(req); resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("foreign Host got %d", resp.StatusCode)
+	}
+}
+
+func TestCompareListsRunsNewestFirst(t *testing.T) {
+	t.Parallel()
+	srv, _, _, _ := setup(t)
+	var c APIComparisons
+	getJSON(t, srv.URL+"/api/v1/compare", &c)
+	if len(c.Runs) != 2 || c.Runs[0].ID != "6-later" || c.Runs[1].ID != "5-run" {
+		t.Fatalf("runs = %+v", c.Runs)
+	}
+	r := c.Runs[1]
+	if r.Ref != "#5" || r.Title != "Add it" || len(r.Arms) != 2 {
+		t.Fatalf("run = %+v", r)
+	}
+	if a := r.Arms[0]; a.Skillset != "tdd" || a.Stage != "awaiting_human" || a.CostUSD != 1.5 || len(a.Gates) != 1 || a.Gates[0].Status != "fail" {
+		t.Fatalf("arm = %+v", a)
+	}
+	if a := r.Arms[1]; a.Gates == nil || a.Findings == nil {
+		t.Fatalf("empty lists should be [], not null: %+v", a)
 	}
 }
 
 func itoa(i int64) string { return strconv.FormatInt(i, 10) }
-
-func TestStreamSendsEscapedLinesThenDone(t *testing.T) {
-	t.Parallel()
-	srv, _, _, id := setup(t)
-	body := get(t, srv.URL+"/jobs/"+itoa(id)+"/stream")
-	if !strings.Contains(body, "event: line") || !strings.Contains(body, "writing &lt;b&gt;tests&lt;/b&gt;") || !strings.Contains(body, "event: done") {
-		t.Fatalf("stream = %q", body)
-	}
-}
-
-func TestActionsAndCrossSiteRefusal(t *testing.T) {
-	t.Parallel()
-	srv, _, fa, id := setup(t)
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.PostForm(srv.URL+"/items/1/park", url.Values{"reason": {"later"}})
-	if err != nil || resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("park: %v %v", err, resp.StatusCode)
-	}
-	req, _ := http.NewRequest("POST", srv.URL+"/jobs/"+itoa(id)+"/retry", nil)
-	req.Header.Set("Origin", "https://evil.example")
-	resp, _ = client.Do(req)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin POST got %d", resp.StatusCode)
-	}
-	// A DNS-rebinding page reaches the server under its own name.
-	req, _ = http.NewRequest("GET", srv.URL+"/board", nil)
-	req.Host = "evil.example"
-	if resp, _ = client.Do(req); resp.StatusCode != http.StatusMisdirectedRequest {
-		t.Fatalf("foreign Host got %d", resp.StatusCode)
-	}
-	if len(fa.calls) != 1 || fa.calls[0] != "park:later" {
-		t.Fatalf("calls = %v", fa.calls)
-	}
-}
 
 func TestSummarize(t *testing.T) {
 	t.Parallel()

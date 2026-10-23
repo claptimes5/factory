@@ -187,9 +187,13 @@ func main() {
 	if err := seedChats(context.Background(), st); err != nil {
 		log.Fatal(err)
 	}
+	comparisons := filepath.Join(dir, "compare")
+	if err := seedCompare(comparisons); err != nil {
+		log.Fatal(err)
+	}
 	rs := &restarter{}
 	s := &web.Server{
-		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs,
+		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs, CompareDir: comparisons,
 		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
 		// 116 stopped because its checks had no database; its compose file has one.
@@ -881,4 +885,26 @@ func seedUsage(ctx context.Context, st *store.Store) error {
 		}
 	}
 	return nil
+}
+
+// seedCompare writes one `factory compare` run: issue 42 built with and
+// without the tdd skills.
+func seedCompare(dir string) error {
+	run := filepath.Join(dir, "42-20261020T100000Z")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(run, "report.json"), []byte(`{
+  "repo": "acme/api", "issue": 42, "title": "Rate-limit the login endpoint", "base_sha": "9f2c1e7a4b3d",
+  "complexity": "medium", "started": "2026-10-20T10:00:00Z",
+  "arms": [
+    {"skillset": "tdd", "branch": "factory/compare-42-tdd", "stage": "awaiting_human", "review": "pass",
+     "gates": [{"gate": "lint", "status": "pass", "detail": ""}, {"gate": "test", "status": "pass", "detail": ""}],
+     "implement_jobs": 1, "cost_usd": 1.84, "seconds": 412, "diff_stat": " 3 files changed, 96 insertions(+), 4 deletions(-)"},
+    {"skillset": "none", "branch": "factory/compare-42-none", "stage": "parked", "review": "block",
+     "findings": ["The limit resets on every deploy: it lives in process memory."],
+     "gates": [{"gate": "lint", "status": "pass", "detail": ""}, {"gate": "test", "status": "fail", "detail": "1 failing"}],
+     "implement_jobs": 3, "cost_usd": 2.51, "seconds": 655, "diff_stat": " 2 files changed, 41 insertions(+)"}
+  ]
+}`), 0o644)
 }

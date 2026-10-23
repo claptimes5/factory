@@ -33,20 +33,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { key: "s:/", label: "Home: what needs you", hint: "Screen", go: go("/") },
       { key: "s:/line", label: "The line", hint: "Screen", go: go("/line") },
       { key: "s:/history", label: "History: activity, done, decisions", hint: "Screen", go: go("/history") },
+      { key: "s:/history?tab=compare", label: "Comparisons: factory compare runs", hint: "Screen", go: go("/history?tab=compare") },
       { key: "s:/notifications", label: "Inbox", hint: "Screen", go: go("/notifications") },
       { key: "s:/orchestrator", label: "Chat: draft issues with the orchestrator", hint: "Screen", go: go("/orchestrator") },
       { key: "s:/metrics", label: "Spend and metrics", hint: "Screen", go: go("/metrics") },
       { key: "s:/settings", label: "Settings", hint: "Screen", go: go("/settings") },
       { key: "s:/get-started", label: "Get started", hint: "Screen", go: go("/get-started") },
-      {
-        key: "s:classic",
-        label: "Classic control room",
-        hint: "Screen",
-        go: () => {
-          onClose();
-          window.location.href = "/";
-        },
-      },
     ];
     const items: Entry[] = (data?.columns ?? []).flatMap((c) =>
       c.cards.map((k) => ({

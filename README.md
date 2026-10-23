@@ -47,7 +47,6 @@ and admin rights on the repo you want the factory to work on.
    | Go | 1.26+ | Builds the `factory` binary (it fetches the 1.27 toolchain itself). |
    | Docker | 28+ for the egress allowlist; any recent one with `mode: open` | Runs every job in a container. |
    | git | any recent | Worktrees and pushes. |
-   | ttyd | any recent | The dashboard's browser terminal into a running job (the attach button). |
    | Node.js | 22.12+ | Only to rebuild the dashboard; the built app is committed. |
    | A Claude API key or subscription token | | The builder and Claude reviewers. |
    | An OpenAI API key or a ChatGPT plan | | Only if a reviewer uses Codex. |
@@ -55,7 +54,7 @@ and admin rights on the repo you want the factory to work on.
    You don't install Claude Code, Codex or Playwright: setup builds them
    into the job image. See [Setup](docs/setup.md#dependencies) for details.
 
-2. **Check and build.** `scripts/install.sh` checks Go, git, Docker and ttyd,
+2. **Check and build.** `scripts/install.sh` checks Go, git and Docker,
    prints the command that fixes anything missing on your system, and
    builds the binary. For each one it asks before running that command;
    say no to install it your own way (asdf, mise, your package manager).

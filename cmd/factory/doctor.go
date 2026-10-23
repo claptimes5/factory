@@ -22,7 +22,6 @@ import (
 	"github.com/claptimes5/factory/internal/harness"
 	"github.com/claptimes5/factory/internal/pipeline"
 	"github.com/claptimes5/factory/internal/runner"
-	"github.com/claptimes5/factory/internal/web"
 )
 
 // What a check found: fine, worth knowing (optional or degraded), or
@@ -58,7 +57,6 @@ var doctorChecks = []check{
 	{run: (*doctor).claude},
 	{run: (*doctor).codex},
 	{run: (*doctor).forges},
-	{system: true, run: (*doctor).ttyd},
 	{run: (*doctor).port},
 	{run: (*doctor).configWarnings},
 }
@@ -494,19 +492,6 @@ func (d *doctor) forges(context.Context) []finding {
 		}
 	}
 	return out
-}
-
-// ttyd opens the dashboard's browser terminals into running jobs; without
-// it the attach button only prints a docker exec command. A dashboard that
-// needs a login never uses it (see web.TTYDAttach).
-func (d *doctor) ttyd(context.Context) []finding {
-	if d.cfg.Runner.Kind != "docker" || web.NeedsLogin(d.cfg.Web.Listen) {
-		return nil
-	}
-	if _, err := d.lookPath("ttyd"); err != nil {
-		return one(finding{fail, "ttyd isn't installed: the dashboard's attach button needs it for a terminal into a running job", d.plat.install("ttyd")})
-	}
-	return one(finding{pass, "ttyd", ""})
 }
 
 func (d *doctor) port(context.Context) []finding {

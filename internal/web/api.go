@@ -869,6 +869,7 @@ func (s *Server) routesAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/orchestrator", s.apiFeed)
 	mux.HandleFunc("GET /api/v1/activity", s.apiActivity)
 	mux.HandleFunc("GET /api/v1/metrics", s.metricsJSON)
+	mux.HandleFunc("GET /api/v1/compare", s.apiCompare)
 	mux.HandleFunc("GET /api/v1/spend", s.apiSpend)
 	mux.HandleFunc("GET /api/v1/notifications", s.apiNotifications)
 	mux.HandleFunc("GET /api/v1/home", s.apiHome)
@@ -972,6 +973,8 @@ func (s *Server) mainHealth(ctx context.Context) []APIMainHealth {
 	}
 	return out
 }
+
+var boardStages = []state.Stage{state.Epic, state.Triage, state.Spec, state.Ready, state.Implementing, state.Reviewing, state.AwaitingHuman, state.Parked, state.Blocked, state.Done}
 
 func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
