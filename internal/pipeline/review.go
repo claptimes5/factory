@@ -91,7 +91,7 @@ func (p *Pipeline) round(ctx context.Context, j *store.Job, it *store.WorkItem) 
 // blocked, the verifier didn't refute it, and no review has found it gone
 // or wrong.
 func stillOpen(f store.ReviewFinding) bool {
-	return f.Blocking && f.Check != verdict.Refuted && f.Ruling != "resolved" && f.Ruling != "withdrawn"
+	return f.Blocking && f.Check != verdict.Refuted && f.Check != verdict.Noted && f.Ruling != "resolved" && f.Ruling != "withdrawn"
 }
 
 // incremental points a re-review at what changed since the reviewer last
@@ -176,6 +176,8 @@ func seenWhy(f store.ReviewFinding) string {
 	switch {
 	case f.Check == verdict.Refuted:
 		return "refuted by the verifier: " + oneLine(truncate(f.CheckReason, 300))
+	case f.Check == verdict.Noted:
+		return "a note: the verifier found it no threat to the merge: " + oneLine(truncate(f.CheckReason, 300))
 	case f.Ruling == "resolved":
 		return "resolved"
 	case f.Ruling == "withdrawn":
@@ -270,6 +272,55 @@ func (p *Pipeline) settle(ctx context.Context, j *store.Job, it *store.WorkItem,
 	return changed, nil
 }
 
+// settledLines turns into notes a re-review's new findings on code it
+// already read and passed: only the lines changed since it last looked
+// (inc, the incremental diff) can earn a new block, so the rounds settle.
+// A regression a fix brings is on lines that fix changed, so it still
+// blocks. Critical and security findings block wherever they are, and so
+// does one whose place can't be told. The note holds auto-merge as a
+// verifier's would (see noted).
+func settledLines(v *verdict.Review, inc string) {
+	if inc == "" {
+		return
+	}
+	changed := changedLines(inc)
+	for _, i := range v.Blocking() {
+		f := &v.Findings[i]
+		if f.Carried || f.Check != nil || f.Severity == verdict.Critical || f.By == store.KindSecurity || f.File == "" {
+			continue
+		}
+		spans, touched := changed[f.File]
+		if touched && f.Line <= 0 {
+			continue
+		}
+		if slices.ContainsFunc(spans, func(s [2]int) bool { return f.Line >= s[0] && f.Line <= s[1] }) {
+			continue
+		}
+		f.Check = &verdict.Check{Status: verdict.Noted, Reason: "it's on code an earlier round of this review read and passed, and nothing since changed it", By: "daemon"}
+	}
+}
+
+// changedLines are the new-side line spans of each file's hunks in a
+// unified diff, context lines included, by the file's path.
+func changedLines(diff string) map[string][][2]int {
+	out := map[string][][2]int{}
+	file := ""
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "+++ "):
+			file = strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/")
+		case strings.HasPrefix(l, "@@ ") && file != "":
+			var start, n int
+			plus := l[strings.Index(l, "+")+1:]
+			if k, _ := fmt.Sscanf(plus, "%d,%d", &start, &n); k == 1 {
+				n = 1
+			}
+			out[file] = append(out[file], [2]int{start, start + n - 1})
+		}
+	}
+	return out
+}
+
 // noRuling is the reason an open finding the review didn't rule on stands.
 const noRuling = "the review didn't rule on it"
 
@@ -294,6 +345,8 @@ func (p *Pipeline) finishReview(ctx context.Context, j *store.Job, it *store.Wor
 			outcome = store.OutcomeNote
 		case f.Check != nil && f.Check.Status == verdict.Refuted:
 			outcome = store.OutcomeRefuted
+		case f.Check != nil && f.Check.Status == verdict.Noted:
+			outcome = store.OutcomeNoted
 		}
 		var st, reason, cby string
 		if f.Check != nil {
@@ -352,6 +405,8 @@ func (p *Pipeline) verifyFindings(ctx context.Context, j *store.Job, it *store.W
 	for _, i := range idx {
 		f := &v.Findings[i]
 		switch {
+		case f.Check != nil:
+			// Ruled on already (see settledLines).
 		case f.By != store.KindSecurity:
 			plain = append(plain, i)
 		case f.Carried:
@@ -437,6 +492,11 @@ func (p *Pipeline) verifyOn(ctx context.Context, j *store.Job, it *store.WorkIte
 		for _, i := range idx {
 			if f := &v.Findings[i]; f.ID == c.ID && f.Check == nil {
 				f.Check = &verdict.Check{Status: c.Verdict, Reason: truncate(c.Reason, 1000), By: by}
+				if c.Verdict == verdict.Noted && (f.Severity == verdict.Critical || f.By == store.KindSecurity) {
+					// Whether these threaten the merge isn't the verifier's call.
+					f.Check.Status = verdict.Confirmed
+					f.Check.Reason = "true, and a " + map[bool]string{true: "critical", false: "security"}[f.Severity == verdict.Critical] + " finding blocks: " + f.Check.Reason
+				}
 			}
 		}
 	}
@@ -752,6 +812,12 @@ func writeFinding(b *strings.Builder, f verdict.Finding) {
 			fmt.Fprintf(b, "  Verifier: confirmed: %s\n", oneLine(c.Reason))
 		case verdict.Refuted:
 			fmt.Fprintf(b, "  Verifier: refuted, so it doesn't block: %s\n", oneLine(c.Reason))
+		case verdict.Noted:
+			if c.By == "daemon" {
+				fmt.Fprintf(b, "  A note: %s\n", oneLine(c.Reason))
+			} else {
+				fmt.Fprintf(b, "  Verifier: true, but no threat to the merge, so it doesn't block: %s\n", oneLine(c.Reason))
+			}
 		default:
 			fmt.Fprintf(b, "  Verifier: not checked (%s), so it blocks\n", oneLine(c.Reason))
 		}

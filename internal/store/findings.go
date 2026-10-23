@@ -12,6 +12,7 @@ const (
 	OutcomeNote        = "note"         // it couldn't block: shown, not answered
 	OutcomePreExisting = "pre-existing" // a problem the change didn't introduce
 	OutcomeRefuted     = "refuted"      // the verifier refuted it: kept as a note
+	OutcomeNoted       = "noted"        // the verifier found it true but no threat to the merge: kept as a note
 	OutcomeFixed       = "fixed"        // the builder fixed it (and no later review upheld it)
 	OutcomeDisputed    = "disputed"     // the builder said it's wrong; no review has ruled yet
 	OutcomeOutOfScope  = "out_of_scope" // the builder said it's out of scope
@@ -37,7 +38,7 @@ type ReviewFinding struct {
 	Evidence string
 	Blocking bool
 
-	Check       string // confirmed | refuted | unverified
+	Check       string // confirmed | refuted | note | unverified
 	CheckReason string
 	CheckBy     string
 	Confirmed   bool

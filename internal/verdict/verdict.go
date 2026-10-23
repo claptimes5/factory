@@ -80,7 +80,16 @@ const (
 	Confirmed  = "confirmed"
 	Refuted    = "refuted"
 	Unverified = "unverified" // the verifier couldn't run or didn't answer: it blocks
+	// Noted is a finding the verifier found true but no threat to the
+	// merge (style, a comment, how a test is written): it stops blocking
+	// and stays on the PR, where it holds auto-merge (see Noted findings in
+	// docs/quality.md).
+	Noted = "note"
 )
+
+// Lifted says whether a verifier's ruling takes a finding's block away:
+// it refuted it, or found it no threat to the merge.
+func (c *Check) Lifted() bool { return c != nil && (c.Status == Refuted || c.Status == Noted) }
 
 // Finding is one reviewer finding. The fields after Evidence are the
 // daemon's: a reviewer's own verdict can't set them (see ParseReview).
@@ -217,14 +226,14 @@ func (r *Review) MarkBlocking() {
 
 // Blocks reports whether the review sends the work back: a block decision
 // with no findings to check (its own, or a reviewer's in a pair), or a blocking finding the verifier didn't
-// refute. A finding the verifier never saw blocks, so a review that wasn't
+// refute or note. A finding the verifier never saw blocks, so a review that wasn't
 // verified (or whose verifier couldn't run) blocks as it always did.
 func (r *Review) Blocks() bool {
 	if r.BlockedWithoutFinding || (r.Decision == "block" && len(r.Findings) == 0) {
 		return true
 	}
 	for _, i := range r.Blocking() {
-		if c := r.Findings[i].Check; c == nil || c.Status != Refuted {
+		if !r.Findings[i].Check.Lifted() {
 			return true
 		}
 	}
@@ -235,8 +244,7 @@ func (r *Review) Blocks() bool {
 func (r *Review) BlocksOn(i int) bool {
 	for _, b := range r.Blocking() {
 		if b == i {
-			c := r.Findings[i].Check
-			return c == nil || c.Status != Refuted
+			return !r.Findings[i].Check.Lifted()
 		}
 	}
 	return false
@@ -250,7 +258,7 @@ type Verify struct {
 // VerifyCheck is the verifier's ruling on one finding.
 type VerifyCheck struct {
 	ID      string `json:"id"`
-	Verdict string `json:"verdict"` // confirmed|refuted
+	Verdict string `json:"verdict"` // confirmed|refuted|note
 	Reason  string `json:"reason"`
 }
 
@@ -329,7 +337,7 @@ func (r *Review) Validate() error {
 			errs = append(errs, fmt.Errorf("findings[%d].claim is empty", n))
 		}
 		if c := f.Check; c != nil {
-			if err := oneOf(fmt.Sprintf("findings[%d].check.status", n), c.Status, Confirmed, Refuted, Unverified); err != nil {
+			if err := oneOf(fmt.Sprintf("findings[%d].check.status", n), c.Status, Confirmed, Refuted, Unverified, Noted); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -348,7 +356,7 @@ func (r *Review) Validate() error {
 func (v *Verify) Validate() error {
 	var errs []error
 	for n, c := range v.Checks {
-		if err := oneOf(fmt.Sprintf("checks[%d].verdict", n), c.Verdict, Confirmed, Refuted); err != nil {
+		if err := oneOf(fmt.Sprintf("checks[%d].verdict", n), c.Verdict, Confirmed, Refuted, Noted); err != nil {
 			errs = append(errs, err)
 		}
 		if strings.TrimSpace(c.Reason) == "" {
@@ -506,6 +514,6 @@ var schemas = map[string]string{
    "required":["id","verdict","reason"],
    "properties":{
     "id":{"type":"string"},
-    "verdict":{"type":"string","enum":["confirmed","refuted"]},
+    "verdict":{"type":"string","enum":["confirmed","refuted","note"]},
     "reason":{"type":"string"}}}}}}`,
 }

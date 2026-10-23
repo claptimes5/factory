@@ -507,6 +507,9 @@ func (p *Pipeline) bodyParts(ctx context.Context, it *store.WorkItem, repo strin
 	if note := p.securityRefutedNote(ctx, it.ID); note != "" {
 		bp.sections[secRisk] += "\n" + note
 	}
+	if note := p.notedNote(ctx, it.ID); note != "" {
+		bp.sections[secRisk] += "\n" + note
+	}
 	bp.sections[secTesting] = p.testingSection(ctx, repo, in, impl, o)
 	if in.Features != "" {
 		blast := "What this change touches, from the feature map on `" + p.repoConf(it.Repo).BaseBranch + "`.\n\n" + in.Features

@@ -305,6 +305,50 @@ func (p *Pipeline) securityRefuted(ctx context.Context, itemID int64) []store.Re
 	return out
 }
 
+// noted are the findings a verifier ruled true but no threat to the merge
+// since the item's latest triage, or its rethink: the approach before a
+// rethink is gone. Nothing has tested that ruling yet, so each holds
+// auto-merge, and the PR asks a person to judge them.
+func (p *Pipeline) noted(ctx context.Context, itemID int64) []store.ReviewFinding {
+	jobs, err := p.Store.ListJobs(ctx, store.JobFilter{ItemID: itemID})
+	if err != nil {
+		p.warn(err, "ListJobs")
+		return []store.ReviewFinding{{FID: "?", Claim: "the findings couldn't be read"}}
+	}
+	since := int64(0)
+	for _, j := range jobs { // newest first
+		if j.Kind == "triage" || isRethink(j) {
+			since = j.ID
+			break
+		}
+	}
+	fs, err := p.Store.ItemFindings(ctx, itemID, since)
+	if err != nil {
+		p.warn(err, "ItemFindings")
+		return []store.ReviewFinding{{FID: "?", Claim: "the findings couldn't be read"}}
+	}
+	var out []store.ReviewFinding
+	for _, f := range fs {
+		if f.Check == verdict.Noted {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// notedNote is the PR's word on noted findings, or "".
+func (p *Pipeline) notedNote(ctx context.Context, itemID int64) string {
+	fs := p.noted(ctx, itemID)
+	if len(fs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, f := range fs {
+		fmt.Fprintf(&b, "%s (%s) %s: %s\n  Why it didn't block: %s\n", f.FID, f.Severity, findingLoc(f.File, f.Line), oneLine(truncate(f.Claim, 300)), oneLine(truncate(f.CheckReason, 300)))
+	}
+	return "**Reviewers raised findings that didn't block**: a verifier found them true but no threat to the merge, or they're on code an earlier round passed, so they didn't cost a round. Check each yourself; this PR doesn't merge itself.\n\n" + fenced(b.String())
+}
+
 // securityRefutedNote is the PR's word on refuted security findings, or "".
 func (p *Pipeline) securityRefutedNote(ctx context.Context, itemID int64) string {
 	fs := p.securityRefuted(ctx, itemID)

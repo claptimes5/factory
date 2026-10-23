@@ -1026,6 +1026,10 @@ func (p *Pipeline) runReview(ctx context.Context, j *store.Job, it *store.WorkIt
 	if err != nil {
 		return fail(run, state.Failed, err.Error())
 	}
+	if data.Since != "" && len(data.Diff) < 200_000 {
+		// A truncated diff hides changed lines, so it settles nothing.
+		settledLines(v, data.Diff)
+	}
 	if v.Decision != "questions" && p.Cfg.Reviews.VerifyOn() && checkable {
 		var sr *config.Route
 		if sec != nil {
@@ -1232,7 +1236,7 @@ const (
 // repo's auto_merge covers its risk and size, it is one repo's change, the
 // feature map that rates its risk could be read, its diff was rated and is
 // of no kind that always needs a person, and the repo's auto-merge breaker
-// hasn't tripped. Work the factory started on its own (main health's
+// hasn't tripped, and no finding was let through as a note. Work the factory started on its own (main health's
 // fixes, the orchestrator's issues, a source's findings) qualifies only
 // at trust level 6 for its source: below it no human read its issue.
 func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in ReviewInput) bool {
@@ -1244,7 +1248,7 @@ func (p *Pipeline) autoMergeWanted(ctx context.Context, it *store.WorkItem, in R
 	}
 	return p.repoConf(it.Repo).AutoMerge.Allows(it.Risk, it.Complexity) && !p.blastUnread(ctx, it.ID, in.ImplementJob) &&
 		len(p.needsPerson(ctx, it.ID, in.ImplementJob)) == 0 && !p.breakerTripped(ctx, it.Repo) &&
-		len(p.securityRefuted(ctx, it.ID)) == 0
+		len(p.securityRefuted(ctx, it.ID)) == 0 && len(p.noted(ctx, it.ID)) == 0
 }
 
 // autoMerge hands a PR to the forge to merge once its checks pass, pinned
