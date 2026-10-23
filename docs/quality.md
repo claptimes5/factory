@@ -300,11 +300,34 @@ the verifier can't run (budget, an error, no ruling on a finding), the
 finding blocks: the verifier can only take a block away, never pass code
 the reviewer would have stopped.
 
+**Only what threatens the merge blocks.** The verifier can also rule a
+finding a `note`: true, but no threat to merging the change. A finding
+threatens the merge when the change does the wrong thing or leaves part
+of the issue undone, breaks something that worked, has a test that
+doesn't prove the fix or would break the suite, or opens a security or
+data-safety problem. Style, comments, how a test is organized and a design
+the reviewer would prefer are notes. A critical finding, or one from the
+security pass, blocks whatever the verifier rules: whether those threaten
+the merge isn't its call.
+
+**The rounds settle.** A re-review reads what changed since it last
+looked, and only those lines can earn a new block. A new finding on code
+it already read and passed is a note, never sent to the verifier. A fix's
+regression is on lines the fix changed, so it still blocks; so do critical
+and security findings, wherever they are.
+
+**A note holds auto-merge.** Noted findings don't cost a round, but
+nothing has tested a ruling that a true finding doesn't matter. So the PR
+lists them, says it won't merge itself, and waits for you, even where
+[`auto_merge`](configuration.md#auto-merge) would take it.
+
 **Answered in the fix round.** The builder is shown the blocking findings
 with their ids and the verifier's reasons, fenced as text to check rather
 than instructions, and answers each in its verdict: `fixed`, `wrong` (with
 why) or `out_of_scope` (with why). One it leaves out is recorded as
-unanswered.
+unanswered. The change already passed every check, so the builder
+runs only the tests and lint on what it changes; the gates run them all
+again on the result.
 
 **Ruled on by the next review.** The next round's reviewer sees its open
 findings with the builder's answers, also fenced, and rules on each:
@@ -329,6 +352,12 @@ real runs, and are to be looked at again once the metrics have data:
   enough, is for the metrics to say.
 - A rethink's budget check counts one round of review; a rethink that
   needs its fix rounds can bill past the estimate.
+- A noted finding always holds auto-merge. Once enough PRs with notes
+  have merged and held up, the Trust screen could offer to let them merge
+  themselves; it doesn't yet.
+- A re-review settles on the lines changed since that reviewer last
+  looked, hunks and their context. A critic that didn't run last round
+  reads more than one round's change.
 - The verifier confirms a finding when it can't tell, so a finding it's
   unsure of still blocks. That's safe, but a light filter; a stricter
   verifier would refute more.

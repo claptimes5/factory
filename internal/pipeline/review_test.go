@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/metrics"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -621,5 +622,140 @@ func TestNotesWaitForTheClaimLock(t *testing.T) {
 	}
 	if len(sent) != 1 || !strings.Contains(sent[0], "Daily budget reached") {
 		t.Fatalf("sent %q", sent)
+	}
+}
+
+// A finding the verifier rules true but no threat to the merge doesn't
+// cost a round, but nothing has tested that ruling, so the PR says so and
+// waits for a person even where auto-merge would take it.
+func TestANotedFindingDoesNotBlockButHoldsAutoMerge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.p.Cfg.Repos[0].AutoMerge = &config.AutoMerge{UpTo: "low"}
+	e.claude.triage = `{"decision":"ready","complexity":"S","risk":"low","question":"","summary":"add Add"}`
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild}
+	e.codex.reviews = []string{block}
+	e.claude.verifies = []string{`{"checks":[{"id":"F1","verdict":"note","reason":"the test's cleanup is untidy, but nothing fails"}]}`}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.Stage != state.AwaitingHuman || len(e.claude.prompts["implement"]) != 1 {
+		t.Fatalf("item %+v", it)
+	}
+	if _, on := e.gh.autoMerged[it.PRNumber]; on {
+		t.Fatal("auto-merged past a noted finding")
+	}
+	fs := e.findings(t, 1)
+	if len(fs) != 1 || fs[0].Check != verdict.Noted || fs[0].Outcome != store.OutcomeNoted {
+		t.Fatalf("findings %+v", fs)
+	}
+	body := e.gh.bodies[it.PRNumber]
+	for _, want := range []string{"found them true but no threat to the merge", "this PR doesn't merge itself", "the test's cleanup is untidy"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("PR body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// Whether a critical finding threatens the merge isn't the verifier's
+// call: a note on one blocks as a confirmation would.
+func TestANotedCriticalFindingStillBlocks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.claude.implVerdict = answerF1
+	e.codex.reviews = []string{strings.Replace(block, `"major"`, `"critical"`, 1), resolveF1}
+	e.claude.verifies = []string{`{"checks":[{"id":"F1","verdict":"note","reason":"style"}]}`}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.claude.prompts["implement"]); n != 2 {
+		t.Fatalf("%d builds, want a fix round", n)
+	}
+	if fs := e.findings(t, 1); len(fs) != 1 || !strings.Contains(fs[0].CheckReason, "a critical finding blocks") {
+		t.Fatalf("findings %+v", fs)
+	}
+}
+
+// A re-review's new finding on code it already read and passed doesn't
+// open another round: it's a note, never sent to the verifier, and it
+// holds auto-merge as a verifier's note would.
+func TestANewFindingOnUnchangedCodeIsANote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.claude.implVerdict = answerF1
+	e.claude.verifies = []string{confirmF1}
+	e.codex.reviews = []string{block, `{"decision":"block","findings":[{"severity":"major","file":"add_test.go","line":6,"claim":"the test checks one sum","evidence":"only Add(1, 2)"}],"earlier":[{"id":"F1","ruling":"resolved","reason":"the check is there"}],"challenged_assumptions":[]}`}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := e.item(t, 1)
+	if it.Stage != state.AwaitingHuman || len(e.claude.prompts["implement"]) != 2 || e.claude.calls["verify"] != 1 {
+		t.Fatalf("item %+v, %d builds, calls %v", it, len(e.claude.prompts["implement"]), e.claude.calls)
+	}
+	fs := e.findings(t, 1)
+	if len(fs) != 2 || fs[1].FID != "F2" || fs[1].Check != verdict.Noted || fs[1].Outcome != store.OutcomeNoted {
+		t.Fatalf("findings %+v", fs)
+	}
+	if body := e.gh.bodies[it.PRNumber]; !strings.Contains(body, "an earlier round of this review read and passed") {
+		t.Fatalf("PR body:\n%s", body)
+	}
+}
+
+// A re-review's new finding on lines the fix changed still blocks: that's
+// where a fix's regression would be.
+func TestANewFindingOnChangedLinesBlocks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	f := fixer()
+	e.claude.builds = []func(string) error{goodBuild, f, f}
+	e.claude.implVerdict = answerF1
+	e.claude.verifies = []string{confirmF1, `{"checks":[{"id":"F2","verdict":"confirmed","reason":"add.go:3 changed it"}]}`}
+	e.codex.reviews = []string{block,
+		`{"decision":"block","findings":[{"severity":"major","file":"add.go","line":3,"claim":"the fix broke Add","evidence":"Add(1,2)"}],"earlier":[{"id":"F1","ruling":"resolved","reason":"the check is there"}],"challenged_assumptions":[]}`,
+		`{"decision":"pass","findings":[],"earlier":[{"id":"F2","ruling":"resolved","reason":"fixed"}],"challenged_assumptions":[]}`}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.claude.prompts["implement"]); n != 3 {
+		t.Fatalf("%d builds, want a second fix round", n)
+	}
+	if fs := e.findings(t, 1); len(fs) != 2 || fs[1].Check != verdict.Confirmed {
+		t.Fatalf("findings %+v", fs)
+	}
+}
+
+// A fix round's builder checks only what it changes: the change already
+// passed every check, and the gates run them all again on the result. The
+// first build runs them all, and so does a rethink, which starts over.
+func TestAFixRoundRunsTargetedChecks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.claude.implVerdict = answerF1
+	e.claude.verifies = []string{confirmF1}
+	e.codex.reviews = []string{block, resolveF1}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ps := e.claude.prompts["implement"]
+	if len(ps) != 2 {
+		t.Fatalf("%d builds", len(ps))
+	}
+	const targeted = "don't run a whole test suite or lint the whole repo"
+	if strings.Contains(ps[0], targeted) || !strings.Contains(ps[1], targeted) {
+		t.Fatalf("first build:\n%s\n\nfix round:\n%s", ps[0], ps[1])
 	}
 }
