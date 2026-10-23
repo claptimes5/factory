@@ -32,6 +32,13 @@ type ChatMessage struct {
 	At     string
 }
 
+// Attachment is a file a person sends with a message: a picture, a log,
+// a spec. It is kept on disk, not in the database.
+type Attachment struct {
+	Name string `json:"name"`
+	Data []byte `json:"data"` // base64 in JSON
+}
+
 // Draft states.
 const (
 	DraftOpen      = "draft"

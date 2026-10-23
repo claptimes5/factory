@@ -647,7 +647,7 @@ func TestTuningEverySetting(t *testing.T) {
 func TestTunable(t *testing.T) {
 	for path, want := range map[string]bool{
 		"budgets.daily_total": true, "routing.implement.S.model": true, "routing.review.effort": true, "escalation.implement": true,
-		"tuning.every": false, "auto_merge.up_to": false, "orchestrator.enabled": false, "orchestrator.run_budget": true,
+		"tuning.every": false, "auto_merge.up_to": false, "orchestrator.enabled": false, "orchestrator.run_budget": true, "orchestrator.keep_files_for": false,
 		"routing.tune.model": false, "routing.orchestrate.model": false, "": false,
 	} {
 		p := strings.Split(path, ".")

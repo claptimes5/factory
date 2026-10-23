@@ -117,6 +117,7 @@ func Settings(src []byte) ([]SettingGroup, error) {
 			num("orchestrator.daily_budget", "Daily cap", "Dollars a day for the orchestrator, tuning and chat, apart from building.", 15),
 			integer("orchestrator.daily_issue_cap", "Issues a day", "How many issues it may open a day.", 10),
 			{Path: []string{"orchestrator", "interval"}, Label: "Every", Help: "How often it runs on schedule, such as 60m.", Kind: "duration", Default: "60m"},
+			{Path: []string{"orchestrator", "keep_files_for"}, Label: "Keep attached files", Help: "How long files attached in a chat stay after its last message, such as 720h. Files sent to a build go once its item is done, or after as long.", Kind: "duration", Default: "720h"},
 		}},
 		{Name: "Quiet hours", Help: "When only something wrong is sent: main broken, a revert, the budget or the disk run out. The rest waits for one catch-up when they end.", Settings: []Setting{
 			{Path: []string{"notify", "quiet_hours", "from"}, Label: "From", Help: "A 24-hour time such as 19:00; empty is off.", Kind: "text"},

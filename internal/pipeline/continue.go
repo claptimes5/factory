@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -588,15 +589,19 @@ func fenceFor(s string) string {
 	return f
 }
 
-// Steer sends a running build a message from a person, which it reads at
-// its next step.
-func (p *Pipeline) Steer(ctx context.Context, jobID int64, text string) error {
+// Steer sends a running build a message from a person, with any files
+// attached, which it reads at its next step. The files go in its out
+// folder, and the message says where.
+func (p *Pipeline) Steer(ctx context.Context, jobID int64, text string, files []store.Attachment) error {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(files) == 0 {
 		return errors.New("write a message first")
 	}
 	if len(text) > 4000 {
 		return errors.New("the message is too long; keep it under 4000 characters")
+	}
+	if err := checkAttachments(files); err != nil {
+		return err
 	}
 	j, err := p.Store.GetJob(ctx, jobID)
 	if err != nil {
@@ -611,6 +616,19 @@ func (p *Pipeline) Steer(ctx context.Context, jobID int64, text string) error {
 	v, ok := p.steer.Load(jobID)
 	if !ok {
 		return errors.New("the builder isn't running its agent right now (it may be setting up or running the checks); try again in a moment")
+	}
+	if len(files) > 0 {
+		out := filepath.Join(p.jobDir(jobID), "out")
+		names, err := saveAttachments(filepath.Join(out, attachDir), files)
+		if err != nil {
+			return fmt.Errorf("saving the files: %w", err)
+		}
+		seen := p.Runner.Paths(specFor("", out)).Out
+		var paths []string
+		for _, n := range names {
+			paths = append(paths, path.Join(filepath.ToSlash(seen), attachDir, n))
+		}
+		text = strings.TrimSpace(text + "\n\n" + attachedNote(paths))
 	}
 	errc := make(chan error, 1)
 	select {

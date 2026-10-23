@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -15,15 +17,23 @@ import (
 // and a draft, and "creates" drafts in the throwaway database only.
 type chatter struct {
 	st     *store.Store
+	dir    string // holds attached files
 	issues atomic.Int64
+}
+
+func (c *chatter) ChatFiles(chatID, msgID int64) string {
+	return filepath.Join(c.dir, "chats", fmt.Sprint(chatID), fmt.Sprint(msgID))
 }
 
 func (c *chatter) ChatUnavailable(context.Context) string { return "" }
 
 func (c *chatter) OrchestrationSpend(context.Context) (float64, error) { return 1.84, nil }
 
-func (c *chatter) Chat(ctx context.Context, chatID int64, text string) (int64, int64, error) {
+func (c *chatter) Chat(ctx context.Context, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
 	text = strings.TrimSpace(text)
+	if text == "" && len(files) > 0 {
+		text = "(files only)"
+	}
 	if strings.Contains(text, "busy") {
 		return 0, 0, errors.New("another chat reply is still being written: wait for it, or stop it")
 	}
@@ -38,8 +48,18 @@ func (c *chatter) Chat(ctx context.Context, chatID int64, text string) (int64, i
 		chatID = id
 	}
 	if text != "" {
-		if _, err := c.st.AddChatMessage(ctx, store.ChatMessage{ChatID: chatID, Role: "user", Text: text}); err != nil {
+		msg, err := c.st.AddChatMessage(ctx, store.ChatMessage{ChatID: chatID, Role: "user", Text: text})
+		if err != nil {
 			return 0, 0, err
+		}
+		// Unchecked names: the devserver only runs on a developer's machine.
+		for _, f := range files {
+			if err := os.MkdirAll(c.ChatFiles(chatID, msg), 0o755); err != nil {
+				return 0, 0, err
+			}
+			if err := os.WriteFile(filepath.Join(c.ChatFiles(chatID, msg), filepath.Base(f.Name)), f.Data, 0o644); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	if _, err := c.st.SaveDraft(ctx, store.IssueDraft{ChatID: chatID, Repo: "acme/api", Title: "Draft: " + chatTitle(text),

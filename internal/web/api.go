@@ -1386,9 +1386,21 @@ func (s *Server) apiLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readBody(r *http.Request, v any) error {
-	b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	return s.readBodyUpTo(r, v, 64<<10)
+}
+
+// maxAttachBody is the body of a message with files: the daemon's limit
+// on them, in base64, and the text.
+const maxAttachBody = 28 << 20
+
+// readBodyUpTo reads a JSON body of at most n bytes into v.
+func (s *Server) readBodyUpTo(r *http.Request, v any, n int64) error {
+	b, err := io.ReadAll(io.LimitReader(r.Body, n+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(b)) > n {
+		return fmt.Errorf("that's too big to send (the most is %d MB)", n>>20)
 	}
 	if len(strings.TrimSpace(string(b))) == 0 {
 		return nil
@@ -1461,13 +1473,14 @@ func (s *Server) apiSteer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Text string `json:"text"`
+		Text  string             `json:"text"`
+		Files []store.Attachment `json:"files"`
 	}
-	if err := s.readBody(r, &in); err != nil {
+	if err := s.readBodyUpTo(r, &in, maxAttachBody); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.act(w, s.Actions.Steer(r.Context(), id, in.Text), "Sent. It reads it at its next step.")
+	s.act(w, s.Actions.Steer(r.Context(), id, in.Text, in.Files), "Sent. It reads it at its next step.")
 }
 
 func (s *Server) apiCancel(w http.ResponseWriter, r *http.Request) {

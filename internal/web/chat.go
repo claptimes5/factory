@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
@@ -13,9 +18,11 @@ import (
 // Chatter is the dashboard chat with the orchestrator's model, which
 // drafts issues for a person to create.
 type Chatter interface {
-	// Chat sends text to chat chatID (0 starts one) and starts the reply;
-	// an empty text asks again for a reply to the last message.
-	Chat(ctx context.Context, chatID int64, text string) (chat, job int64, err error)
+	// Chat sends text and files to chat chatID (0 starts one) and starts
+	// the reply; an empty message asks again for a reply to the last one.
+	Chat(ctx context.Context, chatID int64, text string, files []store.Attachment) (chat, job int64, err error)
+	// ChatFiles is the folder of the files attached to a message.
+	ChatFiles(chatID, msgID int64) string
 	// ChatUnavailable says why a chat can't reply now, or "".
 	ChatUnavailable(ctx context.Context) string
 	// CreateDraft opens a draft as an issue the factory builds, if it is
@@ -78,6 +85,9 @@ type APIChatMessage struct {
 	Text  string `json:"text"`
 	At    string `json:"at"`
 	JobID *int64 `json:"job_id"` // the run that wrote a reply
+	// Files are the names of the files attached, each served at
+	// /chats/{id}/messages/{msg}/files/{name}.
+	Files []string `json:"files"`
 }
 
 // APIChatReply is the run writing (or that failed to write) the reply to
@@ -117,6 +127,7 @@ func (s *Server) routesChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/chats", s.apiChats)
 	mux.HandleFunc("POST /api/v1/chats", s.apiSendChat)
 	mux.HandleFunc("GET /api/v1/chats/{id}", s.apiChat)
+	mux.HandleFunc("GET /api/v1/chats/{id}/messages/{msg}/files/{name}", s.apiChatFile)
 	mux.HandleFunc("POST /api/v1/drafts/{id}/create", s.apiCreateDraft)
 	mux.HandleFunc("POST /api/v1/drafts/{id}/dismiss", s.apiDismissDraft)
 }
@@ -170,7 +181,14 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	out := APIChat{ID: c.ID, Title: c.Title, Messages: []APIChatMessage{}, Drafts: []APIDraft{}}
 	for _, m := range msgs {
-		am := APIChatMessage{ID: m.ID, Role: m.Role, Text: m.Text, At: m.At}
+		am := APIChatMessage{ID: m.ID, Role: m.Role, Text: m.Text, At: m.At, Files: []string{}}
+		if s.Chat != nil && m.Role == "user" {
+			if es, err := os.ReadDir(s.Chat.ChatFiles(id, m.ID)); err == nil {
+				for _, e := range es {
+					am.Files = append(am.Files, e.Name())
+				}
+			}
+		}
 		if m.Role == "assistant" && m.JobID != 0 {
 			jid := m.JobID
 			am.JobID = &jid
@@ -248,20 +266,60 @@ func (s *Server) apiSendChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		ChatID int64  `json:"chat_id"`
-		Text   string `json:"text"`
+		ChatID int64              `json:"chat_id"`
+		Text   string             `json:"text"`
+		Files  []store.Attachment `json:"files"`
 	}
-	if err := s.readBody(r, &in); err != nil {
+	if err := s.readBodyUpTo(r, &in, maxAttachBody); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	chat, job, err := s.Chat.Chat(r.Context(), in.ChatID, in.Text)
+	chat, job, err := s.Chat.Chat(r.Context(), in.ChatID, in.Text, in.Files)
 	if err != nil {
 		apiErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, APISentChat{ChatID: chat, JobID: job})
 }
+
+// apiChatFile serves a file a person attached. It is shown as a picture
+// only when it is one a browser can't run; anything else downloads.
+func (s *Server) apiChatFile(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	msg, err := strconv.ParseInt(r.PathValue("msg"), 10, 64)
+	name := r.PathValue("name")
+	if err != nil || s.Chat == nil || name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+		apiErr(w, http.StatusNotFound, "no such file")
+		return
+	}
+	f, err := os.Open(filepath.Join(s.Chat.ChatFiles(id, msg), name))
+	if err != nil {
+		apiErr(w, http.StatusNotFound, "no such file")
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		apiErr(w, http.StatusNotFound, "no such file")
+		return
+	}
+	ct, shown := chatFileTypes[strings.ToLower(filepath.Ext(name))]
+	if !shown {
+		ct = "application/octet-stream"
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	http.ServeContent(w, r, "", st.ModTime(), f)
+}
+
+// chatFileTypes are the attachments shown in the page: pictures, and not
+// SVG, which can carry script.
+var chatFileTypes = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 
 func (s *Server) apiCreateDraft(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)

@@ -247,14 +247,45 @@ func TestSteerRefusals(t *testing.T) {
 	e := setup(t)
 	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 124, "x")
 	id, _ := e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "codex", Model: "m", Attempt: 1, BudgetUSD: 1})
-	if err := e.p.Steer(ctx, id, "hi"); err == nil || !strings.Contains(err.Error(), "not running") {
+	if err := e.p.Steer(ctx, id, "hi", nil); err == nil || !strings.Contains(err.Error(), "not running") {
 		t.Fatalf("queued: %v", err)
 	}
-	if err := e.p.Steer(ctx, id, " "); err == nil {
+	if err := e.p.Steer(ctx, id, " ", nil); err == nil {
 		t.Fatal("empty message sent")
 	}
 	if why := SteerUnsupported(&store.Job{Kind: "implement", Harness: "codex"}); !strings.Contains(why, "Codex") {
 		t.Fatalf("why = %q", why)
+	}
+}
+
+// A message to a running build carries its files: they land in the
+// build's out folder, and the message says where.
+func TestSteerCarriesAttachedFiles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	it, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 125, "x")
+	j, err := e.p.Store.StartJob(ctx, store.Job{ItemID: &it.ID, Kind: "implement", Harness: "claude", Model: "m", Attempt: 1, BudgetUSD: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan harness.SteerMsg, 1)
+	e.p.steer.Store(j.ID, ch)
+	go func() {
+		m := <-ch
+		m.Err <- nil
+		ch <- m
+	}()
+	if err := e.p.Steer(ctx, j.ID, "", []store.Attachment{{Name: "error.png", Data: []byte("png")}}); err != nil {
+		t.Fatal(err)
+	}
+	m := <-ch
+	path := filepath.ToSlash(filepath.Join(e.p.jobDir(j.ID), "out", "files", "error.png"))
+	if !strings.Contains(m.Text, "`"+path+"`") {
+		t.Fatalf("message = %q", m.Text)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "png" {
+		t.Fatalf("saved = %q", b)
 	}
 }
 

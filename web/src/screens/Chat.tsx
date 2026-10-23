@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ExternalLink, Loader2, MessageSquarePlus, Pencil, Send } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileText, Loader2, MessageSquarePlus, Pencil, Send } from "lucide-react";
 import { act, APIError, getJSON, postJSON } from "@/api/client";
 import type { components } from "@/api/schema";
+import { AttachButton, AttachedList, takesFiles, useAttachments } from "@/components/Attach";
 import { ErrorBox, Loading } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
 import { Badge } from "@/components/ui/badge";
@@ -123,6 +124,7 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
   const qc = useQueryClient();
   const { data, error, isLoading } = useChat(chatId);
   const [text, setText] = useState("");
+  const files = useAttachments();
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState("");
   const [creating, setCreating] = useState(false);
@@ -140,8 +142,11 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
     setSending(true);
     setMsg("");
     try {
-      const r = await postJSON<Sent>("/chats", { chat_id: chatId, text: again ? "" : text });
-      if (!again) setText("");
+      const r = await postJSON<Sent>("/chats", { chat_id: chatId, text: again ? "" : text, files: again ? [] : files.files });
+      if (!again) {
+        setText("");
+        files.clear();
+      }
       await qc.invalidateQueries({ queryKey: ["chats"] });
       await qc.invalidateQueries({ queryKey: ["chat", r.chat_id] });
       if (r.chat_id !== chatId) onStarted(r.chat_id);
@@ -155,6 +160,7 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
   if (chatId && error) return <ErrorBox error={error} />;
   const drafts = data?.drafts ?? [];
   const open = drafts.filter((d) => d.state === "draft");
+  const ready = text.trim() !== "" || files.picked.length > 0;
   // One at a time, in the order drafted, each as its Create would; the
   // first that fails stops the rest.
   const createAll = async () => {
@@ -187,8 +193,12 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
           )}
           {data?.messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="ml-auto max-w-[85%] rounded-control bg-primary/10 px-3 py-2 text-sm whitespace-pre-wrap" data-testid="you">
-                {m.text}
+              <div key={m.id} className="ml-auto max-w-[85%] space-y-2 rounded-control bg-primary/10 px-3 py-2 text-sm whitespace-pre-wrap" data-testid="you">
+                {m.text && <p>{m.text}</p>}
+                {!m.text && m.files.length === 0 && (
+                  <p className="text-muted-foreground">The files sent here were removed (Keep attached files, in Settings).</p>
+                )}
+                {m.files.length > 0 && <MessageFiles chatId={chatId} msgId={m.id} names={m.files} />}
               </div>
             ) : (
               <div key={m.id} className="max-w-[95%] space-y-1" data-testid="reply">
@@ -257,9 +267,10 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
       )}
       <form
         className="space-y-2"
+        {...takesFiles(files)}
         onSubmit={(e) => {
           e.preventDefault();
-          if (text.trim()) void send();
+          if (ready) void send();
         }}
       >
         {compact && turns === 0 && (
@@ -283,18 +294,20 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              if (text.trim() && !busy && !sending) void send();
+              if (ready && !busy && !sending) void send();
             }
           }}
           rows={compact ? 2 : 3}
           placeholder={busy ? "Wait for the reply…" : compact ? "Ask, or hand over a task…" : "Describe what you want built, or ask about the factory's work"}
           className="w-full rounded-control border bg-surface px-3 py-2 text-base md:text-body-sm"
         />
+        <AttachedList a={files} />
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" size="sm" disabled={!text.trim() || busy || sending || !info.available}>
+          <Button type="submit" size="sm" disabled={!ready || busy || sending || !info.available}>
             {sending ? <Loader2 className="animate-spin" /> : <Send />} Send
           </Button>
-          {!compact && <span className="text-xs text-muted-foreground">Enter sends; Shift+Enter starts a new line.</span>}
+          <AttachButton a={files} disabled={sending} />
+          {!compact && <span className="text-xs text-muted-foreground">Enter sends; Shift+Enter starts a new line. Paste or drop images and files to attach them.</span>}
           {msg && (
             <span role="alert" className="text-sm text-destructive">
               {msg}
@@ -303,6 +316,28 @@ export function Conversation({ chatId, info, onStarted, compact }: { chatId: num
         </div>
       </form>
     </div>
+  );
+}
+
+/** The files a person attached to a message: pictures shown small, the rest as links. */
+function MessageFiles({ chatId, msgId, names }: { chatId: number; msgId: number; names: string[] }) {
+  const url = (n: string) => `/api/v1/chats/${chatId}/messages/${msgId}/files/${encodeURIComponent(n)}`;
+  return (
+    <ul className="flex flex-wrap gap-2" aria-label="Attached files">
+      {names.map((n) => (
+        <li key={n}>
+          <a href={url(n)} target="_blank" rel="noreferrer" title={n} className="block">
+            {/\.(png|jpe?g|gif|webp)$/i.test(n) ? (
+              <img src={url(n)} alt={n} className="max-h-40 max-w-60 rounded-control border object-contain" />
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-control border bg-surface px-2 py-1 text-meta hover:bg-accent">
+                <FileText className="size-3.5" /> {n}
+              </span>
+            )}
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }
 

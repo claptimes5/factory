@@ -47,8 +47,9 @@ type Actions interface {
 	// the checkout and session it kept, with extra turns and budget (0.5
 	// is half as much again) and a note to the builder.
 	Continue(ctx context.Context, jobID int64, extra float64, note string) error
-	// Steer sends a running build a message it reads at its next step.
-	Steer(ctx context.Context, jobID int64, text string) error
+	// Steer sends a running build a message, with any files attached,
+	// which it reads at its next step.
+	Steer(ctx context.Context, jobID int64, text string, files []store.Attachment) error
 }
 
 // Server serves the control room.

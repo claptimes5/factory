@@ -17,7 +17,8 @@ func Tunable(path []string) bool {
 	switch {
 	case path[0] == "tuning", path[0] == "auto_merge":
 		return false
-	case len(path) >= 2 && path[0] == "orchestrator" && path[1] == "enabled":
+	case len(path) >= 2 && path[0] == "orchestrator" && (path[1] == "enabled" || path[1] == "keep_files_for"):
+		// Turning it on spends, and keep_files_for removes what people sent.
 		return false
 	case len(path) >= 2 && path[0] == "routing" && (path[1] == "tune" || path[1] == "orchestrate"):
 		return false

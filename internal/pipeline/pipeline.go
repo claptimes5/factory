@@ -1017,6 +1017,7 @@ func (p *Pipeline) dropClosed(ctx context.Context, repo string, open []github.Is
 func (p *Pipeline) closeOut(ctx context.Context) error {
 	p.sweepPreviews(ctx, time.Now())
 	p.sweepKept(ctx)
+	p.sweepAttachments(ctx, time.Now())
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
 		return err

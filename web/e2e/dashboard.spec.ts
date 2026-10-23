@@ -194,8 +194,10 @@ test("session view streams the transcript and attaches a terminal", async ({ pag
   await expect(transcript).toContainText("--- FAIL: TestLastToken");
   // A message reaches the running agent at its next step.
   await page.getByLabel("Message the agent").fill("Also cover an empty input.");
+  await page.locator("form input[type=file]").setInputFiles({ name: "input.txt", mimeType: "text/plain", buffer: Buffer.from("") });
+  await expect(page.getByTestId("attached")).toContainText("input.txt");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "devserver: would send job" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "devserver: would send job" })).toContainText("(1 files)");
   await page.getByRole("tab", { name: "Terminal" }).click();
   await page.getByRole("button", { name: "Connect terminal" }).click();
   const term = page.getByTestId("terminal");
