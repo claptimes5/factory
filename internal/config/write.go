@@ -162,7 +162,7 @@ func WriteWorkspaces(path string, ws map[string]Workspace) error {
 		placed := false
 		for i := 0; i < len(lines); i++ {
 			out.WriteString(lines[i])
-			if placed || !(strings.HasPrefix(lines[i], "repo:") || strings.HasPrefix(lines[i], "repos:")) {
+			if placed || !strings.HasPrefix(lines[i], "repo:") && !strings.HasPrefix(lines[i], "repos:") {
 				continue
 			}
 			for i+1 < len(lines) && continues(lines[i+1:]) {
