@@ -169,6 +169,16 @@ func run(args []string) error {
 	defer func() { _ = st.Close() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	switch fs.Arg(0) {
+	case "serve", "run-once", "pull", "readiness", "compare", "eval", "automerge":
+		learnDefaultBranches(ctx, cfg, func(repo string) (forge, error) {
+			ts, err := tokens(cfg, repo)
+			if err != nil {
+				return nil, err
+			}
+			return newForge(cfg, repo, ts), nil
+		})
+	}
 
 	switch cmd := fs.Arg(0); cmd {
 	case "migrate":

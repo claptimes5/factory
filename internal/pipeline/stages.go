@@ -342,6 +342,14 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 			return fail(agentRun{}, state.Failed, err.Error())
 		}
 	}
+	// A build that continues a branch or kept work starts from today's
+	// base, not the one that work began on.
+	caught, err := p.catchUp(ctx, parts, func(pt *part) bool {
+		return kept || (in.FixRound && onBranch(pt.repo) && pt.ws.Existed)
+	}, kept)
+	if err != nil {
+		return fail(agentRun{}, state.Failed, err.Error())
+	}
 	own := homePart(parts, it.Repo)
 	p.warn(p.Store.SetJobRuntime(ctx, j.ID, "", "", own.ws.Start), "SetJobRuntime")
 
@@ -389,6 +397,12 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 		}
 		x.say = c.Note
 	}
+	if caught.note != "" {
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + caught.note
+		if x.fresh != "" {
+			x.fresh = strings.TrimRight(x.fresh, "\n") + "\n\n" + caught.note
+		}
+	}
 	run := p.runAgentWith(ctx, j, work, out, prompt, "", p.Cfg.Timeout("implement"), x)
 	if p.stopIfCancelled(ctx, j, it, run) {
 		return nil
@@ -422,10 +436,13 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	if len(members) == 1 {
 		msg = fmt.Sprintf("factory: #%d %s\n\n%s\n\nJob %d, %s/%s, attempt %d.", it.IssueNumber, noClose(is.Title), noClose(v.Summary), j.ID, j.Harness, j.Model, j.Attempt)
 	}
-	changed := false
+	changed := caught.carried
 	for _, pt := range parts {
 		if err := realDir(pt.ws.Work); err != nil {
 			return fail(run, state.Failed, err.Error())
+		}
+		if f := markersLeft(pt.ws.Work, pt.ws.Conflicts); f != "" {
+			return fail(run, state.Failed, fmt.Sprintf("builder left conflict markers in %s from merging %s", f, p.repoConf(pt.repo).BaseBranch))
 		}
 		head, ch, err := p.git(pt.repo).Ingest(ctx, pt.ws, msg)
 		if err != nil {

@@ -83,6 +83,10 @@ type keptPart struct {
 	Start   string   `json:"start"`
 	Existed bool     `json:"existed"`
 	Placed  []string `json:"placed,omitempty"`
+	// Merging and Conflicts are a merge of the base still being resolved
+	// (see Workspace).
+	Merging   string   `json:"merging,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
 }
 
 // checkoutDirs are what a build's checkouts are made of, in its job
@@ -182,6 +186,7 @@ func (p *Pipeline) keepCheckout(ctx context.Context, j *store.Job, parts []*part
 			return "", err
 		}
 		g := p.git(pt.repo)
+		merging, conflicts := pt.ws.Merging, pt.ws.Conflicts
 		head, changed, err := g.Ingest(ctx, pt.ws, "factory: work in progress")
 		if err != nil {
 			return "", err
@@ -206,6 +211,12 @@ func (p *Pipeline) keepCheckout(ctx context.Context, j *store.Job, parts []*part
 			if err := g.Unstep(ctx, pt.ws.Repo, pt.ws.Start); err != nil {
 				return "", err
 			}
+			// Taking the commit back takes the merge with it: it's in
+			// progress again, for the continue to finish.
+			pt.ws.Merging, pt.ws.Conflicts = merging, conflicts
+			if err := g.Remerge(ctx, pt.ws); err != nil {
+				return "", err
+			}
 		}
 		rel := func(path string) string {
 			r, err := filepath.Rel(dir, path)
@@ -215,7 +226,8 @@ func (p *Pipeline) keepCheckout(ctx context.Context, j *store.Job, parts []*part
 			return r
 		}
 		k.Parts = append(k.Parts, keptPart{Repo: pt.repo, Folder: pt.folder, RepoDir: rel(pt.ws.Repo), WorkDir: rel(pt.ws.Work),
-			BaseSHA: pt.ws.BaseSHA, Start: pt.ws.Start, Existed: pt.ws.Existed, Placed: pt.ws.Placed})
+			BaseSHA: pt.ws.BaseSHA, Start: pt.ws.Start, Existed: pt.ws.Existed, Placed: pt.ws.Placed,
+			Merging: pt.ws.Merging, Conflicts: pt.ws.Conflicts})
 	}
 	kd := keptDir(dir)
 	if err := os.MkdirAll(kd, 0o755); err != nil {
@@ -296,7 +308,7 @@ func (p *Pipeline) takeKept(dir string, from, by int64) ([]*part, error) {
 			if work, err = in(kp.WorkDir); err == nil {
 				if err = realDir(work); err == nil {
 					parts = append(parts, &part{repo: kp.Repo, folder: kp.Folder, ws: &Workspace{Repo: repo, Work: work, BaseSHA: kp.BaseSHA,
-						Start: kp.Start, Existed: kp.Existed, Placed: kp.Placed}})
+						Start: kp.Start, Existed: kp.Existed, Placed: kp.Placed, Merging: kp.Merging, Conflicts: kp.Conflicts}})
 					continue
 				}
 			}
@@ -802,7 +814,7 @@ func (p *Pipeline) retryExplain(rp *retryPlan, j *store.Job) string {
 	budget := p.Cfg.FastBudget(p.Cfg.JobBudget("implement", rp.size), rp.route.FastFor(rp.route.Harness, rp.route.Model))
 	start := "a fresh checkout"
 	if rp.in.FixRound {
-		start = "a fresh checkout of the branch the reviewer saw"
+		start = "a fresh checkout of the branch the reviewer saw, with the base branch's latest merged in"
 	}
 	if rp.tier {
 		was := j.Model

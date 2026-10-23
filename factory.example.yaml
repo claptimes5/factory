@@ -5,7 +5,7 @@
 # the get-started page of ./factory serve): GitHub's owner/name, or a GitLab
 # project's URL. The factory clones each itself; no checkout here is used.
 # repo: octocat/hello-world  # or a repos: list; see docs/configuration.md#several-repositories
-base_branch: main
+# base_branch: main           # unset: each repo's default branch on its host
 data_dir: ./data              # SQLite db, job logs, scratch workdirs
 
 intake:

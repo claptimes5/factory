@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"time"
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
@@ -51,6 +53,29 @@ func repoFor(cfg *config.Config, repo string) config.Repo {
 	}
 	host, name := config.SplitRepo("", repo)
 	return config.Repo{Name: name, Host: host}
+}
+
+// learnDefaultBranches asks each repo's host for its default branch, the
+// base branch of a repo factory.yaml gives none. A host that doesn't
+// answer leaves main, with a warning.
+func learnDefaultBranches(ctx context.Context, cfg *config.Config, client func(repo string) (forge, error)) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for _, repo := range cfg.RepoNames() {
+		if !cfg.BaseBranchUnset(repo) {
+			continue
+		}
+		c, err := client(repo)
+		if err != nil {
+			continue // no credentials yet: setup says so
+		}
+		b, err := c.DefaultBranch(ctx)
+		if err != nil || b == "" {
+			slog.Warn("couldn't read the repo's default branch, so the factory uses main; set base_branch in factory.yaml to choose", "repo", repo, "err", err)
+			continue
+		}
+		cfg.SetDefaultBranch(repo, b)
+	}
 }
 
 // newForge makes the client for a repo on its host.

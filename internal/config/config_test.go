@@ -45,6 +45,31 @@ func TestRepoConfigLoads(t *testing.T) {
 	}
 }
 
+// Unset base_branch is the repo's default branch on its host once that's
+// known, else main; one set at the top level or on the repo wins.
+func TestBaseBranchFollowsTheDefaultBranchWhenUnset(t *testing.T) {
+	b, _ := exampleYAML()
+	c, err := Parse(regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAll(b, []byte("repos:\n  - o/api\n  - name: o/web\n    base_branch: develop")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := c.RepoConf("o/api"); r.BaseBranch != "main" || !c.BaseBranchUnset("O/Api") {
+		t.Fatalf("before the host says: %q, unset %v", r.BaseBranch, c.BaseBranchUnset("o/api"))
+	}
+	c.SetDefaultBranch("O/API", "master")
+	c.SetDefaultBranch("o/web", "trunk")
+	if r, _ := c.RepoConf("o/api"); r.BaseBranch != "master" {
+		t.Fatalf("o/api = %q", r.BaseBranch)
+	}
+	if r, _ := c.RepoConf("o/web"); r.BaseBranch != "develop" || c.BaseBranchUnset("o/web") {
+		t.Fatalf("o/web = %q", r.BaseBranch)
+	}
+	c.BaseBranch = "release"
+	if r, _ := c.RepoConf("o/api"); r.BaseBranch != "release" || c.BaseBranchUnset("o/api") {
+		t.Fatalf("top level set: %q", r.BaseBranch)
+	}
+}
+
 func TestSeveralRepos(t *testing.T) {
 	b, _ := exampleYAML()
 	y := regexp.MustCompile(`(?m)^repo: .*$`).ReplaceAllString(string(b), `repos:

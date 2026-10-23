@@ -189,6 +189,11 @@ type Workspace struct {
 	// Placed are the files.from files copied into Work, which Ingest
 	// never commits.
 	Placed []string
+	// Merging is the base commit a merge in progress takes in, and
+	// Conflicts the paths it left for the builder to resolve (see
+	// MergeIn); the next Ingest commits the merge.
+	Merging   string
+	Conflicts []string
 }
 
 // Prepare clones the remote into dir/repo and checks out branch (created
@@ -260,18 +265,151 @@ func (g *Git) prepareAt(ctx context.Context, repoDir, workDir, base, branch stri
 	}
 	if workDir != "" {
 		ws.Work = workDir
-		// --no-local copies only what the branch reaches: a local clone would
-		// copy the whole object store, other branches' work included.
-		if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-local", "--single-branch", "--branch", branch, ws.Repo, ws.Work); err != nil {
+		if err := g.cloneWork(ctx, ws, branch); err != nil {
 			return nil, err
-		}
-		for k, v := range map[string]string{"user.name": name, "user.email": email} {
-			if _, err := g.run(ctx, ws.Work, nil, "config", k, v); err != nil {
-				return nil, err
-			}
 		}
 	}
 	return ws, nil
+}
+
+// cloneWork makes the builder's clone of the daemon's, at ws.Work.
+func (g *Git) cloneWork(ctx context.Context, ws *Workspace, branch string) error {
+	// --no-local copies only what the branch reaches: a local clone would
+	// copy the whole object store, other branches' work included.
+	if _, err := g.run(ctx, "", nil, "clone", "--quiet", "--no-local", "--single-branch", "--branch", branch, ws.Repo, ws.Work); err != nil {
+		return err
+	}
+	name, email := g.ident()
+	for k, v := range map[string]string{"user.name": name, "user.email": email} {
+		if _, err := g.run(ctx, ws.Work, nil, "config", k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FetchBase fetches the remote's base into the daemon's clone, makes its
+// tip ws.BaseSHA, and says whether the checked-out branch is behind it.
+func (g *Git) FetchBase(ctx context.Context, ws *Workspace, base string) (bool, error) {
+	ref := "refs/remotes/origin/" + base
+	if _, err := g.run(ctx, ws.Repo, nil, "fetch", "--quiet", "--no-tags", g.remote(), "+refs/heads/"+base+":"+ref); err != nil {
+		return false, err
+	}
+	tip, err := g.run(ctx, ws.Repo, nil, "rev-parse", ref)
+	if err != nil {
+		return false, err
+	}
+	ws.BaseSHA = tip
+	return !g.IsAncestor(ctx, ws.Repo, tip, "HEAD"), nil
+}
+
+// MergeIn merges the base FetchBase fetched into the checked-out branch.
+// A clean merge is committed with msg and becomes ws.Start. One that
+// conflicts is left in progress, in ws.Merging and ws.Conflicts: the next
+// Ingest commits the builder's resolution as the merge. Any other failure
+// leaves the branch as it was.
+func (g *Git) MergeIn(ctx context.Context, ws *Workspace, base, msg string) error {
+	_, err := g.run(ctx, ws.Repo, nil, "merge", "--quiet", "--no-ff", "--no-edit", "-m", msg, "refs/remotes/origin/"+base)
+	if err == nil {
+		ws.Start, err = g.run(ctx, ws.Repo, nil, "rev-parse", "HEAD")
+		return err
+	}
+	if head, conflicts := g.PendingMerge(ctx, ws.Repo); len(conflicts) > 0 {
+		ws.Merging, ws.Conflicts = head, conflicts
+		return nil
+	}
+	_, _ = g.run(ctx, ws.Repo, nil, "merge", "--abort")
+	return err
+}
+
+// PendingMerge is the commit a merge in progress in repo takes in ("" for
+// none), and the paths it left conflicted.
+func (g *Git) PendingMerge(ctx context.Context, repo string) (string, []string) {
+	head, err := g.run(ctx, repo, nil, "rev-parse", "--quiet", "--verify", "MERGE_HEAD")
+	if err != nil {
+		return "", nil
+	}
+	var out strings.Builder
+	if _, err := g.run(ctx, repo, &out, "diff", "--name-only", "-z", "--diff-filter=U"); err != nil || out.Len() == 0 {
+		return head, nil
+	}
+	return head, strings.Split(strings.TrimSuffix(out.String(), "\x00"), "\x00")
+}
+
+// Remerge marks the merge of ws.Merging in progress again in repo, after
+// an Ingest committed it and Unstep took the commit back, so the next
+// Ingest commits a merge again.
+func (g *Git) Remerge(ctx context.Context, ws *Workspace) error {
+	if ws.Merging == "" {
+		return nil
+	}
+	// git won't update-ref a pseudoref, so write it as a merge does.
+	path, err := g.run(ctx, ws.Repo, nil, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(ws.Merging+"\n"), 0o644)
+}
+
+// RebuildWork replaces the builder's clone with a new one of the daemon's
+// branch, after a merge changed it. While a merge is in progress the new
+// clone also gets the daemon's merged files, conflict markers and all.
+func (g *Git) RebuildWork(ctx context.Context, ws *Workspace) error {
+	branch, err := g.run(ctx, ws.Repo, nil, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(ws.Work); err != nil {
+		return err
+	}
+	if err := g.cloneWork(ctx, ws, branch); err != nil {
+		return err
+	}
+	if ws.Merging == "" {
+		return nil
+	}
+	var out strings.Builder
+	if _, err := g.run(ctx, ws.Repo, &out, "diff", "--name-only", "-z", "--no-renames", "HEAD"); err != nil {
+		return err
+	}
+	for _, f := range strings.Split(strings.TrimSuffix(out.String(), "\x00"), "\x00") {
+		if f != "" {
+			if err := copyPath(filepath.Join(ws.Repo, f), filepath.Join(ws.Work, f)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// copyPath makes dst what src is: a file, a symlink, or gone.
+func copyPath(src, dst string) error {
+	fi, err := os.Lstat(src)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(dst)
+	if fi.Mode()&os.ModeSymlink != 0 {
+		to, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(to, dst)
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, fi.Mode().Perm())
 }
 
 // Ingest commits the builder's working tree, read as plain files, into the
@@ -303,6 +441,7 @@ func (g *Git) Ingest(ctx context.Context, ws *Workspace, msg string) (sha string
 	if err != nil {
 		return "", false, err
 	}
+	ws.Merging, ws.Conflicts = "", nil
 	// Bring the daemon's own work tree in line with its new HEAD.
 	_, err = g.run(ctx, ws.Repo, nil, "reset", "--quiet", "--hard", sha)
 	return sha, true, err
