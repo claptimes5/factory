@@ -46,6 +46,30 @@ test("the orchestrator tab opens on a chat that explains itself and shows what i
   await expect(page.getByTestId("feed")).toBeVisible();
 });
 
+test("files attached to a message are sent with it and shown in the chat", async ({ page }, info) => {
+  await page.goto("/app/orchestrator");
+  // A 1x1 PNG, as a screenshot would be.
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+  await page.locator("form input[type=file]").setInputFiles([
+    { name: "broken-page.png", mimeType: "image/png", buffer: png },
+    { name: "error.log", mimeType: "text/plain", buffer: Buffer.from("panic: nil map") },
+  ]);
+  const attached = page.getByTestId("attached");
+  await expect(attached.getByRole("listitem")).toHaveCount(2);
+  await attached.getByRole("button", { name: "Remove error.log" }).click();
+  await expect(attached.getByRole("listitem")).toHaveCount(1);
+  await page.getByLabel("Message").fill(`Why does this page break? (${info.project.name})`);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page).toHaveURL(/chat=\d+/);
+  const you = page.getByTestId("conversation").getByTestId("you");
+  await expect(you.getByRole("img", { name: "broken-page.png" })).toBeVisible();
+  await expect(page.getByTestId("attached")).toHaveCount(0);
+  const src = await you.getByRole("img").getAttribute("src");
+  const r = await page.request.get(src!);
+  expect(r.headers()["content-type"]).toBe("image/png");
+  await shot(page, info, "chat-attached");
+});
+
 test("sending a message starts a chat; its draft can be edited and created", async ({ page }, info) => {
   await page.goto("/app/orchestrator");
   const ask = `Add rate limits to the public API (${info.project.name})`;

@@ -75,16 +75,20 @@ func (p *Pipeline) ChatUnavailable(ctx context.Context, ws string) string {
 	return ""
 }
 
-// Chat sends a person's message to chat chatID (0 starts a new chat, in
-// workspace ws) and starts the run that replies: it returns the chat, new
-// when none was given, and the reply's job. An empty text asks again for a
-// reply to the chat's last message, when it has none. A chat stays in the
-// workspace it started in.
-func (p *Pipeline) Chat(ctx context.Context, ws string, chatID int64, text string) (int64, int64, error) {
+// Chat sends a person's message, with any files attached, to chat chatID
+// (0 starts a new chat, in workspace ws) and starts the run that replies:
+// it returns the chat, new when none was given, and the reply's job. An
+// empty message asks again for a reply to the chat's last message, when
+// it has none. A chat stays in the workspace it started in.
+func (p *Pipeline) Chat(ctx context.Context, ws string, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
 	text = strings.TrimSpace(text)
 	if len(text) > maxChatMessage {
 		return 0, 0, fmt.Errorf("that message is too long (%d bytes; the most is %d)", len(text), maxChatMessage)
 	}
+	if err := checkAttachments(files); err != nil {
+		return 0, 0, err
+	}
+	again := text == "" && len(files) == 0
 	if chatID != 0 {
 		c, err := p.Store.GetChat(ctx, chatID)
 		if err != nil {
@@ -128,16 +132,20 @@ func (p *Pipeline) Chat(ctx context.Context, ws string, chatID int64, text strin
 	}
 	var msgID int64
 	if chatID == 0 {
-		if text == "" {
+		if again {
 			return 0, 0, errors.New("write a message first")
 		}
-		id, err := p.Store.NewChatIn(ctx, chatTitle(text), ws)
+		title := text
+		if title == "" {
+			title = files[0].Name
+		}
+		id, err := p.Store.NewChatIn(ctx, chatTitle(title), ws)
 		if err != nil {
 			return 0, 0, err
 		}
 		chatID = id
 	}
-	if text == "" {
+	if again {
 		msgs, err := p.Store.ChatMessages(ctx, chatID)
 		if err != nil {
 			return 0, 0, err
@@ -152,6 +160,9 @@ func (p *Pipeline) Chat(ctx context.Context, ws string, chatID int64, text strin
 			return 0, 0, err
 		}
 		msgID = id
+		if _, err := saveAttachments(p.ChatFiles(chatID, msgID), files); err != nil {
+			return 0, 0, fmt.Errorf("saving the files: %w", err)
+		}
 	}
 	r := p.Cfg.Routing["orchestrate"]
 	fast := r.FastFor(r.Harness, r.Model)
@@ -230,6 +241,11 @@ func (p *Pipeline) holdChatSlot() (context.Context, func(), error) {
 	}, nil
 }
 
+// ChatFiles is the folder of the files a person attached to a message.
+func (p *Pipeline) ChatFiles(chatID, msgID int64) string {
+	return filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "chats", fmt.Sprint(chatID), fmt.Sprint(msgID))
+}
+
 // chatTitle names a chat after its first message.
 func chatTitle(text string) string {
 	t := strings.Join(strings.Fields(text), " ")
@@ -249,6 +265,7 @@ type ChatPrompt struct {
 	Drafts  string   // the chat's drafts so far, fenced
 	Earlier string   // the earlier turns, fenced
 	Message string   // the message to reply to, fenced
+	Files   string   // where the message's attached files are, or ""
 }
 
 func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
@@ -286,13 +303,14 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	}
 	var earlier []store.ChatMessage
 	var message string
+	found := false
 	for i, m := range msgs {
 		if m.ID == in.Message {
-			earlier, message = msgs[:i], m.Text
+			earlier, message, found = msgs[:i], m.Text, true
 			break
 		}
 	}
-	if message == "" {
+	if !found {
 		return fail(agentRun{}, state.Failed, fmt.Sprintf("chat %d has no message %d to reply to", in.Chat, in.Message))
 	}
 	drafts, err := p.Store.ChatDrafts(ctx, in.Chat)
@@ -304,6 +322,12 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
+	out := filepath.Join(dir, "out")
+	seen := p.Runner.Paths(specFor(work, out)).Out
+	files, err := p.chatAttachments(in.Chat, msgs, out, seen)
+	if err != nil {
+		return fail(agentRun{}, state.Failed, "reading the attached files: "+err.Error())
+	}
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
 	x, err := p.withTools(sctx, dir, p.ChatTools(j.ID, ws))
@@ -312,12 +336,18 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	}
 	snapshot, _ := p.statusText(ctx, ws)
 	d := ChatPrompt{Repo: strings.Join(names, ", "), Repos: names, Missing: missing, Status: snapshot,
-		Labels: strings.Join(p.Cfg.Orchestrator.Labels, ", "), Drafts: chatDrafts(drafts), Earlier: chatEarlier(earlier), Message: fenced(message)}
+		Labels: strings.Join(p.Cfg.Orchestrator.Labels, ", "), Drafts: chatDrafts(drafts), Earlier: chatEarlier(earlier, files),
+		Message: fenced(message), Files: attachedNote(files[in.Message])}
+	for _, f := range files[in.Message] {
+		if IsImage(f) {
+			x.images = append(x.images, f)
+		}
+	}
 	prompt, err := p.renderStep(j, "chat", nil, d)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	run := p.runAgentWith(ctx, j, work, filepath.Join(dir, "out"), prompt, `{"type":"object","additionalProperties":false,"required":["reply"],"properties":{"reply":{"type":"string"}}}`,
+	run := p.runAgentWith(ctx, j, work, out, prompt, `{"type":"object","additionalProperties":false,"required":["reply"],"properties":{"reply":{"type":"string"}}}`,
 		p.Cfg.Timeout("orchestrate"), x)
 	if p.stopIfCancelled(ctx, j, nil, run) {
 		return nil
@@ -339,9 +369,39 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	return nil
 }
 
-// chatEarlier is the turns before the one being answered, fenced, the
-// oldest dropped when they run long.
-func chatEarlier(msgs []store.ChatMessage) string {
+// chatAttachments copies the files of each of a chat's messages into the
+// run's out folder, and returns where the run sees them, by message. A
+// copy, not a link: the run can write its out folder, and must not change
+// what the person sent.
+func (p *Pipeline) chatAttachments(chatID int64, msgs []store.ChatMessage, out, seen string) (map[int64][]string, error) {
+	paths := map[int64][]string{}
+	for _, m := range msgs {
+		src := p.ChatFiles(chatID, m.ID)
+		names := listAttachments(src)
+		if len(names) == 0 {
+			continue
+		}
+		rel := filepath.Join(attachDir, fmt.Sprint(m.ID))
+		if err := os.MkdirAll(filepath.Join(out, rel), 0o755); err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			b, err := os.ReadFile(filepath.Join(src, n))
+			if err == nil {
+				err = os.WriteFile(filepath.Join(out, rel, n), b, 0o644)
+			}
+			if err != nil {
+				return nil, err
+			}
+			paths[m.ID] = append(paths[m.ID], filepath.ToSlash(filepath.Join(seen, rel, n)))
+		}
+	}
+	return paths, nil
+}
+
+// chatEarlier is the turns before the one being answered, fenced, with
+// where their files are, the oldest dropped when they run long.
+func chatEarlier(msgs []store.ChatMessage, files map[int64][]string) string {
 	var parts []string
 	n := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -350,6 +410,9 @@ func chatEarlier(msgs []store.ChatMessage) string {
 			who = "You"
 		}
 		s := who + ":\n" + fenced(msgs[i].Text)
+		for _, f := range files[msgs[i].ID] {
+			s += "(attached `" + f + "`)\n"
+		}
 		if n+len(s) > maxChatEarlier {
 			parts = append(parts, "(earlier turns left out)\n")
 			break

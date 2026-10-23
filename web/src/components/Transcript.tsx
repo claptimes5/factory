@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ChevronRight, Download, Loader2, OctagonX, Send } from "lucide-react";
 import { act, useOverview, type Job, type Stop, type TranscriptEntry } from "@/api/client";
+import { AttachButton, AttachedList, takesFiles, useAttachments } from "@/components/Attach";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { cn, money } from "@/lib/utils";
@@ -219,6 +220,7 @@ function Outcome({ job, stop, outcome, state }: { job: Job; stop?: Stop | null; 
 /** A box to message the running agent, which reads it at its next step. */
 function SteerBox({ jobId, can, note }: { jobId: number; can: boolean; note: string }) {
   const [text, setText] = useState("");
+  const files = useAttachments();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   return (
@@ -227,11 +229,15 @@ function SteerBox({ jobId, can, note }: { jobId: number; can: boolean; note: str
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
-        const r = await act(`/jobs/${jobId}/steer`, { text });
+        const r = await act(`/jobs/${jobId}/steer`, { text, files: files.files });
         setBusy(false);
         setMsg({ ok: r.ok, text: r.message });
-        if (r.ok) setText("");
+        if (r.ok) {
+          setText("");
+          files.clear();
+        }
       }}
+      {...(can ? takesFiles(files) : {})}
     >
       <div className="flex gap-2">
         <input
@@ -242,10 +248,12 @@ function SteerBox({ jobId, can, note }: { jobId: number; can: boolean; note: str
           placeholder={can ? "Message the agent: it reads this at its next step" : "Messages can't reach this agent"}
           className="min-w-0 flex-1 rounded-md border bg-card px-2.5 py-1.5 text-base disabled:opacity-60 md:text-sm"
         />
-        <Button size="sm" type="submit" disabled={!can || busy || text.trim() === ""}>
+        <AttachButton a={files} disabled={!can || busy} />
+        <Button size="sm" type="submit" disabled={!can || busy || (text.trim() === "" && files.picked.length === 0)}>
           <Send /> Send
         </Button>
       </div>
+      <AttachedList a={files} />
       {!can && note && <p className="text-xs text-muted-foreground">{note}</p>}
       {msg && (
         <p role="status" className={cn("text-xs", msg.ok ? "text-success" : "text-destructive")}>

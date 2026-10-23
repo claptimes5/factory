@@ -176,10 +176,10 @@ func TestStoppedJobAPI(t *testing.T) {
 	if c, _ := post("/api/v1/jobs/"+itoa(id)+"/continue", `{"note":"narrow it"}`); c != 200 {
 		t.Fatalf("continue = %d", c)
 	}
-	if c, _ := post("/api/v1/jobs/"+itoa(id)+"/steer", `{"text":"hello"}`); c != 200 {
+	if c, _ := post("/api/v1/jobs/"+itoa(id)+"/steer", `{"text":"hello","files":[{"name":"x.png","data":"cG5n"}]}`); c != 200 {
 		t.Fatalf("steer = %d", c)
 	}
-	if got := strings.Join(fa.calls, "|"); got != "continue:"+itoa(id)+":0:narrow it|steer:"+itoa(id)+":hello" {
+	if got := strings.Join(fa.calls, "|"); got != "continue:"+itoa(id)+":0:narrow it|steer:"+itoa(id)+":hello|file:x.png:png" {
 		t.Fatalf("calls = %s", got)
 	}
 
