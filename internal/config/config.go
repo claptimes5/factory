@@ -325,7 +325,9 @@ type Config struct {
 	// AutoMerge lets the factory merge its own PRs up to a risk level and
 	// size, once CI passes. Unset, every PR waits for you.
 	AutoMerge *AutoMerge `yaml:"auto_merge,omitempty"`
-	// BaseBranch, Env and Gates are the defaults for every repo.
+	// BaseBranch, Env and Gates are the defaults for every repo. Unset
+	// here and on a repo, the repo's default branch on its host is used
+	// (see SetDefaultBranch), and main when that isn't known.
 	BaseBranch string             `yaml:"base_branch"`
 	Env        map[string]string  `yaml:"env"`
 	Services   map[string]Service `yaml:"services,omitempty"`
@@ -480,6 +482,9 @@ type Config struct {
 	Gates Gates `yaml:"gates"`
 
 	dir string
+	// defaultBranches are repos' default branches on their hosts, by
+	// lower-cased name (see SetDefaultBranch).
+	defaultBranches map[string]string
 }
 
 // MinTuningEvery is the shortest tuning cadence: each run costs a model
@@ -589,9 +594,6 @@ func autoCPUs(cores, jobs int) string {
 }
 
 func (c *Config) defaults() {
-	if c.BaseBranch == "" {
-		c.BaseBranch = "main"
-	}
 	if c.DataDir == "" {
 		c.DataDir = "./data"
 	}
@@ -1215,6 +1217,26 @@ func sortedKeys[V any](m map[string]V) []string {
 	return ks
 }
 
+// BaseBranchUnset says factory.yaml names no base branch for repo, at the
+// top level or on the repo, so its default branch on its host is used.
+func (c *Config) BaseBranchUnset(repo string) bool {
+	for _, r := range c.Repos {
+		if strings.EqualFold(r.Name, repo) {
+			return r.BaseBranch == "" && c.BaseBranch == ""
+		}
+	}
+	return false
+}
+
+// SetDefaultBranch records repo's default branch on its host, the base
+// branch for a repo whose base_branch is unset.
+func (c *Config) SetDefaultBranch(repo, branch string) {
+	if c.defaultBranches == nil {
+		c.defaultBranches = map[string]string{}
+	}
+	c.defaultBranches[strings.ToLower(repo)] = branch
+}
+
 // NoRepos says no repo is chosen yet, as a new factory.yaml starts.
 func (c *Config) NoRepos() bool { return len(c.Repos) == 0 }
 
@@ -1228,6 +1250,12 @@ func (c *Config) Resolve(r Repo) Repo { return c.resolve(r) }
 func (c *Config) resolve(r Repo) Repo {
 	if r.BaseBranch == "" {
 		r.BaseBranch = c.BaseBranch
+	}
+	if r.BaseBranch == "" {
+		r.BaseBranch = c.defaultBranches[strings.ToLower(r.Name)]
+	}
+	if r.BaseBranch == "" {
+		r.BaseBranch = "main"
 	}
 	if r.Image == "" && (r.ImageFrom != "" || r.ImageBuild != nil) {
 		r.Image = "factory-job-" + repoTag(r.Name) + ":latest"

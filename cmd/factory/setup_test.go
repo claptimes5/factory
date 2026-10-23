@@ -460,7 +460,7 @@ func TestWriteReposSkipsBlankLines(t *testing.T) {
 	if got := cfg.RepoNames(); !slices.Equal(got, []string{"o/a"}) {
 		t.Fatalf("repos = %v", got)
 	}
-	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "\nbase_branch: main") {
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "\ndata_dir: ") {
 		t.Fatalf("lost what follows the list:\n%s", b)
 	}
 }

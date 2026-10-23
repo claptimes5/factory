@@ -38,7 +38,7 @@ repos:
 workspaces:
   shop: [gitlab.com/acme/api, gitlab.com/acme/web]
 
-base_branch: main
+# base_branch: main           # unset: each repo's default branch on its host
 data_dir: ./data
 
 intake:

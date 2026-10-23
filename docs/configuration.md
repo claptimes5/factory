@@ -54,6 +54,10 @@ repos:
 
 `repo: you/api` is the short form for one repo.
 
+A repo with no `base_branch`, here or at the top level, uses its default
+branch on GitHub or GitLab, read when the factory starts (`main` if the
+host can't say).
+
 A repo's `gates` override the top-level ones field by field. Its
 `commands` replace the top-level commands. Anything it leaves out, such as
 the diff guard or `proves_fix`, is inherited. Set `proves_fix: none`,

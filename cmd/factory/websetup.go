@@ -358,6 +358,9 @@ func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 			}
 		}
 		a.BaseBranch, a.CanUseDefault = rc.BaseBranch, len(cfg.Repos) == 1
+		if cfg.BaseBranchUnset(n) && a.DefaultBranch != "" {
+			a.BaseBranch = a.DefaultBranch // the factory follows it
+		}
 		if a.MissingLabels == nil {
 			a.MissingLabels = []string{} // unchecked, or unreachable: a list, never null
 		}

@@ -223,7 +223,9 @@ on its own: the same task would most likely run out again. Instead:
   the same model, the same Claude session, with a fresh `max_turns` and
   budget. You can add 50%, 100% or 200% more of both (adding needs the
   dashboard password, or the dashboard opened on the factory's machine)
-  and a note it reads first, for example to narrow the scope. On the
+  and a note it reads first, for example to narrow the scope. The base
+  branch's latest is merged in first, as for a [fix round](quality.md),
+  so work that was nearly done is checked against today's base. On the
   local runner, or if the session is gone, it starts a new session that's
   told where the last one stopped. If a continue is cancelled, or the
   factory restarts before it's done, the work goes back to the stopped

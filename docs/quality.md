@@ -39,6 +39,15 @@ the builder, for at most `max_review_rounds` fix rounds (2); a third block
 earns it one [rethink](#rethink-before-parking) before it parks. A malformed review retries once, then parks, so a broken
 reviewer never consumes a fix round or passes code.
 
+A fix round builds on the PR's branch, so first the factory merges the
+base branch's latest into it: what merged since, such as a fix to a check
+that fails on the base, reaches the build, and every retry of the round
+gets it too. When the merge conflicts, the builder resolves it as part of
+the round, and a build that leaves a conflict marker in those files fails.
+A build that stops partway through resolving one (out of turns,
+cancelled, or cut short by a shutdown) keeps the merge in progress, so
+[Continue](using.md) carries on from its resolution so far.
+
 ## Rethink before parking
 
 When the reviewer blocks past the round cap, the item gets one more try

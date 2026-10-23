@@ -108,6 +108,115 @@ func (p *Pipeline) prepareParts(ctx context.Context, dir string, it *store.WorkI
 	return parts, nil
 }
 
+// caughtUp is what catchUp did to a build's parts before the builder runs.
+type caughtUp struct {
+	note    string // for the builder, "" when nothing changed
+	carried bool   // kept work was committed, so the build has a change even if the builder adds none
+}
+
+// catchUp merges the base's latest into each part a build continues on
+// (which says which: a fix round's branch, or a stopped build's kept work,
+// committed first), so it builds on today's base and not the one its
+// branch started from: else what merged since, a fix to a check that
+// fails on the base, say, never reaches it, retry after retry. A part's
+// builder clone is rebuilt from the result. A fetch or merge that fails
+// leaves the part as it was. Kept work still resolving a merge goes on
+// resolving it, with the conflicts it was given.
+func (p *Pipeline) catchUp(ctx context.Context, parts []*part, which func(*part) bool, kept bool) (caughtUp, error) {
+	var out caughtUp
+	var notes []string
+	in := func(pt *part, s string) string {
+		if pt.folder == "" {
+			return s
+		}
+		return pt.folder + "/" + s
+	}
+	for _, pt := range parts {
+		if !which(pt) {
+			continue
+		}
+		g, base := p.git(pt.repo), p.repoConf(pt.repo).BaseBranch
+		if pt.ws.Merging == "" {
+			// A continue cancelled while it resolved a merge gives its
+			// checkout back mid-merge, the kept record none the wiser.
+			pt.ws.Merging, pt.ws.Conflicts = g.PendingMerge(ctx, pt.ws.Repo)
+		}
+		if pt.ws.Merging != "" {
+			// Its builder clone holds the resolution so far.
+			for _, c := range pt.ws.Conflicts {
+				notes = append(notes, "- "+in(pt, c))
+			}
+			continue
+		}
+		behind, err := g.FetchBase(ctx, pt.ws, base)
+		if err != nil {
+			p.log().Warn("couldn't fetch the base to bring a branch up to date; building on it as it is", "repo", pt.repo, "err", err)
+			continue
+		}
+		if !behind {
+			continue
+		}
+		if kept {
+			if err := realDir(pt.ws.Work); err != nil {
+				return out, err
+			}
+			head, changed, err := g.Ingest(ctx, pt.ws, "factory: work in progress")
+			if err != nil {
+				return out, err
+			}
+			pt.ws.Start, out.carried = head, out.carried || changed
+		}
+		branch := "its branch"
+		if b, err := g.run(ctx, pt.ws.Repo, nil, "symbolic-ref", "--short", "HEAD"); err == nil {
+			branch = b
+		}
+		err = g.MergeIn(ctx, pt.ws, base, fmt.Sprintf("Merge %s into %s\n\nThe factory brought this branch up to date with %s before building on it again.", base, branch, base))
+		if err != nil {
+			p.log().Warn("couldn't merge the base into a branch; building on it as it is", "repo", pt.repo, "err", err)
+			continue
+		}
+		if err := g.RebuildWork(ctx, pt.ws); err != nil {
+			return out, err
+		}
+		if err := p.placeBuilderFiles(ctx, pt.repo, pt.ws); err != nil {
+			return out, err
+		}
+		what := "the branch"
+		if pt.folder != "" {
+			what = pt.folder + "'s branch"
+		}
+		out.note += fmt.Sprintf("The factory merged %s (now at %s) into %s before you started, so you build on today's %s; files may differ from when this work began.\n", base, short(pt.ws.BaseSHA), what, base)
+		for _, c := range pt.ws.Conflicts {
+			notes = append(notes, "- "+in(pt, c))
+		}
+	}
+	if len(notes) > 0 {
+		out.note += "\nThe merge conflicted. Resolve the conflicts in these files first, keeping what both sides meant, and remove every conflict marker (<<<<<<<, =======, >>>>>>>); a build that leaves one fails:\n\n" + strings.Join(notes, "\n") + "\n"
+	}
+	return out, nil
+}
+
+// markersLeft is the first of paths under dir still holding a conflict
+// marker, or "".
+func markersLeft(dir string, paths []string) string {
+	for _, f := range paths {
+		fi, err := os.Lstat(filepath.Join(dir, f))
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			continue
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(l, "<<<<<<< ") || strings.HasPrefix(l, ">>>>>>> ") {
+				return f
+			}
+		}
+	}
+	return ""
+}
+
 // agentDir is where an agent works on parts: the one checkout, or the
 // folder that holds a workspace's.
 func agentDir(dir string, parts []*part, builder bool) string {

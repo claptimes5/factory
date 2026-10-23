@@ -835,8 +835,12 @@ func setupImages(p *prompter, cfg *config.Config) bool {
 
 // checkBaseBranches compares each repo's base branch in factory.yaml with
 // its default branch on GitHub. With one repo it offers to fix the config.
+// A repo factory.yaml gives no base branch follows its default already.
 func checkBaseBranches(ctx context.Context, p *prompter, cfgPath string, cfg *config.Config, client clientFor) {
 	for _, name := range cfg.RepoNames() {
+		if cfg.BaseBranchUnset(name) {
+			continue
+		}
 		r, _ := cfg.RepoConf(name)
 		gh, _, err := client(r.Name)
 		if err != nil {
@@ -961,6 +965,10 @@ func setYAML(path, key, value string) error {
 		return err
 	}
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:[ \t]*[^\s#]*`)
+	if !re.Match(b) {
+		// Commented out, as the example leaves base_branch: set it there.
+		re = regexp.MustCompile(`(?m)^#[ \t]*` + regexp.QuoteMeta(key) + `:.*$`)
+	}
 	if !re.Match(b) {
 		return fmt.Errorf("%s has no top-level %s: line to update", path, key)
 	}
