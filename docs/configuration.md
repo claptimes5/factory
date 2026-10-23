@@ -837,6 +837,13 @@ run and `orchestrator.daily_budget` per day, which don't count against the
 build budget. Tuning runs and the dashboard [chat](using.md#chat-opening-issues-with-the-orchestrator)'s
 replies (each up to `run_budget`) share that daily cap. Each workspace's orchestrator and chats can have a smaller one of their own, the workspace's `orchestrator.daily_budget`. `factory compare` arms split what's left of today's budget.
 
+Files people attach are removed once no one needs them.
+`orchestrator.keep_files_for` (default `720h`, 30 days; at least `1h`) is
+how long a chat's files stay after its last message. Files sent to a
+running build go as soon as its item is done (its PR merged or closed, or
+its issue closed), or that long after the build ended. The tuning loop
+never changes this setting.
+
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
 five-hour and a weekly usage window, and so does Codex on a
 [ChatGPT plan](setup.md#codex-on-a-chatgpt-plan). The factory records the latest

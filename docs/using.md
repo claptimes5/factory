@@ -38,7 +38,7 @@ with push notifications (see [Notifications](#notifications)).
 | **History** | The activity, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"); what's done; the orchestrator's own decisions with their reasons, filterable by item and type; and Comparisons, each [`factory compare`](#comparing-skill-sets) run's skill sets side by side. |
 | **Trust** | Each repo's [trust level](#trust), its record, its practice runs, and the level its record has earned. |
 | **Item** | Where it is along the line, as stamps (Plan, Build, Review, You, Live); the [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
-| **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
+| **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message, with files attached if you like, that it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
 | **Diff** | Side by side or unified, the exact patch the reviewer saw, with its findings inline. |
 | **Orchestrator** | The full chat, with every conversation (Ask opens it), and the orchestrator's decisions. |
 | **Spend** | Plan usage, cost per merged PR, first-pass and escalation rates per week, review escapes, [security passes](quality.md#security-pass) and the rounds they blocked, the [revert rate](#auto-merge-guard-rails), how many items their diff raised the risk of, reverts by repo, daily spend against the cap, cost by size and model, and how the cost estimates compared with what finished builds cost. |
@@ -250,6 +250,11 @@ While a Claude build runs, the box under its transcript sends it a
 message, which it reads at its next step (Claude runs with streaming
 input for this). Your message shows in the transcript as "You: ...".
 Codex reads its whole prompt when it starts, so its box is off.
+
+To attach files (a screenshot, a log, a spec), use the paperclip, or paste
+or drop them on the box: at most 10, 20 MB together. They are saved in the
+build's output folder, and the message tells it where to read them. They
+are removed once the item is done, or after `orchestrator.keep_files_for`.
 
 ## Notifications
 
@@ -464,6 +469,13 @@ can read your base branches and the factory's work with the orchestrator's
 read tools, open issues with `create_issue`, and close a split item's issue
 with `close_split`. It can't change code or run commands.
 It works whether or not the orchestrator runs on its own schedule.
+
+To attach files to a message (a screenshot of a bug, a log, a spec), use the
+paperclip, or paste or drop them on the box: at most 10, 20 MB together.
+The reply reads them and sees the pictures; later replies in the chat can
+still read them. They are kept under the data folder, in `chats/`, until the
+chat has been quiet for `orchestrator.keep_files_for` (30 days; **Keep
+attached files** in Settings, under Orchestrator).
 
 An issue chat opens gets the intake label and any of `orchestrator.labels`
 it asked for, is approved as the chat's, and goes to triage like an issue

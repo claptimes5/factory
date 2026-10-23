@@ -402,6 +402,10 @@ type Config struct {
 		// Labels the orchestrator may put on issues it opens (besides the
 		// intake label). factory:* labels are never allowed.
 		Labels []string `yaml:"labels"`
+		// KeepFilesFor is how long files attached in a chat stay after its
+		// last message; default 720h (30 days). Files sent to a build go
+		// once its item is done, or after as long.
+		KeepFilesFor Duration `yaml:"keep_files_for,omitempty"`
 	} `yaml:"orchestrator"`
 
 	// Tuning is the loop that reads the metrics on a cadence and proposes
@@ -648,6 +652,9 @@ func (c *Config) defaults() {
 	}
 	if o.NotifyPerHour == 0 {
 		o.NotifyPerHour = 6
+	}
+	if o.KeepFilesFor.Duration == 0 {
+		o.KeepFilesFor.Duration = 720 * time.Hour
 	}
 	if _, ok := c.Routing["orchestrate"]; !ok && c.Routing != nil {
 		c.Routing["orchestrate"] = c.defaultOrchestrate()
@@ -992,6 +999,9 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Escalation.Implement) == 0 {
 		bad("escalation.implement needs at least one model tier")
+	}
+	if c.Orchestrator.KeepFilesFor.Duration < time.Hour {
+		bad("orchestrator.keep_files_for must be at least 1h")
 	}
 	if t := c.Tuning; t.everyErr != nil || t.Every < 0 {
 		bad("tuning.every must be a duration such as 720h, or 0 or none to turn tuning off")

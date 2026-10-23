@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,19 +19,27 @@ import (
 // fakeChatter records what reached it and answers from the store.
 type fakeChatter struct {
 	st      *store.Store
+	dir     string
 	refuse  string
 	created []int64
 }
 
-func (f *fakeChatter) Chat(ctx context.Context, ws string, chatID int64, text string) (int64, int64, error) {
+func (f *fakeChatter) Chat(ctx context.Context, ws string, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
 	if f.refuse != "" {
 		return 0, 0, errors.New(f.refuse)
 	}
 	if chatID == 0 {
 		chatID, _ = f.st.NewChatIn(ctx, text, ws)
 	}
-	f.st.AddChatMessage(ctx, store.ChatMessage{ChatID: chatID, Role: "user", Text: text})
+	msg, _ := f.st.AddChatMessage(ctx, store.ChatMessage{ChatID: chatID, Role: "user", Text: text})
+	for _, a := range files {
+		os.MkdirAll(f.ChatFiles(chatID, msg), 0o755)
+		os.WriteFile(filepath.Join(f.ChatFiles(chatID, msg), a.Name), a.Data, 0o644)
+	}
 	return chatID, 99, nil
+}
+func (f *fakeChatter) ChatFiles(chatID, msgID int64) string {
+	return filepath.Join(f.dir, fmt.Sprint(chatID), fmt.Sprint(msgID))
 }
 func (f *fakeChatter) ChatUnavailable(context.Context, string) string              { return f.refuse }
 func (f *fakeChatter) OrchestrationSpend(context.Context, string) (float64, error) { return 1.5, nil }
@@ -135,5 +144,43 @@ func TestChatAPI(t *testing.T) {
 	}
 	if r, _ := http.Get(base + "/api/v1/chats/999"); r.StatusCode != http.StatusNotFound {
 		t.Errorf("no chat = %d", r.StatusCode)
+	}
+}
+
+// A message's files are listed with it and served from the chat: a picture
+// to show, anything else, SVG too, only as a download.
+func TestChatFilesAreListedAndServedSafely(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "f.db"))
+	fc := &fakeChatter{st: st, dir: t.TempDir()}
+	s := &Server{Store: st, Actions: &fakeActions{}, Repos: []string{"o/r"}, Chat: fc}
+	h, err := s.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := httpServer(t, h)
+	code, body := postJSON(t, base+"/api/v1/chats", "", `{"chat_id":0,"text":"See","files":[{"name":"a.png","data":"cG5n"},{"name":"b.svg","data":"PHN2Zy8+"}]}`)
+	var sent APISentChat
+	if json.Unmarshal([]byte(body), &sent); code != 200 {
+		t.Fatalf("send = %d %s", code, body)
+	}
+	var c APIChat
+	getJSON(t, fmt.Sprintf("%s/api/v1/chats/%d", base, sent.ChatID), &c)
+	if len(c.Messages) != 1 || strings.Join(c.Messages[0].Files, ",") != "a.png,b.svg" {
+		t.Fatalf("messages = %+v", c.Messages)
+	}
+	file := fmt.Sprintf("%s/api/v1/chats/%d/messages/%d/files/", base, sent.ChatID, c.Messages[0].ID)
+	r, err := http.Get(file + "a.png")
+	if err != nil || r.StatusCode != 200 || r.Header.Get("Content-Type") != "image/png" || r.Header.Get("Content-Disposition") != "" {
+		t.Fatalf("picture = %v %+v", err, r)
+	}
+	r, _ = http.Get(file + "b.svg")
+	if r.StatusCode != 200 || r.Header.Get("Content-Type") != "application/octet-stream" || !strings.HasPrefix(r.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("svg = %+v", r.Header)
+	}
+	for _, bad := range []string{"..%2F..%2Ff.db", ".hidden", "none.png"} {
+		if r, _ := http.Get(file + bad); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s = %d", bad, r.StatusCode)
+		}
 	}
 }

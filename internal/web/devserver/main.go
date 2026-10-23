@@ -59,8 +59,8 @@ func (actions) Replan(_ context.Context, id, _ int64, ask string) error {
 func (actions) Continue(_ context.Context, id int64, extra float64, note string) error {
 	return fmt.Errorf("devserver: would continue job %d with %.0f%% more turns and budget (note: %q)", id, extra*100, note)
 }
-func (actions) Steer(_ context.Context, id int64, text string) error {
-	return fmt.Errorf("devserver: would send job %d: %s", id, text)
+func (actions) Steer(_ context.Context, id int64, text string, files []store.Attachment) error {
+	return fmt.Errorf("devserver: would send job %d: %s (%d files)", id, text, len(files))
 }
 func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
 	return fmt.Errorf("devserver: would reset auto-merge's breaker for %s", repo)
@@ -218,7 +218,7 @@ func main() {
 		ReadinessDir: reports, IntakeLabel: "factory:ready", QueueReadiness: queueCheck(st, jobs, reports),
 		Harnesses: func() []string { return []string{"claude", "codex"} },
 		Plans:     []string{"claude", "codex"}, PauseAtUsage: 95,
-		Chat:         &chatter{st: st},
+		Chat:         &chatter{st: st, dir: dir},
 		Wizard:       newWizard(rs),
 		Uninstaller:  uninstaller{},
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},

@@ -151,14 +151,14 @@ func TestChatNeedsAWorkspace(t *testing.T) {
 	ctx := context.Background()
 	e := setupScoped(t, "")
 	e.p.openChat(ctx)
-	if _, _, err := e.p.Chat(ctx, "", 0, "Hello"); err == nil || !strings.Contains(err.Error(), "say which workspace") {
+	if _, _, err := e.p.Chat(ctx, "", 0, "Hello", nil); err == nil || !strings.Contains(err.Error(), "say which workspace") {
 		t.Fatalf("no workspace = %v", err)
 	}
-	if _, _, err := e.p.Chat(ctx, "nope", 0, "Hello"); err == nil || !strings.Contains(err.Error(), "no workspace") {
+	if _, _, err := e.p.Chat(ctx, "nope", 0, "Hello", nil); err == nil || !strings.Contains(err.Error(), "no workspace") {
 		t.Fatalf("unknown workspace = %v", err)
 	}
 	old, _ := e.p.Store.NewChat(ctx, "from before workspaces")
-	if _, _, err := e.p.Chat(ctx, "docs", old, "Hello"); err == nil || !strings.Contains(err.Error(), "before workspaces") {
+	if _, _, err := e.p.Chat(ctx, "docs", old, "Hello", nil); err == nil || !strings.Contains(err.Error(), "before workspaces") {
 		t.Fatalf("an old chat with several workspaces = %v", err)
 	}
 }

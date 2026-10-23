@@ -672,8 +672,10 @@ export interface paths {
         put?: never;
         /**
          * Send a message and start the reply
-         * @description chat_id 0 starts a new chat. An empty text asks again for a reply to the
-         *     chat's last message, when it has none (after a failed reply). The reply
+         * @description chat_id 0 starts a new chat. An empty text with no files asks again for a
+         *     reply to the chat's last message, when it has none (after a failed reply).
+         *     Files are attached to the message, at most 10 and 20 MB together; the
+         *     reply reads them, and sees the pictures. The reply
          *     is written by a read-only run that may draft issues; it is never an
          *     issue until a person creates the draft. One reply is written at a time
          *     (409 while one is, or when chat can't reply now, with why).
@@ -691,6 +693,7 @@ export interface paths {
                         /** Format: int64 */
                         chat_id?: number;
                         text?: string;
+                        files?: components["schemas"]["Attachment"][];
                         /** @description The workspace a new chat works in; one already started keeps its own. Needed when the factory has several. */
                         workspace?: string;
                     };
@@ -742,6 +745,50 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Chat"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{id}/messages/{msg}/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A file a person attached to a chat message
+         * @description PNG, JPEG, GIF and WebP pictures are served to show; anything else downloads.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["ID"];
+                    msg: number;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The file */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/octet-stream": string;
                     };
                 };
                 404: components["responses"]["Error"];
@@ -1053,7 +1100,7 @@ export interface paths {
         put?: never;
         /**
          * Send a running build a message, which it reads at its next step
-         * @description Claude builds only; Codex reads its whole prompt when it starts.
+         * @description Claude builds only; Codex reads its whole prompt when it starts. Files go in the build's out folder, and the message tells it where; at most 10, 20 MB together. A message may be files alone.
          */
         post: {
             parameters: {
@@ -1067,7 +1114,8 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        text: string;
+                        text?: string;
+                        files?: components["schemas"]["Attachment"][];
                     };
                 };
             };
@@ -3389,6 +3437,14 @@ export interface components {
             /** @description The run answering the last message, while it runs or when it failed; null once it answered */
             reply: components["schemas"]["ChatReply"] | null;
         };
+        Attachment: {
+            name: string;
+            /**
+             * Format: byte
+             * @description The file's bytes in base64
+             */
+            data: string;
+        };
         ChatMessage: {
             /** Format: int64 */
             id: number;
@@ -3402,6 +3458,8 @@ export interface components {
              * @description The run that wrote a reply
              */
             job_id: number | null;
+            /** @description Names of the files a person attached, served at /chats/{id}/messages/{msg}/files/{name} */
+            files: string[];
         };
         ChatReply: {
             /**
