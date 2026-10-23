@@ -32,7 +32,7 @@ import {
   type WizardSecret,
   type WizardStep,
 } from "@/api/client";
-import { Ago, ErrorBox, PageTitle } from "@/components/common";
+import { Ago, ErrorBox, Inline, PageTitle } from "@/components/common";
 import { RemoveRepo } from "@/components/Uninstall";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1168,6 +1168,8 @@ const tryIcon: Record<string, ReactNode> = {
 /** The last try of a repo's checks: each command, how it went, and what a failing one printed. */
 function TryResult({ t }: { t: NonNullable<WizardChecks["try"]> }) {
   const failed = t.steps.filter((s) => s.state === "fail").length;
+  // A failure the sandbox caused isn't the command's: say what to change instead.
+  const setup = t.steps.filter((s) => s.state === "fail" && s.hint).length;
   return (
     <div className="flex flex-col gap-2 rounded-md border p-3 text-sm" data-testid="try-result">
       <p className="font-medium">
@@ -1177,6 +1179,8 @@ function TryResult({ t }: { t: NonNullable<WizardChecks["try"]> }) {
           </>
         ) : t.error ? (
           "The try couldn't run them:"
+        ) : failed > 0 && setup === failed ? (
+          `${failed} of ${t.steps.length} failed because of the factory's setup, not the commands. What to change is under each.`
         ) : failed > 0 ? (
           `${failed} of ${t.steps.length} failed. Fix the command, a service or the environment above, then try again.`
         ) : (
@@ -1194,6 +1198,14 @@ function TryResult({ t }: { t: NonNullable<WizardChecks["try"]> }) {
               {s.seconds > 0 && <span className="text-xs text-muted-foreground">{s.seconds}s</span>}
               {s.state === "skipped" && <span className="text-xs text-muted-foreground">not run</span>}
             </span>
+            {s.state === "fail" && s.hint && (
+              <p className="flex items-start gap-2" data-testid="try-hint">
+                <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0 text-warning" />
+                <span>
+                  <Inline text={s.hint} />
+                </span>
+              </p>
+            )}
             {s.output && (
               <details open={s.state === "fail"}>
                 <summary className="cursor-pointer text-xs text-muted-foreground">Output</summary>

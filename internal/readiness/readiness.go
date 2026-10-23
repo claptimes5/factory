@@ -245,7 +245,7 @@ func Assess(ctx context.Context, in Input) *Report {
 		}
 		if !x.Passed && x.Fault != nil {
 			installed = false
-			r.add(setupFinding("install", x))
+			r.add(setupFinding(in.Repo.Name, "install", x))
 		} else if !x.Passed {
 			installed = false
 			r.add(Finding{Level: Blocker, Area: "install", Title: "Install fails on " + r.Branch,
@@ -309,7 +309,7 @@ func Assess(ctx context.Context, in Input) *Report {
 			// Like a missing service: no change to the code fixes it, so
 			// no issue for a builder.
 			allPassed = false
-			r.add(setupFinding(name, x))
+			r.add(setupFinding(in.Repo.Name, name, x))
 		} else if !x.Passed {
 			allPassed = false
 			title := "`" + name + "` fails on " + r.Branch
@@ -848,9 +848,9 @@ func servicesHint(dir string, files []string, repo config.Repo, output string) s
 
 // setupFinding is the blocker for a check that failed because the job's
 // sandbox lacks a service, library or program it needs.
-func setupFinding(gate string, x Run) Finding {
+func setupFinding(repo, gate string, x Run) Finding {
 	return Finding{Level: Blocker, Area: "setup", Title: "`" + gate + "` can't run in the factory's sandbox: " + x.Fault.What(),
-		Detail: "The output shows:\n\n" + fence(x.Fault.Line) + "\nThis is the factory's setup to fix, not the repo's code: add what's missing to the repo in factory.yaml (a service under `services:`, or a job image that has it), then run the check again.\n\n" + fence(x.Output)}
+		Detail: "The output shows:\n\n" + fence(x.Fault.Line) + "\nThis is the factory's setup to fix, not the repo's code. " + x.Fault.Fix(repo) + ", then run the check again.\n\n" + fence(x.Output)}
 }
 
 func featureMap(files []string) bool {

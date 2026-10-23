@@ -287,7 +287,8 @@ test("the checks step tries the checks before saving, and shows what failed", as
   await api.getByRole("checkbox", { name: /postgres/ }).uncheck();
   await api.getByRole("button", { name: "Try these checks" }).click();
   const result = api.getByTestId("try-result");
-  await expect(result).toContainText("1 of 3 failed");
+  await expect(result).toContainText("1 of 3 failed because of the factory's setup");
+  await expect(result.getByTestId("try-hint")).toContainText("isn't running");
   await expect(result).toContainText("Connection refused");
   await api.getByRole("checkbox", { name: /postgres/ }).check();
   await api.getByRole("button", { name: "Try these checks" }).click();

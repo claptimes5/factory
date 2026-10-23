@@ -283,7 +283,11 @@ secrets the jobs don't need out of `env`.
 - **The built-in list** covers the Claude and OpenAI APIs and their
   sign-in, GitHub, gitlab.com, and the Go, npm, PyPI, RubyGems, crates.io
   and Maven registries. Each repo's own self-hosted GitLab is added for
-  you.
+  you. Go's module proxy hands out each module from Google Cloud Storage
+  (`storage.googleapis.com`), so that's on the list too. It's the widest
+  way out on it: anyone can host files there, so a job could send what it
+  holds to a bucket that brings its own credentials. With no Go repos,
+  you can close it with `no_defaults: true` and your own `allow` list.
 - **Tests and hidden scenarios that run with no network** still get none.
 - **Jobs that run at the same time share the network,** so they can reach
   each other's open ports, as they could on Docker's default network.

@@ -84,6 +84,8 @@ func Detect(ctx context.Context, f Files) (*Suggestion, error) {
 	case has("go.mod"):
 		s.Go = true
 		stacks = append(stacks, "Go")
+		// Downloaded once, the modules are there for every check after it.
+		s.Install = "go mod download"
 	case has("Gemfile"):
 		// test/test_helper.rb is Minitest's, whatever else the repo has.
 		minitest := false

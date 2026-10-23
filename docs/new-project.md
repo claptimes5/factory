@@ -52,7 +52,7 @@ factory runs, and the files that make it pick them.
 
 | Stack | It reads | Install | Checks it runs |
 | --- | --- | --- | --- |
-| Go | `go.mod` | (modules download on build) | `go vet ./...`, `golangci-lint run ./...`, `go test -race ./...`, `go build ./...` |
+| Go | `go.mod` | `go mod download` | `go vet ./...`, `golangci-lint run ./...`, `go test -race ./...`, `go build ./...` |
 | Node / TypeScript | `package.json`, plus `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock` | `npm ci` (`npm install` with no lockfile; pnpm and yarn run through `corepack`) | `typecheck` (or `npx tsc --noEmit`), plus the `lint`, `test` and `build` scripts |
 | Python | `pyproject.toml` or `requirements.txt` (`uv.lock` if you use uv) | a `.venv` in the checkout; `[build-system]` or `[dependency-groups]` in `pyproject.toml` decides how | `.venv/bin/ruff check .` and `.venv/bin/mypy .` if your dependency files mention them, and `.venv/bin/python -m pytest` if they mention pytest or there's a `tests/` directory |
 | Ruby / Rails | `Gemfile` | `bundle install` | `bundle exec rubocop` if it's in the Gemfile, then `bundle exec rspec` (with rspec or a `spec/` directory), `bin/rails db:prepare test` (Rails) or `bundle exec rake test` |

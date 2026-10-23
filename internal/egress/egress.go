@@ -31,8 +31,9 @@ var Defaults = []string{
 	"api.openai.com", "auth.openai.com", "chatgpt.com",
 	// Git hosts
 	"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com", "ghcr.io", "gitlab.com", "registry.gitlab.com",
-	// Go
-	"proxy.golang.org", "sum.golang.org",
+	// Go: the module proxy sends each module's zip from Google Cloud
+	// Storage, so without it no Go repo can download its modules.
+	"proxy.golang.org", "sum.golang.org", "storage.googleapis.com",
 	// JavaScript
 	"registry.npmjs.org", "registry.yarnpkg.com", "repo.yarnpkg.com",
 	// Python

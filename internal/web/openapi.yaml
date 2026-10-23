@@ -2237,13 +2237,14 @@ components:
         error: { type: string, description: "Why it couldn't run them, such as a clone or a service; else empty" }
     WizardTryStep:
       type: object
-      required: [gate, command, state, seconds, output]
+      required: [gate, command, state, seconds, output, hint]
       properties:
         gate: { type: string }
         command: { type: string }
         state: { type: string, enum: [waiting, running, pass, fail, skipped] }
         seconds: { type: integer }
         output: { type: string, description: "The end of what it printed" }
+        hint: { type: string, description: "What to change in the factory's setup when the sandbox, not the command, made it fail; else empty" }
     WizardGate:
       type: object
       required: [gate, command, suggested, source]

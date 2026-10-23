@@ -4591,6 +4591,8 @@ export interface components {
             seconds: number;
             /** @description The end of what it printed */
             output: string;
+            /** @description What to change in the factory's setup when the sandbox, not the command, made it fail; else empty */
+            hint: string;
         };
         WizardGate: {
             gate: string;

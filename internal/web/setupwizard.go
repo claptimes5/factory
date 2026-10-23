@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/gates"
 )
 
 // The get-started page walks through what `factory setup` asks in the
@@ -47,21 +48,21 @@ var WizardActions = []string{
 
 // WizardInput is what an action takes; each uses only its own fields.
 type WizardInput struct {
-	Repos   string `json:"repos"`    // repos: owner/name or GitLab project URLs, comma separated
+	Repos string `json:"repos"` // repos: owner/name or GitLab project URLs, comma separated
 	// Workspace is the one the repos added join ("" for one of their own),
 	// and for workspace/move, the one Repo moves to; for workspace/rename,
 	// the one Name renames.
 	Workspace string `json:"workspace"`
-	Name      string `json:"name"` // workspace/rename: the new name
-	AppID   string `json:"app_id"`   // github/existing-app
-	KeyPath string `json:"key_path"` // github/existing-app: the .pem on the factory's machine
-	Token   string `json:"token"`    // github/token, gitlab/token, sentry
-	Repo    string `json:"repo"`     // base-branch
-	Branch  string `json:"branch"`   // base-branch
-	Key     string `json:"key"`      // claude; codex's API key or access token
-	Anyway  bool   `json:"anyway"`   // claude: save a key that doesn't look like one
-	Mode    string `json:"mode"`     // codex: api-key, chatgpt or access-token
-	URL     string `json:"url"`      // notify
+	Name      string `json:"name"`     // workspace/rename: the new name
+	AppID     string `json:"app_id"`   // github/existing-app
+	KeyPath   string `json:"key_path"` // github/existing-app: the .pem on the factory's machine
+	Token     string `json:"token"`    // github/token, gitlab/token, sentry
+	Repo      string `json:"repo"`     // base-branch
+	Branch    string `json:"branch"`   // base-branch
+	Key       string `json:"key"`      // claude; codex's API key or access token
+	Anyway    bool   `json:"anyway"`   // claude: save a key that doesn't look like one
+	Mode      string `json:"mode"`     // codex: api-key, chatgpt or access-token
+	URL       string `json:"url"`      // notify
 	// checks/save and checks/try: the repo's install, base image, gate
 	// commands, the services to start (by name, from those shown) and its
 	// environment.
@@ -179,6 +180,20 @@ type APIWizardTryStep struct {
 	Seconds int    `json:"seconds"`
 	// Output is the end of what it printed.
 	Output string `json:"output"`
+	// Hint is what to change in the factory's setup when the sandbox, not
+	// the command, made it fail (a host its network doesn't allow), or "".
+	Hint string `json:"hint"`
+}
+
+// TryHint is the Hint for a try's step on repo that printed out and
+// failed: what the sandbox lacks and the change to factory.yaml that
+// gives it, or "" when the output shows no sign of the sandbox's fault.
+func TryHint(repo, out string) string {
+	f := gates.SetupFault(out)
+	if f == nil {
+		return ""
+	}
+	return strings.ToUpper(f.What()[:1]) + f.What()[1:] + ". " + f.Fix(repo) + ", then try again."
 }
 
 // APIWizardGate is one check's command.

@@ -132,7 +132,10 @@ while open stays open, with a button to the next one that needs you.
    them as they are on the page, saved or not: it clones the base branch,
    starts the services ticked, and runs the install and each check once,
    showing each one passing or failing with the end of its output, so you
-   can fix a command, a service or a variable before you save. It uses the
+   can fix a command, a service or a variable before you save. When the
+   sandbox made one fail, not the command (a service that isn't running, a
+   host the job's network doesn't allow), it says what to change in
+   `factory.yaml` instead. It uses the
    job image already built; a new base image needs a save and a build
    first.
 6. **Claude** and **OpenAI (Codex)**, when `factory.yaml` uses them: the

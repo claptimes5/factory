@@ -1560,6 +1560,12 @@ func (p *Pipeline) runJob(ctx context.Context, j *store.Job) {
 		for _, d := range []string{"repo", "repos", "work", "gate", "proves", "feature-base", "preview-base"} {
 			_ = os.RemoveAll(filepath.Join(dir, d))
 		}
+		// Go's caches beside the job's exports (see gateExec), whatever
+		// removed the exports themselves.
+		caches, _ := filepath.Glob(filepath.Join(dir, "*.gocache"))
+		for _, d := range caches {
+			_ = os.RemoveAll(d)
+		}
 	}()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1740,6 +1746,9 @@ var exportEnv = map[string]string{
 	"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
 }
 
+// goCacheEnv points Go at a cache beside the export (see gateExec).
+var goCacheEnv = map[string]string{"GOMODCACHE": "/gocache/mod", "GOCACHE": "/gocache/build", "GOLANGCI_LINT_CACHE": "/gocache/lint"}
+
 // gateExec runs one gate command in the repo's job image against an
 // export of the commit under test, kept apart from what gets pushed.
 func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command string, g gateRun) (int, string, error) {
@@ -1762,8 +1771,25 @@ func (p *Pipeline) gateExec(ctx context.Context, jobID int64, workdir, command s
 		for k, v := range exportEnv {
 			env[k] = v
 		}
-		// Only repos with an install step use the cache; Go fetches its
-		// modules itself, into the container.
+		// Go keeps its modules and builds beside the export, so its install
+		// and each check share them, and they go with the export: outside
+		// the tree, where a check that walks it (gofmt -l .) would find
+		// other people's code, and never shared with another commit's
+		// checks, since Go trusts what's in its cache without checking it.
+		if _, err := os.Stat(filepath.Join(workdir, "go.mod")); err == nil {
+			gocache := workdir + ".gocache"
+			if err := os.MkdirAll(gocache, 0o755); err != nil {
+				return -1, "", err
+			}
+			mounts = append(slices.Clip(mounts), runner.Mount{Host: gocache, Container: "/gocache"})
+			for k, v := range goCacheEnv {
+				env[k] = v
+			}
+			// Go makes its module cache read-only, which would keep it from
+			// being removed.
+			env["GOFLAGS"] = strings.TrimSpace(env["GOFLAGS"] + " -modcacherw")
+		}
+		// Only repos with an install step use the dependency cache.
 		if rc.Gates.Install != "" {
 			cache := filepath.Join(p.Cfg.Path(p.Cfg.DataDir), "cache", strings.ReplaceAll(g.repo, "/", "__"))
 			if err := os.MkdirAll(cache, 0o755); err != nil {
