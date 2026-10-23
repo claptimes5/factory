@@ -102,10 +102,10 @@ type Server struct {
 	Restarter Restarter
 	// Push sends Web Push notifications (nil: the factory can't).
 	Push *push.Sender
-	// SetTrust gives a repo its own auto_merge and self_start in
+	// SetTrust gives a workspace its auto_merge and self_start in
 	// factory.yaml, for a trust level; self_start nil removes it (may be
 	// nil: then trust can't be changed here).
-	SetTrust func(ctx context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error
+	SetTrust func(ctx context.Context, workspace string, a *config.AutoMerge, s *config.SelfStart) error
 	// Breakers reads each repo's auto-merge breaker (may be nil).
 	Breakers func(ctx context.Context) []APIBreaker
 	// Choices are what a person can do next with a job that ended:

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
@@ -258,3 +259,63 @@ func (c *Config) AnyOrchestrator() bool {
 // DisableOrchestrator turns every workspace's orchestrator off, as on a
 // host that can't run it.
 func (c *Config) DisableOrchestrator() { c.noOrchestrator = true }
+
+// trustOf is a repo's auto_merge, given its own, its workspace's and the
+// top level's: the workspace's level, or the repo's where that's
+// stricter; the merge method and breaker as the most specific one sets
+// them.
+func trustOf(repo, ws, top *AutoMerge) *AutoMerge {
+	switch {
+	case ws == nil && repo == nil:
+		return top
+	case ws == nil:
+		return repo
+	}
+	out := *ws
+	if repo != nil {
+		if stricter(repo, ws) {
+			out.UpTo, out.MaxSize = repo.UpTo, repo.MaxSize
+		}
+		out.Method, out.Breaker = cmp.Or(repo.Method, out.Method), cmp.Or(repo.Breaker, out.Breaker)
+	}
+	if top != nil {
+		out.Method, out.Breaker = cmp.Or(out.Method, top.Method), cmp.Or(out.Breaker, top.Breaker)
+	}
+	return &out
+}
+
+// stricter says whether a merges less on its own than b.
+func stricter(a, b *AutoMerge) bool {
+	risks, sizes := []string{"none", "low", "medium"}, []string{"XS", "S", "M", "L"}
+	size := func(x *AutoMerge) int { return slices.Index(sizes, cmp.Or(x.MaxSize, "S")) }
+	ra, rb := slices.Index(risks, a.UpTo), slices.Index(risks, b.UpTo)
+	if ra != rb {
+		return ra < rb
+	}
+	return ra > 0 && size(a) < size(b)
+}
+
+// selfStartOf is a repo's self_start, given its own and its workspace's:
+// with both, only the sources both allow, within the lower caps.
+func selfStartOf(repo, ws *SelfStart) *SelfStart {
+	switch {
+	case ws == nil:
+		return repo
+	case repo == nil:
+		return ws
+	}
+	out := SelfStart{Daily: min(repo.DailyCap(), ws.DailyCap())}
+	for _, s := range repo.Sources {
+		if slices.Contains(ws.Sources, s) {
+			out.Sources = append(out.Sources, s)
+		}
+	}
+	switch {
+	case repo.Budget != nil && ws.Budget != nil:
+		b := min(*repo.Budget, *ws.Budget)
+		out.Budget = &b
+	default:
+		out.Budget = cmp.Or(repo.Budget, ws.Budget)
+	}
+	return &out
+}

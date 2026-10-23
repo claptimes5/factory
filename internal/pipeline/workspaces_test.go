@@ -161,3 +161,27 @@ func TestChatNeedsAWorkspace(t *testing.T) {
 		t.Fatalf("an old chat with several workspaces = %v", err)
 	}
 }
+
+// Trust is the workspace's: one repo's tripped breaker stops auto-merge
+// in every repo of its workspace, not in others, and resetting from any
+// of them resets it.
+func TestBreakerTripsAcrossTheWorkspace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setupScoped(t, "")
+	if _, err := e.p.Store.TripBreaker(ctx, "o/r", "2 reverts", store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !e.p.breakerTripped(ctx, "o/web") || e.p.breakerTripped(ctx, "o/docs") {
+		t.Fatalf("o/web %v, o/docs %v", e.p.breakerTripped(ctx, "o/web"), e.p.breakerTripped(ctx, "o/docs"))
+	}
+	if err := e.p.ResetAutoMerge(ctx, "o/web", "avi"); err != nil {
+		t.Fatal(err)
+	}
+	if e.p.breakerTripped(ctx, "o/r") {
+		t.Fatal("resetting from o/web leaves o/r's breaker tripped")
+	}
+	if err := e.p.ResetAutoMerge(ctx, "o/r", "avi"); err == nil {
+		t.Fatal("a second reset should say there's nothing tripped")
+	}
+}

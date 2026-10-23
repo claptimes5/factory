@@ -403,20 +403,21 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Home" } } } }
   /trust:
     get:
-      summary: "Trust: each repo's level on the ladder toward full automation, its record and practice runs"
+      summary: "Trust: each workspace's level on the ladder toward full automation, the record and practice runs of its repos"
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Trust" } } } }
     post:
-      summary: Move a repo to a trust level (its auto_merge in factory.yaml), applied once the factory restarts
+      summary: Move a workspace to a trust level (its auto_merge and self_start in factory.yaml), applied once the factory restarts
+      description: The levels set on its repos go, so the workspace's is theirs.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [repo, level]
+              required: [workspace, level]
               properties:
-                repo: { type: string }
+                workspace: { type: string }
                 level: { type: integer, description: "1 to 6; 7 isn't built yet" }
       responses:
         "200":
@@ -1826,10 +1827,10 @@ components:
         failed_at: { type: string, description: "When the last push to it failed; empty after one that worked" }
     Trust:
       type: object
-      required: [levels, repos, always_asks, window_days, can_change, reason, pending]
+      required: [levels, workspaces, always_asks, window_days, can_change, reason, pending]
       properties:
         levels: { type: array, items: { $ref: "#/components/schemas/TrustLevel" } }
-        repos: { type: array, items: { $ref: "#/components/schemas/RepoTrust" } }
+        workspaces: { type: array, items: { $ref: "#/components/schemas/WorkspaceTrust" } }
         always_asks: { type: array, items: { type: string }, description: "Kinds of change that wait for a person at every level (risk.needs_person)" }
         window_days: { type: integer, description: How far back the record and practice runs look }
         can_change: { type: boolean }
@@ -1847,14 +1848,23 @@ components:
         available: { type: boolean, description: The factory can work at this level today }
         needs: { type: string, description: "What a level not built yet would take, or empty" }
         evidence: { type: integer, description: "Changes it would have merged in the window, none gone wrong, before it's suggested" }
-    RepoTrust:
+    RepoLevel:
       type: object
-      required: [repo, level, custom, stepped_back, why, merged, automatic, reverted, broke_main, practice, proposed, accepted, sources, suggest, suggest_why]
+      required: [repo, level]
       properties:
+        repo: { type: string }
+        level: { type: integer }
+    WorkspaceTrust:
+      type: object
+      required: [workspace, repos, level, custom, mixed, stricter, stepped_back, why, merged, automatic, reverted, broke_main, practice, proposed, accepted, sources, suggest, suggest_why]
+      properties:
+        workspace: { type: string }
+        repos: { type: array, items: { type: string } }
+        mixed: { type: boolean, description: "No level of its own yet, and its repos are at different ones: level is the lowest" }
+        stricter: { type: array, items: { $ref: "#/components/schemas/RepoLevel" }, description: Its repos set lower than it by hand in factory.yaml }
         proposed: { type: integer, description: "Level 6's record: issues the factory filed from its own findings in the window" }
         accepted: { type: integer, description: "Of those, how many a person took on (or level 6 started)" }
         sources: { type: array, items: { type: string }, description: "What starts on its own at level 6 (self_start.sources)" }
-        repo: { type: string }
         level: { type: integer }
         custom: { type: boolean, description: "auto_merge is set by hand between levels; level is the highest it covers" }
         stepped_back: { type: boolean, description: "The breaker turned auto-merge off: level 1 until it's reset" }

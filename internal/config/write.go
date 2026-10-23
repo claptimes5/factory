@@ -2,7 +2,9 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -123,36 +125,108 @@ func WriteFile(path string, out []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// SetRepoTrust gives repo its own auto_merge and self_start in the config
-// file, as the dashboard's trust screen sets a level: up_to and max_size
-// from a, the merge method and breaker as the repo has them now; self_start
-// as s, keeping the repo's own sources and limits if it has them, or none
-// for s nil.
-func SetRepoTrust(path, repo string, a *AutoMerge, s *SelfStart) error {
+// WriteWorkspaces replaces the config's top-level workspaces: entry with
+// ws, or removes it for none, as WriteRepos does repos:. A new one goes
+// after the repos.
+func WriteWorkspaces(path string, ws map[string]Workspace) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	block := ""
+	if len(ws) > 0 {
+		var buf bytes.Buffer
+		enc := yaml.NewEncoder(&buf)
+		enc.SetIndent(2)
+		if err := enc.Encode(map[string]map[string]Workspace{"workspaces": ws}); err != nil {
+			return err
+		}
+		block = buf.String()
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	var out strings.Builder
+	found := false
+	for i := 0; i < len(lines); i++ {
+		if found || !strings.HasPrefix(lines[i], "workspaces:") {
+			out.WriteString(lines[i])
+			continue
+		}
+		found = true
+		out.WriteString(block)
+		for i+1 < len(lines) && continues(lines[i+1:]) {
+			i++
+		}
+	}
+	if !found && block != "" {
+		// After the repo: or repos: entry and what belongs to it.
+		out.Reset()
+		placed := false
+		for i := 0; i < len(lines); i++ {
+			out.WriteString(lines[i])
+			if placed || !(strings.HasPrefix(lines[i], "repo:") || strings.HasPrefix(lines[i], "repos:")) {
+				continue
+			}
+			for i+1 < len(lines) && continues(lines[i+1:]) {
+				i++
+				out.WriteString(lines[i])
+			}
+			out.WriteString(block)
+			placed = true
+		}
+		if !placed {
+			out.WriteString(block)
+		}
+	}
+	return WriteFile(path, []byte(out.String()))
+}
+
+// SetWorkspaceTrust gives workspace ws a trust level in the config file,
+// as the dashboard's trust screen sets one: up_to and max_size from a, and
+// self_start as s (keeping the workspace's own sources and limits if it
+// has them), or none for s nil. A repo's own workspace is written out by
+// its name. The levels set on its repos go, so the workspace's is theirs;
+// a repo's merge method and breaker move to the workspace when it has none.
+func SetWorkspaceTrust(path, ws string, a *AutoMerge, s *SelfStart) error {
 	cfg, err := Load(path)
 	if err != nil {
 		return err
 	}
+	w, ok := cfg.WorkspaceConf(ws)
+	if !ok {
+		return fmt.Errorf("%s isn't a workspace in %s", ws, path)
+	}
+	next := *a
+	if next.UpTo == "none" {
+		next.MaxSize = ""
+	}
+	if w.AutoMerge != nil {
+		next.Method, next.Breaker = w.AutoMerge.Method, w.AutoMerge.Breaker
+	}
 	repos := slices.Clone(cfg.Repos)
 	for i, r := range repos {
-		if !strings.EqualFold(r.Name, repo) {
+		if cfg.WorkspaceOf(r.Name) != ws {
 			continue
 		}
-		next := *a
-		if cur, _ := cfg.RepoConf(r.Name); cur.AutoMerge != nil {
-			next.Method, next.Breaker = cur.AutoMerge.Method, cur.AutoMerge.Breaker
+		if r.AutoMerge != nil {
+			next.Method, next.Breaker = cmp.Or(next.Method, r.AutoMerge.Method), cmp.Or(next.Breaker, r.AutoMerge.Breaker)
 		}
-		if next.UpTo == "none" {
-			next.MaxSize = ""
-		}
-		repos[i].AutoMerge = &next
-		switch {
-		case s == nil:
-			repos[i].SelfStart = nil
-		case r.SelfStart == nil || len(r.SelfStart.Sources) == 0:
-			repos[i].SelfStart = s
-		}
-		return WriteRepos(path, repos)
+		repos[i].AutoMerge, repos[i].SelfStart = nil, nil
 	}
-	return fmt.Errorf("%s isn't in %s", repo, path)
+	w.AutoMerge = &next
+	switch {
+	case s == nil:
+		w.SelfStart = nil
+	case w.SelfStart == nil || len(w.SelfStart.Sources) == 0:
+		w.SelfStart = s
+	}
+	all := maps.Clone(cfg.Workspaces)
+	if all == nil {
+		all = map[string]Workspace{}
+	}
+	all[ws] = w
+	// The workspace's level first, so the file is valid between the writes.
+	if err := WriteWorkspaces(path, all); err != nil {
+		return err
+	}
+	return WriteRepos(path, repos)
 }

@@ -29,8 +29,8 @@ func trustSetup(t *testing.T, sizes []string) (string, *Server, *store.Store, st
 	path := filepath.Join(t.TempDir(), "factory.yaml")
 	os.WriteFile(path, src, 0o640)
 	s.ConfigPath, s.Listen, s.StartedConfig = path, "127.0.0.1:0", ConfigVersion(src)
-	s.SetTrust = func(_ context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error {
-		return config.SetRepoTrust(path, repo, a, s)
+	s.SetTrust = func(_ context.Context, ws string, a *config.AutoMerge, s *config.SelfStart) error {
+		return config.SetWorkspaceTrust(path, ws, a, s)
 	}
 	ctx := context.Background()
 	for i, size := range sizes {
@@ -54,7 +54,7 @@ func TestTrustLevelsAndPracticeRuns(t *testing.T) {
 	srv, _, st, path := trustSetup(t, sizes)
 	var tr APITrust
 	getJSON(t, srv+"/api/v1/trust", &tr)
-	r := tr.Repos[0]
+	r := tr.Workspaces[0]
 	if r.Level != 3 || r.Custom || r.Merged != 20 || len(tr.AlwaysAsks) == 0 || !tr.CanChange {
 		t.Fatalf("trust = %+v (always asks %v, can change %v)", r, tr.AlwaysAsks, tr.CanChange)
 	}
@@ -71,12 +71,12 @@ func TestTrustLevelsAndPracticeRuns(t *testing.T) {
 	// One reverted change it would have merged: not yet.
 	st.MarkReverted(context.Background(), "o/r", 103, "commit abc", store.Now())
 	getJSON(t, srv+"/api/v1/trust", &tr)
-	if r := tr.Repos[0]; r.Suggest != 0 || r.Reverted != 1 || !strings.Contains(r.SuggestWhy, "went wrong") {
+	if r := tr.Workspaces[0]; r.Suggest != 0 || r.Reverted != 1 || !strings.Contains(r.SuggestWhy, "went wrong") {
 		t.Fatalf("after a revert: %+v", r)
 	}
 
-	// Raising it writes the repo's own auto_merge, applied on restart.
-	code, body := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":4}`)
+	// Raising it writes the workspace's auto_merge, applied on restart.
+	code, body := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"r","level":4}`)
 	if code != 200 || !strings.Contains(body, "level 4") {
 		t.Fatalf("set: %d %s", code, body)
 	}
@@ -89,21 +89,21 @@ func TestTrustLevelsAndPracticeRuns(t *testing.T) {
 	}
 	var after struct{ Trust APITrust }
 	json.Unmarshal([]byte(body), &after)
-	if after.Trust.Repos[0].Level != 4 || !after.Trust.Pending {
-		t.Fatalf("after: %+v pending %v", after.Trust.Repos[0], after.Trust.Pending)
+	if after.Trust.Workspaces[0].Level != 4 || !after.Trust.Pending {
+		t.Fatalf("after: %+v pending %v", after.Trust.Workspaces[0], after.Trust.Pending)
 	}
-	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":7}`); code != 400 {
+	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"r","level":7}`); code != 400 {
 		t.Fatalf("a level not built yet was taken: %d", code)
 	}
-	// Level 1 turns auto-merge off for the repo.
-	postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":1}`)
+	// Level 1 turns auto-merge off for the workspace.
+	postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"r","level":1}`)
 	cfg, _ = config.Load(path)
 	if rc, _ := cfg.RepoConf("o/r"); rc.AutoMerge.On() {
 		t.Fatalf("level 1 left auto-merge on: %+v", rc.AutoMerge)
 	}
 }
 
-// A tripped breaker steps a repo back: no suggestion until it's reset.
+// A tripped breaker steps a workspace back: no suggestion until it's reset.
 func TestTrustStepsBack(t *testing.T) {
 	t.Parallel()
 	srv, s, _, _ := trustSetup(t, []string{"XS"})
@@ -112,7 +112,7 @@ func TestTrustStepsBack(t *testing.T) {
 	}
 	var tr APITrust
 	getJSON(t, srv+"/api/v1/trust", &tr)
-	if r := tr.Repos[0]; !r.SteppedBack || r.Why != "2 reverts" || r.Suggest != 0 || !strings.Contains(r.SuggestWhy, "Reset it first") {
+	if r := tr.Workspaces[0]; !r.SteppedBack || r.Why != "2 reverts" || r.Suggest != 0 || !strings.Contains(r.SuggestWhy, "Reset it first") {
 		t.Fatalf("stepped back = %+v", r)
 	}
 }
@@ -133,11 +133,11 @@ func TestTrustLevelSix(t *testing.T) {
 	}
 	var tr APITrust
 	getJSON(t, srv+"/api/v1/trust", &tr)
-	r := tr.Repos[0]
+	r := tr.Workspaces[0]
 	if r.Level != 5 || r.Proposed != 12 || r.Accepted != 10 || r.Suggest != 6 || !strings.Contains(r.SuggestWhy, "You took on 10 of the 12 issues") {
 		t.Fatalf("level 6's record: %+v", r)
 	}
-	if code, body := postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":6}`); code != 200 {
+	if code, body := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"r","level":6}`); code != 200 {
 		t.Fatalf("set 6: %d %s", code, body)
 	}
 	cfg, _ := config.Load(path)
@@ -146,14 +146,58 @@ func TestTrustLevelSix(t *testing.T) {
 		t.Fatalf("o/r at level 6: %+v %+v", rc.SelfStart, rc.AutoMerge)
 	}
 	getJSON(t, srv+"/api/v1/trust", &tr)
-	if tr.Repos[0].Level != 6 || tr.Repos[0].Custom {
-		t.Fatalf("after: %+v", tr.Repos[0])
+	if tr.Workspaces[0].Level != 6 || tr.Workspaces[0].Custom {
+		t.Fatalf("after: %+v", tr.Workspaces[0])
 	}
 	// Stepping down takes self_start away.
-	postJSON(t, srv+"/api/v1/trust", "", `{"repo":"o/r","level":5}`)
+	postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"r","level":5}`)
 	cfg, _ = config.Load(path)
 	if rc, _ := cfg.RepoConf("o/r"); rc.SelfStart != nil {
 		t.Fatalf("self_start left at level 5: %+v", rc.SelfStart)
+	}
+}
+
+// A workspace of several repos has one level and the record of all of
+// them. Before it has a level of its own, repos set apart show it mixed,
+// at the lowest; setting one gives them all that, and a repo set lower by
+// hand afterwards is listed as stricter.
+func TestTrustIsTheWorkspaces(t *testing.T) {
+	t.Parallel()
+	srv, s, st, path := trustSetup(t, []string{"XS", "S"})
+	src := strings.Replace(string(must(os.ReadFile(path))), "repo: o/r\n", "repos:\n  - o/r\n  - name: o/web\n    auto_merge: {up_to: low, max_size: XS}\nworkspaces:\n  app:\n    repos: [o/r, o/web]\n", 1)
+	os.WriteFile(path, []byte(src), 0o640)
+	s.Repos, s.Workspaces = []string{"o/r", "o/web"}, []Workspace{{Name: "app", Repos: []string{"o/r", "o/web"}}}
+	ctx := context.Background()
+	it, _, _ := st.UpsertItem(ctx, "o/web", 7, "Web change")
+	st.RecordMerge(ctx, store.FactoryMerge{Repo: "o/web", PR: 7, ItemID: it.ID, MergeSHA: "w7", MergedAt: store.Now()})
+	var tr APITrust
+	getJSON(t, srv+"/api/v1/trust", &tr)
+	if len(tr.Workspaces) != 1 {
+		t.Fatalf("workspaces = %+v", tr.Workspaces)
+	}
+	w := tr.Workspaces[0]
+	if w.Workspace != "app" || w.Level != 2 || !w.Mixed || w.Merged != 3 || len(w.Stricter) != 0 {
+		t.Fatalf("before a level of its own = %+v", w)
+	}
+	if code, body := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"app","level":4}`); code != 200 {
+		t.Fatalf("set: %d %s", code, body)
+	}
+	cfg, _ := config.Load(path)
+	for _, repo := range []string{"o/r", "o/web"} {
+		if rc, _ := cfg.RepoConf(repo); rc.AutoMerge.MaxSize != "M" {
+			t.Errorf("%s = %+v", repo, rc.AutoMerge)
+		}
+	}
+	src = strings.Replace(string(must(os.ReadFile(path))), "  - o/web\n", "  - name: o/web\n    auto_merge: {up_to: low, max_size: XS}\n", 1)
+	if err := os.WriteFile(path, []byte(src), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	getJSON(t, srv+"/api/v1/trust", &tr)
+	if w := tr.Workspaces[0]; w.Level != 4 || w.Mixed || len(w.Stricter) != 1 || w.Stricter[0] != (APIRepoLevel{Repo: "o/web", Level: 2}) {
+		t.Fatalf("with o/web set lower by hand = %+v", w)
+	}
+	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"nope","level":2}`); code != 400 {
+		t.Fatalf("an unknown workspace was taken: %d", code)
 	}
 }
 

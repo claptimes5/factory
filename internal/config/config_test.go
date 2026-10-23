@@ -401,6 +401,74 @@ func TestWorkspacesScopeRepos(t *testing.T) {
 	}
 }
 
+// Trust is the workspace's: its level for each repo, a repo's own only
+// where it's stricter, with the merge method as the repo sets it; and
+// setting a workspace's level clears its repos' own.
+func TestWorkspaceTrust(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	y := `repos:
+  - o/api
+  - name: o/web
+    auto_merge: {up_to: low, max_size: XS, method: squash}
+  - name: o/docs
+    auto_merge: {up_to: medium, max_size: L}
+    self_start: {sources: [main_health, todos]}
+workspaces:
+  shop:
+    repos: [o/api, o/web, o/docs]
+    auto_merge: {up_to: low, max_size: M}
+    self_start: {sources: [main_health, dependabot], daily: 2}
+`
+	c, err := Parse([]byte(y + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]string{"o/api": "low M merge", "o/web": "low XS squash", "o/docs": "low M merge"} {
+		r, _ := c.RepoConf(repo)
+		if got := r.AutoMerge.UpTo + " " + r.AutoMerge.MaxSize + " " + r.AutoMerge.MergeMethod(); got != want {
+			t.Errorf("%s = %s, want %s", repo, got, want)
+		}
+	}
+	if r, _ := c.RepoConf("o/docs"); !slices.Equal(r.SelfStart.Sources, []string{"main_health"}) || r.SelfStart.DailyCap() != 2 {
+		t.Errorf("o/docs self_start = %+v", r.SelfStart)
+	}
+	if r, _ := c.RepoConf("o/api"); !slices.Equal(r.SelfStart.Sources, []string{"main_health", "dependabot"}) {
+		t.Errorf("o/api self_start = %+v", r.SelfStart)
+	}
+
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	os.WriteFile(path, []byte(y+base), 0o644)
+	if err := SetWorkspaceTrust(path, "shop", &AutoMerge{UpTo: "medium", MaxSize: "M"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repo := range []string{"o/api", "o/web", "o/docs"} {
+		r, _ := c.RepoConf(repo)
+		if r.AutoMerge.UpTo != "medium" || r.AutoMerge.MaxSize != "M" || r.SelfStart != nil {
+			t.Errorf("%s after setting shop to 5 = %+v %+v", repo, r.AutoMerge, r.SelfStart)
+		}
+	}
+	if w := c.Workspaces["shop"]; w.AutoMerge.Method != "squash" {
+		t.Errorf("o/web's merge method should move to the workspace: %+v", w.AutoMerge)
+	}
+	// A repo's own workspace is written out by its name.
+	os.WriteFile(path, []byte("repos: [o/api, o/web]\n"+base), 0o644)
+	if err := SetWorkspaceTrust(path, "web", &AutoMerge{UpTo: "low", MaxSize: "S"}, &SelfStart{Sources: []string{"main_health"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = Load(path)
+	if w, ok := c.Workspaces["web"]; !ok || !slices.Equal(w.Repos, []string{"o/web"}) || w.AutoMerge.UpTo != "low" || w.SelfStart == nil {
+		t.Fatalf("web = %+v %v", w, ok)
+	}
+	if r, _ := c.RepoConf("o/api"); r.AutoMerge != c.AutoMerge {
+		t.Fatalf("o/api keeps the top level's: %+v", r.AutoMerge)
+	}
+}
+
 func TestCostOfPricesCachedInput(t *testing.T) {
 	c := load(t)
 	// gpt-6.1-sol: $2 input, $0.10 cached, $10 output per million.

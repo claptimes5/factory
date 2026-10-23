@@ -1229,9 +1229,10 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.Services == nil {
 		r.Services = c.Services
 	}
-	if r.AutoMerge == nil {
-		r.AutoMerge = c.AutoMerge
-	}
+	// Trust is the workspace's; a repo's own may only be stricter.
+	w := c.Workspaces[c.WorkspaceOf(r.Name)]
+	r.AutoMerge = trustOf(r.AutoMerge, w.AutoMerge, c.AutoMerge)
+	r.SelfStart = selfStartOf(r.SelfStart, w.SelfStart)
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	// REVIEW.md tells the reviewers what to look for and what to skip, so
 	// the builder they review never may change it, whatever the config.

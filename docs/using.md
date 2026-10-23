@@ -753,7 +753,8 @@ does the dashboard while a repo is red or flaky.
 
 ## Trust
 
-How much the factory may do on its own is a level for each repo, on a
+How much the factory may do on its own is a level for each
+[workspace](configuration.md#workspaces), for all of its repos, on a
 ladder toward full automation, on the dashboard's **Trust** screen:
 
 | Level | The factory may, on its own |
@@ -766,15 +767,21 @@ ladder toward full automation, on the dashboard's **Trust** screen:
 | 6 | Pick its own work: what it finds itself starts without your label, and merges itself under level 5's rules. |
 | 7 | Ship: release and deploy, with a canary and an automatic rollback. *Not built yet.* |
 
-Levels 1 to 5 are names for a repo's [`auto_merge`](configuration.md#auto-merge)
+Levels 1 to 5 are names for a workspace's [`auto_merge`](configuration.md#auto-merge)
 (`up_to` and `max_size`); level 6 adds its
 [`self_start`](configuration.md#picking-its-own-work). At every level, high-risk changes and the kinds
 in `risk.needs_person` (a migration, a new dependency, auth code, a
 deleted test) wait for you, and the [breaker](#auto-merge-guard-rails)
-steps a repo back to level 1 when its merges are reverted or break main,
-until you reset it.
+steps the workspace back to level 1 when a repo's merges are reverted or
+break main, until you reset it.
 
-**Earned, never taken.** For each repo the screen shows its record over
+A repo can be set lower than its workspace by hand, with its own
+`auto_merge` in `factory.yaml`: the stricter of the two applies, and the
+screen lists the repo under its workspace. A workspace with no level of
+its own yet takes the lowest of its repos'; the screen says so until you
+set one.
+
+**Earned, never taken.** For each workspace the screen shows its repos' record over
 the last 30 days (merged, merged by itself, reverted, broke main) and a
 practice run of each level: how many of those merged PRs that level would
 have merged on its own, and how many of them went wrong. When the next
@@ -782,8 +789,9 @@ level's practice run is long enough (5 changes for level 2, then 10, 20
 and 30) and none went wrong, the factory suggests it, on the screen and on
 Home. Level 6's practice run is different: of the issues the factory filed
 from its own findings in the window, how many you took on (it needs 10,
-and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the repo's own
-`auto_merge` to `factory.yaml`, and it applies once the factory restarts.
+and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the workspace's
+`auto_merge` and `self_start` to `factory.yaml`, takes away the levels set
+on its repos, and applies once the factory restarts.
 
 The ladder follows research on agent autonomy: oversight moving from
 approving each action to watching and stepping in (Anthropic, [Measuring
@@ -802,12 +810,12 @@ schedule. Below level 6, what it finds waits for you: issues from the
 sources wait for your label, and main health's fixes and the
 orchestrator's issues are built but wait for you to merge them.
 
-At level 6, the findings from the repo's `self_start.sources` (main
+At level 6, the findings from the workspace's `self_start.sources` (main
 health and Dependabot when the Trust screen raises it) start without a
 label, approved as "the factory (dependabot)" and so on, and merge
-themselves under the repo's auto_merge. Up to 3 a day, and a fifth of
-the daily budget for that work, start this way; past either, they wait
-for your label. A tripped breaker stops it too. Home, The line and
+themselves under its auto_merge. Up to 3 a day, and a fifth of
+the daily budget for that work, start this way across the workspace's
+repos; past either, they wait for your label. A tripped breaker stops it too. Home, The line and
 History mark such work "Found by the factory".
 
 ## Auto-merge guard rails

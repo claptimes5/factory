@@ -569,17 +569,23 @@ func (p *Pipeline) checkBreaker(ctx context.Context, repo string) {
 	var cancelled, stuck []string
 	items, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	p.warn(err, "ListItems")
+	// It stops auto-merge across the repo's workspace.
+	ws := p.Cfg.WorkspaceOf(repo)
 	for _, it := range items {
-		if !strings.EqualFold(it.Repo, repo) || !p.autoMerged(ctx, it) {
+		if p.Cfg.WorkspaceOf(it.Repo) != ws || !p.autoMerged(ctx, it) {
 			continue
 		}
 		if err := p.handBack(ctx, it, "the auto-merge breaker tripped", false); err != nil {
-			stuck = append(stuck, p.ref(repo, it.PRNumber))
+			stuck = append(stuck, p.ref(it.Repo, it.PRNumber))
 			continue
 		}
-		cancelled = append(cancelled, p.ref(repo, it.PRNumber))
+		cancelled = append(cancelled, p.ref(it.Repo, it.PRNumber))
 	}
-	msg := fmt.Sprintf("Auto-merge is off for %s: %s. New PRs there wait for you.", repo, reason)
+	where := repo
+	if len(p.Cfg.WorkspaceRepos(ws)) > 1 {
+		where = "workspace " + ws
+	}
+	msg := fmt.Sprintf("Auto-merge is off for %s: %s. New PRs there wait for you.", where, reason)
 	if len(cancelled) > 0 {
 		msg += fmt.Sprintf(" Cancelled auto-merge on %s; %s for you.", strings.Join(cancelled, ", "), plural(len(cancelled), "it waits", "they wait"))
 	}
@@ -646,38 +652,56 @@ func (p *Pipeline) coolOff(ctx context.Context, repo string) (*store.Guard, erro
 	return p.Store.Guard(ctx, repo)
 }
 
-// breakerTripped says whether a repo's breaker keeps its PRs from
-// merging themselves. A breaker past its cool-off is reset, and you're
-// told. Unsure, it says tripped.
+// breakerTripped says whether a breaker keeps a repo's PRs from merging
+// themselves: its own, or any of its workspace's, since trust is the
+// workspace's. A breaker past its cool-off is reset, and you're told.
+// Unsure, it says tripped.
 func (p *Pipeline) breakerTripped(ctx context.Context, repo string) bool {
 	if p.Cfg.NoGuard {
 		return false
 	}
-	g, err := p.coolOff(ctx, repo)
-	if err != nil {
-		p.warn(err, "Guard")
-		return true
+	for _, r := range p.sameWorkspace(repo) {
+		g, err := p.coolOff(ctx, r)
+		if err != nil {
+			p.warn(err, "Guard")
+			return true
+		}
+		if g.Tripped() {
+			return true
+		}
 	}
-	return g.Tripped()
+	return false
+}
+
+// sameWorkspace is repo and the other repos of its workspace.
+func (p *Pipeline) sameWorkspace(repo string) []string {
+	if rs := p.Cfg.WorkspaceRepos(p.Cfg.WorkspaceOf(repo)); len(rs) > 0 {
+		return rs
+	}
+	return []string{repo}
 }
 
 // errBreakerTripped is why a PR doesn't merge itself after all: the
 // repo's breaker tripped while it was being opened.
 var errBreakerTripped = errors.New("auto-merge's breaker for the repo tripped")
 
-// ResetAutoMerge turns a repo's tripped breaker off, so its PRs may merge
-// themselves again. Strikes before now no longer count. The PRs whose
-// auto-merge it cancelled still wait for you.
+// ResetAutoMerge turns the tripped breakers of a repo's workspace off, so
+// its PRs may merge themselves again. Strikes before now no longer count.
+// The PRs whose auto-merge it cancelled still wait for you.
 func (p *Pipeline) ResetAutoMerge(ctx context.Context, repo, by string) error {
 	name, ok := p.repoName(repo)
 	if !ok {
 		return fmt.Errorf("%s isn't one of the factory's repos", repo)
 	}
-	reset, err := p.resetBreaker(ctx, name, by, guardNow())
-	if err != nil {
-		return err
+	any := false
+	for _, r := range p.sameWorkspace(name) {
+		reset, err := p.resetBreaker(ctx, r, by, guardNow())
+		if err != nil {
+			return err
+		}
+		any = any || reset
 	}
-	if !reset {
+	if !any {
 		return fmt.Errorf("auto-merge's breaker isn't tripped for %s", name)
 	}
 	return nil
