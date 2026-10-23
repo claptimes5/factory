@@ -12,7 +12,7 @@ Thanks for helping. Issues and pull requests are both welcome.
   - If you changed the dashboard under `web/` or the API in
     `internal/web/openapi.yaml`: `cd web && npm ci && npm run build`, then
     commit the regenerated files under `internal/web/app` and
-    `web/src/api`. Then run `npm run e2e` (Playwright, desktop and phone), not `npx playwright test`: it starts the devserver first, which saves minutes where a closed port hangs (see [Working on the dashboard](docs/using.md#working-on-the-dashboard)).
+    `web/src/api` (`scripts/check-web-built.sh` says when they're stale). Then run `npm run e2e` (Playwright, desktop and phone), not `npx playwright test`: it starts the devserver first, which saves minutes where a closed port hangs (see [Working on the dashboard](docs/using.md#working-on-the-dashboard)).
     The build also runs `npm run check-styles`, which keeps screens on the
     design system ([docs/plans/design-system.md](docs/plans/design-system.md)):
     no font sizes, radii or colors outside the tokens; the components and
