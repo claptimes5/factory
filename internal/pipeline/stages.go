@@ -356,7 +356,7 @@ func (p *Pipeline) runImplement(ctx context.Context, j *store.Job, it *store.Wor
 	work := agentDir(dir, parts, true)
 	data := PromptData{Repo: it.Repo, Issue: is, OutDir: p.Runner.Paths(specFor(work, out)).Out,
 		Findings: in.Findings, AnswerIDs: in.FindingIDs, PreviousFailure: in.PreviousFailure, Risk: riskOrLow(it.Risk), Members: p.promptMembers(parts),
-		TextOnly: textOnly(it), Rethink: in.Rethink}
+		TextOnly: textOnly(it), Rethink: in.Rethink, FixRound: in.FixRound && !in.Rethink}
 	for _, pt := range parts {
 		for _, f := range p.riskyFeatures(ctx, pt.repo, pt.ws.Repo, pt.ws.BaseSHA) {
 			if pt.folder != "" {

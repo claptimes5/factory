@@ -734,3 +734,28 @@ func TestANewFindingOnChangedLinesBlocks(t *testing.T) {
 		t.Fatalf("findings %+v", fs)
 	}
 }
+
+// A fix round's builder checks only what it changes: the change already
+// passed every check, and the gates run them all again on the result. The
+// first build runs them all, and so does a rethink, which starts over.
+func TestAFixRoundRunsTargetedChecks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{goodBuild, fixer()}
+	e.claude.implVerdict = answerF1
+	e.claude.verifies = []string{confirmF1}
+	e.codex.reviews = []string{block, resolveF1}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ps := e.claude.prompts["implement"]
+	if len(ps) != 2 {
+		t.Fatalf("%d builds", len(ps))
+	}
+	const targeted = "don't run a whole test suite or lint the whole repo"
+	if strings.Contains(ps[0], targeted) || !strings.Contains(ps[1], targeted) {
+		t.Fatalf("first build:\n%s\n\nfix round:\n%s", ps[0], ps[1])
+	}
+}

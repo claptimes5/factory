@@ -325,7 +325,9 @@ lists them, says it won't merge itself, and waits for you, even where
 with their ids and the verifier's reasons, fenced as text to check rather
 than instructions, and answers each in its verdict: `fixed`, `wrong` (with
 why) or `out_of_scope` (with why). One it leaves out is recorded as
-unanswered.
+unanswered. The change already passed every check, so the builder
+runs only the tests and lint on what it changes; the gates run them all
+again on the result.
 
 **Ruled on by the next review.** The next round's reviewer sees its open
 findings with the builder's answers, also fenced, and rules on each:

@@ -42,14 +42,11 @@ workspace change, a rethink) is unaffected.
 
 ## 2. Cheaper fix rounds
 
-**A fix round continues the last build.** When review blocks a build, its
-checkout and CLI session are kept, as Continue keeps a stopped build's.
-The fix round resumes them, with the findings as the next message, so the
-builder starts knowing the code and what it tried. When nothing was kept,
-or it can't be read, the round starts fresh as before. A rethink always
-starts fresh from the base branch: that's what it is for. Nothing is
-loosened: the checkout stays on the factory's machine and nothing is pushed
-until the gates pass.
+**A fix round already continues the last build's session** (`sessionFor`,
+on Docker with the same harness and model), on the reviewed branch. On the
+item above its rounds took 9 or 10 turns, not the first build's 24; their
+time went to reinstalling and to running the whole suite, and their tokens
+to rereading the resumed context each turn. So nothing changes here.
 
 **A fix round runs targeted checks.** Its prompt asks for the tests of
 what it changed and the linter on the files it changed. The gates still run
@@ -57,7 +54,7 @@ the full checks, and a gate failure already earns one more try with their
 output.
 
 Fix rounds keep their model; whether they should move up a tier is for the
-metrics once rounds resume their session. A dependency cache across jobs is
+metrics. A dependency cache across jobs, the rest of a fix round's time, is
 out of scope.
 
 ## 3. Notes and auto-merge
