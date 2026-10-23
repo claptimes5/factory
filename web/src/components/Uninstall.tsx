@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ExternalLink, Trash2, X } from "lucide-react";
-import { APIError, postJSON, useUninstall, type Uninstall, type UninstallResult } from "@/api/client";
+import { APIError, postJSON, useUninstall, useUninstallRepo, type Uninstall, type UninstallResult } from "@/api/client";
 import { ErrorBox, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +39,118 @@ export function RemoveFactory() {
   );
 }
 
+/**
+ * The get-started page's "Remove" on a repo: what goes with it first, then
+ * either the repo and everything the factory made for it, or only the repo
+ * from factory.yaml. Open while repo is set.
+ */
+export function RemoveRepo({ repo, onClose, onListOnly }: { repo: string; onClose: () => void; onListOnly: () => void }) {
+  const qc = useQueryClient();
+  const { data: p, error, isFetching } = useUninstallRepo(repo);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [result, setResult] = useState<UninstallResult | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = dialog.current;
+    if (!d) return;
+    if (repo && !d.open) d.showModal?.();
+    else if (!repo && d.open) d.close();
+    if (repo) {
+      setErr("");
+      setResult(null);
+    }
+  }, [repo]);
+  const remove = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      setResult(await postJSON<UninstallResult>("/settings/uninstall", { confirm: "remove", repo }));
+      void qc.invalidateQueries({ queryKey: ["wizard"] });
+    } catch (e) {
+      setErr(e instanceof APIError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ready = !!p && !isFetching;
+  return (
+    <dialog
+      ref={dialog}
+      aria-label={`Remove ${repo}?`}
+      onClose={onClose}
+      className="mx-auto mt-[10vh] w-[min(560px,calc(100vw-32px))] rounded-card border bg-surface p-4 text-foreground shadow-2xl backdrop:bg-black/50"
+    >
+      <h2 className="text-title-sm font-semibold break-all">Remove {repo}?</h2>
+      <div className="mt-2 max-h-[55vh] space-y-3 overflow-y-auto text-sm">
+        {result ? (
+          <Result r={result} />
+        ) : (
+          <>
+            <p>
+              The factory stops working on it: it leaves factory.yaml and its workspace. Cleaning up also deletes what the factory made for it, below. Its
+              issues, PRs and code stay.
+            </p>
+            {isFetching && !p ? (
+              <Loading what="Looking for what the factory made for it" />
+            ) : error ? (
+              <p className="text-muted-foreground">
+                Couldn't look for what the factory made for it: {error.message}. You can still take it out of factory.yaml.
+              </p>
+            ) : (
+              p && (
+                <>
+                  <Found p={p} />
+                  <section aria-label="Data">
+                    <h3 className="font-medium">Data on this machine</h3>
+                    <p className={p.data.exists ? "" : "text-muted-foreground"}>{p.data.exists ? `${p.data.what} (${p.data.size})` : p.data.note}</p>
+                  </section>
+                  <Manual steps={p.manual} />
+                  {p.refused && (
+                    <p role="note" className="flex items-start gap-1.5 text-warning" data-testid="uninstall-refused">
+                      <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {p.refused}
+                    </p>
+                  )}
+                  {!p.writable && <p className="text-xs text-muted-foreground">{p.reason}</p>}
+                </>
+              )
+            )}
+            {err && (
+              <p role="alert" className="text-destructive">
+                {err}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        {result ? (
+          <Button onClick={onClose}>Done</Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                onListOnly();
+                onClose();
+              }}
+            >
+              Only take it out of factory.yaml
+            </Button>
+            <Button variant="destructive" onClick={remove} disabled={busy || !ready || !p.writable || !!p.refused}>
+              <Trash2 /> {busy ? "Removing…" : "Remove and clean up"}
+            </Button>
+          </>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
 function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallResult) => void; onRefresh: () => void }) {
   const qc = useQueryClient();
   const [data, setData] = useState(false);
@@ -71,59 +183,7 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
   const repos = [...new Set(p.labels.map((l) => l.repo))];
   return (
     <div className="space-y-4">
-      <section aria-label="Labels">
-        <h3 className="font-medium">Labels</h3>
-        <p className="mb-1 text-xs text-warning">Deleting a label takes it off every issue and PR that has it.</p>
-        {p.labels.length === 0 && p.repos.length === 0 && <p className="text-muted-foreground">None.</p>}
-        {repos.map((r) => (
-          <div key={r} className="mt-1">
-            <div className="text-xs font-semibold text-muted-foreground">{r}</div>
-            <ul className="flex flex-wrap gap-1.5" data-testid="uninstall-labels">
-              {p.labels
-                .filter((l) => l.repo === r)
-                .map((l) => (
-                  <li key={l.name} className="rounded border px-1.5 py-0.5 font-mono text-xs">
-                    {l.name} <span className="text-muted-foreground">{openCount(l)} open</span>
-                  </li>
-                ))}
-            </ul>
-          </div>
-        ))}
-        {p.repos.map((r) => (
-          <p key={r.repo} className="text-xs text-destructive">
-            {r.repo}: couldn't read its labels: {r.error}
-          </p>
-        ))}
-      </section>
-      <section aria-label="Job images">
-        <h3 className="font-medium">Job images</h3>
-        {p.images_note ? (
-          <p className="text-muted-foreground">{p.images_note}</p>
-        ) : p.images.length === 0 ? (
-          <p className="text-muted-foreground">None.</p>
-        ) : (
-          <ul className="space-y-0.5 font-mono text-xs" data-testid="uninstall-images">
-            {p.images.map((im) => (
-              <li key={im.ref}>
-                {im.ref} <span className="text-muted-foreground">{im.size}</span>
-                {im.dangling && <span className="text-muted-foreground"> (an old copy)</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      {p.kept.length > 0 && (
-        <section aria-label="Left alone">
-          <h3 className="font-medium">Left alone</h3>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="uninstall-kept">
-            {p.kept.map((k) => (
-              <li key={k.what}>
-                <span className="font-mono text-xs">{k.what}</span>: {k.why}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <Found p={p} />
       <section aria-label="Data">
         <h3 className="font-medium">Data on this machine</h3>
         {p.data.exists && p.data.blocked ? (
@@ -211,6 +271,68 @@ function Plan({ p, onDone, onRefresh }: { p: Uninstall; onDone: (r: UninstallRes
         </div>
       </dialog>
     </div>
+  );
+}
+
+/** The labels, images and what's left alone that removing would find. */
+function Found({ p }: { p: Uninstall }) {
+  const repos = [...new Set(p.labels.map((l) => l.repo))];
+  return (
+    <>
+      <section aria-label="Labels">
+        <h3 className="font-medium">Labels</h3>
+        <p className="mb-1 text-xs text-warning">Deleting a label takes it off every issue and PR that has it.</p>
+        {p.labels.length === 0 && p.repos.length === 0 && <p className="text-muted-foreground">None.</p>}
+        {repos.map((r) => (
+          <div key={r} className="mt-1">
+            <div className="text-xs font-semibold text-muted-foreground">{r}</div>
+            <ul className="flex flex-wrap gap-1.5" data-testid="uninstall-labels">
+              {p.labels
+                .filter((l) => l.repo === r)
+                .map((l) => (
+                  <li key={l.name} className="rounded border px-1.5 py-0.5 font-mono text-xs">
+                    {l.name} <span className="text-muted-foreground">{openCount(l)} open</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ))}
+        {p.repos.map((r) => (
+          <p key={r.repo} className="text-xs text-destructive">
+            {r.repo}: couldn't read its labels: {r.error}
+          </p>
+        ))}
+      </section>
+      <section aria-label="Job images">
+        <h3 className="font-medium">Job images</h3>
+        {p.images_note ? (
+          <p className="text-muted-foreground">{p.images_note}</p>
+        ) : p.images.length === 0 ? (
+          <p className="text-muted-foreground">None.</p>
+        ) : (
+          <ul className="space-y-0.5 font-mono text-xs" data-testid="uninstall-images">
+            {p.images.map((im) => (
+              <li key={im.ref}>
+                {im.ref} <span className="text-muted-foreground">{im.size}</span>
+                {im.dangling && <span className="text-muted-foreground"> (an old copy)</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {p.kept.length > 0 && (
+        <section aria-label="Left alone">
+          <h3 className="font-medium">Left alone</h3>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="uninstall-kept">
+            {p.kept.map((k) => (
+              <li key={k.what}>
+                <span className="font-mono text-xs">{k.what}</span>: {k.why}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }
 

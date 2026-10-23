@@ -6,7 +6,8 @@
 //	factory run-once   poll once and run queued jobs to completion, then exit
 //	factory status     print items, the queue and today's spend
 //	factory codex-login sign Codex in to a ChatGPT plan
-//	factory uninstall  remove the factory's labels, job images and (--data) data
+//	factory uninstall  remove the factory's labels, job images and (--data) data,
+//	                   or (--repo) one repo's and the repo from factory.yaml
 //	factory migrate    apply database migrations and exit
 //	factory backup F   write a consistent copy of the database to F
 package main
@@ -86,7 +87,7 @@ func restart() error {
 var buildVersion = "dev"
 
 func usage() error {
-	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] version|setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
+	return fmt.Errorf("usage: factory [-config factory.yaml] [-env factory.env] version|setup|doctor|codex-login|images [--rebuild]|uninstall [--data] [--dry-run] [--repo owner/name]|readiness [-file|-queue] [repo]|serve|run-once|status|automerge [reset <repo>]|tune|groom [repo]|limits clear [harness]|migrate|backup <file>|pull <issue>|last-job|wait-job <after-id> <timeout>|eval [review] [flags]|compare <issue> -skills a,b|mcp-bridge <socket>")
 }
 
 func run(args []string) error {
@@ -720,6 +721,12 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 		return ""
 	})
 	un.hold = p.Hold
+	// Through the get-started page, so it sees the change and checks again.
+	un.drop = func(ctx context.Context, repo string) error {
+		names := slices.DeleteFunc(wz.config().RepoNames(), func(n string) bool { return strings.EqualFold(n, repo) })
+		_, err := wz.Do(ctx, "repos", web.WizardInput{Repos: strings.Join(names, ", ")})
+		return err
+	}
 	srv.Uninstaller = un
 	_, err = listenWeb(ctx, cfg, srv)
 	return err

@@ -21,6 +21,7 @@ import (
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/github"
 	"github.com/claptimes5/factory/internal/pipeline"
+	"github.com/claptimes5/factory/internal/readiness"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 	"github.com/claptimes5/factory/internal/web"
@@ -28,10 +29,16 @@ import (
 
 // uninstaller lists and removes what the factory made: its labels on
 // each repo, the job images it built and, if asked, its data. The GitHub
-// App, tokens and config files are left for a person, with links.
+// App, tokens and config files are left for a person, with links. With
+// repo set, it's only what the factory made for that repo.
 type uninstaller struct {
 	cfg              *config.Config
 	cfgPath, envPath string
+	// repo limits it to one repo, in cfg or already dropped from it; see
+	// scoped.
+	repo string
+	// drop takes a repo out of factory.yaml and its workspace.
+	drop func(ctx context.Context, repo string) error
 	// forgeFor reaches a repo with the saved credentials.
 	forgeFor func(repo string) (forge, error)
 	// busy says why removing must wait (jobs running), or "".
@@ -42,19 +49,65 @@ type uninstaller struct {
 	// serving: the factory runs in this process, so its database and
 	// sign-ins stay and only the job data goes.
 	serving bool
-	// active refuses a second Remove while one runs.
-	active atomic.Bool
+	// active refuses a second Remove while one runs, of any scope.
+	active *atomic.Bool
 }
 
 func newUninstaller(cfg *config.Config, cfgPath, envPath string, serving bool, busy func(context.Context) string) *uninstaller {
-	return &uninstaller{cfg: cfg, cfgPath: cfgPath, envPath: envPath, serving: serving, busy: busy,
+	return &uninstaller{cfg: cfg, cfgPath: cfgPath, envPath: envPath, serving: serving, busy: busy, active: new(atomic.Bool),
 		forgeFor: func(repo string) (forge, error) {
 			ts, err := tokens(cfg, repo)
 			if err != nil {
 				return nil, err
 			}
 			return newForge(cfg, repo, ts), nil
+		},
+		drop: func(_ context.Context, repo string) error {
+			cur, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			return setRepoNames(cfgPath, cur, slices.DeleteFunc(cur.RepoNames(), func(n string) bool { return strings.EqualFold(n, repo) }))
 		}}
+}
+
+// scoped is u for one repo, or u itself for "". It reads factory.yaml
+// again: a repo removed from the dashboard leaves it before the factory
+// restarts, and the next must not put it back.
+func (u *uninstaller) scoped(repo string) *uninstaller {
+	if repo == "" {
+		return u
+	}
+	c := *u
+	if cfg, err := config.Load(u.cfgPath); err == nil {
+		c.cfg = cfg
+	}
+	c.repo = strings.Trim(strings.TrimSpace(repo), "/")
+	if rc, ok := c.cfg.RepoConf(c.repo); ok {
+		c.repo = rc.Name
+	}
+	return &c
+}
+
+// listed says whether u.repo is still in factory.yaml.
+func (u *uninstaller) listed() bool {
+	_, ok := u.cfg.RepoConf(u.repo)
+	return u.repo != "" && ok
+}
+
+// repoRefused says why u.repo can't be removed on its own, or "".
+func (u *uninstaller) repoRefused() string {
+	switch {
+	case u.repo == "":
+		return ""
+	// owner/name at least, so its folder in the data folder is never the
+	// data folder itself.
+	case !strings.Contains(u.repo, "/") || slices.Contains(strings.Split(u.repo, "/"), ".."):
+		return u.repo + " isn't a repo: write it as owner/name, or group/project with its GitLab server."
+	case u.listed() && len(u.cfg.Repos) == 1:
+		return u.repo + " is the only repo the factory works on: add another first, or remove the factory instead."
+	}
+	return ""
 }
 
 // servingData are the folders in the data folder a running factory can
@@ -68,9 +121,14 @@ var (
 	dataPrefixes = []string{"factory.db", "todos-", "eval-", "capture-", "factory-askpass", "readiness-"}
 )
 
-// Plan is what removing the factory would remove. It changes nothing.
-func (u *uninstaller) Plan(ctx context.Context) web.APIUninstall {
-	p := web.APIUninstall{Labels: []web.APIUninstallLabel{}, Repos: []web.APIUninstallRepo{}, Images: []web.APIUninstallImage{}, Kept: []web.APIUninstallKept{}}
+// Plan is what removing the factory, or with repo that repo, would
+// remove. It changes nothing.
+func (u *uninstaller) Plan(ctx context.Context, repo string) web.APIUninstall {
+	u = u.scoped(repo)
+	if why := u.repoRefused(); why != "" {
+		return web.APIUninstall{Labels: []web.APIUninstallLabel{}, Repos: []web.APIUninstallRepo{}, Images: []web.APIUninstallImage{}, Kept: []web.APIUninstallKept{}, Manual: []web.APIUninstallStep{}, Refused: why}
+	}
+	p := web.APIUninstall{Listed: u.listed(), Labels: []web.APIUninstallLabel{}, Repos: []web.APIUninstallRepo{}, Images: []web.APIUninstallImage{}, Kept: []web.APIUninstallKept{}}
 	for _, r := range u.scanLabels(ctx) {
 		if r.err != nil {
 			p.Repos = append(p.Repos, web.APIUninstallRepo{Repo: r.repo, Error: r.err.Error()})
@@ -116,7 +174,11 @@ type repoLabels struct {
 func (u *uninstaller) scanLabels(ctx context.Context) []repoLabels {
 	ours := pipeline.LabelNames(u.cfg.Intake.Label)
 	var out []repoLabels
-	for _, repo := range u.cfg.RepoNames() {
+	repos := u.cfg.RepoNames()
+	if u.repo != "" {
+		repos = []string{u.repo}
+	}
+	for _, repo := range repos {
 		r := repoLabels{repo: repo}
 		r.f, r.err = u.forgeFor(repo)
 		var labels []github.LabelInfo
@@ -169,6 +231,9 @@ func (u *uninstaller) images() ([]web.APIUninstallImage, []web.APIUninstallKept,
 	if !dockerUp() {
 		return out, kept, "Docker isn't answering, so the job images can't be listed. Start it and look again."
 	}
+	if u.repo != "" {
+		return u.repoImages()
+	}
 	runner := withTag(u.cfg.Runner.Image)
 	var own []string
 	for _, n := range u.cfg.RepoNames() {
@@ -218,6 +283,68 @@ func (u *uninstaller) images() ([]web.APIUninstallImage, []web.APIUninstallKept,
 	return out, kept, ""
 }
 
+// repoImages are the images built for u.repo alone: its job image and
+// the base built from its Dockerfile. One the other repos or the
+// orchestrator still use stays, and so does one without the factory's
+// mark. Old untagged copies are left to the hourly cleanup.
+func (u *uninstaller) repoImages() ([]web.APIUninstallImage, []web.APIUninstallKept, string) {
+	out, kept := []web.APIUninstallImage{}, []web.APIUninstallKept{}
+	used := []string{withTag(u.cfg.Runner.Image)}
+	for _, j := range jobImages(u.rest()) {
+		used = append(used, withTag(j.tag))
+		if j.build != nil {
+			used = append(used, withTag(j.from))
+		}
+	}
+	rc := repoFor(u.cfg, u.repo)
+	var tags []string
+	if r, ok := u.cfg.RepoConf(u.repo); ok {
+		tags = append(tags, withTag(r.Image))
+	}
+	for _, tag := range append(tags, rc.JobImage(), rc.BaseImage()) {
+		if slices.Contains(used, tag) || slices.ContainsFunc(out, func(im web.APIUninstallImage) bool { return im.Ref == tag }) {
+			continue
+		}
+		var b bytes.Buffer
+		if runCmd(&b, "docker", "image", "inspect", "--format", "{{.Id}}\t{{.Size}}\t{{index .Config.Labels \""+imageLabel+"\"}}", tag) != nil {
+			continue // not built
+		}
+		f := strings.SplitN(strings.TrimSpace(b.String()), "\t", 3)
+		for len(f) < 3 {
+			f = append(f, "")
+		}
+		if f[2] != "1" {
+			kept = append(kept, web.APIUninstallKept{What: "image " + tag, Why: "not marked as built by the factory, so it's left alone; remove it yourself if the factory built it"})
+			continue
+		}
+		n, _ := strconv.ParseInt(f[1], 10, 64)
+		out = append(out, web.APIUninstallImage{ID: shortID(f[0]), Ref: tag, Size: humanBytes(n)})
+	}
+	return out, kept, ""
+}
+
+// rest is the config without u.repo.
+func (u *uninstaller) rest() *config.Config {
+	c := *u.cfg
+	c.Repos = slices.DeleteFunc(slices.Clone(c.Repos), func(r config.Repo) bool { return strings.EqualFold(r.Name, u.repo) })
+	return &c
+}
+
+// repoFiles are u.repo's files in the data folder that exist: its
+// dependency cache and readiness report.
+func (u *uninstaller) repoFiles() []string {
+	var out []string
+	for _, p := range []string{
+		filepath.Join(u.dataDir(), "cache", strings.ReplaceAll(u.repo, "/", "__")),
+		readiness.Path(pipeline.ReadinessDir(u.cfg), u.repo),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func shortID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
 	if len(id) > 12 {
@@ -245,6 +372,20 @@ func cmdError(out string, err error) string {
 func (u *uninstaller) data() web.APIUninstallData {
 	dir := u.dataDir()
 	d := web.APIUninstallData{Path: dir}
+	if u.repo != "" {
+		files := u.repoFiles()
+		if len(files) == 0 {
+			d.Note = "There's nothing of " + u.repo + "'s in the data folder."
+			return d
+		}
+		var n int64
+		for _, f := range files {
+			n += dirSize(f)
+		}
+		d.Exists, d.Size = true, humanBytes(n)
+		d.What = u.repo + "'s dependency cache and readiness report: " + joinAnd(files)
+		return d
+	}
 	if _, err := os.Stat(dir); err != nil {
 		d.Note = "There's no data folder."
 		return d
@@ -347,6 +488,9 @@ func evalOr(p string) string {
 // manual are the steps left for a person, with links.
 func (u *uninstaller) manual() []web.APIUninstallStep {
 	var out []web.APIUninstallStep
+	if u.repo != "" {
+		return u.repoManual()
+	}
 	if len(githubRepos(u.cfg)) > 0 {
 		owner, _, _ := strings.Cut(githubRepos(u.cfg)[0], "/")
 		slug, app, inst := os.Getenv("FACTORY_GITHUB_APP_SLUG"), os.Getenv("FACTORY_GITHUB_APP_ID"), os.Getenv("FACTORY_GITHUB_INSTALLATION_ID")
@@ -378,12 +522,39 @@ func (u *uninstaller) manual() []web.APIUninstallStep {
 	return out
 }
 
+// repoManual are the steps left for a person once u.repo is gone: taking
+// away the access the factory had to it.
+func (u *uninstaller) repoManual() []web.APIUninstallStep {
+	rc := repoFor(u.cfg, u.repo)
+	if rc.GitLab() {
+		return []web.APIUninstallStep{{Text: "If you made a project access token for " + u.repo + " alone, revoke it: the project's Settings, Access tokens.",
+			URL: rc.WebURL() + "/-/settings/access_tokens"}}
+	}
+	var out []web.APIUninstallStep
+	owner, _, _ := strings.Cut(u.repo, "/")
+	if inst := os.Getenv("FACTORY_GITHUB_INSTALLATION_ID"); inst != "" {
+		out = append(out, web.APIUninstallStep{Text: "To stop the GitHub App reaching " + u.repo + ", take it off the app's repository access: its installation, Repository access.",
+			URL: githubWeb + "/organizations/" + url.PathEscape(owner) + "/settings/installations/" + url.PathEscape(inst)},
+			web.APIUninstallStep{Text: "For an install on your own account, it's here.", URL: githubWeb + "/settings/installations/" + url.PathEscape(inst)})
+	}
+	if os.Getenv("GITHUB_TOKEN") != "" && os.Getenv("FACTORY_GITHUB_APP_ID") == "" {
+		out = append(out, web.APIUninstallStep{Text: "If you made the GitHub token (GITHUB_TOKEN) for " + u.repo + " alone, revoke it.", URL: githubWeb + "/settings/personal-access-tokens"})
+	}
+	return out
+}
+
 // Remove removes the labels and job images, and with data the data.
-// New work is held off throughout, and running work is looked for again
-// before each step that a job could be using.
-func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallResult, error) {
+// With repo, it's that repo's, and the repo leaves factory.yaml first: if
+// that fails, nothing goes, and once it's done, removing it again finishes
+// what's left. New work is held off throughout, and running work is
+// looked for again before each step that a job could be using.
+func (u *uninstaller) Remove(ctx context.Context, data bool, repo string) (web.APIUninstallResult, error) {
+	u = u.scoped(repo)
+	if why := u.repoRefused(); why != "" {
+		return web.APIUninstallResult{}, errors.New(why)
+	}
 	if !u.active.CompareAndSwap(false, true) {
-		return web.APIUninstallResult{}, errors.New("already removing the factory: wait for it to finish")
+		return web.APIUninstallResult{}, errors.New("already removing: wait for it to finish")
 	}
 	defer u.active.Store(false)
 	if u.hold != nil {
@@ -402,7 +573,7 @@ func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallRe
 	// Data asked for that can't go refuses the lot, before anything is.
 	dir := u.dataDir()
 	_, statErr := os.Stat(dir)
-	data = data && statErr == nil
+	data = data && statErr == nil && u.repo == ""
 	if data {
 		if err := u.dataRemovable(dir); err != nil {
 			return web.APIUninstallResult{}, fmt.Errorf("nothing was removed: %w", err)
@@ -416,7 +587,13 @@ func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallRe
 		}
 		res.Done = append(res.Done, d)
 	}
-	if u.serving {
+	if u.listed() {
+		if err := u.drop(ctx, u.repo); err != nil {
+			return web.APIUninstallResult{}, fmt.Errorf("nothing was removed: couldn't take %s out of %s: %w", u.repo, filepath.Base(u.cfgPath), err)
+		}
+		add(u.repo+" from "+filepath.Base(u.cfgPath), nil)
+	}
+	if u.serving && u.repo == "" {
 		res.Manual = append([]web.APIUninstallStep{{Text: "Stop the factory now. While it runs it puts labels back as it works, and it picks up no new issues without its " + u.cfg.Intake.Label + " label."}}, res.Manual...)
 	}
 	// Labels: one read of each repo, no counting.
@@ -446,6 +623,12 @@ func (u *uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallRe
 			err = errors.New(cmdError(b.String(), err))
 		}
 		add("image "+im.Ref, err)
+	}
+	if u.repo != "" {
+		for _, f := range u.repoFiles() {
+			add("data "+f, os.RemoveAll(f))
+		}
+		return res, nil
 	}
 	if !data {
 		return res, nil
@@ -525,18 +708,28 @@ var factoryAnswers = func(listen string) bool {
 }
 
 // uninstall is `factory uninstall`: it lists what it would remove, and
-// removes it once you type remove (or the repo's name).
+// removes it once you type remove (or the repo's name). With --repo, it's
+// one repo's share, and the repo leaves factory.yaml.
 func uninstall(ctx context.Context, out io.Writer, in io.Reader, cfgPath string, cfg *config.Config, envPath string, args []string) error {
-	data, dry := false, false
-	for _, a := range args {
-		switch a {
-		case "--data":
+	data, dry, repo := false, false, ""
+	usage := errors.New("usage: factory uninstall [--data] [--dry-run], or factory uninstall --repo owner/name [--dry-run]")
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--data":
 			data = true
-		case "--dry-run":
+		case a == "--dry-run":
 			dry = true
+		case a == "--repo" && i+1 < len(args):
+			i++
+			repo = args[i]
+		case strings.HasPrefix(a, "--repo="):
+			repo = strings.TrimPrefix(a, "--repo=")
 		default:
-			return fmt.Errorf("usage: factory uninstall [--data] [--dry-run]")
+			return usage
 		}
+	}
+	if data && repo != "" {
+		return usage
 	}
 	// A running factory would put labels back, and holds its database.
 	if factoryAnswers(cfg.Web.Listen) {
@@ -558,9 +751,20 @@ func uninstall(ctx context.Context, out io.Writer, in io.Reader, cfgPath string,
 		return runningJobs(ctx, st)
 	}
 	u := newUninstaller(cfg, cfgPath, envPath, false, busy)
+	if repo != "" {
+		repo = u.scoped(repo).repo
+	}
 	fmt.Fprintln(out, "Looking for what the factory made...")
-	p := u.Plan(ctx)
-	printPlan(out, p, data)
+	p := u.Plan(ctx, repo)
+	printPlan(out, p, data || repo != "")
+	if repo != "" && p.Refused == "" {
+		fmt.Fprintln(out, "\nfactory.yaml:")
+		if p.Listed {
+			fmt.Fprintf(out, "  %s leaves repos: and its workspace\n", repo)
+		} else {
+			fmt.Fprintf(out, "  %s isn't in it\n", repo)
+		}
+	}
 	if p.Refused != "" {
 		return errors.New(p.Refused)
 	}
@@ -571,23 +775,26 @@ func uninstall(ctx context.Context, out io.Writer, in io.Reader, cfgPath string,
 		fmt.Fprintln(out, "\nNothing was removed (--dry-run).")
 		return nil
 	}
-	if len(p.Labels) == 0 && len(p.Images) == 0 && (!data || !p.Data.Exists) {
+	if len(p.Labels) == 0 && len(p.Images) == 0 && (!data && repo == "" || !p.Data.Exists) && !p.Listed {
 		fmt.Fprintln(out, "\nThere's nothing to remove.")
 		return nil
 	}
-	repos := cfg.RepoNames()
+	name := repo
+	if repos := cfg.RepoNames(); name == "" && len(repos) == 1 {
+		name = repos[0]
+	}
 	want := "remove"
-	if len(repos) == 1 {
-		want = "remove (or " + repos[0] + ")"
+	if name != "" {
+		want = "remove (or " + name + ")"
 	}
 	fmt.Fprintf(out, "\nType %s to remove all of the above: ", want)
 	line, _ := bufio.NewReader(in).ReadString('\n')
 	line = strings.TrimSpace(line)
-	if line != "remove" && (len(repos) != 1 || line != repos[0]) {
+	if line != "remove" && (name == "" || line != name) {
 		fmt.Fprintln(out, "\nNothing was removed.")
 		return nil
 	}
-	res, err := u.Remove(ctx, data)
+	res, err := u.Remove(ctx, data, repo)
 	if err != nil {
 		return err
 	}
@@ -653,7 +860,7 @@ func printPlan(out io.Writer, p web.APIUninstall, data bool) {
 	case p.Data.Blocked != "":
 		fmt.Fprintf(out, "  kept: %s\n", p.Data.Blocked)
 	case data:
-		fmt.Fprintf(out, "  removed too (--data): %s (%s)\n", p.Data.What, p.Data.Size)
+		fmt.Fprintf(out, "  removed too: %s (%s)\n", p.Data.What, p.Data.Size)
 	default:
 		fmt.Fprintf(out, "  kept: %s (%s). Add --data to remove it too.\n", p.Data.Path, p.Data.Size)
 	}

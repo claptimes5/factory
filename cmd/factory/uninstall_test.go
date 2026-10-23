@@ -268,7 +268,7 @@ func TestUninstallFromTheDashboard(t *testing.T) {
 	u := newUninstaller(cfg, cfgPath, envPath, true, func(context.Context) string { return busy })
 	u.forgeFor = func(repo string) (forge, error) { return newForge(cfg, repo, github.StaticToken("ghp_test")), nil }
 	ctx := context.Background()
-	p := u.Plan(ctx)
+	p := u.Plan(ctx, "")
 	var links []string
 	for _, m := range p.Manual {
 		links = append(links, m.URL)
@@ -282,11 +282,11 @@ func TestUninstallFromTheDashboard(t *testing.T) {
 		t.Errorf("data note = %q", p.Data.Note)
 	}
 	busy = "Not now: 1 job(s) are running."
-	if _, err := u.Remove(ctx, true); err == nil || err.Error() != busy {
+	if _, err := u.Remove(ctx, true, ""); err == nil || err.Error() != busy {
 		t.Fatalf("err = %v", err)
 	}
 	busy = ""
-	res, err := u.Remove(ctx, true)
+	res, err := u.Remove(ctx, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,14 +341,14 @@ func TestUninstallLeavesGitLabGroupLabels(t *testing.T) {
 	u := newUninstaller(cfg, cfgPath, filepath.Join(filepath.Dir(cfgPath), "factory.env"), false, nil)
 	u.forgeFor = func(repo string) (forge, error) { return newForge(cfg, repo, github.StaticToken("glpat")), nil }
 	ctx := context.Background()
-	p := u.Plan(ctx)
+	p := u.Plan(ctx, "")
 	if len(p.Labels) != 1 || p.Labels[0].Name != "factory:parked" {
 		t.Fatalf("labels = %+v", p.Labels)
 	}
 	if len(p.Kept) != 1 || p.Kept[0].What != "label factory:ready on gitlab.example/team/web" || !strings.Contains(p.Kept[0].Why, "defined in group team") || !strings.Contains(p.Kept[0].Why, "not removed") {
 		t.Fatalf("kept = %+v", p.Kept)
 	}
-	res, err := u.Remove(ctx, false)
+	res, err := u.Remove(ctx, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,11 +369,11 @@ func TestUninstallLeavesYourIntakeLabel(t *testing.T) {
 	cfg.Intake.Label = "ready"
 	u := newUninstaller(cfg, cfgPath, envPath, false, nil)
 	ctx := context.Background()
-	p := u.Plan(ctx)
+	p := u.Plan(ctx, "")
 	if len(p.Labels) != 1 || p.Labels[0].Name != "factory:parked" || len(p.Kept) != 1 || !strings.Contains(p.Kept[0].Why, "yours to delete by hand") {
 		t.Fatalf("labels = %+v, kept %+v", p.Labels, p.Kept)
 	}
-	if _, err := u.Remove(ctx, false); err != nil {
+	if _, err := u.Remove(ctx, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(h.deleted, []string{"factory:parked"}) {
@@ -382,7 +382,7 @@ func TestUninstallLeavesYourIntakeLabel(t *testing.T) {
 	// One setup created carries its description, so it goes.
 	h.labels = [][2]string{{"ready", "Factory: pick this up"}}
 	h.deleted = nil
-	if p := u.Plan(ctx); len(p.Labels) != 1 || p.Labels[0].Name != "ready" || len(p.Kept) != 0 {
+	if p := u.Plan(ctx, ""); len(p.Labels) != 1 || p.Labels[0].Name != "ready" || len(p.Kept) != 0 {
 		t.Fatalf("labels = %+v, kept %+v", p.Labels, p.Kept)
 	}
 }
@@ -402,7 +402,7 @@ func TestUninstallImagesAreOnlyTheFactorys(t *testing.T) {
 	u := newUninstaller(cfg, cfgPath, envPath, false, nil)
 	u.forgeFor = func(string) (forge, error) { return nil, errors.New("offline") }
 	ctx := context.Background()
-	p := u.Plan(ctx)
+	p := u.Plan(ctx, "")
 	var refs []string
 	for _, im := range p.Images {
 		refs = append(refs, im.Ref)
@@ -415,7 +415,7 @@ func TestUninstallImagesAreOnlyTheFactorys(t *testing.T) {
 	}) {
 		t.Fatalf("kept = %+v", p.Kept)
 	}
-	if _, err := u.Remove(ctx, false); err != nil {
+	if _, err := u.Remove(ctx, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(d.removed, []string{"factory-job-o__node:latest", "old456789012"}) {
@@ -423,7 +423,7 @@ func TestUninstallImagesAreOnlyTheFactorys(t *testing.T) {
 	}
 	// Marked, the runner image goes too.
 	d.tags["factory-job:latest"] = "sha256:aaa111222333444\t1500000000\t1"
-	if p := u.Plan(ctx); p.Images[0].Ref != "factory-job:latest" {
+	if p := u.Plan(ctx, ""); p.Images[0].Ref != "factory-job:latest" {
 		t.Fatalf("images = %+v", p.Images)
 	}
 }
@@ -461,7 +461,7 @@ func TestUninstallDataMustBeTheFactorys(t *testing.T) {
 	}
 	// The dashboard checks too, before removing even its subfolders.
 	u.serving = true
-	if p := u.Plan(context.Background()); !strings.Contains(p.Data.Blocked, "no factory.db") {
+	if p := u.Plan(context.Background(), ""); !strings.Contains(p.Data.Blocked, "no factory.db") {
 		t.Fatalf("data = %+v", p.Data)
 	}
 	// Asked for and blocked, it refuses the lot before any label goes.
@@ -471,7 +471,7 @@ func TestUninstallDataMustBeTheFactorys(t *testing.T) {
 	u.forgeFor = func(repo string) (forge, error) {
 		return &github.Client{Repo: repo, BaseURL: srv.URL, Tokens: github.StaticToken("t")}, nil
 	}
-	if _, err := u.Remove(context.Background(), true); err == nil || !strings.Contains(err.Error(), "nothing was removed") || !strings.Contains(err.Error(), "no factory.db") {
+	if _, err := u.Remove(context.Background(), true, ""); err == nil || !strings.Contains(err.Error(), "nothing was removed") || !strings.Contains(err.Error(), "no factory.db") {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "jobs")); err != nil {
@@ -481,7 +481,7 @@ func TestUninstallDataMustBeTheFactorys(t *testing.T) {
 		t.Fatalf("deleted %q before refusing", h.deleted)
 	}
 	// Without the data, the rest still goes.
-	if _, err := u.Remove(context.Background(), false); err != nil || len(h.deleted) != 2 {
+	if _, err := u.Remove(context.Background(), false, ""); err != nil || len(h.deleted) != 2 {
 		t.Fatalf("err = %v, deleted %q", err, h.deleted)
 	}
 }
@@ -534,9 +534,9 @@ func TestUninstallOneRemoveAtATime(t *testing.T) {
 	u := newUninstaller(cfg, cfgPath, envPath, true, nil)
 	u.hold = func() func() { in <- struct{}{}; <-out; return func() {} }
 	done := make(chan error, 1)
-	go func() { _, err := u.Remove(context.Background(), false); done <- err }()
+	go func() { _, err := u.Remove(context.Background(), false, ""); done <- err }()
 	<-in
-	if _, err := u.Remove(context.Background(), false); err == nil || !strings.Contains(err.Error(), "already removing") {
+	if _, err := u.Remove(context.Background(), false, ""); err == nil || !strings.Contains(err.Error(), "already removing") {
 		t.Fatalf("second Remove = %v", err)
 	}
 	close(out)
@@ -558,7 +558,7 @@ func TestUninstallChecksBusyBeforeEachStep(t *testing.T) {
 		return ""
 	})
 	u.hold = func() func() { held = true; return func() { released = true } }
-	res, err := u.Remove(context.Background(), true)
+	res, err := u.Remove(context.Background(), true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,5 +613,85 @@ func TestOwnPidLockFromBeforeARestartIsStale(t *testing.T) {
 	unlock()
 	if runs := liveRuns(data); len(runs) != 0 {
 		t.Fatalf("runs = %q", runs)
+	}
+}
+
+// --repo removes one repo's labels, images and files, and the repo from
+// factory.yaml; what the other repos use stays.
+func TestUninstallRepoRemovesOnlyItsShare(t *testing.T) {
+	h := newLabelHost()
+	_, cfgPath, envPath, d := uninstallSetup(t, h)
+	if err := setRepos(cfgPath, []string{"o/r", "o/other"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.tags["factory-job-o__r:latest"] = "sha256:abc456789012345678\t900000000\t1"
+	data := cfg.Path(cfg.DataDir)
+	for _, p := range []string{"cache/o__r/npm", "cache/o__other/npm"} {
+		os.MkdirAll(filepath.Join(data, p), 0o755)
+	}
+	os.MkdirAll(filepath.Join(data, "readiness"), 0o755)
+	os.WriteFile(filepath.Join(data, "readiness", "o__r.json"), []byte("{}"), 0o644)
+	var out bytes.Buffer
+	if err := uninstall(context.Background(), &out, strings.NewReader("o/r\n"), cfgPath, cfg, envPath, []string{"--repo", "o/r"}); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !slices.Equal(h.deleted, []string{"factory:ready", "factory:parked"}) || !slices.Equal(d.removed, []string{"factory-job-o__r:latest"}) {
+		t.Fatalf("deleted %q, removed %q\n%s", h.deleted, d.removed, out.String())
+	}
+	for p, gone := range map[string]bool{"cache/o__r": true, "readiness/o__r.json": true, "cache/o__other": false, "factory.db": false} {
+		if _, err := os.Stat(filepath.Join(data, p)); os.IsNotExist(err) != gone {
+			t.Errorf("%s gone = %v, want %v", p, !gone, gone)
+		}
+	}
+	after, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(after.RepoNames(), []string{"o/other"}) {
+		t.Fatalf("repos = %q", after.RepoNames())
+	}
+}
+
+// The last repo can't leave: that's removing the factory.
+func TestUninstallRepoRefusesTheOnlyRepo(t *testing.T) {
+	h := newLabelHost()
+	cfg, cfgPath, envPath, _ := uninstallSetup(t, h)
+	var out bytes.Buffer
+	err := uninstall(context.Background(), &out, strings.NewReader("o/r\n"), cfgPath, cfg, envPath, []string{"--repo", "o/r"})
+	if err == nil || !strings.Contains(err.Error(), "the only repo") || len(h.deleted) != 0 {
+		t.Fatalf("err = %v, deleted %q", err, h.deleted)
+	}
+}
+
+// The dashboard removes repos before the factory restarts, with the config
+// it started with: a second removal keeps the first one out.
+func TestUninstallRepoTwiceBeforeARestart(t *testing.T) {
+	_, cfgPath, envPath, _ := uninstallSetup(t, newLabelHost())
+	if err := setRepos(cfgPath, []string{"o/r", "o/a", "o/b"}); err != nil {
+		t.Fatal(err)
+	}
+	started, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUninstaller(started, cfgPath, envPath, true, nil)
+	for _, repo := range []string{"o/a", "o/b"} {
+		if _, err := u.Remove(context.Background(), false, repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(after.RepoNames(), []string{"o/r"}) {
+		t.Fatalf("repos = %q", after.RepoNames())
+	}
+	if u.Plan(context.Background(), "o/a").Listed {
+		t.Fatal("o/a is still listed after it left factory.yaml")
 	}
 }

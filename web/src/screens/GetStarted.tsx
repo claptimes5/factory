@@ -33,6 +33,7 @@ import {
   type WizardStep,
 } from "@/api/client";
 import { Ago, ErrorBox, PageTitle } from "@/components/common";
+import { RemoveRepo } from "@/components/Uninstall";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -398,6 +399,7 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const [name, setName] = useState("");
   const [server, setServer] = useState(() => w.repos.find(onGitLab)?.split("/")[0] ?? "gitlab.com");
   const [into, setInto] = useState(""); // the workspace a repo added joins; "" for one of its own
+  const [removing, setRemoving] = useState(""); // the repo whose Remove dialog is open
   const save = (repos: string[], workspace = "") => run("repos", { repos: repos.join(", "), workspace });
   const add = async () => {
     let v = name.trim();
@@ -444,7 +446,7 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
         aria-label={`Remove ${r}`}
         title={w.repos.length === 1 ? "Add another repository first: the factory needs at least one" : `Remove ${r}`}
         disabled={ro || !!busy || w.repos.length === 1}
-        onClick={() => save(w.repos.filter((x) => x !== r))}
+        onClick={() => setRemoving(r)}
       >
         <Trash2 aria-hidden />
       </Button>
@@ -538,6 +540,7 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
         )}
       </form>
       <Message msg={msg} />
+      <RemoveRepo repo={removing} onClose={() => setRemoving("")} onListOnly={() => void save(w.repos.filter((x) => x !== removing))} />
     </>
   );
 }

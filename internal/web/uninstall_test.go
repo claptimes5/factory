@@ -12,19 +12,21 @@ import (
 type fakeUninstaller struct {
 	removed int
 	data    bool
+	repo    string // the last one asked about
 	busy    string
 }
 
-func (f *fakeUninstaller) Plan(context.Context) APIUninstall {
+func (f *fakeUninstaller) Plan(_ context.Context, repo string) APIUninstall {
+	f.repo = repo
 	return APIUninstall{Labels: []APIUninstallLabel{{Repo: "o/r", Name: "factory:ready", Open: 3}}, Refused: f.busy}
 }
 
-func (f *fakeUninstaller) Remove(_ context.Context, data bool) (APIUninstallResult, error) {
+func (f *fakeUninstaller) Remove(_ context.Context, data bool, repo string) (APIUninstallResult, error) {
 	if f.busy != "" {
 		return APIUninstallResult{}, errors.New(f.busy)
 	}
 	f.removed++
-	f.data = data
+	f.data, f.repo = data, repo
 	return APIUninstallResult{Done: []APIUninstallDone{{What: "label factory:ready on o/r", OK: true}}}, nil
 }
 
@@ -66,5 +68,27 @@ func TestUninstallRefusedWithoutAPassword(t *testing.T) {
 	}
 	if code, _ := postJSON(t, base+"/api/v1/settings/uninstall", "", `{"confirm":"remove"}`); code != http.StatusForbidden || f.removed != 0 {
 		t.Fatalf("code = %d, removed %d", code, f.removed)
+	}
+}
+
+// Removing one repo asks for a restart, so the running factory stops
+// working on it; removing the factory doesn't.
+func TestUninstallARepoRestartsTheFactory(t *testing.T) {
+	t.Parallel()
+	base, _, s, fr := settingsSetup(t, "127.0.0.1:8080")
+	f := &fakeUninstaller{}
+	s.Uninstaller = f
+	var p APIUninstall
+	if getJSON(t, base+"/api/v1/settings/uninstall?repo=o%2Fr", &p); f.repo != "o/r" {
+		t.Fatalf("planned for %q", f.repo)
+	}
+	if code, body := postJSON(t, base+"/api/v1/settings/uninstall", "", `{"confirm":"remove"}`); code != http.StatusOK || fr.pending {
+		t.Fatalf("code = %d, pending %v, body %s", code, fr.pending, body)
+	}
+	code, body := postJSON(t, base+"/api/v1/settings/uninstall", "", `{"confirm":"remove","repo":"o/r"}`)
+	var res APIUninstallResult
+	json.Unmarshal([]byte(body), &res)
+	if code != http.StatusOK || f.repo != "o/r" || !fr.pending || len(res.Manual) == 0 || !strings.Contains(res.Manual[0].Text, "restarts to stop working on o/r") {
+		t.Fatalf("code = %d, pending %v, body %s", code, fr.pending, body)
 	}
 }

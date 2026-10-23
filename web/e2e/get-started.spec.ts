@@ -322,10 +322,50 @@ test("repositories are chosen by where they're hosted, and added or removed one 
   await expect(repos.getByRole("status")).toContainText("Saved acme/api and acme/web and gitlab.com/group/sub/project");
   await shot(page, info, "get-started-repos");
 
+  // Remove asks first; taking it out of factory.yaml alone is one choice.
   await repos.getByRole("button", { name: "Remove gitlab.com/group/sub/project" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove gitlab.com/group/sub/project?" });
+  await dialog.getByRole("button", { name: "Only take it out of factory.yaml" }).click();
+  await expect(dialog).toBeHidden();
   expect(sent).toBe("acme/api, acme/web");
   await expect(repos.getByTestId("repo")).toHaveCount(2);
   if (phone(info)) await noSidewaysScroll(page);
+});
+
+test("removing a repo shows what the factory made for it, and cleans it up once asked", async ({ page }, info) => {
+  // The removal plays the server's answer, so the shared sample setup keeps its repos.
+  let sent: Record<string, unknown> = {};
+  await page.route(/\/api\/v1\/settings\/uninstall$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        done: [
+          { what: "acme/web from factory.yaml", ok: true, error: "" },
+          { what: "label factory:ready on acme/web", ok: true, error: "" },
+        ],
+        manual: [{ text: "The factory restarts to stop working on acme/web. Restarting now.", url: "" }],
+      },
+    });
+  });
+  await page.goto("/app/get-started");
+  const repos = await openStep(page, "repos");
+  await repos.getByRole("button", { name: "Remove acme/web" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove acme/web?" });
+  await expect(dialog).toContainText("it leaves factory.yaml and its workspace");
+  await expect(dialog.getByTestId("uninstall-labels")).toContainText("factory:parked 2 open");
+  await expect(dialog.getByTestId("uninstall-images")).toContainText("factory-job-acme__web:latest 1.84GB");
+  await expect(dialog).toContainText("acme/web's dependency cache and readiness report");
+  await expect(dialog).toContainText("take it off the app's repository access");
+  await shot(page, info, "get-started-remove-repo");
+  if (phone(info)) await noSidewaysScroll(page);
+
+  await dialog.getByRole("button", { name: "Remove and clean up" }).click();
+  await expect(dialog.getByTestId("uninstall-result")).toContainText("Removed 2.");
+  await expect(dialog).toContainText("The factory restarts to stop working on acme/web");
+  expect(sent).toEqual({ confirm: "remove", repo: "acme/web" });
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test("a token pasted in the wrong host's field says so, and a saved one can be removed", async ({ page }) => {

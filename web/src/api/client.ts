@@ -170,6 +170,17 @@ export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () 
 export const useUninstall = (enabled: boolean) =>
   useQuery({ queryKey: ["uninstall"], queryFn: () => getJSON<Uninstall>("/settings/uninstall"), enabled, refetchInterval: false, staleTime: Infinity });
 
+/** What removing one repo would remove, looked for afresh each time it's asked. */
+export const useUninstallRepo = (repo: string) =>
+  useQuery({
+    queryKey: ["uninstall", repo],
+    queryFn: () => getJSON<Uninstall>(`/settings/uninstall?repo=${encodeURIComponent(repo)}`),
+    enabled: repo !== "",
+    refetchInterval: false,
+    gcTime: 0,
+    retry: false,
+  });
+
 /** Writes changed settings to factory.yaml. An invalid result is refused with the reason, and nothing is written. */
 export const saveSettings = (changes: { path: string[]; value: SettingValue }[], version: string) =>
   postJSON<Settings>("/settings", { changes, version });

@@ -456,6 +456,24 @@ Neither deletes what only you can:
 
 Each removal is reported as removed or failed, with why.
 
+### Removing one repo
+
+`./factory uninstall --repo owner/name` does the same for one repo, and
+takes it out of `factory.yaml` and its workspace (a workspace left with
+no repos goes too). It removes that repo's labels, its job image and the
+base built from its Dockerfile, unless another repo or the orchestrator
+still uses them, and its dependency cache and readiness report in the
+data folder. Its items, jobs and job logs stay, as the factory's history.
+It works for a repo already gone from `factory.yaml`, and it refuses for
+the only repo. The same refusals and `--dry-run` apply. Afterwards, take
+the repo off the GitHub App's repository access, or revoke a token you
+made for it alone; the list links to both.
+
+On the get-started page, a repo's **Remove** shows the same list. **Remove
+and clean up** removes it all, then restarts the factory once its running
+jobs finish, so it stops working on the repo. **Only take it out of
+factory.yaml** leaves the labels, image and files for `--repo` later.
+
 ## Manual setup
 
 `factory setup` is the easy way. If you'd rather do each step yourself:

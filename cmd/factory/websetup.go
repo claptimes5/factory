@@ -1011,25 +1011,7 @@ func (w *wizard) saveRepos(ctx context.Context, in, ws string) (string, error) {
 	if slices.Equal(names, before) {
 		return "Nothing changed.", nil
 	}
-	// A repo removed leaves its workspace first, so the file stays valid.
-	for _, b := range before {
-		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(b, n) }) {
-			if err := config.SetRepoWorkspace(w.cfgPath, b, ""); err != nil {
-				return "", err
-			}
-		}
-	}
-	// The others' workspaces keep their names: chats and spend go by them.
-	kept := map[string]string{}
-	for _, n := range names {
-		if ws := w.config().WorkspaceOf(n); ws != "" {
-			kept[n] = ws
-		}
-	}
-	if err := setRepos(w.cfgPath, names); err != nil {
-		return "", err
-	}
-	if err := config.KeepWorkspaceNames(w.cfgPath, kept); err != nil {
+	if err := setRepoNames(w.cfgPath, w.config(), names); err != nil {
 		return "", err
 	}
 	// The ones added join the workspace chosen, or have one of their own.
@@ -1050,7 +1032,13 @@ func (w *wizard) saveRepos(ctx context.Context, in, ws string) (string, error) {
 	w.mu.Unlock()
 	w.checkAccess(ctx)
 	w.rechecks.Go(func() { w.checkMachine(context.WithoutCancel(ctx)) }) // the images can differ
-	return "Saved " + joinAnd(names) + " to factory.yaml.", nil
+	msg := "Saved " + joinAnd(names) + " to factory.yaml."
+	for _, b := range before {
+		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(b, n) }) {
+			msg += " To delete " + b + "'s labels, job image and cache too, stop the factory and run ./factory uninstall --repo " + b + "."
+		}
+	}
+	return msg, nil
 }
 
 // wizardWorkspaces are the repos by workspace for the page.
