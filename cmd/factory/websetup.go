@@ -48,6 +48,9 @@ type wizard struct {
 	// renamed moves what the factory keeps of a workspace (its chats) to
 	// its new name (may be nil).
 	renamed func(ctx context.Context, from, to string) error
+	// rechecks are the machine checks a change of repos starts, which a
+	// test waits for.
+	rechecks sync.WaitGroup
 
 	act sync.Mutex // one action at a time, each reading what the last saved
 
@@ -1046,7 +1049,7 @@ func (w *wizard) saveRepos(ctx context.Context, in, ws string) (string, error) {
 	w.missing, w.instErr = nil, ""
 	w.mu.Unlock()
 	w.checkAccess(ctx)
-	go w.checkMachine(context.WithoutCancel(ctx)) // the images can differ
+	w.rechecks.Go(func() { w.checkMachine(context.WithoutCancel(ctx)) }) // the images can differ
 	return "Saved " + joinAnd(names) + " to factory.yaml.", nil
 }
 

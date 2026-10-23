@@ -38,6 +38,8 @@ func testWizard(t *testing.T, f *fakeGitHub, repo string, setupMode bool, run fu
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Before the globals go back: a check a change of repos started reads them.
+	t.Cleanup(w.rechecks.Wait)
 	w.exported = map[string]string{}
 	w.looked = true // no background checks: each test runs what it needs
 	w.machineCheck = func(context.Context, *config.Config) []finding {
