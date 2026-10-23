@@ -1935,8 +1935,12 @@ func runTry(ctx context.Context, cfg *config.Config, repo string, client clientF
 				out += "\n" + err.Error()
 			}
 		}
+		hint := ""
+		if state == "fail" {
+			hint = web.TryHint(repo, out)
+		}
 		update(func(t *web.APIWizardTry) {
-			t.Steps[i].State, t.Steps[i].Seconds, t.Steps[i].Output = state, int(time.Since(start).Seconds()), tailLines(out, 60)
+			t.Steps[i].State, t.Steps[i].Seconds, t.Steps[i].Output, t.Steps[i].Hint = state, int(time.Since(start).Seconds()), tailLines(out, 60), hint
 		})
 		if state == "fail" && st.Gate == "install" {
 			return nil // the rest need what it installs

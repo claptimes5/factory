@@ -838,6 +838,42 @@ func TestGateContainers(t *testing.T) {
 	}
 }
 
+// A Go repo's checks share a module and build cache beside their export,
+// which goes with it; any other repo's get none.
+func TestGoChecksShareACacheBesideTheExport(t *testing.T) {
+	t.Parallel()
+	e := setup(t)
+	log := filepath.Join(t.TempDir(), "docker.log")
+	bin := filepath.Join(t.TempDir(), "docker")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\necho \"MOD=$GOMODCACHE FLAGS=$GOFLAGS\" >> "+log+"\n"), 0o755)
+	e.p.Runner, e.p.GateExec = &runner.Docker{Bin: bin}, nil
+	e.p.Cfg.Repos = []config.Repo{{Name: "o/go", Env: map[string]string{"GOFLAGS": "-tags=x"}}}
+	ctx := context.Background()
+	os.MkdirAll(e.p.jobDir(1), 0o755)
+	goDir, otherDir := filepath.Join(t.TempDir(), "export"), t.TempDir()
+	os.MkdirAll(goDir, 0o755)
+	os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module x\n"), 0o644)
+	for _, dir := range []string{goDir, otherDir} {
+		if _, _, err := e.p.gateExec(ctx, 1, dir, "true", gateRun{repo: "o/go"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("docker calls:\n%s", b)
+	}
+	if !strings.Contains(lines[0], goDir+".gocache:/gocache ") || lines[1] != "MOD=/gocache/mod FLAGS=-tags=x -modcacherw" {
+		t.Errorf("go export: %s\n%s", lines[0], lines[1])
+	}
+	if strings.Contains(lines[2], "/gocache") || lines[3] != "MOD= FLAGS=-tags=x" {
+		t.Errorf("other export: %s\n%s", lines[2], lines[3])
+	}
+	if _, err := os.Stat(goDir + ".gocache"); err != nil {
+		t.Errorf("no cache beside the export: %v", err)
+	}
+}
+
 // Failures escalate one model tier, then park.
 func TestEscalationThenPark(t *testing.T) {
 	t.Parallel()

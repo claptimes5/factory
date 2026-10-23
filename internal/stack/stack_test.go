@@ -77,7 +77,7 @@ func TestOtherStacks(t *testing.T) {
 		files fakeFiles
 		want  string // Stack | ImageFrom | Install | gates
 	}{
-		"go":      {fakeFiles{"go.mod": "module x"}, "Go |  |  | "},
+		"go":      {fakeFiles{"go.mod": "module x"}, "Go |  | go mod download | "},
 		"nothing": {fakeFiles{"README.md": "hi"}, ""},
 		"python": {fakeFiles{"pyproject.toml": "[project.optional-dependencies]\ndev = [\"pytest\", \"ruff\"]", ".python-version": "3.12.4"},
 			"Python | python:3.12.4-bookworm | python -m venv .venv | lint test"},
@@ -91,7 +91,7 @@ func TestOtherStacks(t *testing.T) {
 			"Node |  | corepack yarn install --frozen-lockfile | lint"},
 		"yarn berry": {fakeFiles{"package.json": `{}`, "yarn.lock": "__metadata:\n  version: 8\n"},
 			"Node |  | corepack yarn install --immutable | "},
-		"go and node": {fakeFiles{"go.mod": "module x", "package.json": `{"scripts":{"build":"vite build"}}`}, "Go |  |  | "},
+		"go and node": {fakeFiles{"go.mod": "module x", "package.json": `{"scripts":{"build":"vite build"}}`}, "Go |  | go mod download | "},
 		"rust":        {fakeFiles{"Cargo.toml": "[package]"}, "Rust | rust:1-bookworm | cargo fetch | lint test build"},
 		"pnpm": {fakeFiles{"package.json": `{"scripts":{"typecheck":"tsc","test":"echo \"Error: no test specified\" && exit 1"}}`, "pnpm-lock.yaml": ""},
 			"Node |  | corepack pnpm install --frozen-lockfile | types"},

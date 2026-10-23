@@ -289,7 +289,10 @@ repos:
 every package against the lockfile's hashes, so one job can't plant a
 package a later job trusts. Only install may write to it. Gems
 (`vendor/bundle`), Python virtualenvs and Cargo's home are built inside
-each commit's export instead, so they start fresh every time.
+each commit's export instead, so they start fresh every time. Go's
+modules and build cache sit beside each commit's export, so its install
+(`go mod download`) and every check share them, and they go when it does.
+Each commit's checks start with an empty cache.
 
 ## Services: databases and the like
 
@@ -339,7 +342,9 @@ read from the repo's `docker-compose.yml` or `config/database.yml`, instead
 of filing an issue for a builder, who can't edit `factory.yaml`.
 The same goes for any check that fails because the job's sandbox lacks
 something: a refused connection to a database or cache, a system library
-that can't be loaded, a program that isn't installed. Readiness reports it
+that can't be loaded, a program that isn't installed, a host the
+[egress allowlist](security.md#network-the-egress-allowlist) doesn't let
+it reach (it names the host to add to `runner.egress.allow`). Readiness reports it
 as a setup blocker with no issue. A build that fails that way, or whose
 builder reports it, parks at once with the line that shows it, rather than
 trying the next model. Its first button is **Fix setup**: it reads the

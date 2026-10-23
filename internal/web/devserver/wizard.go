@@ -26,7 +26,7 @@ type wizard struct {
 	mu        sync.Mutex
 	repos     []string
 	inWS      map[string]string // each repo's workspace; one not here has its own
-	app       bool // the app is made
+	app       bool              // the app is made
 	installed bool
 	token     string
 	claude    string
@@ -262,6 +262,7 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 				st := web.APIWizardTryStep{Gate: g, Command: c, State: "pass", Seconds: 12, Output: "ok"}
 				if g == "test" && !pg {
 					st.State, st.Output = "fail", "ActiveRecord::ConnectionNotEstablished: connection to server at \"127.0.0.1\", port 5432 failed: Connection refused"
+					st.Hint = web.TryHint(in.Repo, st.Output)
 				}
 				t.Steps = append(t.Steps, st)
 			}

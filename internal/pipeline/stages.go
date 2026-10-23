@@ -67,8 +67,8 @@ func (p *Pipeline) park(ctx context.Context, it *store.WorkItem, reason string) 
 // saying what's missing, and marks the park as one no model can get past.
 func (p *Pipeline) parkSetup(ctx context.Context, it *store.WorkItem, f *gates.Fault) error {
 	reason := fmt.Sprintf("The checks can't run in the factory's sandbox: %s. The output shows:\n\n```\n%s\n```\n\n"+
-		"Neither the code nor a stronger model can fix this. Add what's missing to %s in factory.yaml (a service under `services:`, or a job image that has it), then press Retry.",
-		f.What(), f.Line, it.Repo)
+		"Neither the code nor a stronger model can fix this. %s, then press Retry.",
+		f.What(), f.Line, f.Fix(it.Repo))
 	if err := p.park(ctx, it, reason); err != nil {
 		return err
 	}
