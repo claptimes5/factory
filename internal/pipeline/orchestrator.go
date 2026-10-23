@@ -476,6 +476,10 @@ func (p *Pipeline) statusText(ctx context.Context, ws string) (string, error) {
 	out := fmt.Sprintf("workspace: %s (%s)\nits items: %s\njobs, every workspace: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (this workspace's orchestration $%.2f of $%.2f)\nawaiting human here: %d (max %d across the factory)",
 		ws, strings.Join(p.Cfg.WorkspaceRepos(ws), ", "), strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.OrchestratorFor(ws).DailyBudget,
 		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax)
+	if w, _ := p.Cfg.WorkspaceConf(ws); w.DailyTotal > 0 {
+		mine, _ := p.Store.SpendOnRepos(ctx, store.Today(), p.Cfg.WorkspaceRepos(ws))
+		out += fmt.Sprintf("\nthis workspace's builds today: $%.2f of its $%.2f", mine, w.DailyTotal)
+	}
 	if limits, _ := p.Store.Limits(ctx); len(limits) > 0 {
 		out += "\nusage limits: " + store.FormatLimits(limits)
 	}

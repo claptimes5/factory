@@ -638,6 +638,8 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 		p.diskHalt = false
 		p.notify(ctx, "There's room on disk again; jobs are starting.")
 	}
+	// A workspace whose own daily budget is spent waits; the rest go on.
+	held := append(p.heldRepos(), p.spentRepos(ctx)...)
 	spent, err := p.buildSpend(ctx)
 	if err != nil {
 		return nil, err
@@ -648,7 +650,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
-		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+		return p.Store.ClaimJobHolding(ctx, append(except, "triage", "implement", "review", "critic", "learn", "groom"), p.heldHarnesses(ctx), held, p.heldForSetup(ctx))
 	}
 	waiting, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	if err != nil {
@@ -657,7 +659,7 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 	if len(waiting) >= p.Cfg.Budgets.AwaitingHumanMax {
 		except = append(except, "implement")
 	}
-	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), p.heldRepos(), p.heldForSetup(ctx))
+	return p.Store.ClaimJobHolding(ctx, except, p.heldHarnesses(ctx), held, p.heldForSetup(ctx))
 }
 
 // ReadinessDir is where the readiness check keeps each repo's report.
@@ -706,6 +708,34 @@ func (p *Pipeline) parentIssue(ctx context.Context, it *store.WorkItem) int {
 // heldRepos are the repos whose job image is being built, with the repos
 // that share a workspace with one; "" when the image of jobs for no repo
 // (the orchestrator's, tuning's) is.
+// spentRepos are the repos of every workspace whose own daily budget
+// (daily_total) is spent today; you're told once a day for each.
+func (p *Pipeline) spentRepos(ctx context.Context) []string {
+	var out []string
+	for _, ws := range p.Cfg.WorkspaceNames() {
+		w, _ := p.Cfg.WorkspaceConf(ws)
+		if w.DailyTotal <= 0 {
+			continue
+		}
+		repos := p.Cfg.WorkspaceRepos(ws)
+		spent, err := p.Store.SpendOnRepos(ctx, store.Today(), repos)
+		if err != nil {
+			p.warn(err, "SpendOnRepos")
+			continue
+		}
+		if spent < w.DailyTotal {
+			continue
+		}
+		out = append(out, repos...)
+		key := store.Today() + " " + ws
+		if seen, err := p.Store.HasEvent(ctx, "workspace_budget_spent", key); err == nil && !seen {
+			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "workspace_budget_spent", Reason: key}), "AddEvent")
+			p.alert(ctx, fmt.Sprintf("%s's daily budget is reached ($%.2f of $%.2f). Its jobs wait until midnight UTC; other workspaces go on.", ws, spent, w.DailyTotal))
+		}
+	}
+	return out
+}
+
 func (p *Pipeline) heldRepos() []string {
 	if p.Building == nil {
 		return nil

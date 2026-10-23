@@ -9,6 +9,7 @@ import (
 
 	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/mcp"
+	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
 
@@ -183,5 +184,32 @@ func TestBreakerTripsAcrossTheWorkspace(t *testing.T) {
 	}
 	if err := e.p.ResetAutoMerge(ctx, "o/r", "avi"); err == nil {
 		t.Fatal("a second reset should say there's nothing tripped")
+	}
+}
+
+// A workspace's own daily budget, once spent, holds its jobs; another
+// workspace's still start.
+func TestWorkspaceBudgetHoldsItsJobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setupScoped(t, "    daily_total: 1\n")
+	var sent []string
+	e.p.Notify = func(_ context.Context, msg string) { sent = append(sent, msg) }
+	api, _, _ := e.p.Store.UpsertItem(ctx, "o/r", 1, "API change")
+	doc, _, _ := e.p.Store.UpsertItem(ctx, "o/docs", 2, "Docs change")
+	spentID, _ := e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &api.ID, Kind: "triage", Harness: "claude", Model: "haiku", BudgetUSD: 2})
+	e.p.Store.ClaimJob(ctx)
+	e.p.Store.FinishJob(ctx, spentID, store.Result{State: state.Succeeded, CostUSD: 1.5})
+	e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &api.ID, Kind: "triage", Harness: "claude", Model: "haiku", BudgetUSD: 1})
+	docJob, _ := e.p.Store.EnqueueJob(ctx, store.Job{ItemID: &doc.ID, Kind: "triage", Harness: "claude", Model: "haiku", BudgetUSD: 1})
+	j, err := e.p.claimNext(ctx)
+	if err != nil || j == nil || j.ID != docJob {
+		t.Fatalf("claimed %+v %v, want docs' job %d", j, err, docJob)
+	}
+	if j, _ := e.p.claimNext(ctx); j != nil {
+		t.Fatalf("app's job started past its budget: %+v", j)
+	}
+	if len(sent) != 1 || !strings.Contains(sent[0], "app's daily budget is reached ($1.50 of $1.00)") {
+		t.Fatalf("told = %q", sent)
 	}
 }

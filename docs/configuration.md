@@ -821,7 +821,7 @@ values below are this repo's.
 | `per_job` | Dollars per implement job, by size: `{XS: 0.5, S: 2, M: 6, L: 15}`. Without an `XS` entry, XS uses S's. |
 | `triage`, `review` | Dollars per triage or review job. |
 | `verify` | Dollars per verifier run, which checks a review's blocking findings (0.5 here; left out, `triage`'s). |
-| `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. |
+| `daily_total` | Total dollars a day. When it's hit, no new jobs start until midnight UTC. A [workspace](#workspaces) can have a smaller `daily_total` of its own: once that's spent, only its jobs wait. |
 | `concurrent_jobs` | Jobs running at once (3). A paired critic (`review.paired_high_risk`) or a [security pass](#the-security-pass) runs inside its review and isn't counted. |
 | `awaiting_human_max` | No new implement jobs while this many PRs wait for you (5). |
 | `min_free_disk_gb` | The [disk space](#disk-space) floor (default 10). |
@@ -832,7 +832,7 @@ values below are this repo's.
 The orchestrator's spend has its own caps, `orchestrator.run_budget` per
 run and `orchestrator.daily_budget` per day, which don't count against the
 build budget. Tuning runs and the dashboard [chat](using.md#chat-opening-issues-with-the-orchestrator)'s
-replies (each up to `run_budget`) share that daily cap. `factory compare` arms split what's left of today's budget.
+replies (each up to `run_budget`) share that daily cap. Each workspace's orchestrator and chats can have a smaller one of their own, the workspace's `orchestrator.daily_budget`. `factory compare` arms split what's left of today's budget.
 
 **Subscription usage limits.** On a Claude subscription, Claude Code has a
 five-hour and a weekly usage window, and so does Codex on a
