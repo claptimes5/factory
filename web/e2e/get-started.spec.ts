@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 const phone = (info: TestInfo) => info.project.name === "phone";
 
@@ -19,6 +19,14 @@ async function openStep(page: Page, key: string) {
   if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
   await expect(head).toHaveAttribute("aria-expanded", "true");
   return step(page, key);
+}
+
+/** A repo's checks in the checks step, its fold opened if an earlier test settled and folded it. */
+async function repoChecks(checks: Locator, repo: string) {
+  const fold = checks.getByTestId("repo-checks").filter({ hasText: repo });
+  await expect(fold).toContainText("Looks like"); // read, so it isn't drawn again closed
+  if (await fold.evaluate((e) => e instanceof HTMLDetailsElement && !e.open)) await fold.locator(":scope > summary").click();
+  return fold;
 }
 
 // When a check fails, say what the page and the API showed.
@@ -144,7 +152,10 @@ test("the GitHub app is made in the browser, then installed and checked", async 
   // Reached, but one repo lacks two of the factory's labels.
   await expect(gh).toHaveAttribute("data-state", "attention");
   await expect(gh).toContainText("Labels missing on acme/web");
-  await expect(gh.getByTestId("access").nth(1)).toContainText("Missing labels: factory:parked, factory:retry");
+  // Listed by the button that creates them, not with the repo's access.
+  const labels = gh.getByRole("region", { name: "Labels" });
+  await expect(labels.getByTestId("missing-labels")).toHaveText("Missing on acme/web: factory:parked, factory:retry");
+  await expect(gh.getByTestId("access").nth(1)).not.toContainText("factory:parked");
 
   await gh.getByRole("button", { name: "Create missing labels" }).click();
   await expect(gh).toHaveAttribute("data-state", "done");
@@ -242,14 +253,23 @@ test("the checks step shows each repo's suggested checks, flags what its AGENTS.
   await expect(api.getByRole("status")).toContainText("Saved acme/api's checks");
   const web = checks.getByTestId("repo-checks").filter({ hasText: "acme/web" });
   await expect(web).toContainText("Suggested, not saved yet.");
+  await expect(web.getByLabel("Needs you")).toBeVisible();
   await web.getByRole("button", { name: "Use these checks" }).click();
   await expect(checks).toHaveAttribute("data-state", "done");
+  // Next time, each settled repo is folded, with a check.
+  await page.reload();
+  const again = await openStep(page, "checks");
+  for (const r of ["acme/api", "acme/web"]) {
+    const fold = again.getByTestId("repo-checks").filter({ hasText: r });
+    await expect(fold.locator(":scope > summary").getByLabel("OK", { exact: true })).toBeVisible();
+    await expect(fold.getByRole("button", { name: "Save", exact: true })).toBeHidden();
+  }
 });
 
 test("the checks step builds the job image from the repo's Dockerfile, or a public image instead", async ({ page }) => {
   await page.goto("/app/get-started");
   const checks = await openStep(page, "checks");
-  const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
+  const api = await repoChecks(checks, "acme/api");
   await expect(api.getByTestId("image-build")).toContainText("Built from the repo's Dockerfile, stage test");
   await api.getByRole("button", { name: "Use a public image instead" }).click();
   await expect(api.getByLabel("Job image built on")).toBeVisible();
@@ -260,7 +280,7 @@ test("the checks step builds the job image from the repo's Dockerfile, or a publ
 test("the checks step tries the checks before saving, and shows what failed", async ({ page }, info) => {
   await page.goto("/app/get-started");
   const checks = await openStep(page, "checks");
-  const api = checks.getByTestId("repo-checks").filter({ hasText: "acme/api" });
+  const api = await repoChecks(checks, "acme/api");
   await expect(api.getByRole("checkbox", { name: /postgres/ })).toBeChecked();
   await expect(api.getByText("DATABASE_URL")).toBeVisible();
   // Without the database, the tests can't connect: the try says so.

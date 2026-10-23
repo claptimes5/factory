@@ -629,12 +629,6 @@ function AccessRow({ a, ro }: { a: WizardAccess; ro: boolean }) {
           {a.state === "failed" && `: ${a.error}`}
         </span>
       </span>
-      {a.missing_labels.length > 0 && (
-        <p className="pl-6 text-xs text-warning">
-          Missing {a.missing_labels.length === 1 ? "label" : "labels"}: <span className="font-mono break-all">{a.missing_labels.join(", ")}</span>
-        </p>
-      )}
-      {a.labels_error && <p className="pl-6 text-xs text-destructive">Couldn't list its labels: {a.labels_error}</p>}
       {a.hints.map((h) => (
         <p key={h} className="pl-6 text-xs text-text-2">
           {h}
@@ -662,10 +656,13 @@ function AccessRow({ a, ro }: { a: WizardAccess; ro: boolean }) {
 
 function Labels({ w, host, ro }: { w: Wizard; host: "github" | "gitlab"; ro: boolean }) {
   const { busy, msg, run } = useAction();
-  const repos = new Set(w.access.filter((a) => a.host === host).map((a) => a.repo));
+  const access = w.access.filter((a) => a.host === host);
+  const repos = new Set(access.map((a) => a.repo));
   const done = w.labels.filter((l) => repos.has(l.repo));
-  const reach = w.access.some((a) => a.host === host && a.state === "ok");
-  const missing = w.access.filter((a) => a.host === host).reduce((n, a) => n + a.missing_labels.length, 0);
+  const reach = access.some((a) => a.state === "ok");
+  const missing = access.reduce((n, a) => n + a.missing_labels.length, 0);
+  // Each repo's own line, named only when there are several.
+  const on = (repo: string) => (repos.size > 1 ? ` on ${repo}` : "");
   return (
     <section aria-label="Labels" className="flex flex-col gap-2">
       <h3 className="text-sm font-semibold">Labels</h3>
@@ -673,6 +670,22 @@ function Labels({ w, host, ro }: { w: Wizard; host: "github" | "gitlab"; ro: boo
         The factory uses {w.label_names.length} labels on each repo, such as <Code>{w.label_names[0]}</Code>.{" "}
         {missing > 0 ? `${missing} ${missing === 1 ? "is" : "are"} missing. Creating them leaves the others as they are.` : "Every one is there."}
       </p>
+      {access
+        .filter((a) => a.missing_labels.length > 0 || a.labels_error)
+        .map((a) => (
+          <div key={a.repo} data-testid="missing-labels" className="flex flex-col gap-1 text-xs">
+            {a.missing_labels.length > 0 && (
+              <p className="text-warning">
+                Missing{on(a.repo)}: <span className="font-mono break-all">{a.missing_labels.join(", ")}</span>
+              </p>
+            )}
+            {a.labels_error && (
+              <p className="text-destructive">
+                Couldn't list the labels{on(a.repo)}: {a.labels_error}
+              </p>
+            )}
+          </div>
+        ))}
       <div>
         <Button size="sm" variant={missing > 0 ? "default" : "outline"} disabled={ro || !reach || missing === 0 || !!busy} onClick={() => run("labels")}>
           {busy ? "Creating…" : "Create missing labels"}
@@ -995,13 +1008,12 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
   if (!c.stack && !c.saved) {
     return <p className="text-sm text-muted-foreground">{c.repo}: connect the factory to it above, so it can read the repo's files and suggest its checks.</p>;
   }
+  // As the step counts it: saved, and nothing its agent instructions disagree with.
+  const disagree = c.gates.some((g) => g.suggested && g.source);
+  const status = !c.saved ? "Suggested, not saved yet." : disagree ? "Saved, but its agent instructions suggest other commands." : "Saved in factory.yaml.";
   return (
-    <div className="flex flex-col gap-3 rounded-md border p-3" data-testid="repo-checks">
-      <p className="text-sm">
-        {several && <span className="font-medium">{c.repo}: </span>}
-        {c.stack ? `Looks like ${c.stack}.` : ""} {c.saved ? "Saved in factory.yaml." : "Suggested, not saved yet."}
-      </p>
-      <TextField id={id("install")} label="Install" value={install} set={setInstall} disabled={ro} placeholder="bundle install" help={c.suggested_install && `Suggested: ${c.suggested_install}`} />
+    <RepoFold repo={c.repo} line={`${c.stack ? `Looks like ${c.stack}. ` : ""}${status}`} settled={c.saved && !disagree} several={several}>
+      <TextField id={id("install")} label="Install" value={install} set={setInstall} disabled={ro} placeholder="none" help={c.suggested_install && `Suggested: ${c.suggested_install}`} />
       {names.map((g) => {
         const row = c.gates.find((x) => x.gate === g);
         const from = row?.source ? `from ${row.source}` : row && c.stack ? "guessed from the repo's files" : "";
@@ -1110,7 +1122,35 @@ function RepoChecks({ c, ro, several }: { c: WizardChecks; ro: boolean; several:
       </div>
       <Message msg={msg} />
       {c.try && <TryResult t={c.try} />}
-    </div>
+    </RepoFold>
+  );
+}
+
+/**
+ * One repo's checks. With several repos each is folded under a line that
+ * says whether it needs you: open while it does, closed with a check once
+ * it's settled. It stays as it opened, so saving doesn't fold it away.
+ */
+function RepoFold({ repo, line, settled, several, children }: { repo: string; line: string; settled: boolean; several: boolean; children: ReactNode }) {
+  const [open] = useState(!settled);
+  if (!several) {
+    return (
+      <div className="flex flex-col gap-3 rounded-md border p-3" data-testid="repo-checks">
+        <p className="text-sm">{line}</p>
+        {children}
+      </div>
+    );
+  }
+  return (
+    <details open={open || undefined} className="rounded-md border p-3" data-testid="repo-checks">
+      <summary className="flex cursor-pointer items-start gap-2 text-sm">
+        <span className="mt-0.5">{settled ? findingIcon.pass : <AlertCircle aria-label="Needs you" className="size-4 shrink-0 text-warning" />}</span>
+        <span className="min-w-0 flex-1 break-words">
+          <span className="font-mono font-medium">{repo}</span>: {line}
+        </span>
+      </summary>
+      <div className="mt-3 flex flex-col gap-3">{children}</div>
+    </details>
   );
 }
 

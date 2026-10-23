@@ -911,6 +911,30 @@ func TestWizardChecks(t *testing.T) {
 	}
 }
 
+// A Go module is suggested the top-level checks it would run anyway, with
+// the lint command its AGENTS.md names over the top-level one, so its
+// fields aren't empty.
+func TestWizardSuggestsGoTheTopLevelChecks(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}, files: map[string]map[string]string{"o/r": {
+		"go.mod":    "module x\n",
+		"AGENTS.md": "Run `golangci-lint run` before you push.",
+	}}}
+	w := testWizard(t, f, "o/r", false, noDocker)
+	ctx := context.Background()
+	if _, err := w.Do(ctx, "github/token", web.WizardInput{Token: "ghp_token_123456789"}); err != nil {
+		t.Fatal(err)
+	}
+	c := w.State(ctx, false).Checks[0]
+	got := map[string]web.APIWizardGate{}
+	for _, g := range c.Gates {
+		got[g.Gate] = g
+	}
+	if c.Saved || c.Stack != "Go" || got["types"].Command != "go vet ./..." || got["test"].Command != "go test -race ./..." ||
+		got["build"].Command != "go build ./..." || got["lint"].Command != "golangci-lint run" || got["lint"].Source != "AGENTS.md" {
+		t.Fatalf("checks = %+v", c)
+	}
+}
+
 // The page tries its checks before saving them: the install and each check
 // run with the commands and services on the page, and it follows each step.
 // Saving keeps the services picked and their environment.
