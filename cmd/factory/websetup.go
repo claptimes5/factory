@@ -44,6 +44,9 @@ type wizard struct {
 	// machineCheck runs the doctor's checks of this machine; tests
 	// replace it.
 	machineCheck func(context.Context, *config.Config) []finding
+	// renamed moves what the factory keeps of a workspace (its chats) to
+	// its new name (may be nil).
+	renamed func(ctx context.Context, from, to string) error
 
 	act sync.Mutex // one action at a time, each reading what the last saved
 
@@ -300,7 +303,7 @@ var findingStatus = [...]string{"pass", "warn", "fail"}
 
 func (w *wizard) stateLocked(vals map[string]string) web.APIWizard {
 	cfg := w.cfg
-	out := web.APIWizard{ConfigPath: w.cfgPath, EnvPath: w.envPath, Repos: cfg.RepoNames(), Machine: []web.APIWizardFinding{},
+	out := web.APIWizard{ConfigPath: w.cfgPath, EnvPath: w.envPath, Repos: cfg.RepoNames(), Workspaces: wizardWorkspaces(cfg), Machine: []web.APIWizardFinding{},
 		Access: []web.APIWizardAccess{}, Labels: []web.APIWizardLabel{}, Warnings: []string{}, Steps: []web.APIWizardStep{},
 		Notify: secretOf(vals["FACTORY_NOTIFY_URL"]), Changed: w.version() != w.started}
 	if out.Labels = w.labels; out.Labels == nil {
@@ -819,7 +822,11 @@ func (w *wizard) Do(ctx context.Context, action string, in web.WizardInput) (str
 		w.checkMachine(ctx)
 		return "Checked this machine again.", nil
 	case "repos":
-		return w.saveRepos(ctx, in.Repos)
+		return w.saveRepos(ctx, in.Repos, in.Workspace)
+	case "workspace/move":
+		return w.moveRepo(ctx, in.Repo, in.Workspace)
+	case "workspace/rename":
+		return w.renameWorkspace(ctx, in.Workspace, in.Name)
 	case "access/check":
 		w.checkAccess(ctx)
 		return w.accessMessage(), nil
@@ -991,16 +998,35 @@ func (w *wizard) accessMessage() string {
 	return "The factory can reach " + joinAnd(ok) + "."
 }
 
-func (w *wizard) saveRepos(ctx context.Context, in string) (string, error) {
+func (w *wizard) saveRepos(ctx context.Context, in, ws string) (string, error) {
 	names, err := parseRepoList(in)
 	if err != nil {
 		return "", err
 	}
-	if slices.Equal(names, w.config().RepoNames()) {
+	before := w.config().RepoNames()
+	if slices.Equal(names, before) {
 		return "Nothing changed.", nil
+	}
+	// A repo removed leaves its workspace first, so the file stays valid.
+	for _, b := range before {
+		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(b, n) }) {
+			if err := config.SetRepoWorkspace(w.cfgPath, b, ""); err != nil {
+				return "", err
+			}
+		}
 	}
 	if err := setRepos(w.cfgPath, names); err != nil {
 		return "", err
+	}
+	// The ones added join the workspace chosen, or have one of their own.
+	if ws != "" {
+		for _, n := range names {
+			if !slices.ContainsFunc(before, func(b string) bool { return strings.EqualFold(b, n) }) {
+				if err := config.SetRepoWorkspace(w.cfgPath, n, ws); err != nil {
+					return "", err
+				}
+			}
+		}
 	}
 	if err := w.reload(); err != nil {
 		return "", err
@@ -1011,6 +1037,50 @@ func (w *wizard) saveRepos(ctx context.Context, in string) (string, error) {
 	w.checkAccess(ctx)
 	go w.checkMachine(context.WithoutCancel(ctx)) // the images can differ
 	return "Saved " + joinAnd(names) + " to factory.yaml.", nil
+}
+
+// wizardWorkspaces are the repos by workspace for the page.
+func wizardWorkspaces(cfg *config.Config) []web.APIWizardWorkspace {
+	out := []web.APIWizardWorkspace{}
+	for _, ws := range cfg.WorkspaceNames() {
+		_, named := cfg.Workspaces[ws]
+		out = append(out, web.APIWizardWorkspace{Name: ws, Repos: cfg.WorkspaceRepos(ws), Own: !named})
+	}
+	return out
+}
+
+// moveRepo puts repo in workspace ws ("" for one of its own).
+func (w *wizard) moveRepo(ctx context.Context, repo, ws string) (string, error) {
+	if err := config.SetRepoWorkspace(w.cfgPath, repo, ws); err != nil {
+		return "", err
+	}
+	if err := w.reload(); err != nil {
+		return "", err
+	}
+	if ws == "" {
+		return fmt.Sprintf("%s has a workspace of its own now, %s. It applies once the factory restarts.", repo, w.config().WorkspaceOf(repo)), nil
+	}
+	return fmt.Sprintf("%s is in %s now. It applies once the factory restarts.", repo, ws), nil
+}
+
+// renameWorkspace renames workspace from to to, its chats too.
+func (w *wizard) renameWorkspace(ctx context.Context, from, to string) (string, error) {
+	to = strings.TrimSpace(to)
+	if to == from {
+		return "Nothing changed.", nil
+	}
+	if err := config.RenameWorkspace(w.cfgPath, from, to); err != nil {
+		return "", err
+	}
+	if w.renamed != nil {
+		if err := w.renamed(ctx, from, to); err != nil {
+			return "", err
+		}
+	}
+	if err := w.reload(); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Renamed %s to %s. It applies once the factory restarts.", from, to), nil
 }
 
 // StartGitHubApp prepares the app manifest the page posts to GitHub.

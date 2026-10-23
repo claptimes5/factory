@@ -469,6 +469,48 @@ workspaces:
 	}
 }
 
+// Get started moves a repo between workspaces and renames them; one left
+// empty goes, and one left with a single repo no longer changes together.
+func TestMoveAndRenameWorkspaces(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	os.WriteFile(path, []byte("repos: [o/api, o/web, o/site]\nworkspaces:\n  shop: [o/api, o/web]\n"+base), 0o644)
+	load := func() *Config {
+		t.Helper()
+		c, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if err := SetRepoWorkspace(path, "o/web", "site"); err != nil {
+		t.Fatal(err)
+	}
+	c := load()
+	if c.WorkspaceOf("o/web") != "site" || !slices.Equal(c.WorkspaceRepos("site"), []string{"o/site", "o/web"}) || c.Workspaces["shop"].ChangeTogether {
+		t.Fatalf("after moving o/web to o/site's: %+v", c.Workspaces)
+	}
+	if err := SetRepoWorkspace(path, "o/api", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); c.WorkspaceOf("o/api") != "api" || len(c.Workspaces) != 1 {
+		t.Fatalf("after giving o/api its own: %+v", c.Workspaces)
+	}
+	if err := RenameWorkspace(path, "site", "web-team"); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); c.WorkspaceOf("o/site") != "web-team" || c.WorkspaceOf("o/web") != "web-team" {
+		t.Fatalf("after renaming: %+v", c.Workspaces)
+	}
+	if err := RenameWorkspace(path, "api", "web-team"); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("renaming onto a name in use = %v", err)
+	}
+	if err := SetRepoWorkspace(path, "o/api", "Bad Name"); err == nil {
+		t.Fatal("a bad name was taken")
+	}
+}
+
 func TestCostOfPricesCachedInput(t *testing.T) {
 	c := load(t)
 	// gpt-6.1-sol: $2 input, $0.10 cached, $10 output per million.

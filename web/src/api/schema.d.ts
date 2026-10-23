@@ -2397,6 +2397,84 @@ export interface paths {
                     "application/json": {
                         /** @description owner/name for GitHub, the project URL for GitLab, separated by commas */
                         repos: string;
+                        /** @description The workspace the repos added join; left out, each gets one of its own. A repo removed leaves its workspace. */
+                        workspace?: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/workspace/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a repo to a workspace in factory.yaml, or give it one of its own */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        repo: string;
+                        /** @description A workspace's name, a new one to make, or empty for one of its own */
+                        workspace: string;
+                    };
+                };
+            };
+            responses: {
+                200: components["responses"]["WizardResult"];
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/workspace/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rename a workspace in factory.yaml, and its chats with it */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        workspace: string;
+                        /** @description Lowercase letters, digits and -, starting with a letter */
+                        name: string;
                     };
                 };
             };
@@ -4316,6 +4394,8 @@ export interface components {
             /** @description Empty while the first check runs */
             machine_checked_at: string;
             repos: string[];
+            /** @description The repos by workspace */
+            workspaces: components["schemas"]["WizardWorkspace"][];
             /** @description Each repo's last access check */
             access: components["schemas"]["WizardAccess"][];
             /** @description Each repo's checks, saved or suggested */
@@ -4349,6 +4429,12 @@ export interface components {
             setup_reason: string;
             /** @description When this process started, so a page waiting on a restart can tell the new one from the old */
             started_at: string;
+        };
+        WizardWorkspace: {
+            name: string;
+            repos: string[];
+            /** @description A repo's own, named for it, with nothing in factory.yaml */
+            own: boolean;
         };
         WizardStep: {
             /** @enum {string} */

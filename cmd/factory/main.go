@@ -696,6 +696,7 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	if err != nil {
 		return err
 	}
+	wz.renamed = st.RenameChatWorkspace
 	srv.Wizard = wz
 	// A restart waits for an image build or a sign-in, as for a job.
 	p.Busy = wz.waitingOn

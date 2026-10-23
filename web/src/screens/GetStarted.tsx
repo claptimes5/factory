@@ -27,6 +27,7 @@ import {
   type Wizard,
   type WizardAccess,
   type WizardChecks,
+  type WizardWorkspace,
   type WizardManifest,
   type WizardSecret,
   type WizardStep,
@@ -35,7 +36,7 @@ import { Ago, ErrorBox, PageTitle } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, NativeSelect } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
@@ -396,14 +397,59 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
   const [host, setHost] = useState<"github" | "gitlab">(w.repos.length > 0 && w.repos.every(onGitLab) ? "gitlab" : "github");
   const [name, setName] = useState("");
   const [server, setServer] = useState(() => w.repos.find(onGitLab)?.split("/")[0] ?? "gitlab.com");
-  const save = (repos: string[]) => run("repos", { repos: repos.join(", ") });
+  const [into, setInto] = useState(""); // the workspace a repo added joins; "" for one of its own
+  const save = (repos: string[], workspace = "") => run("repos", { repos: repos.join(", "), workspace });
   const add = async () => {
     let v = name.trim();
     if (!v) return;
     // A bare group/project is on the GitLab server named beside it; a link or clone address says its own.
     if (host === "gitlab" && !/[:@]/.test(v) && !onGitLab(v)) v = `${server.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || "gitlab.com"}/${v}`;
-    if (await save([...w.repos, v])) setName("");
+    if (await save([...w.repos, v], into)) setName("");
   };
+  // The chosen repos by workspace; one in none yet shows as its own.
+  const groups: WizardWorkspace[] = [
+    ...w.workspaces.map((x) => ({ ...x, repos: x.repos.filter((r) => w.repos.includes(r)) })).filter((x) => x.repos.length > 0),
+    ...w.repos.filter((r) => !w.workspaces.some((x) => x.repos.includes(r))).map((r) => ({ name: r.split("/").pop() ?? r, repos: [r], own: true })),
+  ];
+  // Grouped once there's more than one, or one holds several repos.
+  const grouped = groups.length > 1 || groups.some((x) => x.repos.length > 1);
+  const repoRow = (r: string, ws?: WizardWorkspace) => (
+    <li key={r} data-testid="repo" className="flex min-w-0 flex-wrap items-center gap-2.5 py-1.5 pr-1.5 pl-3">
+      <Badge variant="secondary" className="w-14 justify-center">
+        {onGitLab(r) ? "GitLab" : "GitHub"}
+      </Badge>
+      <span className="min-w-0 flex-1 font-mono text-sm break-all">{r}</span>
+      {ws && (
+        <NativeSelect
+          aria-label={`Workspace for ${r}`}
+          value={ws.own ? "" : ws.name}
+          disabled={ro || !!busy}
+          onChange={(e) => run("workspace/move", { repo: r, workspace: e.target.value })}
+          className="h-8 w-auto font-mono text-meta"
+        >
+          <option value="">{ws.own ? ws.name : "a new one of its own"}</option>
+          {w.workspaces
+            .filter((x) => !(x.own && x.repos.includes(r)))
+            .map((x) => (
+              <option key={x.name} value={x.name}>
+                {x.name}
+              </option>
+            ))}
+        </NativeSelect>
+      )}
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-8"
+        aria-label={`Remove ${r}`}
+        title={w.repos.length === 1 ? "Add another repository first: the factory needs at least one" : `Remove ${r}`}
+        disabled={ro || !!busy || w.repos.length === 1}
+        onClick={() => save(w.repos.filter((x) => x !== r))}
+      >
+        <Trash2 aria-hidden />
+      </Button>
+    </li>
+  );
   const hosts = [
     { key: "github", label: "GitHub" },
     { key: "gitlab", label: "GitLab" },
@@ -411,31 +457,26 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
   return (
     <>
       <p className="text-sm text-text-2">
-        Which repositories should the factory work on? It clones each one from GitHub or GitLab into a workspace of its own, makes its changes on a
+        Which repositories should the factory work on? It clones each one from GitHub or GitLab into a folder of its own, makes its changes on a
         branch, and opens a pull request for you to review. It never uses or changes a folder on this computer, including the one you started it from.
       </p>
-      {w.repos.length > 0 && (
+      <p className="text-sm text-text-2">
+        Repos belong to workspaces, one project each: the dashboard, the orchestrator, Ask and trust work on one workspace at a time, so an issue
+        never lands in the wrong project. A repo you add has a workspace of its own unless you put it in another.
+      </p>
+      {w.repos.length > 0 && !grouped && (
         <ul aria-label="Chosen repositories" className="flex flex-col divide-y rounded-control border">
-          {w.repos.map((r) => (
-            <li key={r} data-testid="repo" className="flex min-w-0 items-center gap-2.5 py-1.5 pr-1.5 pl-3">
-              <Badge variant="secondary" className="w-14 justify-center">
-                {onGitLab(r) ? "GitLab" : "GitHub"}
-              </Badge>
-              <span className="min-w-0 flex-1 font-mono text-sm break-all">{r}</span>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-8"
-                aria-label={`Remove ${r}`}
-                title={w.repos.length === 1 ? "Add another repository first: the factory needs at least one" : `Remove ${r}`}
-                disabled={ro || !!busy || w.repos.length === 1}
-                onClick={() => save(w.repos.filter((x) => x !== r))}
-              >
-                <Trash2 aria-hidden />
-              </Button>
-            </li>
-          ))}
+          {w.repos.map((r) => repoRow(r))}
         </ul>
+      )}
+      {w.repos.length > 0 && grouped && (
+        <div className="flex flex-col gap-3" aria-label="Chosen repositories">
+          {groups.map((ws) => (
+            <WorkspaceGroup key={ws.name} ws={ws} ro={ro} busy={!!busy} rename={(name) => run("workspace/rename", { workspace: ws.name, name })}>
+              {ws.repos.map((r) => repoRow(r, ws))}
+            </WorkspaceGroup>
+          ))}
+        </div>
       )}
       <form
         className="flex flex-col gap-3 rounded-control border p-3"
@@ -480,9 +521,74 @@ function ReposStep({ w, ro }: { w: Wizard; ro: boolean }) {
             ? "owner/name, as in github.com/owner/name. Or paste the repo's link or clone address."
             : "The project's path, subgroups included. Or paste its link or clone address. For a self-hosted GitLab, change the server."}
         </p>
+        {w.workspaces.length > 0 && (
+          <div className="flex min-w-0 flex-col gap-1 sm:w-72">
+            <label htmlFor="wizard-repo-workspace" className="text-sm font-medium">
+              Workspace
+            </label>
+            <NativeSelect id="wizard-repo-workspace" value={into} disabled={ro} onChange={(e) => setInto(e.target.value)} className="font-mono">
+              <option value="">a new one, named for the repo</option>
+              {w.workspaces.map((x) => (
+                <option key={x.name} value={x.name}>
+                  {x.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+        )}
       </form>
       <Message msg={msg} />
     </>
+  );
+}
+
+/** A workspace and its repos, with its name to change. */
+function WorkspaceGroup({ ws, ro, busy, rename, children }: { ws: WizardWorkspace; ro: boolean; busy: boolean; rename: (name: string) => Promise<unknown>; children: ReactNode }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(ws.name);
+  const id = `wizard-ws-${ws.name}`;
+  return (
+    <section aria-label={`Workspace ${ws.name}`} data-testid="workspace" className="rounded-control border">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+        {editing ? (
+          <form
+            className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (await rename(name.trim())) setEditing(false);
+            }}
+          >
+            <label htmlFor={id} className="sr-only">
+              New name for {ws.name}
+            </label>
+            <Input id={id} value={name} onChange={(e) => setName(e.target.value)} className="h-8 w-48 font-mono" spellCheck={false} autoFocus />
+            <Button size="sm" type="submit" disabled={ro || busy || !name.trim()}>
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setName(ws.name);
+              }}
+            >
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <>
+            <span className="text-meta text-muted-foreground">Workspace</span>
+            <span className="flex-1 font-mono text-sm font-medium">{ws.name}</span>
+            <Button size="sm" variant="ghost" disabled={ro} onClick={() => setEditing(true)}>
+              Rename
+            </Button>
+          </>
+        )}
+      </div>
+      <ul className="flex flex-col divide-y">{children}</ul>
+    </section>
   );
 }
 

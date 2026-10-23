@@ -347,3 +347,37 @@ test("the finish step says what happens next", async ({ page }) => {
   const finish = await openStep(page, "finish");
   await expect(finish.getByRole("region", { name: "What happens next" })).toContainText("Add the factory:ready label to an issue");
 });
+
+test("repositories are grouped by workspace, which a repo can move between and which can be renamed", async ({ page }) => {
+  // Each save is played here, so the shared sample keeps its workspaces.
+  const sent: Record<string, unknown>[] = [];
+  const answer = async (route: import("@playwright/test").Route, message: string) => {
+    sent.push(route.request().postDataJSON());
+    const res = await route.fetch({ url: page.url().replace(/\/app\/.*/, "/api/v1/setup"), method: "GET", headers: {} });
+    await route.fulfill({ json: { message, wizard: await res.json() } });
+  };
+  await page.route(/\/api\/v1\/setup\/workspace\/rename$/, (r) => answer(r, "Renamed acme to shop. It applies once the factory restarts."));
+  await page.route(/\/api\/v1\/setup\/workspace\/move$/, (r) => answer(r, "acme/web has a workspace of its own now. It applies once the factory restarts."));
+  await page.route(/\/api\/v1\/setup\/repos$/, (r) => answer(r, "Saved acme/api, acme/web and acme/site to factory.yaml."));
+  await page.goto("/app/get-started");
+  const repos = await openStep(page, "repos");
+  const acme = repos.getByRole("region", { name: "Workspace acme" });
+  await expect(acme.getByTestId("repo")).toHaveCount(2);
+  await expect(acme.getByLabel("Workspace for acme/web")).toHaveValue("acme");
+
+  await acme.getByRole("button", { name: "Rename" }).click();
+  await acme.getByLabel("New name for acme").fill("shop");
+  await acme.getByRole("button", { name: "Save" }).click();
+  await expect(repos.getByRole("status")).toContainText("Renamed acme to shop");
+  expect(sent.at(-1)).toEqual({ workspace: "acme", name: "shop" });
+
+  await acme.getByLabel("Workspace for acme/web").selectOption("");
+  await expect(repos.getByRole("status")).toContainText("acme/web has a workspace of its own now");
+  expect(sent.at(-1)).toEqual({ repo: "acme/web", workspace: "" });
+
+  await repos.getByLabel("Repository", { exact: true }).fill("acme/site");
+  await repos.getByLabel("Workspace", { exact: true }).selectOption("acme");
+  await repos.getByRole("button", { name: "Add" }).click();
+  await expect(repos.getByRole("status")).toContainText("Saved acme/api, acme/web and acme/site");
+  expect(sent.at(-1)).toEqual({ repos: "acme/api, acme/web, acme/site", workspace: "acme" });
+});

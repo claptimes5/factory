@@ -230,3 +230,73 @@ func SetWorkspaceTrust(path, ws string, a *AutoMerge, s *SelfStart) error {
 	}
 	return WriteRepos(path, repos)
 }
+
+// SetRepoWorkspace puts repo in workspace ws in the config file: one
+// factory.yaml names, which it then makes (from a repo's own, that repo
+// and this one), or "" for a workspace of its own. It leaves the one it
+// was in; one left empty goes, and one left with a single repo no longer
+// changes together.
+func SetRepoWorkspace(path, repo, ws string) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	rc, ok := cfg.RepoConf(repo)
+	if !ok {
+		return fmt.Errorf("%s isn't in %s", repo, path)
+	}
+	if ws != "" && !wsName.MatchString(ws) {
+		return fmt.Errorf("workspace names are lowercase letters, digits and -, starting with a letter: %q", ws)
+	}
+	all := maps.Clone(cfg.Workspaces)
+	if all == nil {
+		all = map[string]Workspace{}
+	}
+	from := cfg.WorkspaceOf(rc.Name)
+	if w, ok := all[from]; ok {
+		w.Repos = slices.DeleteFunc(slices.Clone(w.Repos), func(r string) bool { return strings.EqualFold(r, rc.Name) })
+		switch {
+		case len(w.Repos) == 0:
+			delete(all, from)
+		case len(w.Repos) < 2:
+			w.ChangeTogether = false
+			all[from] = w
+		default:
+			all[from] = w
+		}
+	}
+	if ws != "" {
+		w, ok := all[ws]
+		if !ok {
+			w.Repos = slices.DeleteFunc(cfg.WorkspaceRepos(ws), func(r string) bool { return strings.EqualFold(r, rc.Name) })
+		}
+		w.Repos = append(w.Repos, rc.Name)
+		all[ws] = w
+	}
+	return WriteWorkspaces(path, all)
+}
+
+// RenameWorkspace renames workspace from to to in the config file; a
+// repo's own is written out under the new name.
+func RenameWorkspace(path, from, to string) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	w, ok := cfg.WorkspaceConf(from)
+	switch {
+	case !ok:
+		return fmt.Errorf("%s isn't a workspace in %s", from, path)
+	case !wsName.MatchString(to):
+		return fmt.Errorf("workspace names are lowercase letters, digits and -, starting with a letter: %q", to)
+	case to != from && slices.Contains(cfg.WorkspaceNames(), to):
+		return fmt.Errorf("there's a workspace named %s already", to)
+	}
+	all := maps.Clone(cfg.Workspaces)
+	if all == nil {
+		all = map[string]Workspace{}
+	}
+	delete(all, from)
+	all[to] = w
+	return WriteWorkspaces(path, all)
+}

@@ -40,7 +40,7 @@ type Wizard interface {
 
 // WizardActions are the page's buttons, each POST /api/v1/setup/<action>.
 var WizardActions = []string{
-	"machine/check", "repos", "github/install-check", "github/existing-app", "github/token", "github/disconnect",
+	"machine/check", "repos", "workspace/move", "workspace/rename", "github/install-check", "github/existing-app", "github/token", "github/disconnect",
 	"access/check", "base-branch", "labels", "gitlab/token", "gitlab/disconnect", "checks/save", "checks/try", "claude", "claude/disconnect", "codex", "codex/disconnect",
 	"codex/sign-in", "codex/sign-in/cancel", "notify", "notify/test", "sentry", "images/build", "finish",
 }
@@ -48,6 +48,11 @@ var WizardActions = []string{
 // WizardInput is what an action takes; each uses only its own fields.
 type WizardInput struct {
 	Repos   string `json:"repos"`    // repos: owner/name or GitLab project URLs, comma separated
+	// Workspace is the one the repos added join ("" for one of their own),
+	// and for workspace/move, the one Repo moves to; for workspace/rename,
+	// the one Name renames.
+	Workspace string `json:"workspace"`
+	Name      string `json:"name"` // workspace/rename: the new name
 	AppID   string `json:"app_id"`   // github/existing-app
 	KeyPath string `json:"key_path"` // github/existing-app: the .pem on the factory's machine
 	Token   string `json:"token"`    // github/token, gitlab/token, sentry
@@ -87,6 +92,9 @@ type APIWizard struct {
 	Machine          []APIWizardFinding `json:"machine"`
 	MachineCheckedAt string             `json:"machine_checked_at"`
 	Repos            []string           `json:"repos"`
+	// Workspaces are the repos by workspace, in the order the dashboard
+	// shows them.
+	Workspaces []APIWizardWorkspace `json:"workspaces"`
 	// Access is each repo's last access check.
 	Access []APIWizardAccess `json:"access"`
 	// Checks are each repo's checks, saved or suggested.
@@ -186,6 +194,14 @@ type APIWizardGate struct {
 }
 
 // APIWizardStep is one card.
+// APIWizardWorkspace is a workspace and its repos on the get-started page.
+type APIWizardWorkspace struct {
+	Name  string   `json:"name"`
+	Repos []string `json:"repos"`
+	// Own: it's a repo's own, named for it, with nothing in factory.yaml.
+	Own bool `json:"own"`
+}
+
 type APIWizardStep struct {
 	Key     string `json:"key"` // machine, repos, github, gitlab, checks, claude, codex, notify, sentry, images, finish
 	Title   string `json:"title"`

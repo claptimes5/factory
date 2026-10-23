@@ -1,8 +1,8 @@
 # Plan: workspaces, the factory's work scoped to a project
 
-Status: building. The owner chose the four decisions in "Decided" below,
-and the recommendation for each question that was open (see "Settled
-later").
+Status: built, phases 0 to 6. The owner chose the four decisions in
+"Decided" below, and the recommendation for each question that was open
+(see "Settled later").
 
 ## Where things stand
 

@@ -46,6 +46,7 @@ export type Wizard = S["Wizard"];
 export type WizardStep = S["WizardStep"];
 export type WizardAccess = S["WizardAccess"];
 export type WizardChecks = S["WizardChecks"];
+export type WizardWorkspace = S["WizardWorkspace"];
 export type WizardSecret = S["WizardSecret"];
 export type WizardResult = S["WizardResult"];
 export type WizardManifest = S["WizardManifest"];

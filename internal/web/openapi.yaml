@@ -707,6 +707,41 @@ paths:
               required: [repos]
               properties:
                 repos: { type: string, description: "owner/name for GitHub, the project URL for GitLab, separated by commas" }
+                workspace: { type: string, description: "The workspace the repos added join; left out, each gets one of its own. A repo removed leaves its workspace." }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/workspace/move:
+    post:
+      summary: Move a repo to a workspace in factory.yaml, or give it one of its own
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo, workspace]
+              properties:
+                repo: { type: string }
+                workspace: { type: string, description: "A workspace's name, a new one to make, or empty for one of its own" }
+      responses:
+        "200": { $ref: "#/components/responses/WizardResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /setup/workspace/rename:
+    post:
+      summary: Rename a workspace in factory.yaml, and its chats with it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace, name]
+              properties:
+                workspace: { type: string }
+                name: { type: string, description: "Lowercase letters, digits and -, starting with a letter" }
       responses:
         "200": { $ref: "#/components/responses/WizardResult" }
         "400": { $ref: "#/components/responses/Error" }
@@ -2061,7 +2096,7 @@ components:
           oneOf: [{ $ref: "#/components/schemas/TuningProposal" }, { type: "null" }]
     Wizard:
       type: object
-      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, access, checks, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
+      required: [mode, writable, reason, config_path, env_path, steps, machine, machine_checked_at, repos, workspaces, access, checks, labels, label_names, github, gitlab, claude, codex, notify, sentry, images, can_finish, warnings, changed, restart_pending, restart_waits_for, setup_reason, started_at]
       properties:
         mode: { type: string, enum: [setup, normal], description: "setup while the dashboard serves only this page, until Finish starts the factory" }
         writable: { type: boolean, description: This request may save here }
@@ -2072,6 +2107,7 @@ components:
         machine: { type: array, items: { $ref: "#/components/schemas/WizardFinding" } }
         machine_checked_at: { type: string, description: "Empty while the first check runs" }
         repos: { type: array, items: { type: string } }
+        workspaces: { type: array, items: { $ref: "#/components/schemas/WizardWorkspace" }, description: The repos by workspace }
         access: { type: array, items: { $ref: "#/components/schemas/WizardAccess" }, description: Each repo's last access check }
         checks: { type: array, items: { $ref: "#/components/schemas/WizardChecks" }, description: "Each repo's checks, saved or suggested" }
         labels: { type: array, items: { $ref: "#/components/schemas/WizardLabel" }, description: What the last label creation did }
@@ -2090,6 +2126,13 @@ components:
         restart_waits_for: { type: string, description: "Other work the pending restart waits for; else empty" }
         setup_reason: { type: string, description: "Why the factory can't start, in setup mode; else empty" }
         started_at: { type: string, description: "When this process started, so a page waiting on a restart can tell the new one from the old" }
+    WizardWorkspace:
+      type: object
+      required: [name, repos, own]
+      properties:
+        name: { type: string }
+        repos: { type: array, items: { type: string } }
+        own: { type: boolean, description: "A repo's own, named for it, with nothing in factory.yaml" }
     WizardStep:
       type: object
       required: [key, title, state, summary]

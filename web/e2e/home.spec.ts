@@ -6,6 +6,12 @@ async function shot(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 }
 
+// Home refetches as it runs: a stubbed request still in flight when a test
+// ends mustn't fail it.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 /** Every repo set up, so Home shows its usual flow and nothing waits for setup. */
 async function allSetUp(page: Page) {
   await page.route(/\/api\/v1\/readiness$/, async (route) => {

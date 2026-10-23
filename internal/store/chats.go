@@ -99,6 +99,15 @@ func (s *Store) GetChat(ctx context.Context, id int64) (*Chat, error) {
 	return &c, nil
 }
 
+// RenameChatWorkspace moves the chats of workspace from to workspace to,
+// when it's renamed.
+func (s *Store) RenameChatWorkspace(ctx context.Context, from, to string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE chats SET workspace = ? WHERE workspace = ?`, to, from)
+		return err
+	})
+}
+
 // ListChats lists chats, the most recently active first.
 func (s *Store) ListChats(ctx context.Context, limit int) ([]Chat, error) {
 	return s.ListChatsIn(ctx, "", false, limit)

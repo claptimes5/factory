@@ -793,6 +793,57 @@ func TestWizardTokenSaveNamesTheExportedOne(t *testing.T) {
 	}
 }
 
+// Get started puts a repo added in a workspace, moves repos between them
+// and renames one, its chats with it; a repo removed leaves its workspace.
+func TestWizardWorkspaces(t *testing.T) {
+	f := &fakeGitHub{labels: map[string]bool{}}
+	w := testWizard(t, f, "o/r", false, noDocker)
+	var renamed []string
+	w.renamed = func(_ context.Context, from, to string) error {
+		renamed = append(renamed, from+">"+to)
+		return nil
+	}
+	ctx := context.Background()
+	names := func() map[string][]string {
+		out := map[string][]string{}
+		for _, ws := range w.State(ctx, false).Workspaces {
+			out[ws.Name] = ws.Repos
+		}
+		return out
+	}
+	if got := names(); len(got) != 1 || !slices.Equal(got["r"], []string{"o/r"}) {
+		t.Fatalf("one repo, its own workspace: %v", got)
+	}
+	if _, err := w.Do(ctx, "repos", web.WizardInput{Repos: "o/r, o/web", Workspace: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); len(got) != 1 || !slices.Equal(got["r"], []string{"o/r", "o/web"}) {
+		t.Fatalf("o/web added to r's: %v", got)
+	}
+	if msg, err := w.Do(ctx, "workspace/rename", web.WizardInput{Workspace: "r", Name: "shop"}); err != nil || !strings.Contains(msg, "Renamed r to shop") {
+		t.Fatalf("rename: %q %v", msg, err)
+	}
+	if got := names(); !slices.Equal(got["shop"], []string{"o/r", "o/web"}) || !slices.Equal(renamed, []string{"r>shop"}) {
+		t.Fatalf("after renaming: %v, chats %v", got, renamed)
+	}
+	if msg, err := w.Do(ctx, "workspace/move", web.WizardInput{Repo: "o/web", Workspace: ""}); err != nil || !strings.Contains(msg, "o/web has a workspace of its own now, web") {
+		t.Fatalf("move: %q %v", msg, err)
+	}
+	if got := names(); !slices.Equal(got["shop"], []string{"o/r"}) || !slices.Equal(got["web"], []string{"o/web"}) {
+		t.Fatalf("after moving o/web out: %v", got)
+	}
+	// A repo removed from the list leaves the workspace it's in.
+	if _, err := w.Do(ctx, "workspace/move", web.WizardInput{Repo: "o/web", Workspace: "shop"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Do(ctx, "repos", web.WizardInput{Repos: "o/r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); len(got) != 1 || !slices.Equal(got["shop"], []string{"o/r"}) {
+		t.Fatalf("after removing o/web: %v", got)
+	}
+}
+
 // The access check reads each repo's files for its checks: the page shows
 // the suggestion, with the command the repo's AGENTS.md gives, and saving
 // writes them to factory.yaml.
