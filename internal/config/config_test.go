@@ -327,10 +327,10 @@ func TestWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name, m := c.Workspace("o/WEB"); name != "shop" || !slices.Equal(m, []string{"o/api", "o/web"}) {
+	if name, m := c.ChangeTogether("o/WEB"); name != "shop" || !slices.Equal(m, []string{"o/api", "o/web"}) {
 		t.Fatalf("workspace = %s %v", name, m)
 	}
-	if name, m := c.Workspace("o/docs"); name != "" || m != nil {
+	if name, m := c.ChangeTogether("o/docs"); name != "" || m != nil {
 		t.Fatalf("o/docs is on its own: %s %v", name, m)
 	}
 	if ShortName("group/sub/Web") != "web" {
@@ -346,6 +346,58 @@ func TestWorkspaces(t *testing.T) {
 		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", ws, err, want)
 		}
+	}
+}
+
+// A workspace is a project: named ones hold their repos, and a repo in
+// none has one of its own, named for it and kept off names in use. Only
+// the older list form, or change_together, makes its repos one change.
+func TestWorkspacesScopeRepos(t *testing.T) {
+	b, _ := exampleYAML()
+	base := regexp.MustCompile(`(?m)^repo: .*\n`).ReplaceAllString(string(b), "")
+	repos := "repos: [o/api, o/web, o/docs, p/web, o/factory]\n"
+	c, err := Parse([]byte(repos + "workspaces:\n  shop: [o/api, o/web]\n  factory:\n    repos: [o/factory]\n    daily_total: 10\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.WorkspaceNames(); !slices.Equal(got, []string{"factory", "shop", "docs", "web"}) {
+		t.Fatalf("names = %v", got)
+	}
+	for repo, ws := range map[string]string{"O/Api": "shop", "o/factory": "factory", "o/docs": "docs", "p/web": "web", "x/y": ""} {
+		if got := c.WorkspaceOf(repo); got != ws {
+			t.Errorf("WorkspaceOf(%s) = %q, want %q", repo, got, ws)
+		}
+	}
+	if got := c.WorkspaceRepos("web"); !slices.Equal(got, []string{"p/web"}) {
+		t.Fatalf("web's repos = %v", got)
+	}
+	if w, ok := c.WorkspaceConf("factory"); !ok || w.DailyTotal != 10 || w.ChangeTogether {
+		t.Fatalf("factory = %+v %v", w, ok)
+	}
+	if n, m := c.ChangeTogether("o/factory"); n != "" || m != nil {
+		t.Fatalf("a workspace's repos don't change as one unless it says so: %s %v", n, m)
+	}
+	// Two repos' own workspaces with the same short name get apart.
+	c2, err := Parse([]byte("repos: [o/web, p/web]\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := c2.WorkspaceOf("o/web"), c2.WorkspaceOf("p/web"); a != "web" || b != "web-2" {
+		t.Fatalf("own workspaces = %s, %s", a, b)
+	}
+	for ws, want := range map[string]string{
+		"shop:\n    repos: [o/api]\n    change_together: true": "change_together needs at least two repos",
+		"shop:\n    repos: []":                                     "needs at least one repo",
+		"shop:\n    repos: [o/api]\n    daily_total: -1":       "daily_total is dollars",
+	} {
+		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", ws, err, want)
+		}
+	}
+	// The older form is written back as it was.
+	out, err := yaml.Marshal(map[string]Workspace{"shop": {Repos: []string{"o/api", "o/web"}, ChangeTogether: true}})
+	if err != nil || strings.TrimSpace(string(out)) != "shop:\n    - o/api\n    - o/web" {
+		t.Fatalf("marshal = %q %v", out, err)
 	}
 }
 

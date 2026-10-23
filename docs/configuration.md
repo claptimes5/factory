@@ -9,7 +9,8 @@ keys go in `factory.env` instead (see [Manual setup](setup.md#manual-setup)).
 change something by hand.
 
 - [Several repositories](#several-repositories)
-- [Workspaces: one change across repos](#workspaces-one-change-across-repos)
+- [Workspaces](#workspaces)
+  - [Repos that change together](#repos-that-change-together)
 - [GitLab repos](#gitlab-repos)
 - [Each repo's toolchain and checks](#each-repos-toolchain-and-checks)
 - [Services: databases and the like](#services-databases-and-the-like)
@@ -71,17 +72,65 @@ repos, and its private key stays with you.
 The orchestrator sees every repo and names one when it opens an issue.
 With several repos, name an issue on the command line as `owner/name#12`.
 
-## Workspaces: one change across repos
+## Workspaces
+
+A workspace is a project: the repos that belong together. The factory
+scopes its work to it:
+
+- **The dashboard** shows one workspace at a time; switch at the top of
+  the sidebar.
+- **Each workspace has its own orchestrator,** which reads and acts on
+  its repos only, and **Ask** works in the workspace on screen. Neither can
+  file an issue in another workspace's repo.
+- **Trust** is the workspace's: one level for all its repos (see
+  [Trust](using.md#trust)).
+- **A budget of its own,** if you give it one, under the factory's.
+
+```yaml
+repos: [you/api, you/web, you/site]
+workspaces:
+  shop:
+    repos: [you/api, you/web]
+    daily_total: 30               # dollars a day, under budgets.daily_total
+    orchestrator: {interval: 2h, daily_budget: 5}
+    auto_merge: {up_to: low}      # its trust level, for both repos
+  site:
+    repos: [you/site]
+```
+
+- **A repo in no workspace** has one of its own, named for the repo
+  (`you/site` alone would be `site`). With no `workspaces:` at all, each
+  repo is its own workspace.
+- **Every repo is in one workspace,** and each workspace has at least one.
+- `repos:` still holds each repo's settings, such as its gates and image;
+  a workspace only names its repos.
+- **`orchestrator:`** takes the top-level [orchestrator](using.md#the-orchestrator)
+  settings for anything it leaves out: `enabled`, `interval`,
+  `daily_budget` and `daily_issue_cap`. The top level's `daily_budget`
+  still caps them all together.
+- **`auto_merge:` and `self_start:`** are the workspace's trust level. A
+  repo's own may only be stricter: where both are set, the stricter one
+  of each applies.
+- **`daily_total:`** is dollars a day for the workspace's builds and
+  reviews. Once it's spent, its jobs wait for tomorrow, and the other
+  workspaces go on. The factory's `budgets.daily_total` still stops
+  everything.
+
+### Repos that change together
 
 Some repos change together, like a Rails API and the React app that calls
-it. Put them in a workspace and an issue in either one becomes a single
+it. Set `change_together` and an issue in either one becomes a single
 change across both:
 
 ```yaml
 repos: [you/api, you/web]
 workspaces:
-  shop: [you/api, you/web]      # the order their PRs merge in
+  shop:
+    repos: [you/api, you/web]   # the order their PRs merge in
+    change_together: true
 ```
+
+The older form, a plain list, means the same: `shop: [you/api, you/web]`.
 
 - **One branch, every repo.** The builder gets every repo of the workspace
   checked out side by side, `api/` and `web/`, on one branch named for the
@@ -425,7 +474,7 @@ All of these are added to the end of that step's prompt, under
 instructions, then the file, then the repo's. The daemon checks at startup
 that each skill and file exists. Escalation keeps the instructions of the
 size an item started on, so an `implement.S` item that climbs to Opus still
-gets `implement.S`'s. In a [workspace](#workspaces-one-change-across-repos), the build and review
+gets `implement.S`'s. In a [workspace whose repos change together](#repos-that-change-together), the build and review
 get every member repo's instructions, each labeled with its repo.
 
 ## Models and escalation
@@ -1217,7 +1266,7 @@ General > Uploads); the comment says so.
 branch in its settings.
 
 A page with a long scroll is cut at 4000 pixels. Previews aren't
-supported for a repo in a [workspace](#workspaces-one-change-across-repos)
+supported for a repo whose [workspace changes together](#repos-that-change-together)
 yet.
 
 ## PR descriptions

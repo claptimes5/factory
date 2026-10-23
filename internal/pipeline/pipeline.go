@@ -730,7 +730,7 @@ func (p *Pipeline) heldRepos() []string {
 			continue
 		}
 		add(r)
-		_, members := p.Cfg.Workspace(r)
+		_, members := p.Cfg.ChangeTogether(r)
 		for _, m := range members {
 			add(m)
 		}

@@ -24,7 +24,7 @@ func TestSingleVendorExamples(t *testing.T) {
 					t.Errorf("repo %s isn't on gitlab.com", r.Name)
 				}
 			}
-			if _, m := c.Workspace("gitlab.com/acme/web"); len(m) != 2 || m[0] != "gitlab.com/acme/api" {
+			if _, m := c.ChangeTogether("gitlab.com/acme/web"); len(m) != 2 || m[0] != "gitlab.com/acme/api" {
 				t.Errorf("workspace = %v", m)
 			}
 			routes := map[string]Route{"verify (resolved)": c.VerifyRoute(), "critic (resolved)": c.CriticRoute(), "security (resolved)": c.SecurityRoute()}
