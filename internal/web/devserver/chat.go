@@ -18,11 +18,11 @@ type chatter struct {
 	issues atomic.Int64
 }
 
-func (c *chatter) ChatUnavailable(context.Context) string { return "" }
+func (c *chatter) ChatUnavailable(context.Context, string) string { return "" }
 
-func (c *chatter) OrchestrationSpend(context.Context) (float64, error) { return 1.84, nil }
+func (c *chatter) OrchestrationSpend(context.Context, string) (float64, error) { return 1.84, nil }
 
-func (c *chatter) Chat(ctx context.Context, chatID int64, text string) (int64, int64, error) {
+func (c *chatter) Chat(ctx context.Context, ws string, chatID int64, text string) (int64, int64, error) {
 	text = strings.TrimSpace(text)
 	if strings.Contains(text, "busy") {
 		return 0, 0, errors.New("another chat reply is still being written: wait for it, or stop it")
@@ -31,7 +31,7 @@ func (c *chatter) Chat(ctx context.Context, chatID int64, text string) (int64, i
 		if text == "" {
 			return 0, 0, errors.New("write a message first")
 		}
-		id, err := c.st.NewChat(ctx, text)
+		id, err := c.st.NewChatIn(ctx, text, ws)
 		if err != nil {
 			return 0, 0, err
 		}

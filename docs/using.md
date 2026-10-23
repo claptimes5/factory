@@ -400,6 +400,11 @@ work through the daemon's MCP tools. Its prompt is `prompts/orchestrate.md`.
 Turn it on with `orchestrator.enabled: true`. It is off by default in code,
 and on in this repo's `factory.yaml`, since it spends on its own schedule.
 
+Each [workspace](configuration.md#workspaces) has its own orchestrator. A
+run works on one workspace: it sees that workspace's items and repos, and
+nothing else. Each can be turned on or off, and given its own interval,
+daily budget and issue cap, under the workspace's `orchestrator:`.
+
 ### When it runs
 
 - On a new `factory:epic` issue.
@@ -412,8 +417,10 @@ and on in this repo's `factory.yaml`, since it spends on its own schedule.
 - Once a day after `summary_hour`, for the summary it sends to your
   notifier.
 
-One run at a time. Extra triggers, and any that piled up while the daemon
-was down, coalesce into one run.
+Each workspace's orchestrator runs on its own triggers: an epic, failures
+or stuck items there, its own interval, and its own daily summary. One run
+at a time per workspace. Extra triggers, and any that piled up while the
+daemon was down, coalesce into one run.
 
 ### What it can do
 
@@ -435,9 +442,11 @@ The orchestrator also:
 - may only add labels listed in `orchestrator.labels`;
 - reads only approved issue text (see [Who can start work](security.md#who-can-start-work));
 - has its own daily spending cap, which does not count against the build
-  budget.
-
-It sees every repo and names one when it opens an issue.
+  budget;
+- can't read or change another workspace's items, repos or jobs. In a
+  workspace of several repos it must name the repo for each issue it
+  opens: none is assumed. Ask is fenced the same way, in the workspace it
+  was started in.
 
 ### Chat: opening issues with the orchestrator
 

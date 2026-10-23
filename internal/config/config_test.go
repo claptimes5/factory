@@ -387,7 +387,7 @@ func TestWorkspacesScopeRepos(t *testing.T) {
 	}
 	for ws, want := range map[string]string{
 		"shop:\n    repos: [o/api]\n    change_together: true": "change_together needs at least two repos",
-		"shop:\n    repos: []":                                     "needs at least one repo",
+		"shop:\n    repos: []":                                 "needs at least one repo",
 		"shop:\n    repos: [o/api]\n    daily_total: -1":       "daily_total is dollars",
 	} {
 		if _, err := Parse([]byte(repos + "workspaces:\n  " + ws + "\n" + base)); err == nil || !strings.Contains(err.Error(), want) {

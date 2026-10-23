@@ -278,7 +278,7 @@ func caseConfig(o Options, repo, dir string) (*config.Config, config.Repo, bool)
 	cfg := *o.Cfg
 	cfg.DataDir = filepath.Join(dir, "data")
 	cfg.Intake.PollInterval = config.Duration{}
-	cfg.Orchestrator.On = false
+	cfg.DisableOrchestrator()
 	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
 	cfg.Sources.Off()                // nor are its errors, alerts and TODOs

@@ -22,18 +22,18 @@ type fakeChatter struct {
 	created []int64
 }
 
-func (f *fakeChatter) Chat(ctx context.Context, chatID int64, text string) (int64, int64, error) {
+func (f *fakeChatter) Chat(ctx context.Context, ws string, chatID int64, text string) (int64, int64, error) {
 	if f.refuse != "" {
 		return 0, 0, errors.New(f.refuse)
 	}
 	if chatID == 0 {
-		chatID, _ = f.st.NewChat(ctx, text)
+		chatID, _ = f.st.NewChatIn(ctx, text, ws)
 	}
 	f.st.AddChatMessage(ctx, store.ChatMessage{ChatID: chatID, Role: "user", Text: text})
 	return chatID, 99, nil
 }
-func (f *fakeChatter) ChatUnavailable(context.Context) string              { return f.refuse }
-func (f *fakeChatter) OrchestrationSpend(context.Context) (float64, error) { return 1.5, nil }
+func (f *fakeChatter) ChatUnavailable(context.Context, string) string              { return f.refuse }
+func (f *fakeChatter) OrchestrationSpend(context.Context, string) (float64, error) { return 1.5, nil }
 func (f *fakeChatter) DismissDraft(ctx context.Context, id int64) error {
 	return f.st.MoveDraft(ctx, id, store.DraftOpen, store.DraftDismissed, store.IssueDraft{})
 }

@@ -484,6 +484,8 @@ type Config struct {
 	// defaultBranches are repos' default branches on their hosts, by
 	// lower-cased name (see SetDefaultBranch).
 	defaultBranches map[string]string
+	// noOrchestrator turns every orchestrator off (see DisableOrchestrator).
+	noOrchestrator bool
 }
 
 // MinTuningEvery is the shortest tuning cadence: each run costs a model

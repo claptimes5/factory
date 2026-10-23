@@ -454,10 +454,10 @@ func build(cfg *config.Config, st *store.Store) (*pipeline.Pipeline, error) {
 			return nil, needsSetup{err}
 		}
 	}
-	if cfg.Orchestrator.On && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
+	if cfg.AnyOrchestrator() && cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
 		// Its container runs this binary as the MCP bridge.
 		slog.Warn("orchestrator disabled: with the docker runner it needs a Linux host")
-		cfg.Orchestrator.On = false
+		cfg.DisableOrchestrator()
 	}
 	if _, err := codexAuth(); err != nil {
 		return nil, err
@@ -636,8 +636,11 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Harnesses = func() []string { return connected(p.Secrets, p.PlanBilled) }
 	r := cfg.Routing["orchestrate"]
 	srv.Chat = p
-	srv.Orchestrator = web.OrchestratorInfo{On: cfg.Orchestrator.On, Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),
-		RunBudget: cfg.Orchestrator.RunBudget, DailyBudget: cfg.Orchestrator.DailyBudget}
+	srv.Orchestrator = web.OrchestratorInfo{On: cfg.AnyOrchestrator(), Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),
+		RunBudget: cfg.Orchestrator.RunBudget, DailyBudget: cfg.Orchestrator.DailyBudget, For: cfg.OrchestratorFor}
+	for _, ws := range cfg.WorkspaceNames() {
+		srv.Workspaces = append(srv.Workspaces, web.Workspace{Name: ws, Repos: cfg.WorkspaceRepos(ws)})
+	}
 	// The Settings screen edits the config file; saved changes apply when
 	// the daemon restarts, which it does once running jobs finish.
 	srv.ConfigPath, _ = filepath.Abs(cfgPath)

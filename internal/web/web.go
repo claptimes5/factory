@@ -56,6 +56,9 @@ type Server struct {
 	Store   *store.Store
 	Actions Actions
 	Repos   []string // owner/name of each repo the factory works on
+	// Workspaces are the factory's workspaces, in order, each with its
+	// repos (nil: each repo is its own, as with none in factory.yaml).
+	Workspaces []Workspace
 	// IssueURL and PRURL link to an issue or pull (merge) request on its
 	// repo's host; they default to GitHub's.
 	IssueURL func(repo string, n int) string

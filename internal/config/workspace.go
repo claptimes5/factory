@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -216,3 +217,44 @@ func (c *Config) checkWorkspaces(seen map[string]bool, bad func(string, ...any),
 		}
 	}
 }
+
+// Orchestration is a workspace's orchestrator: its own settings, with the
+// top level's for what it leaves out.
+type Orchestration struct {
+	On            bool
+	Interval      time.Duration
+	RunBudget     float64 // dollars per run
+	DailyBudget   float64 // dollars a day for it and the workspace's chats
+	DailyIssueCap int     // issues it and the chats may open a day
+}
+
+// OrchestratorFor is workspace ws's orchestrator.
+func (c *Config) OrchestratorFor(ws string) Orchestration {
+	t := c.Orchestrator
+	o := Orchestration{On: t.On && !c.noOrchestrator, Interval: t.Interval.Duration, RunBudget: t.RunBudget, DailyBudget: t.DailyBudget, DailyIssueCap: t.DailyIssueCap}
+	w, _ := c.WorkspaceConf(ws)
+	if x := w.Orchestrator; x != nil {
+		if x.On != nil {
+			o.On = *x.On && !c.noOrchestrator
+		}
+		if x.Interval.Duration > 0 {
+			o.Interval = x.Interval.Duration
+		}
+		if x.DailyBudget > 0 {
+			o.DailyBudget = min(x.DailyBudget, t.DailyBudget)
+		}
+		if x.DailyIssueCap > 0 {
+			o.DailyIssueCap = min(x.DailyIssueCap, t.DailyIssueCap)
+		}
+	}
+	return o
+}
+
+// AnyOrchestrator says whether some workspace's orchestrator is on.
+func (c *Config) AnyOrchestrator() bool {
+	return slices.ContainsFunc(c.WorkspaceNames(), func(ws string) bool { return c.OrchestratorFor(ws).On })
+}
+
+// DisableOrchestrator turns every workspace's orchestrator off, as on a
+// host that can't run it.
+func (c *Config) DisableOrchestrator() { c.noOrchestrator = true }
