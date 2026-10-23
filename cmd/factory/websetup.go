@@ -1016,7 +1016,17 @@ func (w *wizard) saveRepos(ctx context.Context, in, ws string) (string, error) {
 			}
 		}
 	}
+	// The others' workspaces keep their names: chats and spend go by them.
+	kept := map[string]string{}
+	for _, n := range names {
+		if ws := w.config().WorkspaceOf(n); ws != "" {
+			kept[n] = ws
+		}
+	}
 	if err := setRepos(w.cfgPath, names); err != nil {
+		return "", err
+	}
+	if err := config.KeepWorkspaceNames(w.cfgPath, kept); err != nil {
 		return "", err
 	}
 	// The ones added join the workspace chosen, or have one of their own.

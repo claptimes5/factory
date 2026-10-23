@@ -843,11 +843,14 @@ func (c *Config) Validate() error {
 	}
 	// No repos yet is a factory not set up: setup and serve's get-started
 	// page ask for them, and the other commands refuse (see NoRepos).
-	checkAutoMerge := func(where string, a *AutoMerge) {
+	// A repo's may leave up_to out, to set only its merge method and
+	// breaker under its workspace's level (noLevel).
+	checkAutoMerge := func(where string, a *AutoMerge, noLevel bool) {
 		if a == nil {
 			return
 		}
 		switch {
+		case a.UpTo == "" && noLevel:
 		case a.UpTo == "high":
 			bad("%sauto_merge.up_to: high-risk changes always wait for you; use low or medium", where)
 		case !slices.Contains([]string{"none", "low", "medium"}, a.UpTo):
@@ -871,10 +874,10 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	checkAutoMerge("", c.AutoMerge)
+	checkAutoMerge("", c.AutoMerge, false)
 	seen := map[string]bool{}
 	for _, r := range c.Repos {
-		checkAutoMerge("repo "+r.Name+": ", r.AutoMerge)
+		checkAutoMerge("repo "+r.Name+": ", r.AutoMerge, true)
 		switch o, n, ok := strings.Cut(r.Path(), "/"); {
 		case r.GitLab() && (!ok || o == "" || n == "" || strings.Contains(r.Name, "//")):
 			bad("repo %s must be %s/group/project", r.Name, r.Host)
@@ -1229,10 +1232,20 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.Services == nil {
 		r.Services = c.Services
 	}
-	// Trust is the workspace's; a repo's own may only be stricter.
-	w := c.Workspaces[c.WorkspaceOf(r.Name)]
-	r.AutoMerge = trustOf(r.AutoMerge, w.AutoMerge, c.AutoMerge)
-	r.SelfStart = selfStartOf(r.SelfStart, w.SelfStart)
+	// Trust is the workspace's; a repo's own may only be stricter. One of
+	// several repos with no level of its own takes the lowest of theirs.
+	ws := c.WorkspaceOf(r.Name)
+	w := c.Workspaces[ws]
+	wsLevel := w.AutoMerge
+	if low := c.lowestLevel(ws); low != nil {
+		wsLevel = low
+	}
+	r.AutoMerge = trustOf(r.AutoMerge, wsLevel, c.AutoMerge)
+	if common, ok := c.commonSelfStart(ws); ok {
+		r.SelfStart = common
+	} else {
+		r.SelfStart = selfStartOf(r.SelfStart, w.SelfStart)
+	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	// REVIEW.md tells the reviewers what to look for and what to skip, so
 	// the builder they review never may change it, whatever the config.

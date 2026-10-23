@@ -97,7 +97,8 @@ function WorkspaceTrustView({ t, w: r }: { t: Trust; w: WorkspaceTrust }) {
         <Alert variant="info">
           <AlertTriangle aria-hidden />
           <span>
-            Its repos were set to different levels, so it counts as the lowest, {r.level}, until you choose one. Moving it gives every repo that level.
+            Its repos were set to different levels, so they all merge at the lowest, {r.level}, until you choose one for the workspace. A repo set lower
+            than the one you choose keeps its own.
           </span>
         </Alert>
       )}

@@ -109,8 +109,11 @@ workspaces:
   `daily_budget` and `daily_issue_cap`. The top level's `daily_budget`
   still caps them all together.
 - **`auto_merge:` and `self_start:`** are the workspace's trust level. A
-  repo's own may only be stricter: where both are set, the stricter one
-  of each applies.
+  repo's own may only be stricter: where both are set, the stricter risk
+  and the smaller size apply, and only the self-start sources both allow.
+  A repo's `auto_merge` may leave out `up_to` to set only its `method` and
+  `breaker`. A workspace of several repos with no level of its own merges
+  at the lowest of theirs.
 - **`daily_total:`** is dollars a day for the workspace's builds and
   reviews. Once it's spent, its jobs wait for tomorrow, and the other
   workspaces go on. The factory's `budgets.daily_total` still stops

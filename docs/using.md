@@ -797,8 +797,11 @@ and 30) and none went wrong, the factory suggests it, on the screen and on
 Home. Level 6's practice run is different: of the issues the factory filed
 from its own findings in the window, how many you took on (it needs 10,
 and 4 in 5), and whether any of what merged from them went wrong. Only a person raises a level: **Move here** writes the workspace's
-`auto_merge` and `self_start` to `factory.yaml`, takes away the levels set
-on its repos, and applies once the factory restarts.
+`auto_merge` and `self_start` to `factory.yaml` and applies once the
+factory restarts. Its repos set lower by hand keep their level; the
+others' own levels go, keeping their merge method and breaker. A repo
+moved to another workspace keeps the level its old one gave it, as its
+own, so a move never lets it merge more.
 
 The ladder follows research on agent autonomy: oversight moving from
 approving each action to watching and stepping in (Anthropic, [Measuring

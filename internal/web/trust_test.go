@@ -159,8 +159,8 @@ func TestTrustLevelSix(t *testing.T) {
 
 // A workspace of several repos has one level and the record of all of
 // them. Before it has a level of its own, repos set apart show it mixed,
-// at the lowest; setting one gives them all that, and a repo set lower by
-// hand afterwards is listed as stricter.
+// at the lowest; setting one gives the others that, and a repo set lower
+// by hand keeps its level and is listed as stricter.
 func TestTrustIsTheWorkspaces(t *testing.T) {
 	t.Parallel()
 	srv, s, st, path := trustSetup(t, []string{"XS", "S"})
@@ -182,19 +182,16 @@ func TestTrustIsTheWorkspaces(t *testing.T) {
 	if code, body := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"app","level":4}`); code != 200 {
 		t.Fatalf("set: %d %s", code, body)
 	}
+	// o/web was set lower by hand, and stays there.
 	cfg, _ := config.Load(path)
-	for _, repo := range []string{"o/r", "o/web"} {
-		if rc, _ := cfg.RepoConf(repo); rc.AutoMerge.MaxSize != "M" {
-			t.Errorf("%s = %+v", repo, rc.AutoMerge)
+	for repo, want := range map[string]string{"o/r": "M", "o/web": "XS"} {
+		if rc, _ := cfg.RepoConf(repo); rc.AutoMerge.MaxSize != want {
+			t.Errorf("%s = %+v, want max_size %s", repo, rc.AutoMerge, want)
 		}
-	}
-	src = strings.Replace(string(must(os.ReadFile(path))), "  - o/web\n", "  - name: o/web\n    auto_merge: {up_to: low, max_size: XS}\n", 1)
-	if err := os.WriteFile(path, []byte(src), 0o640); err != nil {
-		t.Fatal(err)
 	}
 	getJSON(t, srv+"/api/v1/trust", &tr)
 	if w := tr.Workspaces[0]; w.Level != 4 || w.Mixed || len(w.Stricter) != 1 || w.Stricter[0] != (APIRepoLevel{Repo: "o/web", Level: 2}) {
-		t.Fatalf("with o/web set lower by hand = %+v", w)
+		t.Fatalf("after setting app to 4 = %+v", w)
 	}
 	if code, _ := postJSON(t, srv+"/api/v1/trust", "", `{"workspace":"nope","level":2}`); code != 400 {
 		t.Fatalf("an unknown workspace was taken: %d", code)

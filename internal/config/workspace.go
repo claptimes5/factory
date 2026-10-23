@@ -173,7 +173,7 @@ func ownName(repo string) string {
 
 // checkWorkspaces reports what's wrong with the workspaces, given the
 // repos configured (lower-cased).
-func (c *Config) checkWorkspaces(seen map[string]bool, bad func(string, ...any), checkAutoMerge func(string, *AutoMerge)) {
+func (c *Config) checkWorkspaces(seen map[string]bool, bad func(string, ...any), checkAutoMerge func(string, *AutoMerge, bool)) {
 	inWS := map[string]string{}
 	for _, name := range sortedKeys(c.Workspaces) {
 		w := c.Workspaces[name]
@@ -212,7 +212,7 @@ func (c *Config) checkWorkspaces(seen map[string]bool, bad func(string, ...any),
 		if o := w.Orchestrator; o != nil && (o.DailyBudget < 0 || o.DailyIssueCap < 0 || o.Interval.Duration < 0) {
 			bad("workspace %s: orchestrator budgets, caps and interval can't be negative", name)
 		}
-		checkAutoMerge("workspace "+name+": ", w.AutoMerge)
+		checkAutoMerge("workspace "+name+": ", w.AutoMerge, false)
 		if err := w.SelfStart.check("workspaces." + name); err != nil {
 			bad("%v", err)
 		}
@@ -261,42 +261,137 @@ func (c *Config) AnyOrchestrator() bool {
 func (c *Config) DisableOrchestrator() { c.noOrchestrator = true }
 
 // trustOf is a repo's auto_merge, given its own, its workspace's and the
-// top level's: the workspace's level, or the repo's where that's
-// stricter; the merge method and breaker as the most specific one sets
-// them.
+// top level's. The level is the workspace's, or for risk and for size each
+// the repo's where that's stricter; with no workspace level, the repo's
+// own replaces the top level's. A repo's auto_merge may leave up_to out,
+// to set only its merge method and breaker. The method and breaker are as
+// the most specific one sets them.
 func trustOf(repo, ws, top *AutoMerge) *AutoMerge {
-	switch {
-	case ws == nil && repo == nil:
+	if repo == nil && ws == nil {
 		return top
-	case ws == nil:
-		return repo
 	}
-	out := *ws
-	if repo != nil {
-		if stricter(repo, ws) {
-			out.UpTo, out.MaxSize = repo.UpTo, repo.MaxSize
+	var lv *AutoMerge
+	switch {
+	case ws != nil && hasLevel(repo):
+		u, m := lower(repo, ws)
+		lv = &AutoMerge{UpTo: u, MaxSize: m}
+	case ws != nil:
+		lv = ws
+	case hasLevel(repo):
+		lv = repo
+	default:
+		lv = top
+	}
+	if lv == nil {
+		return nil
+	}
+	out := AutoMerge{UpTo: lv.UpTo, MaxSize: lv.MaxSize}
+	for _, a := range []*AutoMerge{repo, ws, top} {
+		if a != nil {
+			out.Method, out.Breaker = cmp.Or(out.Method, a.Method), cmp.Or(out.Breaker, a.Breaker)
 		}
-		out.Method, out.Breaker = cmp.Or(repo.Method, out.Method), cmp.Or(repo.Breaker, out.Breaker)
-	}
-	if top != nil {
-		out.Method, out.Breaker = cmp.Or(out.Method, top.Method), cmp.Or(out.Breaker, top.Breaker)
 	}
 	return &out
 }
 
-// stricter says whether a merges less on its own than b.
-func stricter(a, b *AutoMerge) bool {
+// hasLevel says whether an auto_merge sets a level, not only a method.
+func hasLevel(a *AutoMerge) bool { return a != nil && a.UpTo != "" }
+
+// lower is the stricter of two levels, risk and size each: what both
+// would merge on their own.
+func lower(a, b *AutoMerge) (upTo, maxSize string) {
 	risks, sizes := []string{"none", "low", "medium"}, []string{"XS", "S", "M", "L"}
-	size := func(x *AutoMerge) int { return slices.Index(sizes, cmp.Or(x.MaxSize, "S")) }
-	ra, rb := slices.Index(risks, a.UpTo), slices.Index(risks, b.UpTo)
-	if ra != rb {
-		return ra < rb
+	upTo = a.UpTo
+	if slices.Index(risks, b.UpTo) < slices.Index(risks, a.UpTo) {
+		upTo = b.UpTo
 	}
-	return ra > 0 && size(a) < size(b)
+	sa, sb := cmp.Or(a.MaxSize, "S"), cmp.Or(b.MaxSize, "S")
+	maxSize = sa
+	if slices.Index(sizes, sb) < slices.Index(sizes, sa) {
+		maxSize = sb
+	}
+	if upTo == "none" {
+		maxSize = ""
+	}
+	return upTo, maxSize
+}
+
+// stricter says whether a merges less on its own than b in risk or size.
+func stricter(a, b *AutoMerge) bool {
+	u, m := lower(a, b)
+	bu, bm := lower(b, b) // b's size as lower writes it
+	return u != bu || m != bm
+}
+
+// lowestLevel is the level of a workspace of several repos that has none
+// of its own: the lowest of its repos', each its own or the top level's.
+// nil for a workspace of one repo, or one with a level.
+func (c *Config) lowestLevel(ws string) *AutoMerge {
+	if w := c.Workspaces[ws]; w.AutoMerge != nil {
+		return nil
+	}
+	var low *AutoMerge
+	n := 0
+	for _, r := range c.Repos {
+		if c.WorkspaceOf(r.Name) != ws {
+			continue
+		}
+		n++
+		lv := r.AutoMerge
+		if !hasLevel(lv) {
+			lv = c.AutoMerge
+		}
+		if lv == nil {
+			lv = &AutoMerge{UpTo: "none"}
+		}
+		if low == nil {
+			low = &AutoMerge{UpTo: lv.UpTo, MaxSize: lv.MaxSize}
+		} else {
+			u, m := lower(low, lv)
+			low = &AutoMerge{UpTo: u, MaxSize: m}
+		}
+	}
+	if n < 2 {
+		return nil
+	}
+	return low
+}
+
+// commonSelfStart is the self_start of a workspace of several repos that
+// has none of its own: what all of its repos' allow, or nil when one has
+// none. ok is false for a workspace of one repo, or one with its own.
+func (c *Config) commonSelfStart(ws string) (ss *SelfStart, ok bool) {
+	if w := c.Workspaces[ws]; w.SelfStart != nil {
+		return nil, false
+	}
+	n := 0
+	for _, r := range c.Repos {
+		if c.WorkspaceOf(r.Name) != ws {
+			continue
+		}
+		n++
+		if r.SelfStart == nil {
+			return nil, true
+		}
+		if ss == nil {
+			cp := *r.SelfStart
+			ss = &cp
+		} else {
+			ss = selfStartOf(r.SelfStart, ss)
+		}
+	}
+	if n < 2 {
+		return nil, false
+	}
+	if ss != nil && len(ss.Sources) == 0 {
+		return nil, true
+	}
+	return ss, true
 }
 
 // selfStartOf is a repo's self_start, given its own and its workspace's:
-// with both, only the sources both allow, within the lower caps.
+// with both, only the sources both allow (all the workspace's, for a
+// repo's that names none), within the lower caps.
 func selfStartOf(repo, ws *SelfStart) *SelfStart {
 	switch {
 	case ws == nil:
@@ -305,6 +400,10 @@ func selfStartOf(repo, ws *SelfStart) *SelfStart {
 		return ws
 	}
 	out := SelfStart{Daily: min(repo.DailyCap(), ws.DailyCap())}
+	// A repo's that names no sources only caps the workspace's.
+	if len(repo.Sources) == 0 {
+		out.Sources = slices.Clone(ws.Sources)
+	}
 	for _, s := range repo.Sources {
 		if slices.Contains(ws.Sources, s) {
 			out.Sources = append(out.Sources, s)

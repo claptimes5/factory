@@ -217,27 +217,32 @@ func workspaceLevel(cfg *config.Config, w Workspace, t *APIWorkspaceTrust) {
 		}
 		return
 	}
-	first := true
-	for _, repo := range w.Repos {
+	// Its repos merge at the lowest of their levels (see config's
+	// resolve); mixed is whether the levels set on them differ.
+	set := map[int]bool{}
+	for i, repo := range w.Repos {
 		rc, ok := cfg.RepoConf(repo)
 		if !ok {
 			continue
 		}
-		l, custom := levelOf(rc.AutoMerge, rc.SelfStart)
-		switch {
-		case first:
-			t.Level, t.Custom = l, custom
+		if i == 0 {
+			t.Level, t.Custom = levelOf(rc.AutoMerge, rc.SelfStart)
 			if rc.SelfStart != nil {
 				t.Sources = rc.SelfStart.Sources
 			}
-		case l != t.Level:
-			t.Mixed = true
-			if l < t.Level {
-				t.Level, t.Custom = l, custom
+		}
+		for _, r := range cfg.Repos {
+			if strings.EqualFold(r.Name, rc.Name) {
+				am := r.AutoMerge
+				if am == nil || am.UpTo == "" {
+					am = cfg.AutoMerge
+				}
+				l, _ := levelOf(am, r.SelfStart)
+				set[l] = true
 			}
 		}
-		first = false
 	}
+	t.Mixed = len(set) > 1
 }
 
 // proposals is level 6's practice run: the issues the factory filed from
