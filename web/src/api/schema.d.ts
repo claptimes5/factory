@@ -2070,7 +2070,10 @@ export interface paths {
         /** What removing the factory would remove, and what is left for you to do */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Only what removing this repo would remove: its labels, job images, cache and readiness report, and the repo from factory.yaml */
+                    repo?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -2094,7 +2097,9 @@ export interface paths {
          * Remove the factory's labels and job images, and its job data if asked
          * @description Deleting a label takes it off every issue and PR that has it. Refused
          *     while jobs run (409). The GitHub App, tokens and config files are
-         *     never touched; the result says where to remove them.
+         *     never touched; the result says where to remove them. With repo, only
+         *     that repo's share goes, the repo leaves factory.yaml, and the factory
+         *     restarts to stop working on it.
          */
         post: {
             parameters: {
@@ -2110,6 +2115,8 @@ export interface paths {
                         confirm: "remove";
                         /** @description Remove the job data too (default false) */
                         data?: boolean;
+                        /** @description Remove only this repo's share, and the repo from factory.yaml */
+                        repo?: string;
                     };
                 };
             };
@@ -3892,6 +3899,8 @@ export interface components {
             data: components["schemas"]["UninstallData"];
             /** @description What the factory can't do for you: the GitHub App, tokens, its config files */
             manual: components["schemas"]["UninstallStep"][];
+            /** @description The repo asked about is in factory.yaml, and leaves it */
+            listed: boolean;
             /** @description Why nothing can be removed now (jobs running), or empty */
             refused: string;
             writable: boolean;

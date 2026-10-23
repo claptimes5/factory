@@ -11,11 +11,14 @@ import (
 // and removes it once a person confirms.
 type Uninstaller interface {
 	// Plan is what removing the factory would remove, and what a person
-	// has to do themselves. It changes nothing.
-	Plan(ctx context.Context) APIUninstall
-	// Remove removes the labels and images, and the data too with data.
-	// An error refuses it as a whole; each item says how it went.
-	Remove(ctx context.Context, data bool) (APIUninstallResult, error)
+	// has to do themselves. It changes nothing. With repo, it's what
+	// removing that repo would: its labels, images and files, and the
+	// repo from factory.yaml.
+	Plan(ctx context.Context, repo string) APIUninstall
+	// Remove removes the labels and images, and the data too with data;
+	// with repo, that repo's share, and the repo from factory.yaml. An
+	// error refuses it as a whole; each item says how it went.
+	Remove(ctx context.Context, data bool, repo string) (APIUninstallResult, error)
 }
 
 // APIUninstall is the dry run: what would be removed.
@@ -39,6 +42,8 @@ type APIUninstall struct {
 	// Manual are the steps the factory can't do for you: the GitHub App,
 	// tokens to revoke, its config files.
 	Manual []APIUninstallStep `json:"manual"`
+	// Listed: the repo asked about is in factory.yaml, and leaves it.
+	Listed bool `json:"listed"`
 	// Refused says why nothing can be removed now (jobs running), or "".
 	Refused string `json:"refused"`
 	// Writable says whether this request may remove anything; Reason
@@ -120,7 +125,7 @@ func (s *Server) apiUninstallPlan(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusNotFound, "removing the factory isn't available in this dashboard")
 		return
 	}
-	p := s.Uninstaller.Plan(r.Context())
+	p := s.Uninstaller.Plan(r.Context(), r.URL.Query().Get("repo"))
 	p.Writable, p.Reason = s.settingsWritable(r)
 	writeJSON(w, http.StatusOK, p)
 }
@@ -140,6 +145,7 @@ func (s *Server) apiUninstall(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Confirm string `json:"confirm"`
 		Data    bool   `json:"data"`
+		Repo    string `json:"repo"`
 	}
 	if err := s.readBody(r, &in); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
@@ -154,10 +160,16 @@ func (s *Server) apiUninstall(w http.ResponseWriter, r *http.Request) {
 	// helps no one.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
-	res, err := s.Uninstaller.Remove(ctx, in.Data)
+	res, err := s.Uninstaller.Remove(ctx, in.Data, in.Repo)
 	if err != nil {
 		apiErr(w, http.StatusConflict, err.Error())
 		return
+	}
+	// The running factory still works on a repo that left factory.yaml
+	// until it restarts, and would put its labels back.
+	if in.Repo != "" && s.Restarter != nil {
+		n := s.Restarter.RequestRestart(ctx)
+		res.Manual = append([]APIUninstallStep{{Text: "The factory restarts to stop working on " + in.Repo + ". " + RestartMessage(n, s.Restarter.RestartWaitsFor())}}, res.Manual...)
 	}
 	writeJSON(w, http.StatusOK, res)
 }

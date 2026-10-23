@@ -69,7 +69,17 @@ func (actions) ResetAutoMerge(_ context.Context, repo, _ string) error {
 // uninstaller lists sample labels and images, and pretends to remove them.
 type uninstaller struct{}
 
-func (uninstaller) Plan(context.Context) web.APIUninstall {
+func (uninstaller) Plan(_ context.Context, repo string) web.APIUninstall {
+	if repo != "" {
+		return web.APIUninstall{Listed: true,
+			Labels: []web.APIUninstallLabel{{Repo: repo, Name: "factory:ready", Open: 1}, {Repo: repo, Name: "factory:parked", Open: 2}},
+			Repos:  []web.APIUninstallRepo{}, Kept: []web.APIUninstallKept{},
+			Images: []web.APIUninstallImage{{Ref: "factory-job-" + strings.ReplaceAll(repo, "/", "__") + ":latest", ID: "7d1e0b2c4a9f", Size: "1.84GB"}},
+			Data: web.APIUninstallData{Path: "/srv/factory/data", Exists: true, Size: "212.4MB",
+				What: repo + "'s dependency cache and readiness report: /srv/factory/data/cache/" + strings.ReplaceAll(repo, "/", "__")},
+			Manual: []web.APIUninstallStep{{Text: "To stop the GitHub App reaching " + repo + ", take it off the app's repository access: its installation, Repository access.", URL: "https://github.com/organizations/acme/settings/installations/1"}},
+		}
+	}
 	return web.APIUninstall{
 		Labels: []web.APIUninstallLabel{
 			{Repo: "acme/api", Name: "factory:ready", Open: 1000, OpenCapped: true}, {Repo: "acme/api", Name: "factory:parked", Open: 3}, {Repo: "acme/api", Name: "factory:risk-low", Open: 0},
@@ -94,8 +104,15 @@ func (uninstaller) Plan(context.Context) web.APIUninstall {
 	}
 }
 
-func (u uninstaller) Remove(ctx context.Context, data bool) (web.APIUninstallResult, error) {
-	p := u.Plan(ctx)
+func (u uninstaller) Remove(ctx context.Context, data bool, repo string) (web.APIUninstallResult, error) {
+	p := u.Plan(ctx, repo)
+	if repo != "" {
+		res := web.APIUninstallResult{Done: []web.APIUninstallDone{{What: repo + " from factory.yaml", OK: true}}, Manual: p.Manual}
+		for _, l := range p.Labels {
+			res.Done = append(res.Done, web.APIUninstallDone{What: "label " + l.Name + " on " + repo, OK: true})
+		}
+		return res, nil
+	}
 	res := web.APIUninstallResult{Done: []web.APIUninstallDone{}, Manual: append([]web.APIUninstallStep{{Text: "Stop the factory now. While it runs it puts labels back as it works, and it picks up no new issues without its factory:ready label."}}, p.Manual...)}
 	for _, l := range p.Labels {
 		res.Done = append(res.Done, web.APIUninstallDone{What: "label " + l.Name + " on " + l.Repo, OK: true})

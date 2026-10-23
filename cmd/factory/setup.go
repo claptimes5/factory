@@ -953,6 +953,29 @@ func setRepos(path string, names []string) error {
 	return writeRepos(path, repos)
 }
 
+// setRepoNames writes names as the config's repos, as setRepos does. A
+// repo removed leaves its workspace first, so the file stays valid, and
+// the others' workspaces keep their names: chats and spend go by them.
+func setRepoNames(path string, cur *config.Config, names []string) error {
+	for _, b := range cur.RepoNames() {
+		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(b, n) }) {
+			if err := config.SetRepoWorkspace(path, b, ""); err != nil {
+				return err
+			}
+		}
+	}
+	kept := map[string]string{}
+	for _, n := range names {
+		if ws := cur.WorkspaceOf(n); ws != "" {
+			kept[n] = ws
+		}
+	}
+	if err := setRepos(path, names); err != nil {
+		return err
+	}
+	return config.KeepWorkspaceNames(path, kept)
+}
+
 // writeRepos replaces the config's repo: or repos: entry with repos
 // (see config.WriteRepos).
 func writeRepos(path string, repos []config.Repo) error { return config.WriteRepos(path, repos) }

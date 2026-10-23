@@ -601,6 +601,8 @@ paths:
   /settings/uninstall:
     get:
       summary: What removing the factory would remove, and what is left for you to do
+      parameters:
+        - { name: repo, in: query, schema: { type: string }, description: "Only what removing this repo would remove: its labels, job images, cache and readiness report, and the repo from factory.yaml" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Uninstall" } } } }
         "404": { $ref: "#/components/responses/Error" }
@@ -609,7 +611,9 @@ paths:
       description: |
         Deleting a label takes it off every issue and PR that has it. Refused
         while jobs run (409). The GitHub App, tokens and config files are
-        never touched; the result says where to remove them.
+        never touched; the result says where to remove them. With repo, only
+        that repo's share goes, the repo leaves factory.yaml, and the factory
+        restarts to stop working on it.
       requestBody:
         content:
           application/json:
@@ -619,6 +623,7 @@ paths:
               properties:
                 confirm: { type: string, enum: [remove] }
                 data: { type: boolean, description: "Remove the job data too (default false)" }
+                repo: { type: string, description: "Remove only this repo's share, and the repo from factory.yaml" }
       responses:
         "200": { description: How each removal went, content: { application/json: { schema: { $ref: "#/components/schemas/UninstallResult" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -1581,7 +1586,7 @@ components:
         workspace: { type: string, description: "The item's workspace, which the chat that splits it starts in" }
     Uninstall:
       type: object
-      required: [labels, repos, kept, images, images_note, data, manual, refused, writable, reason]
+      required: [labels, repos, kept, images, images_note, data, manual, listed, refused, writable, reason]
       properties:
         kept: { type: array, items: { $ref: "#/components/schemas/UninstallKept" }, description: "What looks like the factory's but stays, with why: a GitLab group's label, an intake label you made, a runner image not marked as the factory's" }
         labels: { type: array, items: { $ref: "#/components/schemas/UninstallLabel" }, description: "The factory's labels on each repo. Deleting one takes it off every issue and PR that has it" }
@@ -1590,6 +1595,7 @@ components:
         images_note: { type: string, description: "Why no images could be listed, or empty" }
         data: { $ref: "#/components/schemas/UninstallData" }
         manual: { type: array, items: { $ref: "#/components/schemas/UninstallStep" }, description: "What the factory can't do for you: the GitHub App, tokens, its config files" }
+        listed: { type: boolean, description: "The repo asked about is in factory.yaml, and leaves it" }
         refused: { type: string, description: "Why nothing can be removed now (jobs running), or empty" }
         writable: { type: boolean }
         reason: { type: string, description: "Why this request may not remove anything, or empty" }

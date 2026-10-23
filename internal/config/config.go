@@ -237,6 +237,12 @@ func (r Repo) BaseImage() string {
 	return "factory-base-" + repoTag(r.Name) + ":latest"
 }
 
+// JobImage is the tag the factory gives a repo's own job image, one
+// built from image_from or image_build.
+func (r Repo) JobImage() string {
+	return "factory-job-" + repoTag(r.Name) + ":latest"
+}
+
 func repoTag(name string) string {
 	return strings.ToLower(strings.NewReplacer("/", "__", ":", "-").Replace(name))
 }
@@ -1226,7 +1232,7 @@ func (c *Config) resolve(r Repo) Repo {
 		r.BaseBranch = "main"
 	}
 	if r.Image == "" && (r.ImageFrom != "" || r.ImageBuild != nil) {
-		r.Image = "factory-job-" + repoTag(r.Name) + ":latest"
+		r.Image = r.JobImage()
 	}
 	if r.Image == "" {
 		r.Image = c.Runner.Image
