@@ -25,6 +25,7 @@ export type Feed = S["Feed"];
 export type Activity = S["Activity"];
 export type ActivityEntry = S["ActivityEntry"];
 export type Spend = S["Spend"];
+export type Comparison = S["Comparison"];
 export type Metrics = S["Metrics"];
 export type Notification = S["Notification"];
 export type Notifications = S["Notifications"];
@@ -150,6 +151,8 @@ export const useActivity = (repo = "") =>
     queryFn: () => getJSON<Activity>(repo ? `/activity?repo=${encodeURIComponent(repo)}` : "/activity"),
   });
 export const useSpend = () => useQuery({ queryKey: ["spend"], queryFn: () => getJSON<Spend>("/spend") });
+export const useCompare = () =>
+  useQuery({ queryKey: ["compare"], queryFn: () => getJSON<S["Comparisons"]>("/compare") });
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: () => getJSON<Metrics>("/metrics") });
 export const useNotifications = () =>
   useQuery({ queryKey: ["notifications"], queryFn: () => getJSON<Notifications>("/notifications") });

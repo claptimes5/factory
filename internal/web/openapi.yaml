@@ -374,6 +374,11 @@ paths:
       summary: Cost per merged PR, first-pass and escalation rates, overall and per week
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Metrics" } } } }
+  /compare:
+    get:
+      summary: "The `factory compare` runs, newest first: one issue built once per skill set"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Comparisons" } } } }
   /spend:
     get:
       summary: Spend by day (30 days, newest first) and by model
@@ -1718,6 +1723,37 @@ components:
       required: [entries]
       properties:
         entries: { type: array, items: { $ref: "#/components/schemas/ActivityEntry" } }
+    Comparisons:
+      type: object
+      required: [runs]
+      properties:
+        runs: { type: array, items: { $ref: "#/components/schemas/Comparison" } }
+    Comparison:
+      type: object
+      required: [id, ref, title, base_sha, complexity, started, arms]
+      properties:
+        id: { type: string, description: "The run's directory under data/compare" }
+        ref: { type: string }
+        title: { type: string }
+        base_sha: { type: string, description: The base every arm started from }
+        complexity: { type: string }
+        started: { type: string }
+        arms: { type: array, items: { $ref: "#/components/schemas/Arm" } }
+    Arm:
+      type: object
+      required: [skillset, branch, stage, gates, review, findings, implement_jobs, cost_usd, seconds, diff_stat, error]
+      properties:
+        skillset: { type: string, description: "The skill set; none means no skills" }
+        branch: { type: string }
+        stage: { type: string, description: awaiting_human means it passed review }
+        gates: { type: array, items: { $ref: "#/components/schemas/Gate" } }
+        review: { type: string, description: "pass, block, questions, or empty when none ran" }
+        findings: { type: array, items: { type: string } }
+        implement_jobs: { type: integer }
+        cost_usd: { type: number }
+        seconds: { type: number }
+        diff_stat: { type: string, description: git diff --stat against the base }
+        error: { type: string }
     DaySpend:
       type: object
       required: [day, cost_usd]

@@ -750,7 +750,7 @@ still get none.
 
 ## Metrics
 
-`/metrics` (and `/metrics.json`) report:
+The dashboard's Spend screen (and `/metrics.json`) report:
 
 - cost per merged PR by complexity and by the model that landed it;
 - first-pass rate and escalation rate;

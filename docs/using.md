@@ -6,7 +6,8 @@ command, and the orchestrator that plans and steers work.
 ## The dashboard
 
 `factory serve` serves the dashboard at `/app/` on `web.listen` (default
-`127.0.0.1:8080`), so open http://127.0.0.1:8080/app/. It is a React app
+`127.0.0.1:8080`), so open http://127.0.0.1:8080/app/ (the bare address leads
+there too). It is a React app
 built from `web/` and embedded in the binary, fonts included, so running
 the factory needs no Node and loads nothing from outside. It follows the
 system's dark or light setting, and the sun/moon button switches it.
@@ -27,7 +28,7 @@ with push notifications (see [Notifications](#notifications)).
 | **Ask the factory** | [Chat](#chat-opening-issues-with-the-orchestrator) with the orchestrator's model from any screen, with suggestions to start from: beside the screen on a wide desk, a sheet over it on a laptop or phone. |
 | **The line** | The old Floor: what needs you, with each item's buttons, then a column per stage. A running job's card says what it is doing, read from its log ("editing webhook/retry.go"), with its model, attempt and how long it has run. A live feed of the day and the week's numbers sit beside it. |
 | **Jump to** (⌘K or Ctrl+K) | Any item by number or title, or any screen. |
-| **History** | The activity, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"); what's done; and the orchestrator's own decisions with their reasons, filterable by item and type. |
+| **History** | The activity, said plainly ("PR #88 is ready for you", "started building with opus, attempt 2"); what's done; the orchestrator's own decisions with their reasons, filterable by item and type; and Comparisons, each [`factory compare`](#comparing-skill-sets) run's skill sets side by side. |
 | **Trust** | Each repo's [trust level](#trust), its record, its practice runs, and the level its record has earned. |
 | **Item** | Where it is along the line, as stamps (Plan, Build, Review, You, Live); the [plan](#plans-before-big-builds) of a big item, with Build it and Ask for another plan when it waits for you, the [cost estimate](#cost-estimates) and what it's based on, with Approve estimate when it waits for you, the issue, triage's spec, the risk the latest build's diff raised and why, and whether it [needs you whatever its risk](quality.md#risk-from-the-diff), the latest build's [screenshots](#screenshots-on-the-pr), jobs, audit trail, and the PR panel: CI checks from GitHub, gate results, the reviewer's verdict with each finding linked to its diff line, and Approve (on GitHub), Retry, Tier up and Park. A parked item says why and offers its choices at the top. |
 | **Session** | The job's transcript beside the issue and spec, the way Claude Code shows a session: the agent's words as the thread, each run of tool calls folded into a line ("Ran 3 commands, read 2 files") that opens to each call's input and output, thinking tucked away, failed calls in sight, a "Now:" line while it runs and how it ended at the bottom. Raw log downloads the whole log. While a Claude build runs, a box sends it a message it reads at its next step. A build that ran out of turns or budget shows its note and the work it kept. Then a live terminal in the job's container (xterm.js over a WebSocket; Docker runner only). |
@@ -241,23 +242,6 @@ message, which it reads at its next step (Claude runs with streaming
 input for this). Your message shows in the transcript as "You: ...".
 Codex reads its whole prompt when it starts, so its box is off.
 
-## The classic control room
-
-The older control room is still there on the same address (search the
-dashboard for "Classic control room" to go back to it):
-
-- **Needs you:** PRs waiting for review, parked items with the reason, budget alerts.
-- **Board:** items by stage, with model and cost.
-- **Job view:** live log over SSE, gate results, verdict, cost; buttons to
-  retry, retry one tier up, cancel, and attach a terminal (through `ttyd`;
-  without it, or on a dashboard served beyond this machine, it shows the
-  `docker exec` command instead).
-- **Orchestrator log** and **Spend** (today, 7 days, cost per merged PR).
-- **Compare:** the reports from [`factory compare`](#comparing-skill-sets).
-
-The numbers behind these screens are also at `/metrics` (see
-[Metrics](quality.md#metrics)).
-
 ## Notifications
 
 Set `FACTORY_NOTIFY_URL` in `factory.env` to one of:
@@ -404,7 +388,8 @@ Before you change a prompt, model or skill set, you can measure it.
 
 You get a side-by-side report covering the outcome, review verdict and
 findings, failed gates, implement attempts, cost, time and diff. It's saved
-under `data/compare/` and shown in the control room under Compare.
+under `data/compare/` and shown on History, under Comparisons. The diff
+itself is in `report.md` there, and on the arm's branch.
 
 ## The orchestrator
 

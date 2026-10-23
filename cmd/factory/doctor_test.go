@@ -186,8 +186,6 @@ func TestDoctorChecks(t *testing.T) {
 			t.Setenv("FACTORY_GITHUB_APP_ID", "1")
 			t.Setenv("FACTORY_GITHUB_APP_KEY", filepath.Join(t.TempDir(), "none.pem"))
 		}, fail, "FACTORY_GITHUB_APP_KEY", "./factory setup"},
-		{"no ttyd", func(_ *testing.T, m *fakeMachine, _ *config.Config) { m.missing["ttyd"] = true },
-			fail, "ttyd isn't installed", "sudo apt install ttyd"},
 		{"port taken", func(_ *testing.T, m *fakeMachine, _ *config.Config) { m.busy = true },
 			warn, "is taken", "ss -ltnp | grep :8080"},
 	} {
@@ -247,7 +245,7 @@ func TestDoctorSkipsWhatDependsOnDocker(t *testing.T) {
 	m.fail["docker image inspect factory-job:latest"] = true
 	d := m.doctor(cfg)
 	fs := d.checkAll(context.Background(), true)
-	if len(fs) != 3 {
+	if len(fs) != 2 {
 		t.Fatalf("system checks: %+v", fs)
 	}
 	for _, f := range d.checkAll(context.Background(), false) {
@@ -341,9 +339,6 @@ esac`,
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Errorf("Go %s: exit 0", tc.goVersion)
-		}
-		if !strings.Contains(string(out), "✓ ttyd") && !strings.Contains(string(out), "sudo apt install ttyd") {
-			t.Errorf("Go %s: no ttyd line in:\n%s", tc.goVersion, out)
 		}
 		for _, w := range append(tc.want, "✓ git 2.43.0", "! Docker 27.5.1", "runner.egress.mode: open") {
 			if !strings.Contains(string(out), w) {

@@ -467,11 +467,6 @@ var errSetupMode = errors.New("the factory isn't set up yet: finish setup at " +
 // a factory that can't start yet.
 func (s *Server) setupHandler() (*http.ServeMux, error) {
 	mux := http.NewServeMux()
-	static, err := staticFS()
-	if err != nil {
-		return nil, err
-	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, getStarted, http.StatusSeeOther)
 	})

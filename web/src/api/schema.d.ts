@@ -1302,6 +1302,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The `factory compare` runs, newest first: one issue built once per skill set */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Comparisons"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend": {
         parameters: {
             query?: never;
@@ -3904,6 +3940,37 @@ export interface components {
         };
         Activity: {
             entries: components["schemas"]["ActivityEntry"][];
+        };
+        Comparisons: {
+            runs: components["schemas"]["Comparison"][];
+        };
+        Comparison: {
+            /** @description The run's directory under data/compare */
+            id: string;
+            ref: string;
+            title: string;
+            /** @description The base every arm started from */
+            base_sha: string;
+            complexity: string;
+            started: string;
+            arms: components["schemas"]["Arm"][];
+        };
+        Arm: {
+            /** @description The skill set; none means no skills */
+            skillset: string;
+            branch: string;
+            /** @description awaiting_human means it passed review */
+            stage: string;
+            gates: components["schemas"]["Gate"][];
+            /** @description pass, block, questions, or empty when none ran */
+            review: string;
+            findings: string[];
+            implement_jobs: number;
+            cost_usd: number;
+            seconds: number;
+            /** @description git diff --stat against the base */
+            diff_stat: string;
+            error: string;
         };
         DaySpend: {
             day: string;
