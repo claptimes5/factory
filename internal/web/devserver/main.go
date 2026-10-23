@@ -125,6 +125,10 @@ func (r *restarter) RestartWaitsFor() string            { return "" }
 // sampleConfig is the factory.yaml the Settings screen edits.
 const sampleConfig = `# A sample factory.yaml for the devserver.
 repos: [acme/api, acme/web]
+workspaces:
+  acme:
+    repos: [acme/api, acme/web]
+    daily_total: 20
 runner: {kind: local}
 auto_merge: {up_to: low, max_size: S}
 
@@ -194,6 +198,7 @@ func main() {
 	rs := &restarter{}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs, CompareDir: comparisons,
+		Workspaces: []web.Workspace{{Name: "acme", Repos: []string{"acme/api", "acme/web"}, DailyCap: 20}},
 		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
 		// 116 stopped because its checks had no database; its compose file has one.
@@ -219,8 +224,8 @@ func main() {
 		Orchestrator: web.OrchestratorInfo{Harness: "claude", Model: "opus", Every: "1h0m0s", RunBudget: 2, DailyBudget: 10},
 		Push:         devPush(),
 		// Trust levels are written to the sample config as the factory writes them.
-		SetTrust: func(_ context.Context, repo string, a *config.AutoMerge, s *config.SelfStart) error {
-			return config.SetRepoTrust(cfgPath, repo, a, s)
+		SetTrust: func(_ context.Context, ws string, a *config.AutoMerge, s *config.SelfStart) error {
+			return config.SetWorkspaceTrust(cfgPath, ws, a, s)
 		},
 		Breakers: func(context.Context) []web.APIBreaker {
 			return []web.APIBreaker{

@@ -317,11 +317,10 @@ type Config struct {
 	// filled from it. Use RepoNames and RepoConf rather than either field.
 	SingleRepo string `yaml:"repo"`
 	Repos      []Repo `yaml:"repos"`
-	// Workspaces group repos that change together, like an API and the
-	// web app that calls it: an issue in any member becomes one change
-	// across all of them, with a PR in each repo it touches. Members are
-	// listed in the order their PRs should merge.
-	Workspaces map[string][]string `yaml:"workspaces,omitempty"`
+	// Workspaces are projects: the repos that belong together, and what
+	// the dashboard, the orchestrator, trust and budgets are scoped to.
+	// A repo in none has one of its own. See Workspace.
+	Workspaces map[string]Workspace `yaml:"workspaces,omitempty"`
 	// AutoMerge lets the factory merge its own PRs up to a risk level and
 	// size, once CI passes. Unset, every PR waits for you.
 	AutoMerge *AutoMerge `yaml:"auto_merge,omitempty"`
@@ -489,6 +488,8 @@ type Config struct {
 	// defaultBranches are repos' default branches on their hosts, by
 	// lower-cased name (see SetDefaultBranch).
 	defaultBranches map[string]string
+	// noOrchestrator turns every orchestrator off (see DisableOrchestrator).
+	noOrchestrator bool
 }
 
 // MinTuningEvery is the shortest tuning cadence: each run costs a model
@@ -843,17 +844,20 @@ func (c *Config) Validate() error {
 		errs = append(errs, err)
 	}
 	for _, r := range c.Repos {
-		if err := r.SelfStart.check(r.Name); err != nil {
+		if err := r.SelfStart.check("repos[" + r.Name + "]"); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	// No repos yet is a factory not set up: setup and serve's get-started
 	// page ask for them, and the other commands refuse (see NoRepos).
-	checkAutoMerge := func(where string, a *AutoMerge) {
+	// A repo's may leave up_to out, to set only its merge method and
+	// breaker under its workspace's level (noLevel).
+	checkAutoMerge := func(where string, a *AutoMerge, noLevel bool) {
 		if a == nil {
 			return
 		}
 		switch {
+		case a.UpTo == "" && noLevel:
 		case a.UpTo == "high":
 			bad("%sauto_merge.up_to: high-risk changes always wait for you; use low or medium", where)
 		case !slices.Contains([]string{"none", "low", "medium"}, a.UpTo):
@@ -877,10 +881,10 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	checkAutoMerge("", c.AutoMerge)
+	checkAutoMerge("", c.AutoMerge, false)
 	seen := map[string]bool{}
 	for _, r := range c.Repos {
-		checkAutoMerge("repo "+r.Name+": ", r.AutoMerge)
+		checkAutoMerge("repo "+r.Name+": ", r.AutoMerge, true)
 		switch o, n, ok := strings.Cut(r.Path(), "/"); {
 		case r.GitLab() && (!ok || o == "" || n == "" || strings.Contains(r.Name, "//")):
 			bad("repo %s must be %s/group/project", r.Name, r.Host)
@@ -931,33 +935,7 @@ func (c *Config) Validate() error {
 			bad("repo %s: confirm_over is dollars, or 0 to turn it off for this repo", r.Name)
 		}
 	}
-	inWS := map[string]string{}
-	for _, name := range sortedKeys(c.Workspaces) {
-		members := c.Workspaces[name]
-		if !wsName.MatchString(name) {
-			bad("workspace %q: names are lowercase letters, digits and -", name)
-		}
-		if len(members) < 2 {
-			bad("workspace %s needs at least two repos", name)
-		}
-		short := map[string]bool{}
-		for _, m := range members {
-			key := strings.ToLower(m)
-			switch {
-			case !seen[key]:
-				bad("workspace %s: %s isn't in repos", name, m)
-			case inWS[key] != "":
-				bad("workspace %s: %s is already in workspace %s", name, m, inWS[key])
-			}
-			inWS[key] = name
-			// Each member is checked out in a folder named for it.
-			if sn := ShortName(m); short[sn] {
-				bad("workspace %s: two repos are named %s; a workspace's repos need different names", name, sn)
-			} else {
-				short[sn] = true
-			}
-		}
-	}
+	c.checkWorkspaces(seen, bad, checkAutoMerge)
 	for _, k := range []string{"triage", "implement.S", "implement.M", "implement.L", "review"} {
 		if _, ok := c.Routing[k]; !ok {
 			bad("routing.%s is required", k)
@@ -1190,26 +1168,6 @@ func (c *Config) RepoConf(name string) (Repo, bool) {
 	return Repo{}, false
 }
 
-// Workspace returns the workspace a repo belongs to and its members, in
-// merge order, as listed in repos; "" and nil for a repo on its own.
-func (c *Config) Workspace(repo string) (string, []string) {
-	for _, name := range sortedKeys(c.Workspaces) {
-		for _, m := range c.Workspaces[name] {
-			if strings.EqualFold(m, repo) {
-				out := make([]string, 0, len(c.Workspaces[name]))
-				for _, x := range c.Workspaces[name] {
-					if r, ok := c.RepoConf(x); ok {
-						x = r.Name
-					}
-					out = append(out, x)
-				}
-				return name, out
-			}
-		}
-	}
-	return "", nil
-}
-
 // ShortName is a repo's name without its owner or group: the folder it is
 // checked out in within a workspace.
 func ShortName(repo string) string {
@@ -1284,8 +1242,19 @@ func (c *Config) resolve(r Repo) Repo {
 	if r.Services == nil {
 		r.Services = c.Services
 	}
-	if r.AutoMerge == nil {
-		r.AutoMerge = c.AutoMerge
+	// Trust is the workspace's; a repo's own may only be stricter. One of
+	// several repos with no level of its own takes the lowest of theirs.
+	ws := c.WorkspaceOf(r.Name)
+	w := c.Workspaces[ws]
+	wsLevel := w.AutoMerge
+	if low := c.lowestLevel(ws); low != nil {
+		wsLevel = low
+	}
+	r.AutoMerge = trustOf(r.AutoMerge, wsLevel, c.AutoMerge)
+	if common, ok := c.commonSelfStart(ws); ok {
+		r.SelfStart = common
+	} else {
+		r.SelfStart = selfStartOf(r.SelfStart, w.SelfStart)
 	}
 	r.Gates = mergeGates(c.Gates, r.Gates)
 	// REVIEW.md tells the reviewers what to look for and what to skip, so

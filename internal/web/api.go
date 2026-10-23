@@ -229,6 +229,9 @@ type APIOverview struct {
 	// AutoMerge is each repo's auto-merge breaker, where auto-merge is on
 	// or its breaker tripped.
 	AutoMerge []APIBreaker `json:"auto_merge"`
+	// Workspaces are the factory's workspaces, in order, each with its
+	// repos; the dashboard shows one at a time.
+	Workspaces []APIWorkspace `json:"workspaces"`
 }
 
 // APIBreaker is one repo's auto-merge circuit breaker.
@@ -477,6 +480,8 @@ type APINotification struct {
 	Detail string `json:"detail"`
 	ItemID *int64 `json:"item_id"`
 	At     string `json:"at"`
+	// Workspace is the item's; "" for one about the whole factory.
+	Workspace string `json:"workspace"`
 	// For a parked item, what a person can do right here.
 	ChoiceJobID *int64      `json:"choice_job_id"`
 	Choices     []APIChoice `json:"choices"`
@@ -909,9 +914,15 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
+	out := APIOverview{Repo: firstOr(s.Repos, ""), Repos: s.Repos, SpentTodayUSD: spent, DailyCapUSD: s.DailyCap, Awaiting: len(waiting),
 		AwaitingCap: s.AwaitCap, Running: running, Queued: queued, Version: v, DiskLow: s.diskLow(), SignedIn: s.Login != nil && s.Login.Password != "",
-		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r), PlansOnly: s.PlansOnly})
+		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r), PlansOnly: s.PlansOnly, Workspaces: []APIWorkspace{}}
+	for _, ws := range s.workspaces() {
+		aw := APIWorkspace{Name: ws.Name, Repos: ws.Repos, DailyCapUSD: ws.DailyCap}
+		aw.SpentTodayUSD, _ = s.Store.SpendOnRepos(ctx, store.Today(), ws.Repos)
+		out.Workspaces = append(out.Workspaces, aw)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // breakers are the repos' auto-merge breakers worth showing.
@@ -1574,10 +1585,26 @@ func (s *Server) apiFeed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ws := r.URL.Query().Get("workspace")
+	if ws != "" && !s.hasWorkspace(ws) {
+		apiErr(w, http.StatusBadRequest, "no workspace "+ws)
+		return
+	}
 	evs, err := s.Store.EventsByActorFor(ctx, "orchestrator", item, 500)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if ws != "" {
+		// A workspace's are its orchestrator's runs and what any did to its
+		// items; a run from before workspaces shows in each.
+		var keep []store.Event
+		for _, e := range evs {
+			if other := s.eventWorkspace(ctx, e); other == "" || other == ws {
+				keep = append(keep, e)
+			}
+		}
+		evs = keep
 	}
 	writeJSON(w, http.StatusOK, APIFeed{Events: apiEvents(evs)})
 }
@@ -1641,7 +1668,7 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 	ests := s.estimatesByItem(ctx)
 	for _, it := range waiting {
 		id := it.ID
-		n := APINotification{ItemID: &id, At: it.UpdatedAt}
+		n := APINotification{ItemID: &id, At: it.UpdatedAt, Workspace: s.workspaceOf(it.Repo)}
 		e := ests[it.ID]
 		switch {
 		case it.Stage == state.Blocked && s.Store.PlanWaiting(ctx, it):

@@ -182,7 +182,7 @@ func runArm(ctx context.Context, o Options, is *github.Issue, set, complexity, r
 	rc.ConfirmOver = nil // nobody is there to say go
 	cfg.Repos = []config.Repo{rc}
 	cfg.DataDir = filepath.Join(dir, "data")
-	cfg.Orchestrator.On = false
+	cfg.DisableOrchestrator()
 	cfg.Learning.Enabled = new(bool) // nothing to learn from a test run
 	cfg.MainHealth.Enabled = false   // main is the real repo's, not the run's
 	cfg.Sources.Off()                // nor are its errors, alerts and TODOs

@@ -25,11 +25,11 @@ func (c *chatter) ChatFiles(chatID, msgID int64) string {
 	return filepath.Join(c.dir, "chats", fmt.Sprint(chatID), fmt.Sprint(msgID))
 }
 
-func (c *chatter) ChatUnavailable(context.Context) string { return "" }
+func (c *chatter) ChatUnavailable(context.Context, string) string { return "" }
 
-func (c *chatter) OrchestrationSpend(context.Context) (float64, error) { return 1.84, nil }
+func (c *chatter) OrchestrationSpend(context.Context, string) (float64, error) { return 1.84, nil }
 
-func (c *chatter) Chat(ctx context.Context, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
+func (c *chatter) Chat(ctx context.Context, ws string, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
 	text = strings.TrimSpace(text)
 	if text == "" && len(files) > 0 {
 		text = "(files only)"
@@ -41,7 +41,7 @@ func (c *chatter) Chat(ctx context.Context, chatID int64, text string, files []s
 		if text == "" {
 			return 0, 0, errors.New("write a message first")
 		}
-		id, err := c.st.NewChat(ctx, text)
+		id, err := c.st.NewChatIn(ctx, text, ws)
 		if err != nil {
 			return 0, 0, err
 		}

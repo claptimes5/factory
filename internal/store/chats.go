@@ -18,6 +18,7 @@ const KindChat = "chat"
 type Chat struct {
 	ID        int64
 	Title     string
+	Workspace string // the workspace it works in; "" for one from before workspaces
 	CreatedAt string
 	UpdatedAt string
 }
@@ -78,9 +79,14 @@ func (d IssueDraft) Version() string {
 
 // NewChat starts a chat with a person's first message.
 func (s *Store) NewChat(ctx context.Context, title string) (int64, error) {
+	return s.NewChatIn(ctx, title, "")
+}
+
+// NewChatIn starts a chat in a workspace.
+func (s *Store) NewChatIn(ctx context.Context, title, workspace string) (int64, error) {
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO chats(title, created_at, updated_at) VALUES (?, ?, ?)`, title, Now(), Now())
+		res, err := tx.Exec(`INSERT INTO chats(title, workspace, created_at, updated_at) VALUES (?, ?, ?, ?)`, title, workspace, Now(), Now())
 		if err != nil {
 			return err
 		}
@@ -93,16 +99,32 @@ func (s *Store) NewChat(ctx context.Context, title string) (int64, error) {
 // GetChat reads one chat.
 func (s *Store) GetChat(ctx context.Context, id int64) (*Chat, error) {
 	var c Chat
-	err := s.read.QueryRowContext(ctx, `SELECT id, title, created_at, updated_at FROM chats WHERE id = ?`, id).Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt)
+	err := s.read.QueryRowContext(ctx, `SELECT id, title, workspace, created_at, updated_at FROM chats WHERE id = ?`, id).Scan(&c.ID, &c.Title, &c.Workspace, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
+// RenameChatWorkspace moves the chats of workspace from to workspace to,
+// when it's renamed.
+func (s *Store) RenameChatWorkspace(ctx context.Context, from, to string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE chats SET workspace = ? WHERE workspace = ?`, to, from)
+		return err
+	})
+}
+
 // ListChats lists chats, the most recently active first.
 func (s *Store) ListChats(ctx context.Context, limit int) ([]Chat, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC, id DESC LIMIT ?`, limit)
+	return s.ListChatsIn(ctx, "", false, limit)
+}
+
+// ListChatsIn lists a workspace's chats ("" for every chat), the most
+// recently active first; with older, the chats from before workspaces too.
+func (s *Store) ListChatsIn(ctx context.Context, workspace string, older bool, limit int) ([]Chat, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id, title, workspace, created_at, updated_at FROM chats
+		WHERE ? = '' OR workspace = ? OR (? AND workspace = '') ORDER BY updated_at DESC, id DESC LIMIT ?`, workspace, workspace, older, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +132,7 @@ func (s *Store) ListChats(ctx context.Context, limit int) ([]Chat, error) {
 	var out []Chat
 	for rows.Next() {
 		var c Chat
-		if err := rows.Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Title, &c.Workspace, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

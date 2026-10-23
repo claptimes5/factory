@@ -28,94 +28,162 @@ import (
 // LabelEpic marks an issue for the orchestrator to decompose.
 const LabelEpic = "factory:epic"
 
-// OrchestrateInput is carried by an orchestrate job: why it runs.
+// OrchestrateInput is carried by an orchestrate job: the workspace it
+// runs for, and why.
 type OrchestrateInput struct {
-	Reasons []string `json:"reasons"`
-	Summary bool     `json:"summary,omitempty"` // write the daily summary
+	Workspace string   `json:"workspace"`
+	Reasons   []string `json:"reasons"`
+	Summary   bool     `json:"summary,omitempty"` // write the daily summary
 }
 
-// Orchestrate requests an orchestrator run. Requests coalesce: at most one
-// orchestrate job is ever queued, and reasons accumulate on it.
-func (p *Pipeline) Orchestrate(ctx context.Context, reason string, summary bool) error {
+// Orchestrate requests a run of workspace ws's orchestrator, when it's on.
+// Requests coalesce: at most one orchestrate job is queued for a
+// workspace, and reasons accumulate on it.
+func (p *Pipeline) Orchestrate(ctx context.Context, ws, reason string, summary bool) error {
+	o := p.Cfg.OrchestratorFor(ws)
+	if !o.On {
+		return nil
+	}
 	p.orchMu.Lock()
 	defer p.orchMu.Unlock()
-	spent, err := p.orchSpend(ctx)
-	if err != nil {
-		return err
-	}
-	if spent >= p.Cfg.Orchestrator.DailyBudget {
-		return p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "orchestrate_skipped",
-			Reason: fmt.Sprintf("orchestration budget spent ($%.2f of $%.2f): %s", spent, p.Cfg.Orchestrator.DailyBudget, reason)})
+	if why, err := p.orchBudgetSpent(ctx, ws); err != nil || why != "" {
+		if err != nil {
+			return err
+		}
+		return p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "orchestrate_skipped", Reason: why + ": " + reason})
 	}
 	queued, err := p.Store.ListJobs(ctx, store.JobFilter{Kind: "orchestrate", State: state.Queued})
 	if err != nil {
 		return err
 	}
-	if len(queued) > 0 {
+	for _, q := range queued {
 		var in OrchestrateInput
-		_ = json.Unmarshal([]byte(queued[0].Input), &in)
+		_ = json.Unmarshal([]byte(q.Input), &in)
+		if in.Workspace != ws {
+			continue
+		}
 		in.Reasons = append(in.Reasons, reason)
 		in.Summary = in.Summary || summary
 		b, _ := json.Marshal(in)
-		if ok, err := p.Store.SetJobInput(ctx, queued[0].ID, string(b)); err != nil || ok {
+		if ok, err := p.Store.SetJobInput(ctx, q.ID, string(b)); err != nil || ok {
 			return err
 		}
-		// It was claimed meanwhile: this reason needs a run of its own.
+		break // it was claimed meanwhile: this reason needs a run of its own
 	}
 	r := p.Cfg.Routing["orchestrate"]
-	b, _ := json.Marshal(OrchestrateInput{Reasons: []string{reason}, Summary: summary})
+	b, _ := json.Marshal(OrchestrateInput{Workspace: ws, Reasons: []string{reason}, Summary: summary})
 	_, err = p.Store.EnqueueJob(ctx, store.Job{Kind: "orchestrate", Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: r.FastFor(r.Harness, r.Model),
-		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.FastBudget(p.Cfg.Orchestrator.RunBudget, r.FastFor(r.Harness, r.Model)), Priority: 10, Input: string(b)})
+		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.FastBudget(o.RunBudget, r.FastFor(r.Harness, r.Model)), Priority: 10, Input: string(b)})
 	return err
 }
 
-// coalesceOrchestrate merges every queued orchestrate job into the oldest,
-// so triggers that piled up while the daemon was down (including a run it
-// interrupted) fire as one fresh run.
+// orchBudgetSpent says why workspace ws's orchestration can't spend more
+// today, or "": the factory's orchestration budget, or its own.
+func (p *Pipeline) orchBudgetSpent(ctx context.Context, ws string) (string, error) {
+	spent, err := p.orchSpend(ctx)
+	if err != nil {
+		return "", err
+	}
+	if spent >= p.Cfg.Orchestrator.DailyBudget {
+		return fmt.Sprintf("the orchestration budget is spent ($%.2f of $%.2f)", spent, p.Cfg.Orchestrator.DailyBudget), nil
+	}
+	mine, err := p.orchSpendIn(ctx, ws)
+	if err != nil {
+		return "", err
+	}
+	if o := p.Cfg.OrchestratorFor(ws); mine >= o.DailyBudget {
+		return fmt.Sprintf("%s's orchestration budget is spent ($%.2f of $%.2f)", ws, mine, o.DailyBudget), nil
+	}
+	return "", nil
+}
+
+// orchSpendIn is today's spend on workspace ws's orchestrator and chats.
+func (p *Pipeline) orchSpendIn(ctx context.Context, ws string) (float64, error) {
+	var sum float64
+	for _, kind := range []string{"orchestrate", store.KindChat} {
+		v, err := p.Store.SpendByKindIn(ctx, store.Today(), kind, ws)
+		if err != nil {
+			return 0, err
+		}
+		sum += v
+	}
+	return sum, nil
+}
+
+// coalesceOrchestrate merges each workspace's queued orchestrate jobs into
+// its oldest, so triggers that piled up while the daemon was down
+// (including a run it interrupted) fire as one fresh run.
 func (p *Pipeline) coalesceOrchestrate(ctx context.Context) error {
 	queued, err := p.Store.ListJobs(ctx, store.JobFilter{Kind: "orchestrate", State: state.Queued})
 	if err != nil || len(queued) < 2 {
 		return err
 	}
 	sort.Slice(queued, func(a, b int) bool { return queued[a].ID < queued[b].ID })
-	var in OrchestrateInput
+	byWS := map[string][]*store.Job{}
+	ins := map[int64]OrchestrateInput{}
+	var order []string
 	for _, j := range queued {
 		var x OrchestrateInput
 		_ = json.Unmarshal([]byte(j.Input), &x)
-		in.Reasons = append(in.Reasons, x.Reasons...)
-		in.Summary = in.Summary || x.Summary
+		if _, ok := byWS[x.Workspace]; !ok {
+			order = append(order, x.Workspace)
+		}
+		byWS[x.Workspace], ins[j.ID] = append(byWS[x.Workspace], j), x
 	}
-	for _, j := range queued[1:] {
-		if err := p.Store.CancelQueued(ctx, j.ID, "daemon", fmt.Sprintf("coalesced into job %d", queued[0].ID)); err != nil {
+	for _, ws := range order {
+		js := byWS[ws]
+		if len(js) < 2 {
+			continue
+		}
+		in := OrchestrateInput{Workspace: ws}
+		for _, j := range js {
+			in.Reasons = append(in.Reasons, ins[j.ID].Reasons...)
+			in.Summary = in.Summary || ins[j.ID].Summary
+		}
+		for _, j := range js[1:] {
+			if err := p.Store.CancelQueued(ctx, j.ID, "daemon", fmt.Sprintf("coalesced into job %d", js[0].ID)); err != nil {
+				return err
+			}
+		}
+		b, _ := json.Marshal(in)
+		if _, err := p.Store.SetJobInput(ctx, js[0].ID, string(b)); err != nil {
 			return err
 		}
 	}
-	b, _ := json.Marshal(in)
-	_, err = p.Store.SetJobInput(ctx, queued[0].ID, string(b))
-	return err
+	return nil
 }
 
-// orchestratorTriggers runs on each tick: the schedule, the daily summary
-// and a drained queue while ready work exists. (Epics and repeated failures
-// trigger from Intake and finish.)
+// orchestratorTriggers runs on each tick, for each workspace whose
+// orchestrator is on: its schedule and its daily summary. (A drained
+// queue, epics and repeated failures trigger from elsewhere.)
 func (p *Pipeline) orchestratorTriggers(ctx context.Context, now time.Time) {
-	if p.lastOrch.IsZero() {
-		p.lastOrch = now // the first scheduled run is one interval after start
-	}
-	if now.Sub(p.lastOrch) >= p.Cfg.Orchestrator.Interval.Duration {
-		p.lastOrch = now
-		p.warn(p.Orchestrate(ctx, "scheduled run", false), "orchestrate")
+	if p.lastOrch == nil {
+		p.lastOrch, p.lastSummary = map[string]time.Time{}, map[string]string{}
 	}
 	day := now.Format("2006-01-02")
-	if now.Hour() >= p.Cfg.Orchestrator.SummaryHour && p.lastSummary != day {
-		p.lastSummary = day
+	for _, ws := range p.Cfg.WorkspaceNames() {
+		o := p.Cfg.OrchestratorFor(ws)
+		if !o.On {
+			continue
+		}
+		if last, ok := p.lastOrch[ws]; !ok {
+			p.lastOrch[ws] = now // the first scheduled run is one interval after start
+		} else if now.Sub(last) >= o.Interval {
+			p.lastOrch[ws] = now
+			p.warn(p.Orchestrate(ctx, ws, "scheduled run", false), "orchestrate")
+		}
+		if now.Hour() < p.Cfg.Orchestrator.SummaryHour || p.lastSummary[ws] == day {
+			continue
+		}
+		p.lastSummary[ws] = day
 		// Recorded, so a restart after the summary hour does not send it again.
-		if seen, err := p.Store.HasEvent(ctx, "summary_requested", day); err == nil && !seen {
-			if err := p.Orchestrate(ctx, "daily summary", true); err != nil {
-				p.lastSummary = "" // try again next tick
+		key := day + " " + ws
+		if seen, err := p.Store.HasEvent(ctx, "summary_requested", key); err == nil && !seen {
+			if err := p.Orchestrate(ctx, ws, "daily summary", true); err != nil {
+				p.lastSummary[ws] = "" // try again next tick
 				p.warn(err, "orchestrate")
 			} else {
-				p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "summary_requested", Reason: day}), "AddEvent")
+				p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "summary_requested", Reason: key}), "AddEvent")
 			}
 		}
 	}
@@ -139,24 +207,28 @@ func (p *Pipeline) drainedTrigger(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	var stuck []string
+	// Each workspace's orchestrator hears of its own stuck items.
+	stuck := map[string][]string{}
 	for _, it := range items {
 		// Waiting on a human's OK on the cost is not stuck either.
 		if it.Stage == state.Blocked && (p.depsMoving(ctx, it.ID) || p.estimateNeedsOK(ctx, it.ID)) {
 			continue
 		}
-		stuck = append(stuck, p.ref(it.Repo, it.IssueNumber))
+		ws := p.Cfg.WorkspaceOf(it.Repo)
+		stuck[ws] = append(stuck[ws], p.ref(it.Repo, it.IssueNumber))
 	}
-	if len(stuck) == 0 {
-		return
+	for _, ws := range p.Cfg.WorkspaceNames() {
+		if len(stuck[ws]) == 0 || !p.Cfg.OrchestratorFor(ws).On {
+			continue
+		}
+		// Once per set per day: the same items stuck again tomorrow get another look.
+		key := store.Today() + " " + strings.Join(stuck[ws], ",")
+		if seen, err := p.Store.HasEvent(ctx, "drain_seen", key); err != nil || seen {
+			continue
+		}
+		p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "drain_seen", Reason: key}), "AddEvent")
+		p.warn(p.Orchestrate(ctx, ws, "queue drained; stuck items: "+strings.Join(stuck[ws], ", "), false), "orchestrate")
 	}
-	// Once per set per day: the same items stuck again tomorrow get another look.
-	key := store.Today() + " " + strings.Join(stuck, ",")
-	if seen, err := p.Store.HasEvent(ctx, "drain_seen", key); err != nil || seen {
-		return
-	}
-	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "drain_seen", Reason: key}), "AddEvent")
-	p.warn(p.Orchestrate(ctx, "queue drained; stuck items: "+strings.Join(stuck, ", "), false), "orchestrate")
 }
 
 // depsMoving reports whether any dependency of an item is still progressing
@@ -194,7 +266,7 @@ func (p *Pipeline) failedTwice(ctx context.Context, j *store.Job) {
 		if err != nil {
 			return
 		}
-		p.warn(p.Orchestrate(ctx, fmt.Sprintf("item %d (issue %s) failed twice in a row; last error: %s", it.ID, p.ref(it.Repo, it.IssueNumber), truncate(jobs[0].Error, 300)), false), "orchestrate")
+		p.warn(p.Orchestrate(ctx, p.Cfg.WorkspaceOf(it.Repo), fmt.Sprintf("item %d (issue %s) failed twice in a row; last error: %s", it.ID, p.ref(it.Repo, it.IssueNumber), truncate(jobs[0].Error, 300)), false), "orchestrate")
 	}
 }
 
@@ -228,7 +300,7 @@ func (p *Pipeline) intakeEpics(ctx context.Context, repo string) error {
 		if err := p.approve(ctx, it, text, who); err != nil {
 			return err
 		}
-		p.warn(p.Orchestrate(ctx, fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, text.Title), false), "orchestrate")
+		p.warn(p.Orchestrate(ctx, p.Cfg.WorkspaceOf(repo), fmt.Sprintf("new epic %s (item %d): %s", p.ref(repo, is.Number), it.ID, text.Title), false), "orchestrate")
 	}
 	return nil
 }
@@ -247,27 +319,34 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 		p.finish(ctx, j, run, st, "", msg)
 		return nil // the next trigger starts a fresh run; nothing to retry
 	}
+	ws := in.Workspace
+	if _, ok := p.Cfg.WorkspaceConf(ws); !ok || !p.Cfg.OrchestratorFor(ws).On {
+		// Queued before workspaces, for one since removed, or one whose
+		// orchestrator was turned off: its next trigger queues a fresh run.
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", fmt.Sprintf("no orchestrator runs for workspace %q", ws))
+		return nil
+	}
 	// The cap is checked again here: runs queued before it was hit wait.
-	if spent, err := p.orchSpend(ctx); err != nil || spent >= p.Cfg.Orchestrator.DailyBudget {
-		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "orchestration budget spent for today")
+	if why, err := p.orchBudgetSpent(ctx, ws); err != nil || why != "" {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", why+" for today")
 		return err
 	}
 	if p.Cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
 		// The container runs this very binary as its MCP bridge.
 		return fail(agentRun{}, state.Failed, "the orchestrator needs a Linux host with Docker (the daemon's binary runs inside the job container)")
 	}
-	work, missing, err := p.checkoutAll(ctx, dir)
+	names := p.Cfg.WorkspaceRepos(ws)
+	work, missing, err := p.checkoutAll(ctx, dir, names)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
-	x, err := p.withTools(sctx, dir, p.OrchestratorTools(j.ID))
+	x, err := p.withTools(sctx, dir, p.OrchestratorTools(j.ID, ws))
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	names := p.Cfg.RepoNames()
-	snapshot, _ := p.statusText(ctx)
+	snapshot, _ := p.statusText(ctx, ws)
 	prompt, err := p.renderStep(j, "orchestrate", nil, PromptData{Repo: strings.Join(names, ", "), Repos: names, Reasons: append(in.Reasons, missing...), Summary: in.Summary, Status: snapshot})
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
@@ -290,18 +369,17 @@ func (p *Pipeline) runOrchestrate(ctx context.Context, j *store.Job) error {
 	p.finish(ctx, j, run, state.Succeeded, string(norm), "")
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "orchestrator", JobID: &j.ID, Type: "run_summary", Reason: truncate(v.Summary, 2000)}), "AddEvent")
 	if in.Summary {
-		p.notify(ctx, "Daily summary\n\n"+v.Summary)
+		p.notify(ctx, p.forWorkspace(ws, "Daily summary")+"\n\n"+v.Summary)
 	}
 	return nil
 }
 
-// checkoutAll checks out each repo's base branch read-only for an agent
-// that reads code across them (the orchestrator, a chat): one repo in dir,
-// several each in a folder there named owner__name. A repo that can't be
-// checked out is left out, and missing says so, so one bad repo doesn't
-// stop the rest.
-func (p *Pipeline) checkoutAll(ctx context.Context, dir string) (work string, missing []string, err error) {
-	names := p.Cfg.RepoNames()
+// checkoutAll checks out the base branch of each of names read-only for
+// an agent that reads code across them (the orchestrator, a chat): one
+// repo in dir, several each in a folder there named owner__name. A repo
+// that can't be checked out is left out, and missing says so, so one bad
+// repo doesn't stop the rest.
+func (p *Pipeline) checkoutAll(ctx context.Context, dir string, names []string) (work string, missing []string, err error) {
 	for _, name := range names {
 		rc := p.repoConf(name)
 		sub := dir
@@ -372,16 +450,19 @@ func extractJSON(s string) string {
 	return s[i : j+1]
 }
 
-// statusText is the deterministic snapshot given to the orchestrator and
-// used by queue_status.
-func (p *Pipeline) statusText(ctx context.Context) (string, error) {
+// statusText is the deterministic snapshot given to workspace ws's
+// orchestrator and chats, and used by queue_status: its items, and the
+// queue and spend it shares with the others.
+func (p *Pipeline) statusText(ctx context.Context, ws string) (string, error) {
 	items, err := p.Store.ListItems(ctx)
 	if err != nil {
 		return "", err
 	}
 	byStage := map[state.Stage]int{}
 	for _, it := range items {
-		byStage[it.Stage]++
+		if p.Cfg.WorkspaceOf(it.Repo) == ws {
+			byStage[it.Stage]++
+		}
 	}
 	var stages []string
 	for st, n := range byStage {
@@ -391,10 +472,14 @@ func (p *Pipeline) statusText(ctx context.Context) (string, error) {
 	q, _ := p.Store.CountJobs(ctx, state.Queued, "")
 	r, _ := p.Store.CountJobs(ctx, state.Running, "")
 	spent, _ := p.buildSpend(ctx)
-	orch, _ := p.orchSpend(ctx)
-	out := fmt.Sprintf("items: %s\njobs: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (orchestration $%.2f of $%.2f)\nawaiting human: %d of max %d",
-		strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.Orchestrator.DailyBudget,
+	orch, _ := p.orchSpendIn(ctx, ws)
+	out := fmt.Sprintf("workspace: %s (%s)\nits items: %s\njobs, every workspace: queued=%d running=%d (max %d concurrent)\nspend today: $%.2f of $%.2f (this workspace's orchestration $%.2f of $%.2f)\nawaiting human here: %d (max %d across the factory)",
+		ws, strings.Join(p.Cfg.WorkspaceRepos(ws), ", "), strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.OrchestratorFor(ws).DailyBudget,
 		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax)
+	if w, _ := p.Cfg.WorkspaceConf(ws); w.DailyTotal > 0 {
+		mine, _ := p.Store.SpendOnRepos(ctx, store.Today(), p.Cfg.WorkspaceRepos(ws))
+		out += fmt.Sprintf("\nthis workspace's builds today: $%.2f of its $%.2f", mine, w.DailyTotal)
+	}
 	if limits, _ := p.Store.Limits(ctx); len(limits) > 0 {
 		out += "\nusage limits: " + store.FormatLimits(limits)
 	}
@@ -416,15 +501,35 @@ const reasonProp = `"reason":{"type":"string","description":"Why you are doing t
 // one item; past it, the item is the human's.
 const MaxOrchestratorRetries = 2
 
-// OrchestratorTools are the daemon's MCP tools for one orchestrate job.
-// Not available: merge, push, closing PRs, editing factory.yaml or prompts,
-// marking anything verified, unparking.
-func (p *Pipeline) OrchestratorTools(jobID int64) []mcp.Tool {
-	return p.toolsFor(jobID, "orchestrator")
+// OrchestratorTools are the daemon's MCP tools for one orchestrate job,
+// run for workspace ws. Not available: merge, push, closing PRs, editing
+// factory.yaml or prompts, marking anything verified, unparking.
+func (p *Pipeline) OrchestratorTools(jobID int64, ws string) []mcp.Tool {
+	return p.toolsFor(jobID, "orchestrator", ws)
 }
 
-// toolsFor is the orchestrator's tools, audited as actor's.
-func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
+// forWorkspace names workspace ws after what, when there's more than one.
+func (p *Pipeline) forWorkspace(ws, what string) string {
+	if len(p.Cfg.WorkspaceNames()) > 1 {
+		return what + " (" + ws + ")"
+	}
+	return what
+}
+
+// toolsFor is the orchestrator's tools, audited as actor's, for workspace
+// ws: they read and change its items and repos only.
+func (p *Pipeline) toolsFor(jobID int64, actor, ws string) []mcp.Tool {
+	// item is an item of the workspace, or why it can't be used.
+	item := func(ctx context.Context, id int64) (*store.WorkItem, error) {
+		it, err := p.Store.GetItem(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("no item %d", id)
+		}
+		if other := p.Cfg.WorkspaceOf(it.Repo); other != ws {
+			return nil, fmt.Errorf("refused: item %d is in workspace %s, and this run works on %s", id, other, ws)
+		}
+		return it, nil
+	}
 	// audit records a mutating call before it takes effect.
 	audit := func(ctx context.Context, tool string, itemID *int64, reason string, args json.RawMessage) error {
 		if strings.TrimSpace(reason) == "" {
@@ -450,7 +555,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 		Reason string `json:"reason"`
 	}
 	return []mcp.Tool{
-		{Name: "list_items", Description: "List work items, optionally only those in one stage.",
+		{Name: "list_items", Description: "List the workspace's work items, optionally only those in one stage.",
 			InputSchema: schema(`"stage":{"type":"string"}`),
 			Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				logRead(ctx, "list_items", raw)
@@ -482,7 +587,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				}
 				rows := []row{}
 				for _, it := range items {
-					rows = append(rows, row{it.ID, it.Repo, it.IssueNumber, it.Title, string(it.Stage), it.Complexity, it.Risk, it.Priority, it.PRNumber, it.ParentID})
+					if p.Cfg.WorkspaceOf(it.Repo) == ws {
+						rows = append(rows, row{it.ID, it.Repo, it.IssueNumber, it.Title, string(it.Stage), it.Complexity, it.Risk, it.Priority, it.PRNumber, it.ParentID})
+					}
 				}
 				b, _ := json.Marshal(rows)
 				return string(b), nil
@@ -495,9 +602,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
 				}
-				it, err := p.Store.GetItem(ctx, a.Item)
+				it, err := item(ctx, a.Item)
 				if err != nil {
-					return "", fmt.Errorf("no item %d", a.Item)
+					return "", err
 				}
 				deps, _ := p.Store.Dependencies(ctx, a.Item)
 				jobs, _ := p.Store.ListJobs(ctx, store.JobFilter{ItemID: a.Item, Limit: 20})
@@ -536,7 +643,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
 				}
-				repo, err := p.pickRepo(a.Repo)
+				repo, err := p.pickRepo(ws, a.Repo)
 				if err != nil {
 					return "", err
 				}
@@ -567,7 +674,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 			InputSchema: schema(""),
 			Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				logRead(ctx, "queue_status", raw)
-				return p.statusText(ctx)
+				return p.statusText(ctx, ws)
 			}},
 		{Name: "get_job_log", Description: "The last lines of a job's log.",
 			InputSchema: schema(`"job":{"type":"integer"},"lines":{"type":"integer"}`, "job"),
@@ -583,6 +690,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				j, err := p.Store.GetJob(ctx, a.Job)
 				if err != nil || j.LogPath == "" {
 					return "", fmt.Errorf("no log for job %d", a.Job)
+				}
+				if err := p.jobIn(ctx, j, ws); err != nil {
+					return "", err
 				}
 				if a.Lines <= 0 || a.Lines > 200 {
 					a.Lines = 50
@@ -605,9 +715,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					return "", errors.New("reason is required")
 				}
 				if a.Parent != 0 {
-					parent, err := p.Store.GetItem(ctx, a.Parent)
+					parent, err := item(ctx, a.Parent)
 					if err != nil {
-						return "", fmt.Errorf("refused: no parent item %d", a.Parent)
+						return "", fmt.Errorf("refused: parent: %w", err)
 					}
 					if a.Repo == "" {
 						a.Repo = parent.Repo // an epic's children go in its repo unless named
@@ -619,15 +729,16 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 						return "", fmt.Errorf("refused: item %d's sub-issues came from backlog grooming and wait for a human's approval; don't split it again", a.Parent)
 					}
 				}
-				repo, err := p.pickRepo(a.Repo)
+				repo, err := p.pickRepo(ws, a.Repo)
 				if err != nil {
 					return "", err
 				}
-				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
+				if err := p.checkDeps(ctx, ws, a.DependsOn); err != nil {
 					return "", err
 				}
 				since := time.Now().UTC().Format("2006-01-02") + "T00:00:00"
-				// Chat and the orchestrator share the cap.
+				// Chat and the orchestrator share the caps: the factory's, and
+				// the workspace's.
 				n := 0
 				for _, who := range []string{"orchestrator", "chat"} {
 					c, err := p.Store.CountEventsSince(ctx, who, "create_issue", since)
@@ -638,6 +749,13 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				}
 				if n >= p.Cfg.Orchestrator.DailyIssueCap {
 					return "", fmt.Errorf("refused: daily issue cap (%d) reached", p.Cfg.Orchestrator.DailyIssueCap)
+				}
+				mine, err := p.Store.CountWorkspaceEventsSince(ctx, "create_issue", ws, since, "orchestrator", "chat")
+				if err != nil {
+					return "", err
+				}
+				if c := p.Cfg.OrchestratorFor(ws).DailyIssueCap; mine >= c {
+					return "", fmt.Errorf("refused: %s's daily issue cap (%d) reached", ws, c)
 				}
 				labels, dropped := p.orchestratorLabels(a.Labels)
 				if err := audit(ctx, "create_issue", nil, a.Reason, raw); err != nil {
@@ -697,10 +815,10 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if strings.TrimSpace(a.Reason) == "" {
 					return "", errors.New("reason is required")
 				}
-				if _, err := p.Store.GetItem(ctx, a.Item); err != nil {
-					return "", fmt.Errorf("no item %d", a.Item)
+				if _, err := item(ctx, a.Item); err != nil {
+					return "", err
 				}
-				if err := p.checkDeps(ctx, a.DependsOn); err != nil {
+				if err := p.checkDeps(ctx, ws, a.DependsOn); err != nil {
 					return "", err
 				}
 				if err := p.Store.SetDependencies(ctx, a.Item, a.DependsOn, "orchestrator", a.Reason); err != nil {
@@ -719,8 +837,8 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
 				}
-				if _, err := p.Store.GetItem(ctx, a.Item); err != nil {
-					return "", fmt.Errorf("no item %d", a.Item)
+				if _, err := item(ctx, a.Item); err != nil {
+					return "", err
 				}
 				if a.Priority >= HealthPriority {
 					return "", fmt.Errorf("refused: priorities from %d up are kept for main health fixes", HealthPriority)
@@ -740,6 +858,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 					Reason     string `json:"reason"`
 				}
 				if err := json.Unmarshal(raw, &a); err != nil {
+					return "", err
+				}
+				if _, err := item(ctx, a.Item); err != nil {
 					return "", err
 				}
 				if err := p.checkEnqueue(ctx, a.Item, a.Stage); err != nil {
@@ -765,7 +886,7 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err != nil || j.ItemID == nil {
 					return "", fmt.Errorf("no item job %d", a.Job)
 				}
-				it, err := p.Store.GetItem(ctx, *j.ItemID)
+				it, err := item(ctx, *j.ItemID)
 				if err != nil {
 					return "", err
 				}
@@ -793,9 +914,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", err
 				}
-				it, err := p.Store.GetItem(ctx, a.Item)
+				it, err := item(ctx, a.Item)
 				if err != nil {
-					return "", fmt.Errorf("refused: no item %d", a.Item)
+					return "", fmt.Errorf("refused: %w", err)
 				}
 				if err := state.CheckStage(it.Stage, state.Epic); err != nil {
 					return "", fmt.Errorf("refused: item %d is %s; only a parked or untriaged item can be split", a.Item, it.Stage)
@@ -817,6 +938,9 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 			Handler: mutating(func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a itemArgs
 				if err := json.Unmarshal(raw, &a); err != nil {
+					return "", err
+				}
+				if _, err := item(ctx, a.Item); err != nil {
 					return "", err
 				}
 				if err := audit(ctx, "park", &a.Item, a.Reason, raw); err != nil {
@@ -842,12 +966,18 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 				if n >= p.Cfg.Orchestrator.NotifyPerHour {
 					return "", fmt.Errorf("refused: notification rate limit (%d per hour)", p.Cfg.Orchestrator.NotifyPerHour)
 				}
-				var item *int64
+				var about *int64
 				if a.Item != 0 {
-					item = &a.Item
+					if _, err := item(ctx, a.Item); err != nil {
+						return "", err
+					}
+					about = &a.Item
 				}
-				if err := audit(ctx, "notify_human", item, truncate(a.Message, 500), raw); err != nil {
+				if err := audit(ctx, "notify_human", about, truncate(a.Message, 500), raw); err != nil {
 					return "", err
+				}
+				if len(p.Cfg.WorkspaceNames()) > 1 {
+					a.Message = ws + ": " + a.Message
 				}
 				p.notify(ctx, truncate(a.Message, 2000))
 				return "sent", nil
@@ -855,13 +985,17 @@ func (p *Pipeline) toolsFor(jobID int64, actor string) []mcp.Tool {
 	}
 }
 
-// checkDeps refuses dependencies on missing items and on epics: an epic is
-// done only when its children are, so a child waiting on it waits forever.
-func (p *Pipeline) checkDeps(ctx context.Context, deps []int64) error {
+// checkDeps refuses dependencies on missing items, on another
+// workspace's, and on epics: an epic is done only when its children are,
+// so a child waiting on it waits forever.
+func (p *Pipeline) checkDeps(ctx context.Context, ws string, deps []int64) error {
 	for _, d := range deps {
 		it, err := p.Store.GetItem(ctx, d)
 		if err != nil {
 			return fmt.Errorf("refused: no item %d to depend on", d)
+		}
+		if other := p.Cfg.WorkspaceOf(it.Repo); other != ws {
+			return fmt.Errorf("refused: item %d is in workspace %s; depend only on %s's items", d, other, ws)
 		}
 		if it.Stage == state.Epic {
 			return fmt.Errorf("refused: item %d is an epic; depend on its children instead", d)
@@ -1088,16 +1222,24 @@ func (p *Pipeline) unblock(ctx context.Context) error {
 	return nil
 }
 
-// repoProp is the optional repo argument of tools that act on GitHub.
-const repoProp = `"repo":{"type":"string","description":"owner/name; defaults to the parent epic's repo, else the first configured repo"}`
+// repoProp is the repo argument of tools that act on GitHub.
+const repoProp = `"repo":{"type":"string","description":"owner/name, one of the workspace's repos; required when it has more than one (a child of an epic goes in the epic's repo unless named)"}`
 
-// pickRepo resolves a tool's repo argument to a configured repo.
-func (p *Pipeline) pickRepo(name string) (string, error) {
+// pickRepo resolves a tool's repo argument to one of workspace ws's repos.
+// In a workspace of several it must be named: nothing defaults to one of
+// them, so an issue never lands in a repo nobody chose.
+func (p *Pipeline) pickRepo(ws, name string) (string, error) {
+	repos := p.Cfg.WorkspaceRepos(ws)
 	if name == "" {
-		return p.Cfg.Repos[0].Name, nil
+		if len(repos) == 1 {
+			return repos[0], nil
+		}
+		return "", fmt.Errorf("refused: name the repo: workspace %s has %s", ws, strings.Join(repos, ", "))
 	}
-	r, ok := p.Cfg.RepoConf(name)
-	if !ok {
+	repo := ""
+	if r, ok := p.Cfg.RepoConf(name); ok {
+		repo = r.Name
+	} else {
 		// A GitLab repo named without its host, as owner/name.
 		var hits []string
 		for _, n := range p.Cfg.RepoNames() {
@@ -1105,12 +1247,37 @@ func (p *Pipeline) pickRepo(name string) (string, error) {
 				hits = append(hits, n)
 			}
 		}
-		if len(hits) == 1 {
-			return hits[0], nil
+		if len(hits) != 1 {
+			return "", fmt.Errorf("refused: %s is not one of workspace %s's repos (%s)", name, ws, strings.Join(repos, ", "))
 		}
-		return "", fmt.Errorf("refused: %s is not one of the factory's repos (%s)", name, strings.Join(p.Cfg.RepoNames(), ", "))
+		repo = hits[0]
 	}
-	return r.Name, nil
+	if other := p.Cfg.WorkspaceOf(repo); other != ws {
+		return "", fmt.Errorf("refused: %s is in workspace %s, and this works on %s (%s)", repo, other, ws, strings.Join(repos, ", "))
+	}
+	return repo, nil
+}
+
+// jobIn refuses a job outside workspace ws: one of another workspace's
+// items, or an orchestrator or chat run for another.
+func (p *Pipeline) jobIn(ctx context.Context, j *store.Job, ws string) error {
+	if j.ItemID != nil {
+		it, err := p.Store.GetItem(ctx, *j.ItemID)
+		if err != nil {
+			return fmt.Errorf("no item %d", *j.ItemID)
+		}
+		if other := p.Cfg.WorkspaceOf(it.Repo); other != ws {
+			return fmt.Errorf("refused: job %d is in workspace %s, and this run works on %s", j.ID, other, ws)
+		}
+		return nil
+	}
+	var in struct {
+		Workspace string `json:"workspace"`
+	}
+	if json.Unmarshal([]byte(j.Input), &in) != nil || in.Workspace != ws {
+		return fmt.Errorf("refused: job %d isn't one of workspace %s's", j.ID, ws)
+	}
+	return nil
 }
 
 // childItems are the items an item was split into.

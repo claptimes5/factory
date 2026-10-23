@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/claptimes5/factory/internal/config"
 	"github.com/claptimes5/factory/internal/state"
 	"github.com/claptimes5/factory/internal/store"
 )
@@ -18,20 +19,22 @@ import (
 // Chatter is the dashboard chat with the orchestrator's model, which
 // drafts issues for a person to create.
 type Chatter interface {
-	// Chat sends text and files to chat chatID (0 starts one) and starts
-	// the reply; an empty message asks again for a reply to the last one.
-	Chat(ctx context.Context, chatID int64, text string, files []store.Attachment) (chat, job int64, err error)
+	// Chat sends text and files to chat chatID (0 starts one, in
+	// workspace ws) and starts the reply; an empty message asks again for
+	// a reply to the last one. A chat stays in the workspace it started in.
+	Chat(ctx context.Context, ws string, chatID int64, text string, files []store.Attachment) (chat, job int64, err error)
 	// ChatFiles is the folder of the files attached to a message.
 	ChatFiles(chatID, msgID int64) string
-	// ChatUnavailable says why a chat can't reply now, or "".
-	ChatUnavailable(ctx context.Context) string
+	// ChatUnavailable says why a chat in workspace ws can't reply now, or "".
+	ChatUnavailable(ctx context.Context, ws string) string
 	// CreateDraft opens a draft as an issue the factory builds, if it is
 	// still the version the person read; a title or body given replaces
 	// the draft's.
 	CreateDraft(ctx context.Context, id int64, version, title, body string) (*store.IssueDraft, error)
 	DismissDraft(ctx context.Context, id int64) error
-	// OrchestrationSpend is today's spend against orchestrator.daily_budget.
-	OrchestrationSpend(ctx context.Context) (float64, error)
+	// OrchestrationSpend is today's spend on workspace ws's orchestrator
+	// and chats ("" for every workspace's, tuning's too).
+	OrchestrationSpend(ctx context.Context, ws string) (float64, error)
 }
 
 // OrchestratorInfo describes the orchestrator for the dashboard.
@@ -42,6 +45,8 @@ type OrchestratorInfo struct {
 	Every       string  // how often it runs on its own
 	RunBudget   float64 // dollars per run or chat reply
 	DailyBudget float64 // dollars per day across it, tuning and chat
+	// For is a workspace's orchestrator (may be nil: then the above).
+	For func(ws string) config.Orchestration
 }
 
 // APIChats is the chat tab: whether chat can reply, what it runs on, and
@@ -58,6 +63,7 @@ type APIChats struct {
 	DailyBudget float64     `json:"daily_budget_usd"`
 	SpentToday  float64     `json:"spent_today_usd"`
 	Chats       []APIChatAt `json:"chats"`
+	Workspace   string      `json:"workspace"` // the workspace these are of; "" for every one
 }
 
 // APIChatAt is one chat in the list.
@@ -71,11 +77,12 @@ type APIChatAt struct {
 // answering the last message, while it runs or when it failed; null once
 // it answered.
 type APIChat struct {
-	ID       int64            `json:"id"`
-	Title    string           `json:"title"`
-	Messages []APIChatMessage `json:"messages"`
-	Drafts   []APIDraft       `json:"drafts"`
-	Reply    *APIChatReply    `json:"reply"`
+	ID        int64            `json:"id"`
+	Title     string           `json:"title"`
+	Workspace string           `json:"workspace"` // the one it works in; "" for one from before workspaces
+	Messages  []APIChatMessage `json:"messages"`
+	Drafts    []APIDraft       `json:"drafts"`
+	Reply     *APIChatReply    `json:"reply"`
 }
 
 // APIChatMessage is one turn.
@@ -134,8 +141,16 @@ func (s *Server) routesChat(mux *http.ServeMux) {
 
 func (s *Server) apiChats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ws, ok := s.reqWorkspace(w, r)
+	if !ok {
+		return
+	}
 	o := s.Orchestrator
-	out := APIChats{Model: o.Model, Harness: o.Harness, On: o.On, Every: o.Every, RunBudget: o.RunBudget, DailyBudget: o.DailyBudget, Chats: []APIChatAt{}}
+	out := APIChats{Model: o.Model, Harness: o.Harness, On: o.On, Every: o.Every, RunBudget: o.RunBudget, DailyBudget: o.DailyBudget, Chats: []APIChatAt{}, Workspace: ws}
+	if o.For != nil && ws != "" {
+		f := o.For(ws)
+		out.On, out.Every, out.RunBudget, out.DailyBudget = f.On, f.Interval.String(), f.RunBudget, f.DailyBudget
+	}
 	for _, h := range s.Plans {
 		out.Plan = out.Plan || h == o.Harness
 	}
@@ -144,10 +159,15 @@ func (s *Server) apiChats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	out.Unavailable = s.Chat.ChatUnavailable(ctx)
+	if ws == "" {
+		out.Unavailable = "Choose a workspace to chat in."
+	} else {
+		out.Unavailable = s.Chat.ChatUnavailable(ctx, ws)
+	}
 	out.Available = out.Unavailable == ""
-	out.SpentToday, _ = s.Chat.OrchestrationSpend(ctx)
-	chats, err := s.Store.ListChats(ctx, 50)
+	out.SpentToday, _ = s.Chat.OrchestrationSpend(ctx, ws)
+	// A chat from before workspaces works in the factory's only one.
+	chats, err := s.Store.ListChatsIn(ctx, ws, ws != "" && ws == s.soleWorkspace(), 50)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -179,7 +199,7 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := APIChat{ID: c.ID, Title: c.Title, Messages: []APIChatMessage{}, Drafts: []APIDraft{}}
+	out := APIChat{ID: c.ID, Title: c.Title, Workspace: c.Workspace, Messages: []APIChatMessage{}, Drafts: []APIDraft{}}
 	for _, m := range msgs {
 		am := APIChatMessage{ID: m.ID, Role: m.Role, Text: m.Text, At: m.At, Files: []string{}}
 		if s.Chat != nil && m.Role == "user" {
@@ -266,15 +286,20 @@ func (s *Server) apiSendChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		ChatID int64              `json:"chat_id"`
-		Text   string             `json:"text"`
-		Files  []store.Attachment `json:"files"`
+		ChatID    int64              `json:"chat_id"`
+		Text      string             `json:"text"`
+		Workspace string             `json:"workspace"` // for a new chat; one already started keeps its own
+		Files     []store.Attachment `json:"files"`
 	}
 	if err := s.readBodyUpTo(r, &in, maxAttachBody); err != nil {
 		apiErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	chat, job, err := s.Chat.Chat(r.Context(), in.ChatID, in.Text, in.Files)
+	if in.Workspace != "" && !s.hasWorkspace(in.Workspace) {
+		apiErr(w, http.StatusBadRequest, "no workspace "+in.Workspace)
+		return
+	}
+	chat, job, err := s.Chat.Chat(r.Context(), in.Workspace, in.ChatID, in.Text, in.Files)
 	if err != nil {
 		apiErr(w, http.StatusConflict, err.Error())
 		return

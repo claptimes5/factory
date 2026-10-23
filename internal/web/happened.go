@@ -36,6 +36,8 @@ type APISplit struct {
 	Prompt string `json:"prompt"`
 	// Unavailable says why chat can't take it now, or "".
 	Unavailable string `json:"unavailable"`
+	// Workspace is the item's, which the chat that splits it starts in.
+	Workspace string `json:"workspace"`
 }
 
 // happenedJobs is how many of the latest jobs that ended badly it tells.
@@ -265,11 +267,11 @@ func (s *Server) splitOffer(ctx context.Context, it *store.WorkItem, jobs []*sto
 	if failed != nil && !s.sizeStop(failed) {
 		return nil
 	}
-	sp := &APISplit{Prompt: SplitPrompt(it, h.Summary, failed)}
+	sp := &APISplit{Prompt: SplitPrompt(it, h.Summary, failed), Workspace: s.workspaceOf(it.Repo)}
 	if s.Chat == nil {
 		sp.Unavailable = "Chat isn't available in this dashboard."
 	} else {
-		sp.Unavailable = s.Chat.ChatUnavailable(ctx)
+		sp.Unavailable = s.Chat.ChatUnavailable(ctx, sp.Workspace)
 	}
 	return sp
 }

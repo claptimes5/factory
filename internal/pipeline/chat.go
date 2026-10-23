@@ -26,10 +26,12 @@ import (
 // for a free job slot, since it only reads, but one is written at a time,
 // on the orchestrator's daily budget.
 
-// ChatInput is carried by a chat job: the chat and the message it answers.
+// ChatInput is carried by a chat job: the chat, the message it answers,
+// and the workspace the chat works in.
 type ChatInput struct {
-	Chat    int64 `json:"chat"`
-	Message int64 `json:"message"`
+	Chat      int64  `json:"chat"`
+	Message   int64  `json:"message"`
+	Workspace string `json:"workspace"`
 }
 
 // Limits on what a person sends and on what a reply reads of the chat.
@@ -42,8 +44,8 @@ const (
 // read, and create_issue and close_split to split an item.
 var chatTools = []string{"list_items", "get_item", "get_issue", "queue_status", "get_job_log", "create_issue", "close_split"}
 
-// ChatUnavailable says why a chat can't reply now, or "".
-func (p *Pipeline) ChatUnavailable(ctx context.Context) string {
+// ChatUnavailable says why a chat in workspace ws can't reply now, or "".
+func (p *Pipeline) ChatUnavailable(ctx context.Context, ws string) string {
 	r, ok := p.Cfg.Routing["orchestrate"]
 	if !ok {
 		return "Chat runs on the orchestrator's model, and routing.orchestrate isn't set."
@@ -60,12 +62,12 @@ func (p *Pipeline) ChatUnavailable(ctx context.Context) string {
 	if p.restart.Load() {
 		return "The factory is restarting to apply new settings. Send your message once it's back."
 	}
-	spent, err := p.orchSpend(ctx)
+	why, err := p.orchBudgetSpent(ctx, ws)
 	if err != nil {
 		return err.Error()
 	}
-	if spent >= p.Cfg.Orchestrator.DailyBudget {
-		return fmt.Sprintf("Today's orchestration budget is spent ($%.2f of $%.2f). Chat is back tomorrow, or raise orchestrator.daily_budget in Settings.", spent, p.Cfg.Orchestrator.DailyBudget)
+	if why != "" {
+		return "Chat is paused: " + why + " today. It's back tomorrow, or raise orchestrator.daily_budget in Settings."
 	}
 	if why := p.harnessHeld(ctx, &store.Job{}, r.Harness); why != "" {
 		return "Chat can't reply now: " + why + "."
@@ -74,10 +76,11 @@ func (p *Pipeline) ChatUnavailable(ctx context.Context) string {
 }
 
 // Chat sends a person's message, with any files attached, to chat chatID
-// (0 starts a new chat) and starts the run that replies: it returns the
-// chat, new when none was given, and the reply's job. An empty message
-// asks again for a reply to the chat's last message, when it has none.
-func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
+// (0 starts a new chat, in workspace ws) and starts the run that replies:
+// it returns the chat, new when none was given, and the reply's job. An
+// empty message asks again for a reply to the chat's last message, when
+// it has none. A chat stays in the workspace it started in.
+func (p *Pipeline) Chat(ctx context.Context, ws string, chatID int64, text string, files []store.Attachment) (int64, int64, error) {
 	text = strings.TrimSpace(text)
 	if len(text) > maxChatMessage {
 		return 0, 0, fmt.Errorf("that message is too long (%d bytes; the most is %d)", len(text), maxChatMessage)
@@ -86,11 +89,28 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string, files []
 		return 0, 0, err
 	}
 	again := text == "" && len(files) == 0
+	if chatID != 0 {
+		c, err := p.Store.GetChat(ctx, chatID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("no chat %d", chatID)
+		}
+		if ws, err = p.chatWorkspace(c); err != nil {
+			return 0, 0, err
+		}
+	} else if ws == "" {
+		if names := p.Cfg.WorkspaceNames(); len(names) == 1 {
+			ws = names[0]
+		} else {
+			return 0, 0, fmt.Errorf("say which workspace the chat is in: one of %s", strings.Join(names, ", "))
+		}
+	} else if _, ok := p.Cfg.WorkspaceConf(ws); !ok {
+		return 0, 0, fmt.Errorf("no workspace %q", ws)
+	}
 	// Checked and started under the scheduler's lock, so no job claims a
 	// one-at-a-time harness between the check and the start.
 	ctx, unlock := p.lockClaims(ctx)
 	defer unlock()
-	if why := p.ChatUnavailable(ctx); why != "" {
+	if why := p.ChatUnavailable(ctx, ws); why != "" {
 		return 0, 0, errors.New(why)
 	}
 	jctx, release, err := p.holdChatSlot()
@@ -119,13 +139,11 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string, files []
 		if title == "" {
 			title = files[0].Name
 		}
-		id, err := p.Store.NewChat(ctx, chatTitle(title))
+		id, err := p.Store.NewChatIn(ctx, chatTitle(title), ws)
 		if err != nil {
 			return 0, 0, err
 		}
 		chatID = id
-	} else if _, err := p.Store.GetChat(ctx, chatID); err != nil {
-		return 0, 0, fmt.Errorf("no chat %d", chatID)
 	}
 	if again {
 		msgs, err := p.Store.ChatMessages(ctx, chatID)
@@ -148,7 +166,7 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string, files []
 	}
 	r := p.Cfg.Routing["orchestrate"]
 	fast := r.FastFor(r.Harness, r.Model)
-	in, _ := json.Marshal(ChatInput{Chat: chatID, Message: msgID})
+	in, _ := json.Marshal(ChatInput{Chat: chatID, Message: msgID, Workspace: ws})
 	j, err := p.Store.StartJob(ctx, store.Job{Kind: store.KindChat, Harness: r.Harness, Model: r.Model, Effort: r.Effort, Fast: fast,
 		Skillset: r.Skills, Route: "orchestrate", BudgetUSD: p.Cfg.FastBudget(p.Cfg.Orchestrator.RunBudget, fast), Priority: 10, Input: string(in)})
 	if err != nil {
@@ -161,6 +179,21 @@ func (p *Pipeline) Chat(ctx context.Context, chatID int64, text string, files []
 		p.runJob(jctx, j)
 	}()
 	return chatID, j.ID, nil
+}
+
+// chatWorkspace is the workspace chat c works in: its own, or, for a chat
+// from before workspaces, the factory's only one.
+func (p *Pipeline) chatWorkspace(c *store.Chat) (string, error) {
+	if c.Workspace != "" {
+		if _, ok := p.Cfg.WorkspaceConf(c.Workspace); !ok {
+			return "", fmt.Errorf("chat %d's workspace %s isn't in factory.yaml any more: start a new chat", c.ID, c.Workspace)
+		}
+		return c.Workspace, nil
+	}
+	if names := p.Cfg.WorkspaceNames(); len(names) == 1 {
+		return names[0], nil
+	}
+	return "", fmt.Errorf("chat %d is from before workspaces, and the factory has several now: start a new chat in the one you mean", c.ID)
 }
 
 // errChatClosed refuses a chat before the daemon has recovered from its
@@ -246,9 +279,19 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 		p.finish(ctx, j, run, st, "", msg)
 		return nil // the person sends it again
 	}
+	ws := in.Workspace
+	if ws == "" { // a reply queued before workspaces
+		c, err := p.Store.GetChat(ctx, in.Chat)
+		if err == nil {
+			ws, err = p.chatWorkspace(c)
+		}
+		if err != nil {
+			return fail(agentRun{}, state.Failed, err.Error())
+		}
+	}
 	// Checked again here: a reply queued again after a restart waits.
-	if spent, err := p.orchSpend(ctx); err != nil || spent >= p.Cfg.Orchestrator.DailyBudget {
-		p.finish(ctx, j, agentRun{}, state.Cancelled, "", "orchestration budget spent for today")
+	if why, err := p.orchBudgetSpent(ctx, ws); err != nil || why != "" {
+		p.finish(ctx, j, agentRun{}, state.Cancelled, "", why+" for today")
 		return err
 	}
 	if p.Cfg.Runner.Kind == "docker" && runtime.GOOS != "linux" {
@@ -274,7 +317,8 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	work, missing, err := p.checkoutAll(ctx, dir)
+	names := p.Cfg.WorkspaceRepos(ws)
+	work, missing, err := p.checkoutAll(ctx, dir, names)
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
@@ -286,12 +330,11 @@ func (p *Pipeline) runChat(ctx context.Context, j *store.Job) error {
 	}
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
-	x, err := p.withTools(sctx, dir, p.ChatTools(j.ID))
+	x, err := p.withTools(sctx, dir, p.ChatTools(j.ID, ws))
 	if err != nil {
 		return fail(agentRun{}, state.Failed, err.Error())
 	}
-	snapshot, _ := p.statusText(ctx)
-	names := p.Cfg.RepoNames()
+	snapshot, _ := p.statusText(ctx, ws)
 	d := ChatPrompt{Repo: strings.Join(names, ", "), Repos: names, Missing: missing, Status: snapshot,
 		Labels: strings.Join(p.Cfg.Orchestrator.Labels, ", "), Drafts: chatDrafts(drafts), Earlier: chatEarlier(earlier, files),
 		Message: fenced(message), Files: attachedNote(files[in.Message])}
@@ -397,10 +440,10 @@ func chatDrafts(ds []store.IssueDraft) string {
 	return b.String()
 }
 
-// ChatTools are the tools of the run replying in a chat.
-func (p *Pipeline) ChatTools(jobID int64) []mcp.Tool {
+// ChatTools are the tools of the run replying in a chat in workspace ws.
+func (p *Pipeline) ChatTools(jobID int64, ws string) []mcp.Tool {
 	var out []mcp.Tool
-	for _, t := range p.toolsFor(jobID, "chat") {
+	for _, t := range p.toolsFor(jobID, "chat", ws) {
 		if slices.Contains(chatTools, t.Name) {
 			out = append(out, t)
 		}
@@ -408,9 +451,9 @@ func (p *Pipeline) ChatTools(jobID int64) []mcp.Tool {
 	return out
 }
 
-// checkDraft checks a draft as create_issue checks an issue, fills in its
-// repo, and keeps only the labels it may carry.
-func (p *Pipeline) checkDraft(ctx context.Context, d store.IssueDraft) (store.IssueDraft, []string, error) {
+// checkDraft checks a draft as create_issue checks an issue, in workspace
+// ws, fills in its repo, and keeps only the labels it may carry.
+func (p *Pipeline) checkDraft(ctx context.Context, ws string, d store.IssueDraft) (store.IssueDraft, []string, error) {
 	d.Title, d.Body = strings.TrimSpace(d.Title), strings.TrimSpace(d.Body)
 	if d.Title == "" || d.Body == "" {
 		return d, nil, errors.New("a draft needs a title and a body")
@@ -423,6 +466,9 @@ func (p *Pipeline) checkDraft(ctx context.Context, d store.IssueDraft) (store.Is
 		if err != nil {
 			return d, nil, fmt.Errorf("no parent item %d", d.Parent)
 		}
+		if other := p.Cfg.WorkspaceOf(parent.Repo); other != ws {
+			return d, nil, fmt.Errorf("parent item %d is in workspace %s, and the chat is in %s", d.Parent, other, ws)
+		}
 		if d.Repo == "" {
 			d.Repo = parent.Repo
 		}
@@ -432,12 +478,12 @@ func (p *Pipeline) checkDraft(ctx context.Context, d store.IssueDraft) (store.Is
 			return d, nil, fmt.Errorf("item %d's sub-issues came from backlog grooming and wait for a human's approval; don't split it again", d.Parent)
 		}
 	}
-	repo, err := p.pickRepo(d.Repo)
+	repo, err := p.pickRepo(ws, d.Repo)
 	if err != nil {
 		return d, nil, err
 	}
 	d.Repo = repo
-	if err := p.checkDeps(ctx, d.DependsOn); err != nil {
+	if err := p.checkDeps(ctx, ws, d.DependsOn); err != nil {
 		return d, nil, err
 	}
 	keep, dropped := p.orchestratorLabels(d.Labels)
@@ -475,7 +521,15 @@ func (p *Pipeline) CreateDraft(ctx context.Context, id int64, seen, title, body 
 		d.Body = body
 	}
 	// Checked again: items, repos and labels may have changed since.
-	checked, _, err := p.checkDraft(ctx, *d)
+	c, err := p.Store.GetChat(ctx, d.ChatID)
+	if err != nil {
+		return nil, fmt.Errorf("no chat %d", d.ChatID)
+	}
+	ws, err := p.chatWorkspace(c)
+	if err != nil {
+		return nil, err
+	}
+	checked, _, err := p.checkDraft(ctx, ws, *d)
 	if err != nil {
 		return nil, err
 	}
@@ -521,10 +575,14 @@ func (p *Pipeline) CreateDraft(ctx context.Context, id int64, seen, title, body 
 	return p.Store.GetDraft(ctx, id)
 }
 
-// OrchestrationSpend is today's spend on the orchestrator, tuning and
-// chat, against orchestrator.daily_budget.
-func (p *Pipeline) OrchestrationSpend(ctx context.Context) (float64, error) {
-	return p.orchSpend(ctx)
+// OrchestrationSpend is today's spend on workspace ws's orchestrator and
+// chats, or with ws "", every workspace's and tuning's, against
+// orchestrator.daily_budget.
+func (p *Pipeline) OrchestrationSpend(ctx context.Context, ws string) (float64, error) {
+	if ws == "" {
+		return p.orchSpend(ctx)
+	}
+	return p.orchSpendIn(ctx, ws)
 }
 
 // DismissDraft sets a draft aside without opening it.

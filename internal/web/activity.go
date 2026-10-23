@@ -34,7 +34,11 @@ type APIActivity struct {
 
 func (s *Server) apiActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	repo := r.URL.Query().Get("repo")
+	repo, ws := r.URL.Query().Get("repo"), r.URL.Query().Get("workspace")
+	if ws != "" && !s.hasWorkspace(ws) {
+		apiErr(w, http.StatusBadRequest, "no workspace "+ws)
+		return
+	}
 	evs, err := s.Store.RecentEvents(ctx, 500)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
@@ -66,6 +70,16 @@ func (s *Server) apiActivity(w http.ResponseWriter, r *http.Request) {
 			if j, seen = jobs[*e.JobID]; !seen {
 				j, _ = s.Store.GetJob(ctx, *e.JobID)
 				jobs[*e.JobID] = j
+			}
+		}
+		// A workspace's feed keeps its items and its orchestrator's runs, and
+		// the factory-wide lines.
+		if ws != "" {
+			if it != nil && s.workspaceOf(it.Repo) != ws {
+				continue
+			}
+			if other := jobWorkspace(j); it == nil && other != "" && other != ws {
+				continue
 			}
 		}
 		text, tone := describe(e, it, j)

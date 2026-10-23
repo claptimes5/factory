@@ -51,7 +51,7 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 		}
 		return `{"reply":"Drafted Add."}`, nil
 	}
-	chat, job, err := e.p.Chat(ctx, 0, "We need an Add function.", nil)
+	chat, job, err := e.p.Chat(ctx, "", 0, "We need an Add function.", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestChatDraftsAndAPersonCreates(t *testing.T) {
 	}
 
 	// The next turn reads the conversation and the drafts.
-	if _, _, err := e.p.Chat(ctx, chat, "Make it Sub too.", nil); err != nil {
+	if _, _, err := e.p.Chat(ctx, "", chat, "Make it Sub too.", nil); err != nil {
 		t.Fatal(err)
 	}
 	e.p.wg.Wait()
@@ -122,7 +122,7 @@ func TestChatGivesTheReplyItsAttachedFiles(t *testing.T) {
 		reqs = append(reqs, req)
 		return `{"reply":"Seen."}`, nil
 	}
-	chat, _, err := e.p.Chat(ctx, 0, "", []store.Attachment{{Name: "shot.png", Data: []byte("png")}, {Name: "../../.env", Data: []byte("log")}})
+	chat, _, err := e.p.Chat(ctx, "", 0, "", []store.Attachment{{Name: "shot.png", Data: []byte("png")}, {Name: "../../.env", Data: []byte("log")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,14 +148,14 @@ func TestChatGivesTheReplyItsAttachedFiles(t *testing.T) {
 		t.Errorf("title = %q", c.Title)
 	}
 
-	if _, _, err := e.p.Chat(ctx, chat, "And now?", nil); err != nil {
+	if _, _, err := e.p.Chat(ctx, "", chat, "And now?", nil); err != nil {
 		t.Fatal(err)
 	}
 	e.p.wg.Wait()
 	if !strings.Contains(reqs[1].Prompt, "(attached `") || len(reqs[1].Images) != 0 {
 		t.Errorf("a later turn lost the earlier files, or attached them again: %v\n%s", reqs[1].Images, reqs[1].Prompt)
 	}
-	if _, _, err := e.p.Chat(ctx, chat, "big", []store.Attachment{{Name: "a", Data: make([]byte, maxAttachBytes+1)}}); err == nil {
+	if _, _, err := e.p.Chat(ctx, "", chat, "big", []store.Attachment{{Name: "a", Data: make([]byte, maxAttachBytes+1)}}); err == nil {
 		t.Error("files over the limit were taken")
 	}
 }
@@ -166,7 +166,7 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := setup(t)
-	if _, _, err := e.p.Chat(ctx, 0, "Before the daemon is up", nil); !errors.Is(err, errChatClosed) {
+	if _, _, err := e.p.Chat(ctx, "", 0, "Before the daemon is up", nil); !errors.Is(err, errChatClosed) {
 		t.Errorf("a chat before the daemon recovered = %v", err)
 	}
 	e.p.openChat(ctx)
@@ -177,7 +177,7 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 		}
 		return `{"reply":"Here."}`, nil
 	}
-	chat, job, err := e.p.Chat(ctx, 0, "What's stuck?", nil)
+	chat, job, err := e.p.Chat(ctx, "", 0, "What's stuck?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 		t.Fatalf("job = %+v", j)
 	}
 	fail = false
-	if _, again, err := e.p.Chat(ctx, chat, "", nil); err != nil || again == job {
+	if _, again, err := e.p.Chat(ctx, "", chat, "", nil); err != nil || again == job {
 		t.Fatalf("asking again = %d, %v", again, err)
 	}
 	e.p.wg.Wait()
@@ -194,10 +194,10 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 	if len(msgs) != 2 || msgs[0].Text != "What's stuck?" || msgs[1].Text != "Here." {
 		t.Fatalf("messages = %+v", msgs)
 	}
-	if _, _, err := e.p.Chat(ctx, chat, "", nil); err == nil || !strings.Contains(err.Error(), "nothing to reply to") {
+	if _, _, err := e.p.Chat(ctx, "", chat, "", nil); err == nil || !strings.Contains(err.Error(), "nothing to reply to") {
 		t.Errorf("asking again with nothing unanswered = %v", err)
 	}
-	if _, _, err := e.p.Chat(ctx, 0, "", nil); err == nil {
+	if _, _, err := e.p.Chat(ctx, "", 0, "", nil); err == nil {
 		t.Error("an empty first message was accepted")
 	}
 
@@ -206,17 +206,17 @@ func TestChatRetryOneAtATimeAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.p.Chat(ctx, chat, "And now?", nil); err == nil || !strings.Contains(err.Error(), "still being written") {
+	if _, _, err := e.p.Chat(ctx, "", chat, "And now?", nil); err == nil || !strings.Contains(err.Error(), "still being written") {
 		t.Errorf("a second reply at once = %v", err)
 	}
 	e.p.Store.FinishJob(ctx, running.ID, store.Result{State: state.Cancelled})
 
 	// Its spend is the orchestrator's.
 	e.p.Cfg.Orchestrator.DailyBudget = 0.05 // the reply above cost $0.10
-	if why := e.p.ChatUnavailable(ctx); !strings.Contains(why, "orchestration budget is spent") {
+	if why := e.p.ChatUnavailable(ctx, "r"); !strings.Contains(why, "orchestration budget is spent") {
 		t.Errorf("unavailable = %q", why)
 	}
-	if _, _, err := e.p.Chat(ctx, chat, "And now?", nil); err == nil {
+	if _, _, err := e.p.Chat(ctx, "", chat, "And now?", nil); err == nil {
 		t.Error("a reply started past the budget")
 	}
 	if n, _ := e.p.Store.CountEventsSince(ctx, "orchestrator", "create_issue", "2000-01-01"); n != 0 {
@@ -281,7 +281,7 @@ func TestChatSurvivesAStop(t *testing.T) {
 		<-hold
 		return `{"reply":"ok"}`, nil
 	}
-	if _, _, err := e.p.Chat(ctx, chat, "hi", nil); err != nil {
+	if _, _, err := e.p.Chat(ctx, "", chat, "hi", nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.p.Running(); n != 1 {
@@ -292,7 +292,7 @@ func TestChatSurvivesAStop(t *testing.T) {
 	}
 	e.p.mu.Unlock()
 	e.p.closeChat()
-	if _, _, err := e.p.Chat(ctx, chat, "again", nil); !errors.Is(err, errChatClosed) {
+	if _, _, err := e.p.Chat(ctx, "", chat, "again", nil); !errors.Is(err, errChatClosed) {
 		t.Errorf("a chat while stopping = %v", err)
 	}
 	close(hold)

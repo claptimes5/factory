@@ -78,24 +78,28 @@ func (p *Pipeline) mergesItself(ctx context.Context, it *store.WorkItem) bool {
 func startOfDay() string { return time.Now().UTC().Format("2006-01-02") + "T00:00:00" }
 
 // selfStartRoom says why no more work may start on its own today in repo,
-// or "": a tripped breaker, or its daily cap and budget for self-started
-// work.
+// or "": a tripped breaker, or the daily cap and budget for self-started
+// work, which its workspace's repos share.
 func (p *Pipeline) selfStartRoom(ctx context.Context, repo string) (string, error) {
 	if p.breakerTripped(ctx, repo) {
 		return "auto-merge is off after a revert or a broken main, which stops it starting its own work until it's reset", nil
 	}
 	ss := p.repoConf(repo).SelfStart
 	since := startOfDay()
-	n, err := p.Store.CountEventsFor(ctx, "self_started", repo, since)
-	if err != nil {
-		return "", err
+	n, spent := 0, 0.0
+	for _, r := range p.sameWorkspace(repo) {
+		c, err := p.Store.CountEventsFor(ctx, "self_started", r, since)
+		if err != nil {
+			return "", err
+		}
+		v, err := p.Store.SpendByApprovers(ctx, r, since, selfApprovers())
+		if err != nil {
+			return "", err
+		}
+		n, spent = n+c, spent+v
 	}
 	if n >= ss.DailyCap() {
 		return fmt.Sprintf("%d started on their own today (self_start.daily)", n), nil
-	}
-	spent, err := p.Store.SpendByApprovers(ctx, repo, since, selfApprovers())
-	if err != nil {
-		return "", err
 	}
 	if b := ss.BudgetUSD(p.Cfg.Budgets.DailyTotal); spent >= b {
 		return fmt.Sprintf("$%.2f of its $%.2f a day for work it starts itself is spent (self_start.budget)", spent, b), nil

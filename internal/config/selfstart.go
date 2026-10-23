@@ -51,17 +51,18 @@ func (s *SelfStart) BudgetUSD(dailyTotal float64) float64 {
 	return dailyTotal / 5
 }
 
-func (s *SelfStart) check(repo string) error {
+// check reports what's wrong with it; where names it, such as repos[o/r].
+func (s *SelfStart) check(where string) error {
 	if s == nil {
 		return nil
 	}
 	for _, src := range s.Sources {
 		if !slices.Contains(SelfStartSources, src) {
-			return fmt.Errorf("repos[%s].self_start.sources: %q isn't one of %v", repo, src, SelfStartSources)
+			return fmt.Errorf("%s.self_start.sources: %q isn't one of %v", where, src, SelfStartSources)
 		}
 	}
 	if s.Daily < 0 || s.Budget != nil && *s.Budget < 0 {
-		return fmt.Errorf("repos[%s].self_start: daily and budget can't be negative", repo)
+		return fmt.Errorf("%s.self_start: daily and budget can't be negative", where)
 	}
 	return nil
 }

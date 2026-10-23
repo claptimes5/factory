@@ -178,7 +178,7 @@ func TestOrchestratorOnCodex(t *testing.T) {
 		called = true
 		return `{"summary":"all quiet"}`, nil
 	}
-	if err := e.p.Orchestrate(ctx, "test", false); err != nil {
+	if err := e.p.Orchestrate(ctx, "r", "test", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.p.Drain(ctx); err != nil {
