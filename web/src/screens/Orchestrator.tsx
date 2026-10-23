@@ -1,5 +1,6 @@
 import { useSearchParams, Link } from "react-router";
 import { useFeed } from "@/api/client";
+import { useScope } from "@/lib/workspace";
 import { Empty, ErrorBox, Loading, PageTitle } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/card";
 import { ago, cn } from "@/lib/utils";
@@ -44,7 +45,8 @@ export function OrchestratorScreen() {
 export function Decisions() {
   const [params, setParams] = useSearchParams();
   const item = Number(params.get("item")) || undefined;
-  const { data, error, isLoading } = useFeed(item);
+  const { workspace } = useScope();
+  const { data, error, isLoading } = useFeed(item, item ? "" : workspace);
   const types = [...new Set((data?.events ?? []).map((e) => e.type))].sort();
   const type = params.get("type") ?? "";
   const events = (data?.events ?? []).filter((e) => !type || e.type === type);

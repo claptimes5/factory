@@ -188,7 +188,7 @@ test("Home shows what needs you one decision at a time, reviews first, with the 
 test("Home says what went live since you looked, until you dismiss it", async ({ page }) => {
   let dismissed = false;
   await page.route(/\/api\/v1\/home$/, async (route) => {
-    const went_live = dismissed ? [] : [{ id: 1, title: "Fix flaky tests", ref: "api#106" }, { id: 2, title: "Start a feature map", ref: "web#7" }];
+    const went_live = dismissed ? [] : [{ id: 1, title: "Fix flaky tests", ref: "api#106", repo: "acme/api" }, { id: 2, title: "Start a feature map", ref: "web#7", repo: "acme/web" }];
     await route.fulfill({ json: { seen_at: "2026-10-20T08:00:00Z", went_live } });
   });
   await page.route(/\/api\/v1\/home\/seen$/, async (route) => {

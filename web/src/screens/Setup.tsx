@@ -9,6 +9,7 @@ import type { Notice } from "@/components/Notices";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ago, cn, repoName, shortSha } from "@/lib/utils";
+import { useScope } from "@/lib/workspace";
 
 type Readiness = components["schemas"]["Readiness"];
 type RepoReadiness = components["schemas"]["RepoReadiness"];
@@ -794,10 +795,13 @@ function RepoCard({ r, data, many }: { r: RepoReadiness; data: Readiness; many: 
 
 export function SetupScreen() {
   const { data, error, isLoading } = useReadiness();
+  const { inScope } = useScope();
   if (isLoading) return <Loading what="Reading the readiness checks" />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
-  const checked = data.repos.filter((r) => r.state !== "unchecked");
+  // The workspace on screen's repos.
+  const repos = data.repos.filter((r) => inScope(r.repo));
+  const checked = repos.filter((r) => r.state !== "unchecked");
   const ready = checked.filter((r) => r.state === "ready").length;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5" data-testid="setup">
@@ -806,7 +810,7 @@ export function SetupScreen() {
         <p className="-mt-2 text-sm text-text-2">
           Before the factory can work on real tasks, each repo's install and checks must pass on its base branch, and its tests must give the same answer
           every run. This is where each repo stands.
-          {checked.length > 0 && ` ${ready} of ${data.repos.length} ${data.repos.length === 1 ? "repo is" : "repos are"} ready.`}
+          {checked.length > 0 && ` ${ready} of ${repos.length} ${repos.length === 1 ? "repo is" : "repos are"} ready.`}
         </p>
         <p className="mt-1 text-sm text-text-2">
           Repos, access and keys are on the{" "}
@@ -816,8 +820,8 @@ export function SetupScreen() {
           .
         </p>
       </div>
-      {data.repos.map((r) => (
-        <RepoCard key={r.repo} r={r} data={data} many={data.repos.length > 1} />
+      {repos.map((r) => (
+        <RepoCard key={r.repo} r={r} data={data} many={repos.length > 1} />
       ))}
     </div>
   );

@@ -155,8 +155,11 @@ dashboard work is.
 
 1. **A factory with several repos and no `workspaces:`.** Each repo
    becomes its own workspace: the safest default.
-2. **An "All workspaces" view,** for Home and the Inbox only, so nothing
-   waiting on you hides in another workspace. Every other screen, Ask
-   included, always has one workspace.
+2. **Nothing hides in another workspace.** Built as a line on Home and the
+   Inbox, "In shop, 2 things need you. Switch to it", rather than an "All
+   workspaces" view: every screen, Ask included, always shows one
+   workspace. The factory-wide notices (the disk, setup) show everywhere;
+   a repo's (its main, its breaker) in its workspace. Spend stays the
+   factory's, with the workspace's own budget in the sidebar.
 3. **Who may add or change a workspace from the browser:** the same rule
    as saving settings, a password or the factory's own machine.

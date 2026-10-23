@@ -1,11 +1,14 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/claptimes5/factory/internal/config"
+	"github.com/claptimes5/factory/internal/store"
 )
 
 // Workspace is one of the factory's workspaces, as the dashboard scopes
@@ -13,6 +16,48 @@ import (
 type Workspace struct {
 	Name  string
 	Repos []string
+	// DailyCap is its own daily budget for builds and reviews, 0 for none.
+	DailyCap float64
+}
+
+// APIWorkspace is a workspace for the dashboard's switcher.
+type APIWorkspace struct {
+	Name  string   `json:"name"`
+	Repos []string `json:"repos"`
+	// DailyCapUSD is its own daily budget (0 for none), and SpentTodayUSD
+	// what its builds and reviews cost today.
+	DailyCapUSD   float64 `json:"daily_cap_usd"`
+	SpentTodayUSD float64 `json:"spent_today_usd"`
+}
+
+// eventWorkspace is the workspace an event is of: its item's, or the one
+// its orchestrator or chat job ran for; "" for neither.
+func (s *Server) eventWorkspace(ctx context.Context, e store.Event) string {
+	if e.ItemID != nil {
+		if it, err := s.Store.GetItem(ctx, *e.ItemID); err == nil {
+			return s.workspaceOf(it.Repo)
+		}
+		return ""
+	}
+	if e.JobID != nil {
+		if j, err := s.Store.GetJob(ctx, *e.JobID); err == nil {
+			return jobWorkspace(j)
+		}
+	}
+	return ""
+}
+
+// jobWorkspace is the workspace an orchestrator or chat job ran for, from
+// its input; "" for any other job.
+func jobWorkspace(j *store.Job) string {
+	if j == nil || j.ItemID != nil {
+		return ""
+	}
+	var in struct {
+		Workspace string `json:"workspace"`
+	}
+	_ = json.Unmarshal([]byte(j.Input), &in)
+	return in.Workspace
 }
 
 // workspaces are the factory's workspaces in order: Workspaces, or, when

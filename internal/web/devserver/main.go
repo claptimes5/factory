@@ -125,6 +125,10 @@ func (r *restarter) RestartWaitsFor() string            { return "" }
 // sampleConfig is the factory.yaml the Settings screen edits.
 const sampleConfig = `# A sample factory.yaml for the devserver.
 repos: [acme/api, acme/web]
+workspaces:
+  acme:
+    repos: [acme/api, acme/web]
+    daily_total: 20
 runner: {kind: local}
 auto_merge: {up_to: low, max_size: S}
 
@@ -194,6 +198,7 @@ func main() {
 	rs := &restarter{}
 	s := &web.Server{
 		Store: st, Actions: actions{}, Repos: []string{"acme/api", "acme/web"}, DailyCap: 25, AwaitCap: 5, JobsDir: jobs, CompareDir: comparisons,
+		Workspaces: []web.Workspace{{Name: "acme", Repos: []string{"acme/api", "acme/web"}, DailyCap: 20}},
 		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
 		// 116 stopped because its checks had no database; its compose file has one.

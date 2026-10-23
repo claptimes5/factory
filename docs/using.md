@@ -16,7 +16,14 @@ To reach it from another machine, or to put a password on it, see
 [Control room login](security.md#control-room-login).
 
 On a desk, a sidebar holds the screens, search, the repo filter, what's
-running, the day's spend and plan usage. On a phone, tabs at the bottom do
+running, the day's spend and plan usage. With more than one
+[workspace](configuration.md#workspaces), a switcher at its top (on a
+phone, under the top bar) picks the one every screen shows: Home, The
+line, History, Trust, Setup, the Inbox, the orchestrator's decisions and
+Ask are that workspace's, and a link keeps it (`?ws=`). Home and the Inbox
+say what needs you in the others, with a link to switch. Opening an item
+switches to its workspace. The sidebar shows a workspace's own daily
+budget beside the factory's. On a phone, tabs at the bottom do
 (Home, Line, Ask, History, Settings), and Settings leads to the rest. The
 dashboard installs as a web app: on a phone, add it to the home screen
 (on an iPhone, Share, then Add to Home Screen) and it opens like an app,

@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { useActivity, useMetrics, type ActivityEntry } from "@/api/client";
 import { Empty, ErrorBox, Loading } from "@/components/common";
 import { cn, money, pct, shortRef } from "@/lib/utils";
+import { useScope } from "@/lib/workspace";
 
 const toneColor: Record<ActivityEntry["tone"], string> = {
   live: "text-primary-soft",
@@ -20,8 +21,10 @@ function clock(at: string) {
 }
 
 /** What happened lately, newest first; repo narrows it to one repo's items. */
-export function ActivityFeed({ repo, limit = 50, className }: { repo?: string; limit?: number; className?: string }) {
-  const { data, error, isLoading } = useActivity(repo);
+/** What happened lately in the workspace on screen (and the repo picked in it). */
+export function ActivityFeed({ limit = 50, className }: { limit?: number; className?: string }) {
+  const { repo, workspace } = useScope();
+  const { data, error, isLoading } = useActivity(repo, workspace);
   if (isLoading) return <Loading what="Loading activity" />;
   if (error) return <ErrorBox error={error} />;
   const entries = data!.entries.slice(0, limit);

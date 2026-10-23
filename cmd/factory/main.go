@@ -639,7 +639,8 @@ func serveWeb(ctx context.Context, cfgPath, envPath string, cfg *config.Config, 
 	srv.Orchestrator = web.OrchestratorInfo{On: cfg.AnyOrchestrator(), Harness: r.Harness, Model: r.Model, Every: cfg.Orchestrator.Interval.String(),
 		RunBudget: cfg.Orchestrator.RunBudget, DailyBudget: cfg.Orchestrator.DailyBudget, For: cfg.OrchestratorFor}
 	for _, ws := range cfg.WorkspaceNames() {
-		srv.Workspaces = append(srv.Workspaces, web.Workspace{Name: ws, Repos: cfg.WorkspaceRepos(ws)})
+		w, _ := cfg.WorkspaceConf(ws)
+		srv.Workspaces = append(srv.Workspaces, web.Workspace{Name: ws, Repos: cfg.WorkspaceRepos(ws), DailyCap: w.DailyTotal})
 	}
 	// The Settings screen edits the config file; saved changes apply when
 	// the daemon restarts, which it does once running jobs finish.

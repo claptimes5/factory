@@ -358,6 +358,7 @@ paths:
           required: false
           schema: { type: string }
           description: Only this repo's items (owner/name), plus lines about no item
+        - { $ref: "#/components/parameters/Workspace" }
       responses:
         "200":
           description: OK
@@ -369,6 +370,7 @@ paths:
       summary: The orchestrator's decisions, newest first
       parameters:
         - { name: item, in: query, required: false, schema: { type: integer }, description: Only this item's decisions }
+        - { $ref: "#/components/parameters/Workspace" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Feed" } } } }
   /metrics:
@@ -1025,8 +1027,9 @@ components:
         message: { type: string }
     Overview:
       type: object
-      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only]
+      required: [repo, repos, spent_today_usd, daily_cap_usd, awaiting, awaiting_cap, running, queued, version, disk_low, signed_in, main_health, auto_merge, plans_only, workspaces]
       properties:
+        workspaces: { type: array, items: { $ref: "#/components/schemas/Workspace" }, description: "The factory's workspaces, in order; the dashboard shows one at a time" }
         plans_only: { type: boolean, description: "Every harness in use runs on a subscription plan: no job costs dollars, so show plan usage, not spend" }
         auto_merge:
           type: array
@@ -1047,6 +1050,14 @@ components:
         running: { type: integer }
         queued: { type: integer }
         version: { type: string }
+    Workspace:
+      type: object
+      required: [name, repos, daily_cap_usd, spent_today_usd]
+      properties:
+        name: { type: string }
+        repos: { type: array, items: { type: string } }
+        daily_cap_usd: { type: number, description: "Its own daily budget for builds and reviews; 0 for none" }
+        spent_today_usd: { type: number, description: What its builds and reviews cost today }
     Breaker:
       type: object
       required: [repo, on, tripped, tripped_at, reason, strikes, threshold, window_hours, cool_off_hours, can_reset]
@@ -1800,9 +1811,10 @@ components:
         estimates: { $ref: "#/components/schemas/Estimates" }
     Notification:
       type: object
-      required: [id, kind, title, detail, item_id, at, choice_job_id, choices]
+      required: [id, kind, title, detail, item_id, at, workspace, choice_job_id, choices]
       properties:
         id: { type: string }
+        workspace: { type: string, description: "The item's workspace; empty for one about the whole factory" }
         kind: { type: string, enum: [needs_input, ready_for_review, budget] }
         title: { type: string }
         detail: { type: string }

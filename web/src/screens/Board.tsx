@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { ExternalLink } from "lucide-react";
-import { useBoard, useOverview, type Card as CardT } from "@/api/client";
+import { useBoard, type Card as CardT } from "@/api/client";
 import { ActivityFeed, LiveHeading, WeekStats } from "@/components/Activity";
 import { ErrorBox, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Badge } from "@/components/ui/badge";
-import { useRepo } from "@/lib/repo";
+import { useScope } from "@/lib/workspace";
 import { brief, cn, duration, money, repoName, shortRef, stageName } from "@/lib/utils";
 import { setupActivity, useReadiness } from "@/screens/Setup";
 import type { components } from "@/api/schema";
@@ -25,20 +25,19 @@ export function BoardScreen() {
   const { data, error, isLoading } = useBoard({
     refetchInterval: (q) => (q.state.data?.columns.some((c) => c.cards.some((k) => k.live)) ? 10_000 : 30_000),
   });
-  const repos = useOverview().data?.repos ?? [];
-  const repo = useRepo(repos);
-  const setupRun = useReadiness().data?.repos.find((r) => setupActivity(r) && (!repo || r.repo === repo));
+  const { inScope, workspace, repo } = useScope();
+  const setupRun = useReadiness().data?.repos.find((r) => setupActivity(r) && inScope(r.repo));
   const [open, setOpen] = useState<string>(""); // phone: the quiet stage opened below
   const [showDone, setShowDone] = useState(false);
   const [cols, held] = useMemo(() => {
     const m = new Map<string, CardT[]>();
-    for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => !repo || k.repo === repo));
+    for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => inScope(k.repo)));
     // An item waiting for your OK on its cost or its plan needs you, not its column.
     const blocked = m.get("blocked") ?? [];
     const ok = (k: CardT) => k.estimate_waiting || k.plan_waiting;
     m.set("blocked", blocked.filter((k) => !ok(k)));
     return [m, blocked.filter(ok)] as const;
-  }, [data, repo]);
+  }, [data, workspace, repo]);
   if (isLoading) return <Loading what="Loading the floor" />;
   if (error) return <ErrorBox error={error} />;
 
@@ -139,7 +138,7 @@ export function BoardScreen() {
           </Link>
         </div>
         <div className="min-h-0 overflow-y-auto xl:flex-1">
-          <ActivityFeed repo={repo} limit={12} />
+          <ActivityFeed limit={12} />
         </div>
         <WeekStats />
       </aside>

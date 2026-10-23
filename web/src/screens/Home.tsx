@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ExternalLink, MessageCircle, ShieldCheck } from "lucide-react";
-import { postJSON, useBoard, useHome, useOverview, useTrust, type Card as CardT } from "@/api/client";
+import { postJSON, useBoard, useHome, useTrust, type Card as CardT } from "@/api/client";
 import { Ago, ErrorBox, Inline, Loading, WaitsFor } from "@/components/common";
 import { Choices } from "@/components/Choices";
 import { FoundBy } from "@/components/FoundBy";
 import { Button } from "@/components/ui/button";
-import { useRepo } from "@/lib/repo";
 import { brief, cn, duration, money, repoName, shortRef } from "@/lib/utils";
+import { setWorkspace, useScope, type Scope } from "@/lib/workspace";
 import { CheckSteps, NextActions, nextStep, RunProgress, setupActivity, useReadiness, useReadinessRun, yourPartLeft } from "@/screens/Setup";
 import type { components } from "@/api/schema";
 
@@ -126,17 +126,17 @@ export function HomeScreen() {
   const { data, error, isLoading } = useBoard({
     refetchInterval: (q) => (q.state.data?.columns.some((c) => c.cards.some((k) => k.live)) ? 10_000 : 30_000),
   });
-  const repos = useOverview().data?.repos ?? [];
-  const repo = useRepo(repos);
+  const scope = useScope();
+  const { inScope, workspace, repo } = scope;
   const readiness = useReadiness().data;
   // Home leads with setup while a person's part is left; the factory's own fixes are work like any other.
-  const unready = (readiness?.repos ?? []).filter((r) => r.state !== "unchecked" && yourPartLeft(r) && (!repo || r.repo === repo));
+  const unready = (readiness?.repos ?? []).filter((r) => r.state !== "unchecked" && yourPartLeft(r) && inScope(r.repo));
   const [later, setLater] = useState<number[]>([]);
   const cols = useMemo(() => {
     const m = new Map<string, CardT[]>();
-    for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => !repo || k.repo === repo));
+    for (const c of data?.columns ?? []) m.set(c.stage, c.cards.filter((k) => inScope(k.repo)));
     return m;
-  }, [data, repo]);
+  }, [data, workspace, repo]);
   if (isLoading) return <Loading what="Loading Home" />;
   if (error) return <ErrorBox error={error} />;
 
@@ -207,7 +207,9 @@ export function HomeScreen() {
         </section>
       )}
 
-      <CatchUp />
+      <Elsewhere scope={scope} cards={(data?.columns ?? []).flatMap((c) => c.cards)} />
+
+      <CatchUp inScope={inScope} />
 
       {/* While setup leads nothing new starts, so the line would only repeat what's folded above. */}
       {!(unready.length > 0 && readiness) && (
@@ -227,27 +229,53 @@ export function HomeScreen() {
   );
 }
 
-/** A repo whose record supports more trust, to raise on the trust screen. */
+/** The workspace on screen, when its record supports more trust, to raise on the trust screen. */
 function Earned() {
-  const r = useTrust().data?.repos.find((x) => x.suggest > 0);
-  if (!r) return null;
+  const { workspace, workspaces } = useScope();
+  const w = useTrust().data?.workspaces.find((x) => x.workspace === workspace && x.suggest > 0);
+  if (!w) return null;
+  const who = workspaces.length > 1 ? w.workspace : w.repos.length === 1 ? w.repos[0] : "The factory";
   return (
     <Link
-      to={`/trust?repo=${encodeURIComponent(r.repo)}`}
+      to="/trust"
       aria-label="Earned more trust"
       className="flex items-start gap-2.5 rounded-card bg-live-bg px-4 py-3 text-body-sm hover:ring-1 hover:ring-live-border"
     >
       <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
       <span className="flex-1">
-        <span className="font-mono">{r.repo}</span> has earned more trust. {r.suggest_why}{" "}
-        <span className="font-medium text-primary">Move it to level {r.suggest}?</span>
+        <span className="font-mono">{who}</span> has earned more trust. {w.suggest_why}{" "}
+        <span className="font-medium text-primary">Move it to level {w.suggest}?</span>
       </span>
     </Link>
   );
 }
 
+/** What needs you in the other workspaces, so nothing waiting hides behind the switcher. */
+function Elsewhere({ scope, cards }: { scope: Scope; cards: CardT[] }) {
+  if (scope.workspaces.length < 2) return null;
+  const waiting = new Map<string, number>();
+  for (const c of cards) {
+    const ws = scope.workspaceOf(c.repo);
+    const needsYou = c.stage === "awaiting_human" || c.stage === "parked" || (c.stage === "blocked" && (c.estimate_waiting || c.plan_waiting));
+    if (needsYou && ws && ws !== scope.workspace) waiting.set(ws, (waiting.get(ws) ?? 0) + 1);
+  }
+  if (waiting.size === 0) return null;
+  return (
+    <section aria-label="In other workspaces" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-body-sm text-text-2">
+      {[...waiting].map(([ws, n]) => (
+        <span key={ws}>
+          In <span className="font-mono">{ws}</span>, {n === 1 ? "1 thing needs" : `${n} things need`} you.{" "}
+          <button onClick={() => setWorkspace(ws)} className="cursor-pointer font-medium text-primary hover:underline">
+            Switch to it
+          </button>
+        </span>
+      ))}
+    </section>
+  );
+}
+
 /** "Since you looked": what went live, until you dismiss it. The first visit starts the clock. */
-function CatchUp() {
+function CatchUp({ inScope }: { inScope: (repo: string) => boolean }) {
   const qc = useQueryClient();
   const { data } = useHome();
   const seen = async () => {
@@ -258,7 +286,7 @@ function CatchUp() {
   useEffect(() => {
     if (first) void seen();
   }, [first]);
-  const live = data?.went_live ?? [];
+  const live = (data?.went_live ?? []).filter((it) => inScope(it.repo));
   if (live.length === 0) return null;
   return (
     <section aria-label="Since you looked" className="flex items-start gap-2.5 rounded-card bg-success-bg px-4 py-3 text-body-sm">
