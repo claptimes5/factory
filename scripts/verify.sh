@@ -24,6 +24,11 @@ linux_npm() {
 	case "$(npm config get prefix 2>/dev/null)" in
 	[A-Za-z]:\\*)
 		printf "npm here is the Windows one (%s). Put a Linux Node's bin directory first on the PATH, then rerun; verify reinstalls web/node_modules.\n" "$(npm config get prefix)" >&2
+		# asdf's shim is what hands off to the Windows npm, so name the
+		# real directory behind it.
+		if dir=$(asdf where nodejs 2>/dev/null); then
+			printf 'Here: export PATH="%s/bin:$PATH"\n' "$dir" >&2
+		fi
 		exit 1
 		;;
 	esac

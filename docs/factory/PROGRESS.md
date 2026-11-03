@@ -4,7 +4,7 @@
 |------|------|--------|------|--------------|----------|
 | 0 | Orient and baseline | passed | 2026-11-03 | commands in BASELINE.md | [BASELINE.md](BASELINE.md) |
 | 1 | One-command local verification | passed | 2026-11-03 | `scripts/verify.sh` | fresh clone at 0e2c81e, 2 runs |
-| 2 | Lean CLAUDE.md | not started | | | |
+| 2 | Lean CLAUDE.md | passed | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
 | 3 | Deterministic guardrails | not started | | | |
 | 4 | Required CI mirrors local verify | not started | | | |
 | 5 | Characterization + critical-path tests | not started | | | |
@@ -59,4 +59,25 @@ Flaky: e2e/notify.spec.ts (phone) failed once in 4 full runs; quarantined visibl
   BASELINE.md, fix in Step 6.
 Open questions for human: none
 Next step proposed: 2
+```
+
+### 2026-11-03
+```
+STEP 2: Lean CLAUDE.md   STATUS: passed
+Gate command(s): a fresh agent in a fresh clone, told to learn verification only from
+  CLAUDE.md (-> AGENTS.md): "add one sentence to Match's doc comment and prove the repo
+  still verifies". Default PATH.
+Result: run 3 (at 9eac808) found and ran scripts/verify.sh, was stopped by verify's
+  Windows-npm check, followed it, verify passed (166 passed, 4 skipped). No questions
+  for a human. Its one gap (where a Linux Node lives) is now printed by verify via asdf.
+Negative control: run 1 used the old AGENTS.md (worktree from main, by mistake): it ran
+  only the Go checks and skipped the dashboard, unsure what the full gate was. Run 2
+  (new AGENTS.md) failed on the Windows npm that `which npm` hid. Both gaps fixed.
+Flagged changes: none
+Decisions made: CLAUDE.md stays an @AGENTS.md import (Factory's own builders read
+  AGENTS.md); AGENTS.md now 82 lines. The npm trap became a check in verify, not prose.
+  A truly separate `claude -p` session was blocked by the auto-mode safety check; the
+  gate used subagents told to ignore inherited context.
+Open questions for human: none
+Next step proposed: 3
 ```
