@@ -17,7 +17,9 @@ quick=false
 step() { printf '\n== %s\n' "$*"; }
 
 step gofmt
-unformatted=$(git ls-files '*.go' | xargs gofmt -l)
+# New files too, not only tracked ones: a file not yet added is still in
+# the commit about to be made.
+unformatted=$(git ls-files --cached --others --exclude-standard '*.go' | xargs gofmt -l)
 if [ -n "$unformatted" ]; then
 	echo "These files need gofmt -w:" >&2
 	echo "$unformatted" >&2
