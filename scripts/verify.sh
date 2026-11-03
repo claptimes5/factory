@@ -16,6 +16,19 @@ quick=false
 
 step() { printf '\n== %s\n' "$*"; }
 
+# On WSL a Windows npm can run even when `which npm` names a Linux one
+# (a version manager's shim hands off to the next npm on the PATH). It
+# installs a node_modules the build can't use and fails with errors that
+# don't mention npm, so catch it first.
+linux_npm() {
+	case "$(npm config get prefix 2>/dev/null)" in
+	[A-Za-z]:\\*)
+		printf "npm here is the Windows one (%s). Put a Linux Node's bin directory first on the PATH, then rerun; verify reinstalls web/node_modules.\n" "$(npm config get prefix)" >&2
+		exit 1
+		;;
+	esac
+}
+
 step gofmt
 # New files too, not only tracked ones: a file not yet added is still in
 # the commit about to be made.
@@ -51,6 +64,7 @@ if $quick; then
 	go test ./...
 	if [ -d web/node_modules ]; then
 		step dashboard type check
+		linux_npm
 		(cd web && npm run --silent typecheck)
 	else
 		printf '\nSkipped the dashboard type check: web/node_modules is missing (run the full verify once).\n'
@@ -63,6 +77,7 @@ step go test -race
 go test -race ./...
 
 step npm ci
+linux_npm
 (cd web && npm ci --no-audit --no-fund)
 
 step dashboard build, and the committed build matches it

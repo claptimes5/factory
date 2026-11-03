@@ -37,8 +37,10 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
   (127.0.0.1:8090), then `cd web && npm run dev`
   (http://localhost:5173/app/). More in
   [Working on the dashboard](docs/using.md#working-on-the-dashboard).
-- On WSL, check `which npm` is the Linux one: a Windows npm on the PATH
-  installs a `node_modules` the build can't use.
+- On WSL a Windows npm can run even when `which npm` names a Linux one;
+  verify stops and says so. Put a Linux Node's `bin` first on the PATH.
+  There is no pinned Node: any version `web/package.json`'s `engines`
+  allows works (CI uses 24).
 - A browser test that fails once with nothing changed may be one of the
   known flaky ones listed in `docs/factory/BASELINE.md`; say so, don't
   rerun until green.
