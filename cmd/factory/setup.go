@@ -583,7 +583,7 @@ var gitlabFineGrained = []string{
 	"Project, Repository, Branch, Commit, Pipeline, Job, Member: Read",
 	"Work Item: Read, Create, Update",
 	"Merge Request: Read, Create, Update, Merge",
-	"Label: Read, Create",
+	"Label: Read, Create, Delete",
 	"Markdown Upload: Create, Delete",
 }
 

@@ -220,7 +220,7 @@ selector groups resources under headings; its search box finds each by name.
 | Group and project | CI/CD | Job | Read | Failed jobs' logs |
 | Group and project | Project Planning | Work Item | Read, Create, Update | Issues, labels on them, and comments on issues and merge requests |
 | Group and project | Repository | Merge Request | Read, Create, Update, Merge | Draft merge requests; Merge only for auto-merge |
-| Group and project | Project Planning | Label | Read, Create | The factory's labels |
+| Group and project | Project Planning | Label | Read, Create, Delete | The factory's labels; Delete only for removing the factory or a repo |
 | Group and project | System Access | Member | Read | Who may start work |
 | Group and project | Projects | Markdown Upload | Create, Delete | Screenshots on merge requests |
 | User | System Access | User | Read | Which account the token is |
