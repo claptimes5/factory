@@ -42,7 +42,14 @@ Recorded 2026-11-03 on a WSL2 Linux workstation, from a clean worktree of
 - Playwright: 4 skipped on the phone project by design (desktop-only
   tests that change sample data, or need a wide screen).
 
-No flaky tests observed in one run each; flakiness is measured in Step 5.
+## Flaky tests (quarantine list)
+
+Still running and still required; listed so a red run from them is
+recognized, not retried until green.
+
+| Test | Seen | Symptom | Likely cause | Owner | Fix in |
+|---|---|---|---|---|---|
+| `e2e/notify.spec.ts` "When to tell you…" (phone) | 1 in 4 full runs, 2026-11-03 | `apiResponse.json: Response has been disposed` at line 16 | The settings route handler is still fetching when the page closes | maintainer | Step 6 |
 
 ## CI and repo settings
 
