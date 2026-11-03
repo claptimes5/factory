@@ -573,3 +573,28 @@ func TestSecurityPassInAWorkspace(t *testing.T) {
 		t.Fatalf("security prompts %q", sp)
 	}
 }
+
+// A security finding the verifier rules a note blocks: whether a security
+// hole threatens the merge isn't the verifier's call.
+func TestANotedSecurityFindingStillBlocks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := setup(t)
+	e.addIssue(1)
+	e.claude.builds = []func(string) error{authBuild, authFixer()}
+	e.claude.implVerdict = answerF1
+	e.codex.reviews = []string{pass, pass}
+	e.claude.security = []string{secMajor, secResolveF1}
+	e.claude.reviews = []string{pass, pass} // the critic, on high-risk auth code
+	e.claude.verifies = []string{`{"checks":[{"id":"F1","verdict":"note","reason":"a style matter"}]}`}
+	if err := e.p.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.claude.prompts["implement"]); n != 2 {
+		t.Fatalf("%d builds, want a fix round", n)
+	}
+	fs := e.findings(t, 1)
+	if len(fs) == 0 || fs[0].Check != verdict.Confirmed || !strings.Contains(fs[0].CheckReason, "a security finding blocks") {
+		t.Fatalf("findings %+v", fs)
+	}
+}

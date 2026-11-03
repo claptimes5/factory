@@ -1647,6 +1647,7 @@ type PromptData struct {
 	Findings        string   // a fix round's findings, or the verifier's, fenced
 	AnswerIDs       []string // the findings a fix round's builder answers
 	Rethink         bool     // Findings are the last approach's, which hit the round cap
+	FixRound        bool     // a fix round on the reviewed branch: it checks only what it changes
 	PreviousFailure string
 	Gates           string
 	Features        string   // the change's blast radius, when the repo has a feature map

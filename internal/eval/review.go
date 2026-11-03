@@ -303,7 +303,7 @@ func runReviewCase(ctx context.Context, o Options, c ReviewCase, dir, prefix str
 		return res, err
 	}
 	for _, f := range fs {
-		if !f.Blocking || f.Outcome == store.OutcomeRefuted || f.Check == "refuted" {
+		if !f.Blocking || f.Outcome == store.OutcomeRefuted || f.Outcome == store.OutcomeNoted || f.Check == "refuted" {
 			continue
 		}
 		res.Findings++

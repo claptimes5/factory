@@ -302,17 +302,18 @@ func Period(ctx context.Context, st *store.Store, from, to time.Time) (*Report, 
 				}
 			}
 		}
-		// Precision: a finding is settled once the verifier refuted it, a
-		// later review ruled on it, or the item stopped being worked on.
+		// Precision: a finding is settled once the verifier refuted or
+		// noted it, a later review ruled on it, or the item stopped being
+		// worked on. A noted finding was checked and found true.
 		active := it.Stage == state.Triage || it.Stage == state.Ready || it.Stage == state.Implementing || it.Stage == state.Reviewing || it.Stage == state.Blocked
 		for _, f := range byItem[it.ID] {
-			if f.Check == verdict.Confirmed || f.Check == verdict.Refuted || f.Confirmed {
+			if f.Check == verdict.Confirmed || f.Check == verdict.Refuted || f.Check == verdict.Noted && f.CheckBy != "daemon" || f.Confirmed {
 				checked++
 				if f.Check == verdict.Refuted {
 					refuted++
 				}
 			}
-			if !f.Blocking || active && f.Check != verdict.Refuted && f.Ruling == "" {
+			if !f.Blocking || active && f.Check != verdict.Refuted && f.Check != verdict.Noted && f.Ruling == "" {
 				continue
 			}
 			k := f.Route + " " + f.Harness + "/" + f.Model
