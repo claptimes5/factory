@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -151,13 +152,37 @@ func TestProxyTunnels(t *testing.T) {
 func TestBlocked(t *testing.T) {
 	for a, want := range map[string]bool{"127.0.0.1": true, "10.1.2.3": true, "192.168.1.1": true, "172.17.0.1": true,
 		"169.254.169.254": true, "100.100.1.1": true, "::1": true, "fd00::1": true, "0.0.0.0": true, "::ffff:10.0.0.1": true,
-		"140.82.112.3": false, "2606:4700::1": false, "64:ff9b::a00:1": true, "::10.0.0.1": true, "0.1.2.3": true, "198.18.0.1": true, "240.0.0.1": true} {
+		"140.82.112.3": false, "2606:4700::1": false, "64:ff9b::a00:1": true, "::10.0.0.1": true, "0.1.2.3": true, "198.18.0.1": true, "240.0.0.1": true,
+		"::ffff:100.100.1.1": true, "::ffff:198.18.0.1": true, "::ffff:127.0.0.1": true} {
 		if got := Blocked(netip.MustParseAddr(a)); got != want {
 			t.Errorf("%s: %v", a, got)
 		}
 	}
 	if !privateOnly(netip.MustParseAddr("10.0.0.5")) || privateOnly(netip.MustParseAddr("127.0.0.1")) || privateOnly(netip.MustParseAddr("169.254.169.254")) {
 		t.Error("privateOnly")
+	}
+}
+
+// A Private rule reaches its host on a private network, but never this
+// machine or the metadata service, whatever the name resolves to.
+func TestPrivateRuleReachesOnlyThePrivateNetwork(t *testing.T) {
+	rs := rules(t, "git.corp.example")
+	rs[0].Private = true
+	for addr, ok := range map[string]bool{"10.0.0.5": true, "192.168.1.9": true, "127.0.0.1": false,
+		"169.254.169.254": false, "::ffff:127.0.0.1": false, "::1": false} {
+		dialed := false
+		p := &Proxy{Rules: rs, Blocked: Blocked,
+			Resolve: func(context.Context, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr(addr)}, nil
+			},
+			Dial: func(context.Context, string) (net.Conn, error) {
+				dialed = true
+				return nil, io.EOF
+			}}
+		_, err := p.dial(context.Background(), "git.corp.example:443")
+		if dialed != ok || !ok && !errors.Is(err, errDenied) {
+			t.Errorf("%s: dialed %v, err %v", addr, dialed, err)
+		}
 	}
 }
 
