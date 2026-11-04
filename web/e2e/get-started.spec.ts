@@ -298,12 +298,17 @@ test("the checks step tries the checks before saving, and shows what failed", as
 
 test("repositories are chosen by where they're hosted, and added or removed one at a time", async ({ page }, info) => {
   // Saving plays the server's answer, so the shared sample setup keeps its repos.
+  // The page also fetches the setup again (every 2s while a check runs), so once
+  // a save is played those answers come from it too, not from the server.
   let sent = "";
+  let played: Record<string, unknown> | null = null;
+  await page.route(/\/api\/v1\/setup(\?.*)?$/, (route) => (played ? route.fulfill({ json: played }) : route.fallback()));
   await page.route(/\/api\/v1\/setup\/repos$/, async (route) => {
     sent = route.request().postDataJSON().repos;
     const res = await route.fetch({ url: page.url().replace(/\/app\/.*/, "/api/v1/setup"), method: "GET", headers: {} });
     const repos = sent.split(", ");
-    await route.fulfill({ json: { message: `Saved ${repos.join(" and ")} to factory.yaml.`, wizard: { ...(await res.json()), repos } } });
+    played = { ...(await res.json()), repos };
+    await route.fulfill({ json: { message: `Saved ${repos.join(" and ")} to factory.yaml.`, wizard: played } });
   });
   await page.goto("/app/get-started");
   const repos = await openStep(page, "repos");
