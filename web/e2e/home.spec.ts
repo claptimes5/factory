@@ -85,7 +85,7 @@ test("a failure the base branch has too shows as known, with what fixes it, not 
   await page.goto("/app/");
   const card = page.getByTestId("setup-lead");
   await expect(card.getByRole("listitem", { name: "Lint: fails on the base branch too" })).toBeVisible();
-  await expect(card.getByRole("listitem", { name: "Tests: running" })).toBeVisible();
+  await expect(card.getByRole("listitem", { name: "Tests: seeded failure for the Step 4 gate" })).toBeVisible();
   await expect(card).toContainText("Lint fails on master too; #17 fixes it.");
 });
 
