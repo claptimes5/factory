@@ -90,29 +90,5 @@
         ]
       }
     ]
-  },
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false,
-    "filesystem": {
-      "allowWrite": ["~/.cache", "~/.npm", "~/.asdf/installs/golang", "~/go"],
-      "denyRead": ["/var/run/docker.sock", "/run/docker.sock", "/run/WSL"]
-    },
-    "network": {
-      "allowAllUnixSockets": true,
-      "allowedDomains": [
-        "proxy.golang.org",
-        "sum.golang.org",
-        "storage.googleapis.com",
-        "registry.npmjs.org",
-        "github.com",
-        "api.github.com",
-        "uploads.github.com",
-        "*.githubusercontent.com",
-        "cdn.playwright.dev",
-        "playwright.download.prss.microsoft.com"
-      ]
-    }
   }
 }

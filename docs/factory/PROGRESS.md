@@ -2,6 +2,8 @@
 
 Source of truth for where the factory build stands. Updated at the end of every step (see `PLAYBOOK.md`, Appendix A). Statuses: `not started`, `in progress`, `blocked`, `passed`, `skipped`. Put your name in Owner when you begin a step; do not start a step someone else owns.
 
+**Lock level: 1** (since 2026-11-04; see PLAYBOOK.md, "Lock levels"). Rollout mode A.
+
 Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has carried real work. Optional: 5b, 7b, 11, 16.
 
 | Step | Name | Status | Owner | Date | Gate command | Evidence |
@@ -9,7 +11,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 0 | Orient and baseline | passed | Avi | 2026-11-04 | commands in BASELINE.md; GitHub plan recorded | [BASELINE.md](BASELINE.md), top-up in log |
 | 1 | One-command local verification | passed | Avi | 2026-11-04 | `scripts/verify.sh`; install cooldown checked with npm 11.19 | fresh clone at 0e2c81e, 2 runs; `web/.npmrc`, top-up in log |
 | 2 | Lean CLAUDE.md | passed | Avi | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
-| 3 | Deterministic guardrails (hooks, permissions) | blocked | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; live demos need a restart | top-up in log: sandbox needs `socat`, live demos need the maintainer |
+| 3 | Deterministic guardrails (hooks, permissions) | in progress | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; Level 1 live demos | Level 3 parts done early, see log; Level 1 gate re-run after the lock change merges |
 | 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
@@ -25,6 +27,21 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 14 | Measure and improve (factory as code) | not started | | | | |
 | 15 | Make poteto-mode the default (optional until 14 is stable) | not started | | | | |
 | 16 | Scale carefully (optional) | skipped | Avi | 2026-11-04 | | not before Steps 12 to 14 are solid; reopen then |
+
+## Lock log
+
+<!-- One line per time a lock got in the way, was worked around, or should have fired and didn't: what happened, which control, the fix. Move up a level only when every item is fixed or accepted. -->
+
+| Date | What happened | Control | Fix | State |
+|------|---------------|---------|-----|-------|
+| 2026-11-04 | Every edit to a factory file needed a person to restart Claude Code with FACTORY_CONFIG=1, and the sandbox blocked Bash writes under .claude/ | guard.py harness block, Bash sandbox (both Level 3 controls, switched on at Step 3) | Back to Level 1: the guard drops the factory files, settings.json drops the sandbox | fixed |
+| 2026-11-04 | Every commit from a desktop-app session was refused: the guard runs verify with Claude Code's PATH, where the Windows npm comes first | guard.py verify-before-commit | verify switches to asdf's Linux Node when the npm on the PATH is the Windows one | fixed |
+| 2026-11-04 | A stray ~/.git folder (no HEAD) made the guard treat the home directory as a repo and refuse writes under ~/.claude | guard.py repo_root | A .git directory counts only with a HEAD (#125) | fixed |
+| 2026-11-04 | The guard reads a heredoc's text as commands, so a script whose text mentions "> some/protected/path" is treated as writing there | guard.py segments | None yet; it now only asks, and only for product paths | accepted |
+| 2026-11-04 | `cp -r staging/. worktree/` wrote .claude/hooks/guard.py into a branch worktree while the guard still refused factory files: cp names a directory as its target, and the guard checks only the target it is given | guard.py check_writes | None needed at Level 1 (nothing there is protected now); at Level 3 the sandbox and autonomy.json Edit denies stop it | accepted |
+| 2026-11-04 | In the sandbox, the job bridge's tests couldn't open Unix sockets | Bash sandbox | allowAllUnixSockets plus denyRead on the Docker and WSL sockets (#126). autonomy.json doesn't carry these yet | open for Level 3 |
+| 2026-11-04 | In the sandbox, git push fails through the token mask (the stand-in isn't swapped inside git's Basic header); gh works | Bash sandbox credentials mask | Give pushes the bot identity's own repo-scoped token (Step 9) | open for Level 3 |
+| 2026-11-04 | In the sandbox, git status lists the /dev/null mounts over denied paths as untracked files | Bash sandbox | Add files by name in sandboxed sessions | open for Level 3 |
 
 ## Log
 <!-- Newest last. One entry per step using the Appendix A template. -->
@@ -318,4 +335,57 @@ Note: inside the sandbox, git status lists the /dev/null mounts over denied path
   (.bashrc, .mcp.json, .claude/skills, ...) as untracked. Add files by name there.
 Next: switch the remote, restart with --settings .claude/github.json, show gh and
   git push work with hosts.yml masked, then set Step 3 to passed.
+
+STEP 3 live gate, part 2   STATUS: blocked
+Gate command(s): in a FACTORY_CONFIG=1 session with the sandbox on and the mask from
+  .claude/github.json: gh api user; git ls-remote origin HEAD; git push of a branch;
+  python3 .claude/hooks/guard_test.py.
+Result: origin is now https://github.com/claptimes5/factory.git with
+  `gh auth git-credential` as git's helper. gh works through the mask: gh api user
+  answered claptimes5 from inside the sandbox, with the project's Read deny on
+  hosts.yml kept. Guard tests: 22 pass.
+  git push fails: "Invalid username or token. Password authentication is not
+  supported for Git operations." ls-remote passed only because the repo is public
+  and needs no auth. Likely cause: the helper gives git the stand-in, git sends it
+  base64-encoded in a Basic header, and the proxy swaps the stand-in only where it
+  appears in plain text (gh sends it that way, so gh works). Sending it in plain
+  text with http.extraHeader "Authorization: Bearer ..." also got a 401: GitHub's
+  git endpoint wants Basic.
+Not shown: the stand-in itself. Printing even part of the token gh sees was refused
+  by auto mode's classifier, which is the right call.
+Options for the maintainer: (a) push from a terminal outside Claude Code and accept
+  that sandboxed sessions can't push; autonomous runs would then need a different
+  route before Step 13. (b) Find out whether the sandbox's mask can swap a stand-in
+  inside a Basic header. (c) Give sandboxed sessions a separate fine-grained token
+  limited to this repo, readable by git, instead of masking gh's.
+Next: the maintainer picks an option; then show a push from inside the sandbox and
+  set Step 3 to passed.
+```
+
+### 2026-11-04
+```
+LOCK LEVEL CHANGE: back to Level 1   (PLAYBOOK.md now has "Rollout modes" and "Lock levels")
+Why: the factory-config route and the sandbox are Level 3 controls (Step 13), but they
+  went on at Step 3. Each factory change then needed the maintainer to restart Claude
+  Code, and the agent couldn't commit or push from its own session.
+What changed: the guard no longer lists .claude/, .github/, docs/factory/, AGENTS.md,
+  CLAUDE.md, REVIEW.md or RISK.md, and the FACTORY_CONFIG check is gone (it is in git
+  history, 5d469af, for Level 3). Product protected paths still ask; force pushes,
+  --no-verify and rm -rf outside the checkout are still refused; bash -c is still
+  checked. settings.json keeps its secret denies and drops the sandbox block.
+  .claude/autonomy.json and .claude/github.json stay as Level 3 drafts, unused until
+  then. verify switches to asdf's Linux Node when the npm on the PATH is Windows'.
+  Rollout mode A (one maintainer, own repo) recorded in BASELINE.md.
+Gate command(s): python3 .claude/hooks/guard_test.py (21 tests); verify --quick with
+  a fake Windows npm first on the PATH.
+Result: 21 pass. verify --quick: "npm here was the Windows one ...; using asdf's
+  .../nodejs/24.2.0 instead", then passed; the old verify stopped at the same point.
+Negative control: .claude/ put back on the protected list turned 3 tests red.
+Flagged changes: guard tests that expected factory files to be refused now expect
+  them to be allowed. This is a deliberate loosening, asked for by the maintainer and
+  matching the playbook's lock levels.
+Next: once this merges and the main checkout pulls it, restart once (settings load at
+  start) and re-run Step 3's Level 1 gate live: a product protected edit asks, a commit
+  with a lint error is refused, a .env read is denied, verify runs with no prompt, a
+  factory file edits freely, and a Bash bypass of a product path is recorded.
 ```

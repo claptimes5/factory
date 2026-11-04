@@ -146,6 +146,8 @@ the dashboard's types are generated from); a dropped field fails it.
   a GitHub release from `release.yml`; rolling back means installing the
   previous release.
 - **Approver:** the maintainer alone. No compliance constraints.
+- **Rollout mode A** (recorded 2026-11-04): the maintainer controls the repo
+  and is its only developer, so changes go straight to it with no shadow fork.
 - **Secrets when running the baseline:** the tests need none. Checked
   2026-11-04: the agent's environment holds no secret variables apart
   from Claude Code's own session token, and no `factory.env` is loaded.

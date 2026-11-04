@@ -26,12 +26,9 @@ Thanks for helping. Issues and pull requests are both welcome.
 - Run `gofmt -w` on the Go files you changed.
 - If you use Claude Code here, `.claude/settings.json` adds hooks (they
   need Python 3): they ask before an edit to a protected path, refuse
-  edits to the factory's own files unless you started Claude Code with
-  `FACTORY_CONFIG=1`, refuse force pushes and `--no-verify`, and run
-  `scripts/verify.sh --quick` before each commit. They also turn on
-  Claude Code's Bash sandbox and refuse to start without it; on Linux and
-  WSL2 it needs `bubblewrap` and `socat` (`sudo apt-get install
-  bubblewrap socat`). The settings also go in your main checkout's
+  force pushes and `--no-verify`, and run `scripts/verify.sh --quick`
+  before each commit; the settings deny reading secret files such as
+  `.env`, `factory.env` and `~/.ssh`. The settings also go in your main checkout's
   `.claude/` if you work in worktrees under it, since Claude Code reads
   them from there. AGENTS.md says which paths are protected.
 - Update the docs under `docs/` when you change what a user sees or runs.

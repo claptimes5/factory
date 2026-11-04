@@ -29,20 +29,17 @@ class Guard(unittest.TestCase):
             f.write(f"#!/bin/sh\necho verify ran\nexit {code}\n")
         os.chmod(p, 0o755)
 
-    def run_guard(self, mode, tool_input, factory_config=False):
+    def run_guard(self, mode, tool_input):
         event = {"cwd": self.repo, "tool_input": tool_input}
         env = dict(os.environ, CLAUDE_PROJECT_DIR=self.repo, TMPDIR=self.tmp.name)
-        env.pop("FACTORY_CONFIG", None)
-        if factory_config:
-            env["FACTORY_CONFIG"] = "1"
         return subprocess.run([sys.executable, GUARD, mode], input=json.dumps(event),
                               capture_output=True, text=True, env=env)
 
-    def bash(self, command, factory_config=False):
-        return self.run_guard("pre-bash", {"command": command}, factory_config)
+    def bash(self, command):
+        return self.run_guard("pre-bash", {"command": command})
 
-    def edit(self, path, factory_config=False):
-        return self.run_guard("pre-edit", {"file_path": os.path.join(self.repo, path)}, factory_config)
+    def edit(self, path):
+        return self.run_guard("pre-edit", {"file_path": os.path.join(self.repo, path)})
 
     def assertAsks(self, r):
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -55,26 +52,19 @@ class Guard(unittest.TestCase):
     def assertAllowed(self, r):
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
 
-    HARNESS = (".github/workflows/ci.yml", ".github/CODEOWNERS", ".claude/settings.json",
-               ".claude/hooks/guard.py", "docs/factory/PROGRESS.md", "AGENTS.md", "CLAUDE.md",
-               "REVIEW.md", "RISK.md")
+    FACTORY_FILES = (".github/workflows/ci.yml", ".github/CODEOWNERS", ".claude/settings.json",
+                     ".claude/hooks/guard.py", "docs/factory/PROGRESS.md", "AGENTS.md", "CLAUDE.md",
+                     "REVIEW.md", "RISK.md")
 
     def test_edit_to_protected_path_asks(self):
         for p in ("internal/runner/docker.go", "internal/web/auth.go", "prompts/x.md", "deploy/upgrade.sh"):
             with self.subTest(p):
                 self.assertAsks(self.edit(p))
 
-    def test_edit_to_factory_file_is_refused_without_factory_config(self):
-        for p in self.HARNESS:
+    def test_factory_files_are_edited_freely_before_level_3(self):
+        for p in self.FACTORY_FILES:
             with self.subTest(p):
-                r = self.edit(p)
-                self.assertRefused(r)
-                self.assertIn("FACTORY_CONFIG=1", r.stderr)
-
-    def test_edit_to_factory_file_asks_with_factory_config(self):
-        for p in self.HARNESS:
-            with self.subTest(p):
-                self.assertAsks(self.edit(p, factory_config=True))
+                self.assertAllowed(self.edit(p))
 
     def test_edit_elsewhere_is_allowed(self):
         for p in ("internal/web/api.go", "internal/pipeline/pipeline.go", "docs/using.md", "docs/factory.md"):
@@ -92,8 +82,7 @@ class Guard(unittest.TestCase):
         # Like a home directory holding a tool's stray .git folder.
         home = os.path.join(self.tmp.name, "home")
         os.makedirs(os.path.join(home, ".git", "gk"))
-        os.makedirs(os.path.join(home, ".claude", "memory"))
-        self.assertAllowed(self.edit(os.path.join(home, ".claude", "memory", "note.md")))
+        self.assertAllowed(self.edit(os.path.join(home, "deploy", "notes.md")))
 
     def test_shell_write_to_protected_path_asks(self):
         for c in ("echo x > deploy/x.sh", "sed -i 's/a/b/' prompts/review.md",
@@ -102,18 +91,17 @@ class Guard(unittest.TestCase):
             with self.subTest(c):
                 self.assertAsks(self.bash(c))
 
-    def test_shell_write_to_factory_file_is_refused_without_factory_config(self):
+    def test_shell_write_to_factory_file_is_allowed_before_level_3(self):
         for c in ("echo x > .github/CODEOWNERS", "sed -i 's/a/b/' .github/workflows/ci.yml",
-                  "bash -c 'echo x > .claude/hooks/guard.py'", "sh -c \"tee docs/factory/RISK.md\"",
-                  "cd docs && bash -c 'cp /tmp/x factory/PROGRESS.md'",
-                  # A variable set on the command line is not the session's.
-                  "FACTORY_CONFIG=1 sed -i 's/a/b/' AGENTS.md"):
+                  "bash -c 'echo x > .claude/hooks/guard.py'"):
             with self.subTest(c):
-                self.assertRefused(self.bash(c))
-        self.assertAsks(self.bash("sed -i 's/a/b/' AGENTS.md", factory_config=True))
+                self.assertAllowed(self.bash(c))
 
     def test_shell_c_runs_the_same_checks(self):
-        self.assertAsks(self.bash("bash -c 'rm deploy/upgrade.sh'"))
+        for c in ("bash -c 'rm deploy/upgrade.sh'", "sh -c \"tee prompts/review.md\"",
+                  "cd internal && bash -c 'cp /tmp/x runner/x.go'"):
+            with self.subTest(c):
+                self.assertAsks(self.bash(c))
         self.assertRefused(self.bash("sh -c 'git push --force'"))
         self.assertAllowed(self.bash("bash -c 'echo hi > out.txt'"))
 

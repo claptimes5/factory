@@ -6,9 +6,7 @@ interactive Claude Code session in this repository (Factory's own builders
 start Claude with --setting-sources user, so they never load them):
 
   pre-edit   Before Edit, Write or NotebookEdit: an edit to a protected
-             path needs a person to approve it, and an edit to the
-             factory's own files (HARNESS) is refused unless a person
-             started the session with FACTORY_CONFIG=1.
+             path needs a person to approve it.
   pre-bash   Before a shell command: force pushes, --no-verify and rm -rf
              outside the checkout are refused; shell writes to a protected
              path are treated like edits; a commit first runs
@@ -29,31 +27,21 @@ import sys
 
 # PROTECTED mirrors docs/factory/BASELINE.md and AGENTS.md "Take care
 # with". A trailing slash protects a directory. internal/web/web.go is
-# protected whole because its request guard lives there.
+# protected whole because its request guard lives there. The factory's
+# own files (.claude/, .github/, docs/factory/) aren't listed: until lock
+# level 3 the agent edits them freely and review catches mistakes
+# (docs/factory/PLAYBOOK.md, "Lock levels").
 PROTECTED = (
     "internal/runner/",
     "internal/egress/",
     "internal/web/auth.go",
     "internal/web/web.go",
     "internal/pipeline/guard.go",
-    ".github/",
-    ".claude/",
     "prompts/",
     "factory.example.yaml",
     ".golangci.yml",
     "deploy/",
-    "docs/factory/",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "REVIEW.md",
-    "RISK.md",
 )
-
-# HARNESS is the part of PROTECTED that steers the agents themselves
-# (docs/factory/PLAYBOOK.md, Step 3). The hook reads FACTORY_CONFIG from
-# the environment Claude Code was started with, so an agent can't set it
-# for itself: FACTORY_CONFIG=1 before a command changes only that command.
-HARNESS = (".claude/", ".github/", "docs/factory/", "AGENTS.md", "CLAUDE.md", "REVIEW.md", "RISK.md")
 
 SHELLS = {"sh", "bash", "dash", "zsh"}
 
@@ -114,11 +102,6 @@ def refuse(reason):
 
 
 def ask_protected(p):
-    if p in HARNESS and os.environ.get("FACTORY_CONFIG") != "1":
-        refuse(f"Refused: {p} is one of the factory's own files, which change only in "
-               "a session a person started for that. Ask them to restart Claude Code "
-               "with FACTORY_CONFIG=1 (FACTORY_CONFIG=1 claude) if this change is "
-               "what the task is about.")
     ask(f"{p} is a protected path (AGENTS.md, \"Take care with\"). "
         "Change it only when the task is about it, and only once a person "
         "approves this edit.")
