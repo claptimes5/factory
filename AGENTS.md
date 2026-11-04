@@ -79,10 +79,12 @@ ask first. Never weaken a check to make it pass: no skipped tests,
 loosened thresholds or rewritten expectations without saying so.
 
 In Claude Code, `.claude/hooks/guard.py` enforces some of this: an edit
-to one of these paths waits for a person to approve it; force pushes,
-`--no-verify` and `rm -rf` outside the checkout are refused; a commit
-first runs `scripts/verify.sh --quick`; Go files are gofmt'd on save.
-When it refuses, fix the cause; don't work around it.
+to one of these paths asks for approval (in auto mode, the auto-mode
+classifier answers, not a person); force pushes, `--no-verify` and
+`rm -rf` outside the checkout are refused; a commit runs
+`scripts/verify.sh --quick` first, and must be its own command so the
+check sees what it commits; Go files are gofmt'd on save. When it
+refuses, fix the cause; don't work around it.
 
 How this repo is being moved to agent-driven work, step by step, is in
 [docs/factory/PLAYBOOK.md](docs/factory/PLAYBOOK.md), with progress in

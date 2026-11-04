@@ -146,8 +146,13 @@ def short_flags(args):
     return {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
 
 
-def check_git(seg, cwd):
+def check_git(seg, cwd, changed):
     sub, args, where = git_subcommand(seg)
+    if sub == "commit" and changed:
+        # The hook runs before the whole command, so verify would check
+        # the tree as it was, not as the earlier commands leave it.
+        refuse("Refused: run git commit as its own command (cd and git add "
+               "before it are fine), so the check before it sees what it commits.")
     if "--no-verify" in args or (sub == "commit" and "n" in short_flags(args)):
         refuse("Refused: --no-verify skips the checks this repository relies on. "
                "Fix what the hook or check reports instead.")
@@ -229,6 +234,7 @@ def pre_bash(event):
     project = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
     tmp = os.environ.get("TMPDIR") or "/tmp"
     workspace = [os.path.realpath(d) for d in (project, repo_root(os.path.realpath(cwd)) or project, tmp, "/tmp")]
+    changed = False
     for seg in segments(event.get("tool_input", {}).get("command", "")):
         while seg and "=" in seg[0] and not seg[0].startswith("="):
             seg = seg[1:]  # FOO=bar cmd
@@ -240,9 +246,11 @@ def pre_bash(event):
             continue
         check_writes(seg, cwd)
         if name == "git":
-            check_git(seg, cwd)
+            check_git(seg, cwd, changed)
         elif name == "rm":
             check_rm(seg, cwd, workspace)
+        if not (name == "git" and git_subcommand(seg)[0] in ("add", "status", "diff")):
+            changed = True
 
 
 def edited_path(event):

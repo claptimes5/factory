@@ -117,6 +117,14 @@ class Guard(unittest.TestCase):
 
     def test_commit_is_allowed_when_verify_passes(self):
         self.assertAllowed(self.bash("git commit -m 'x'"))
+        self.assertAllowed(self.bash("cd . && git add -A && git commit -m 'x'"))
+
+    def test_commit_after_a_change_in_the_same_command_is_refused(self):
+        for c in ("echo x > a.go && git commit -am x", "gofmt -w . && git add -A && git commit -m x"):
+            with self.subTest(c):
+                r = self.bash(c)
+                self.assertRefused(r)
+                self.assertIn("its own command", r.stderr)
 
     def test_post_edit_formats_go(self):
         p = os.path.join(self.repo, "x.go")

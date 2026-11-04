@@ -27,7 +27,9 @@ Thanks for helping. Issues and pull requests are both welcome.
 - If you use Claude Code here, `.claude/settings.json` adds hooks (they
   need Python 3): they ask before an edit to a protected path, refuse
   force pushes and `--no-verify`, and run `scripts/verify.sh --quick`
-  before each commit. AGENTS.md says which paths are protected.
+  before each commit. The settings also go in your main checkout's
+  `.claude/` if you work in worktrees under it, since Claude Code reads
+  them from there. AGENTS.md says which paths are protected.
 - Update the docs under `docs/` when you change what a user sees or runs.
 
 ## Versions and releases

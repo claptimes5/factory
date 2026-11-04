@@ -1,0 +1,67 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(scripts/verify.sh)",
+      "Bash(scripts/verify.sh --quick)",
+      "Bash(./scripts/verify.sh)",
+      "Bash(./scripts/verify.sh --quick)",
+      "Bash(scripts/check-web-built.sh)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(go build:*)",
+      "Bash(gofmt -l:*)",
+      "Bash(gofmt -d:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(npm run build)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run check-styles)",
+      "Bash(npm run e2e:*)",
+      "Bash(python3 .claude/hooks/guard_test.py)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git rev-parse:*)"
+    ],
+    "deny": [
+      "Read(./factory.env)",
+      "Read(./factory.yaml)",
+      "Read(**/*.pem)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c 'import json,os,subprocess as p,sys;d=sys.stdin.read();c=json.loads(d).get(\"cwd\") or \".\";t=p.run([\"git\",\"-C\",c,\"rev-parse\",\"--show-toplevel\"],capture_output=True,text=True).stdout.strip();g=os.path.join(t,\".claude/hooks/guard.py\");sys.exit(p.run([sys.executable,g,sys.argv[1]],input=d,text=True).returncode if t and os.path.isfile(g) else 0)' pre-edit || exit 2"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c 'import json,os,subprocess as p,sys;d=sys.stdin.read();c=json.loads(d).get(\"cwd\") or \".\";t=p.run([\"git\",\"-C\",c,\"rev-parse\",\"--show-toplevel\"],capture_output=True,text=True).stdout.strip();g=os.path.join(t,\".claude/hooks/guard.py\");sys.exit(p.run([sys.executable,g,sys.argv[1]],input=d,text=True).returncode if t and os.path.isfile(g) else 0)' pre-bash || exit 2",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c 'import json,os,subprocess as p,sys;d=sys.stdin.read();c=json.loads(d).get(\"cwd\") or \".\";t=p.run([\"git\",\"-C\",c,\"rev-parse\",\"--show-toplevel\"],capture_output=True,text=True).stdout.strip();g=os.path.join(t,\".claude/hooks/guard.py\");sys.exit(p.run([sys.executable,g,sys.argv[1]],input=d,text=True).returncode if t and os.path.isfile(g) else 0)' post-edit || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}
