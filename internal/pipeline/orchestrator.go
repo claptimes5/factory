@@ -101,7 +101,7 @@ func (p *Pipeline) orchBudgetSpent(ctx context.Context, ws string) (string, erro
 func (p *Pipeline) orchSpendIn(ctx context.Context, ws string) (float64, error) {
 	var sum float64
 	for _, kind := range []string{"orchestrate", store.KindChat} {
-		v, err := p.Store.SpendByKindIn(ctx, store.Today(), kind, ws)
+		v, err := p.Store.SpendByKindIn(ctx, p.Store.Today(), kind, ws)
 		if err != nil {
 			return 0, err
 		}
@@ -222,7 +222,7 @@ func (p *Pipeline) drainedTrigger(ctx context.Context) {
 			continue
 		}
 		// Once per set per day: the same items stuck again tomorrow get another look.
-		key := store.Today() + " " + strings.Join(stuck[ws], ",")
+		key := p.Store.Today() + " " + strings.Join(stuck[ws], ",")
 		if seen, err := p.Store.HasEvent(ctx, "drain_seen", key); err != nil || seen {
 			continue
 		}
@@ -477,7 +477,7 @@ func (p *Pipeline) statusText(ctx context.Context, ws string) (string, error) {
 		ws, strings.Join(p.Cfg.WorkspaceRepos(ws), ", "), strings.Join(stages, " "), q, r, p.Cfg.Budgets.ConcurrentJobs, spent, p.Cfg.Budgets.DailyTotal, orch, p.Cfg.OrchestratorFor(ws).DailyBudget,
 		byStage[state.AwaitingHuman], p.Cfg.Budgets.AwaitingHumanMax)
 	if w, _ := p.Cfg.WorkspaceConf(ws); w.DailyTotal > 0 {
-		mine, _ := p.Store.SpendOnRepos(ctx, store.Today(), p.Cfg.WorkspaceRepos(ws))
+		mine, _ := p.Store.SpendOnRepos(ctx, p.Store.Today(), p.Cfg.WorkspaceRepos(ws))
 		out += fmt.Sprintf("\nthis workspace's builds today: $%.2f of its $%.2f", mine, w.DailyTotal)
 	}
 	if limits, _ := p.Store.Limits(ctx); len(limits) > 0 {

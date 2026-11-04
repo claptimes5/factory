@@ -489,6 +489,20 @@ func redOn(t *testing.T, e *env, g *fakeGuard, sha, check string, id int64) {
 	e.p.CheckMainHealth(context.Background())
 }
 
+// Unsure whether a breaker tripped, because its state can't be read,
+// auto-merge stays off.
+func TestUnreadableBreakerCountsAsTripped(t *testing.T) {
+	e, _, _ := guardSetup(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !e.p.breakerTripped(ctx, "o/r") {
+		t.Fatal("an unreadable breaker left auto-merge on")
+	}
+	if e.p.breakerTripped(context.Background(), "o/r") {
+		t.Fatal("a readable, untripped breaker counts as tripped")
+	}
+}
+
 func TestBreakerCoolOff(t *testing.T) {
 	ctx := context.Background()
 	e, g, msgs := guardSetup(t, true)

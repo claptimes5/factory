@@ -31,12 +31,25 @@ const TimeFormat = "2006-01-02T15:04:05.000000000Z"
 // Now returns the current time in the store's text format.
 func Now() string { return time.Now().UTC().Format(TimeFormat) }
 
-// Today returns the current UTC day, the key of the spend table.
-func Today() string { return time.Now().UTC().Format("2006-01-02") }
+// Today returns the store's current UTC day, the key of the spend table.
+func (s *Store) Today() string { return s.now().Format("2006-01-02") }
+
+// now is the store's time in UTC: Clock's, or the wall clock's.
+func (s *Store) now() time.Time {
+	if s.Clock != nil {
+		return s.Clock().UTC()
+	}
+	return time.Now().UTC()
+}
 
 // Store wraps one SQLite file. Reads use a pool; every write goes through
 // one goroutine so the daemon never contends with itself for the lock.
 type Store struct {
+	// Clock, when set, is the clock Today reads instead of time.Now. A
+	// test that records spend and reads it back pins it, so a run that
+	// straddles midnight UTC still sees one day.
+	Clock func() time.Time
+
 	path   string
 	read   *sql.DB
 	write  *sql.DB
@@ -863,10 +876,10 @@ func (s *Store) FinishJob(ctx context.Context, id int64, r Result) error {
 	if !r.State.Terminal() {
 		return fmt.Errorf("FinishJob needs a terminal state, got %s", r.State)
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error { return finishJob(tx, id, r) })
+	return s.tx(ctx, func(tx *sql.Tx) error { return s.finishJob(tx, id, r) })
 }
 
-func finishJob(tx *sql.Tx, id int64, r Result) error {
+func (s *Store) finishJob(tx *sql.Tx, id int64, r Result) error {
 	var from string
 	var item sql.NullInt64
 	if err := tx.QueryRow(`SELECT state, item_id FROM jobs WHERE id = ?`, id).Scan(&from, &item); err != nil {
@@ -875,12 +888,14 @@ func finishJob(tx *sql.Tx, id int64, r Result) error {
 	if err := state.CheckJob(state.JobState(from), r.State); err != nil {
 		return err
 	}
+	// finished_at is what a repo's spend for the day is summed by, so it
+	// reads the same clock as the spend table's day.
 	if _, err := tx.Exec(`UPDATE jobs SET state = ?, cost_usd = ?, tokens_in = ?, tokens_out = ?, verdict = ?, error = ?, finished_at = ? WHERE id = ?`,
-		string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), Now(), id); err != nil {
+		string(r.State), r.CostUSD, r.TokensIn, r.TokensOut, nullable(r.Verdict), nullable(r.Error), s.now().Format(TimeFormat), id); err != nil {
 		return err
 	}
 	if r.CostUSD > 0 {
-		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), r.CostUSD); err != nil {
+		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, s.Today(), r.CostUSD); err != nil {
 			return err
 		}
 	}
@@ -973,7 +988,7 @@ func (s *Store) GateResults(ctx context.Context, jobID int64) ([]GateResult, err
 // arms) to today's spend, with an event saying what it was.
 func (s *Store) AddSpend(ctx context.Context, cost float64, actor, reason string) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, Today(), cost); err != nil {
+		if _, err := tx.Exec(`INSERT INTO spend(day, cost_usd) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd`, s.Today(), cost); err != nil {
 			return err
 		}
 		return insertEvent(tx, Event{Actor: actor, Type: "spend", Reason: reason, Data: fmt.Sprintf(`{"cost_usd":%g}`, cost)})

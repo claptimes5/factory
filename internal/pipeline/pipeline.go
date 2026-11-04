@@ -645,8 +645,8 @@ func (p *Pipeline) claimNext(ctx context.Context) (*store.Job, error) {
 		return nil, err
 	}
 	if spent >= p.Cfg.Budgets.DailyTotal {
-		if p.budgetHalt != store.Today() {
-			p.budgetHalt = store.Today()
+		if p.budgetHalt != p.Store.Today() {
+			p.budgetHalt = p.Store.Today()
 			p.alert(ctx, fmt.Sprintf("Daily budget reached ($%.2f of $%.2f). No new jobs start until midnight UTC.", spent, p.Cfg.Budgets.DailyTotal))
 		}
 		// The orchestrator has its own budget, checked when its run starts.
@@ -718,7 +718,7 @@ func (p *Pipeline) spentRepos(ctx context.Context) []string {
 			continue
 		}
 		repos := p.Cfg.WorkspaceRepos(ws)
-		spent, err := p.Store.SpendOnRepos(ctx, store.Today(), repos)
+		spent, err := p.Store.SpendOnRepos(ctx, p.Store.Today(), repos)
 		if err != nil {
 			p.warn(err, "SpendOnRepos")
 			continue
@@ -727,7 +727,7 @@ func (p *Pipeline) spentRepos(ctx context.Context) []string {
 			continue
 		}
 		out = append(out, repos...)
-		key := store.Today() + " " + ws
+		key := p.Store.Today() + " " + ws
 		if seen, err := p.Store.HasEvent(ctx, "workspace_budget_spent", key); err == nil && !seen {
 			p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "workspace_budget_spent", Reason: key}), "AddEvent")
 			p.alert(ctx, fmt.Sprintf("%s's daily budget is reached ($%.2f of $%.2f). Its jobs wait until midnight UTC; other workspaces go on.", ws, spent, w.DailyTotal))
@@ -839,7 +839,7 @@ func (p *Pipeline) recordLimits(ctx context.Context, harnessName string, res *ha
 // buildSpend is today's spend on building, without orchestration, which
 // has its own daily cap.
 func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
-	all, err := p.Store.SpendOn(ctx, store.Today())
+	all, err := p.Store.SpendOn(ctx, p.Store.Today())
 	if err != nil {
 		return 0, err
 	}
@@ -853,7 +853,7 @@ func (p *Pipeline) buildSpend(ctx context.Context) (float64, error) {
 func (p *Pipeline) orchSpend(ctx context.Context) (float64, error) {
 	var sum float64
 	for _, kind := range []string{"orchestrate", "tune", store.KindChat} {
-		v, err := p.Store.SpendByKind(ctx, store.Today(), kind)
+		v, err := p.Store.SpendByKind(ctx, p.Store.Today(), kind)
 		if err != nil {
 			return 0, err
 		}

@@ -60,7 +60,7 @@ func (p *Pipeline) learnDay() string {
 	if p.learnDayFn != nil {
 		return p.learnDayFn()
 	}
-	return store.Today()
+	return p.Store.Today()
 }
 
 // LearnInput is carried by a learn job: its repo and the signals it reads.

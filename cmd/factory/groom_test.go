@@ -52,7 +52,7 @@ func TestGroomLines(t *testing.T) {
 	_, _ = st.AddGroomProposal(ctx, store.GroomProposal{Repo: "o/r", IssueNumber: 4, Kind: store.GroomSplit, Key: "k", IssueHash: "h"})
 	_, _ = st.AddGroomProposal(ctx, store.GroomProposal{Repo: "o/r", IssueNumber: 2, Kind: store.GroomDuplicate, Key: "k", IssueHash: "h"})
 	got := strings.Join(groomLines(ctx, st, cfg), "\n")
-	for _, want := range []string{"grooming o/r:\tlast run " + store.Today() + ", read 40, flagged 3 (1 proposal dropped); 2 open: duplicate o/r#2; split o/r#4",
+	for _, want := range []string{"grooming o/r:\tlast run " + st.Today() + ", read 40, flagged 3 (1 proposal dropped); 2 open: duplicate o/r#2; split o/r#4",
 		"grooming o/web:\tnot run yet"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lines lack %q:\n%s", want, got)

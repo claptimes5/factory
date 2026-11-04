@@ -295,6 +295,37 @@ func TestAPIReads(t *testing.T) {
 	}
 }
 
+// A POST the browser marks as from another site, even a sibling
+// subdomain, is refused; one from this page or typed in is not.
+func TestAPIActionsRefuseCrossSitePosts(t *testing.T) {
+	t.Parallel()
+	base, _, fa, _ := apiSetup(t)
+	post := func(site string) int {
+		req, _ := http.NewRequest("POST", base+"/api/v1/jobs/1/retry", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Sec-Fetch-Site", site)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, site := range []string{"same-site", "cross-site"} {
+		if c := post(site); c != http.StatusForbidden {
+			t.Errorf("Sec-Fetch-Site %s: %d, want 403", site, c)
+		}
+	}
+	if len(fa.calls) != 0 {
+		t.Fatalf("refused requests reached the daemon: %v", fa.calls)
+	}
+	for _, site := range []string{"same-origin", "none"} {
+		if c := post(site); c != 200 {
+			t.Errorf("Sec-Fetch-Site %s: %d, want 200", site, c)
+		}
+	}
+}
+
 func TestAPIActionsNeedSameOriginJSON(t *testing.T) {
 	t.Parallel()
 	base, _, fa, _ := apiSetup(t)

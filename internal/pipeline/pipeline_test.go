@@ -587,7 +587,7 @@ func TestIssueBecomesReviewedDraftPR(t *testing.T) {
 	if jobs[0].Skillset != "baseline" {
 		t.Fatalf("skillset = %q", jobs[0].Skillset)
 	}
-	spent, _ := e.p.Store.SpendOn(ctx, store.Today())
+	spent, _ := e.p.Store.SpendOn(ctx, e.p.Store.Today())
 	if spent < 0.29 {
 		t.Fatalf("spend not recorded: %v", spent)
 	}

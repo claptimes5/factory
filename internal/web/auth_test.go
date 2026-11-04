@@ -85,6 +85,33 @@ func TestNeedsLogin(t *testing.T) {
 	}
 }
 
+func TestSafeNextStaysOnThisSite(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{"/app/items/3?tab=log": "/app/items/3?tab=log", "/": "/", "": "/",
+		"//evil.example/x": "/", "///evil.example": "/", "/\\evil.example": "/", "https://evil.example/": "/", "evil.example": "/", "javascript:alert(1)": "/"} {
+		if got := safeNext(in); got != want {
+			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The fifth wrong password in a minute is the last one tried: after it,
+// even the right one waits.
+func TestLoginLimitsAtTheFifthWrongTry(t *testing.T) {
+	t.Parallel()
+	l := &Login{Password: "correct horse battery", Secret: make([]byte, 32)}
+	r := httptest.NewRequest("POST", "/login", nil)
+	r.RemoteAddr = "192.0.2.7:1"
+	for i := 1; i < maxFailures; i++ {
+		if l.limited(r, true) {
+			t.Fatalf("limited after %d wrong tries", i)
+		}
+	}
+	if !l.limited(r, true) || !l.limited(r, false) {
+		t.Fatalf("not limited after %d wrong tries", maxFailures)
+	}
+}
+
 func TestLoginLimits(t *testing.T) {
 	t.Parallel()
 	if clientKey("[2001:db8:1:2:3:4:5:6]:99") != clientKey("[2001:db8:1:2:ffff::1]:1") {

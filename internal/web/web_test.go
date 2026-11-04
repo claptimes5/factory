@@ -63,6 +63,10 @@ func setup(t *testing.T) (*httptest.Server, *store.Store, *fakeActions, int64) {
 	t.Helper()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "f.db"))
+	// One day for the whole test: spend recorded just before midnight UTC
+	// and read just after would otherwise count as yesterday's.
+	now := time.Now()
+	st.Clock = func() time.Time { return now }
 	ctx := context.Background()
 	it, _, _ := st.UpsertItem(ctx, "o/r", 1, "Add <script>alert(1)</script>")
 	st.SetStage(ctx, it.ID, state.Parked, "daemon", "needs a human")

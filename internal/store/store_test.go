@@ -184,6 +184,35 @@ func TestClaimOrder(t *testing.T) {
 	}
 }
 
+func TestSpendStaysOnTheDayTheClockSaid(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _ := openTest(t)
+	now := time.Date(2026, 3, 1, 23, 59, 59, 0, time.UTC)
+	s.Clock = func() time.Time { return now }
+	it := newItem(t, s, 1)
+	id := enqueue(t, s, it.ID, 0)
+	if _, err := s.ClaimJob(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishJob(ctx, id, Result{State: state.Succeeded, CostUSD: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddSpend(ctx, 0.5, "you", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if spent, _ := s.SpendOn(ctx, s.Today()); s.Today() != "2026-03-01" || spent != 2.5 {
+		t.Fatalf("before midnight: today %s, spent %v", s.Today(), spent)
+	}
+	if spent, _ := s.SpendOnRepos(ctx, s.Today(), []string{"o/r"}); spent != 2 {
+		t.Fatalf("before midnight, o/r spent %v", spent)
+	}
+	now = now.Add(2 * time.Second)
+	if spent, _ := s.SpendOn(ctx, s.Today()); s.Today() != "2026-03-02" || spent != 0 {
+		t.Fatalf("after midnight: today %s, spent %v", s.Today(), spent)
+	}
+}
+
 func TestFinishJobTransitionsAndSpend(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -211,7 +240,7 @@ func TestFinishJobTransitionsAndSpend(t *testing.T) {
 	if j.State != state.Succeeded || j.CostUSD != 1.25 || j.FinishedAt == "" {
 		t.Fatalf("unexpected job: %+v", j)
 	}
-	spent, err := s.SpendOn(ctx, Today())
+	spent, err := s.SpendOn(ctx, s.Today())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -905,7 +905,7 @@ func (s *Server) apiSpec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	spent, _ := s.Store.SpendOn(ctx, store.Today())
+	spent, _ := s.Store.SpendOn(ctx, s.Store.Today())
 	waiting, _ := s.Store.ListItems(ctx, state.AwaitingHuman)
 	running, _ := s.Store.CountJobs(ctx, state.Running, "")
 	queued, _ := s.Store.CountJobs(ctx, state.Queued, "")
@@ -919,7 +919,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		MainHealth: s.mainHealth(ctx), AutoMerge: s.breakers(r), PlansOnly: s.PlansOnly, Workspaces: []APIWorkspace{}}
 	for _, ws := range s.workspaces() {
 		aw := APIWorkspace{Name: ws.Name, Repos: ws.Repos, DailyCapUSD: ws.DailyCap}
-		aw.SpentTodayUSD, _ = s.Store.SpendOnRepos(ctx, store.Today(), ws.Repos)
+		aw.SpentTodayUSD, _ = s.Store.SpendOnRepos(ctx, s.Store.Today(), ws.Repos)
 		out.Workspaces = append(out.Workspaces, aw)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1620,8 +1620,11 @@ func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
 	for _, l := range limits {
 		out.Usage = append(out.Usage, APIUsage{Harness: l.Harness, Window: l.Window, UsedPercent: l.UsedPercent, ResetsAt: l.ResetsAt, SeenAt: l.SeenAt})
 	}
+	// The store's day, not the wall clock's, so the days line up with
+	// what it recorded.
+	today, _ := time.Parse("2006-01-02", s.Store.Today())
 	for i := 0; i < 30; i++ {
-		d := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
+		d := today.AddDate(0, 0, -i).Format("2006-01-02")
 		c, err := s.Store.SpendOn(ctx, d)
 		if err != nil {
 			apiErr(w, http.StatusInternalServerError, err.Error())
@@ -1720,7 +1723,7 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 		out = append(out, n)
 	}
 	if s.DailyCap > 0 {
-		spent, err := s.Store.SpendOn(ctx, store.Today())
+		spent, err := s.Store.SpendOn(ctx, s.Store.Today())
 		if err != nil {
 			return nil, err
 		}
@@ -1733,7 +1736,7 @@ func (s *Server) notifications(ctx context.Context) ([]APINotification, error) {
 		}
 		if level != "" {
 			out = append(out, APINotification{
-				ID: "budget-" + level + "-" + store.Today(), Kind: "budget",
+				ID: "budget-" + level + "-" + s.Store.Today(), Kind: "budget",
 				Title:  fmt.Sprintf("Daily budget %s: $%.2f of $%.2f", map[string]string{"reached": "reached", "near": "at 80%"}[level], spent, s.DailyCap),
 				Detail: map[string]string{"reached": "No new jobs start until tomorrow (UTC).", "near": "New jobs stop starting when the cap is reached."}[level],
 				At:     store.Now(),
