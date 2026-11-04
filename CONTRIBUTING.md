@@ -6,7 +6,12 @@ Thanks for helping. Issues and pull requests are both welcome.
 
 - For anything bigger than a small fix, open an issue first so we can
   agree on the approach.
-- Run what CI runs:
+- Run what CI runs: `scripts/verify.sh` does all of it, stopping at the
+  first failure (about 3 minutes; `scripts/verify.sh --quick` skips the
+  race detector and the dashboard for the inner loop). It needs
+  golangci-lint at the version CI pins, and tells you how to install it.
+  What it runs:
+  - `gofmt -l` reports nothing for the Go files
   - `go vet ./...`, `go build ./...` and `go test -race ./...`
   - `golangci-lint run ./...`
   - If you changed the dashboard under `web/` or the API in

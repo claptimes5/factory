@@ -42,7 +42,7 @@ type imageBuilder struct {
 	tokens   func(*config.Config, string) (github.TokenSource, error)
 	mu       sync.Mutex
 	running  bool
-	building []string // tags this build still has to make
+	building []string          // tags this build still has to make
 	why      map[string]string // why each is built, by tag, for the page
 	since    time.Time
 	log      *tailBuffer
