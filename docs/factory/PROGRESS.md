@@ -7,7 +7,7 @@
 | 2 | Lean CLAUDE.md | passed | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
 | 3 | Deterministic guardrails | passed | 2026-11-03 | live hook demos + `python3 .claude/hooks/guard_test.py` | see log |
 | 4 | Required CI mirrors local verify | passed | 2026-11-04 | throwaway PR, clean PR, direct push | #122, #121, see log |
-| 5 | Characterization + critical-path tests | not started | | | |
+| 5 | Characterization + critical-path tests | passed | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 6 | Browser E2E + web quality gates | not started | | | |
 | 7 | Agent self-verification protocol | not started | | | |
 | 8 | AI code review + security review | not started | | | |
@@ -141,4 +141,36 @@ Decisions made: CI's jobs each run one --part of verify.sh (same speed as before
   attempt on the red PR, so (a) is shown by GitHub's merge state, not by a refused merge.
 Open questions for human: none
 Next step proposed: 5
+```
+
+### 2026-11-04
+```
+STEP 5: Characterization + critical-path tests   STATUS: passed
+Gate command(s): python3 docs/factory/seeds.py <clone> (24 one-line bugs in the 5 critical
+  flows' code, each package's tests run per seed); go test -race -count=5 on the new tests;
+  CI's ci workflow on #123, run 1 plus 4 reruns.
+Result: seeds before: 16 of 23 caught (one seed's text matched twice, so it never ran).
+  After: 23 of 24, by flow 2/2, 5/6, 4/4, 7/7, 5/5 (table in BASELINE). The rerun first
+  showed 22: my redirect test didn't catch its seed, since //host is refused by the "has a
+  host" check anyway; ///host (no host when parsed, another site to a browser) does.
+  New tests: -count=5 -race all ok locally; CI run 41765848116 attempts 1-5 all success.
+  Full verify: 220s, 166 passed, 4 skipped.
+Negative control: the seeds are the negative control. Also: a renamed JSON field fails the
+  existing contract test, TestOpenAPIMatchesGo; with the dashboard tests' clock pinned to
+  2020 every internal/web test passes (before the per-repo fix, one didn't).
+Flagged changes: (*Store).Today replaces store.Today, and finishJob stamps finished_at
+  from the store's Clock (nil in production, so the wall clock, as before). One test case
+  I added ("copied into protected") was removed: it claimed to cover copies, but the diff
+  guard's copy parsing never runs (git -M overrides diff.renames = copies), so that seed,
+  G4, can't be caught. Recorded as unreachable rather than tested.
+Decisions made: measure the existing net with seeds before writing tests, and write tests
+  only for the misses (coverage was 58 to 100% per package; it was a guide, not the gate).
+  Seeds run in a scratch clone, never this checkout. seeds.py is committed so later steps
+  can rerun it. Characterization beyond the misses wasn't needed: the flows' code already
+  had focused tests that caught the other 16.
+Follow-up for the hooks (Step 3, protected): the guard's "commit as its own command" rule
+  also applies in repos without scripts/verify.sh, where there's nothing to check; it
+  should apply only where verify runs. Not changed here.
+Open questions for human: none
+Next step proposed: 6
 ```
