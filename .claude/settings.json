@@ -25,9 +25,36 @@
       "Bash(git rev-parse:*)"
     ],
     "deny": [
+      "Read(//**/.env*)",
       "Read(./factory.env)",
       "Read(./factory.yaml)",
-      "Read(**/*.pem)"
+      "Read(//**/*.pem)",
+      "Read(//**/*.key)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.netrc)",
+      "Read(~/.npmrc)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.kube/config)",
+      "Read(~/.git-credentials)",
+      "Edit(//**/.env*)",
+      "Edit(./factory.env)",
+      "Edit(./factory.yaml)",
+      "Edit(//**/*.pem)",
+      "Edit(//**/*.key)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.aws/**)",
+      "Edit(~/.azure/**)",
+      "Edit(~/.config/gcloud/**)",
+      "Edit(~/.config/gh/hosts.yml)",
+      "Edit(~/.netrc)",
+      "Edit(~/.npmrc)",
+      "Edit(~/.docker/config.json)",
+      "Edit(~/.kube/config)",
+      "Edit(~/.git-credentials)"
     ]
   },
   "hooks": {
@@ -63,5 +90,27 @@
         ]
       }
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": ["~/.cache", "~/.npm", "~/.asdf/installs/golang", "~/go"]
+    },
+    "network": {
+      "allowedDomains": [
+        "proxy.golang.org",
+        "sum.golang.org",
+        "storage.googleapis.com",
+        "registry.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "uploads.github.com",
+        "*.githubusercontent.com",
+        "cdn.playwright.dev",
+        "playwright.download.prss.microsoft.com"
+      ]
+    }
   }
 }

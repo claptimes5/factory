@@ -82,9 +82,18 @@ above, only when the task is about them; in a session with a person,
 ask first. Never weaken a check to make it pass: no skipped tests,
 loosened thresholds or rewritten expectations without saying so.
 
-In Claude Code, `.claude/hooks/guard.py` enforces some of this: an edit
-to one of these paths asks for approval (in auto mode, the auto-mode
-classifier answers, not a person); force pushes, `--no-verify` and
+In Claude Code, `.claude/hooks/guard.py` enforces some of this. The
+factory's own files (`.claude/`, `.github/`, `docs/factory/`, this file,
+`CLAUDE.md`, `REVIEW.md`, `RISK.md`) can be edited only in a session a
+person started with `FACTORY_CONFIG=1 claude`; otherwise ask them to
+restart that way. Edits to the other paths above ask for approval (in
+auto mode, the auto-mode classifier answers, not a person). The hook is
+a speed bump, not a wall: a script run through Bash can write files it
+never sees. The walls are the Bash sandbox in `.claude/settings.json`
+(Linux needs `bubblewrap` and `socat`), review, and CODEOWNERS.
+Autonomous runs start with `claude --settings .claude/autonomy.json`,
+which also denies writes to the factory's files and limits the network
+to GitHub and the package registries. Force pushes, `--no-verify` and
 `rm -rf` outside the checkout are refused; a commit runs
 `scripts/verify.sh --quick` first, and must be its own command so the
 check sees what it commits; Go files are gofmt'd on save. When it

@@ -124,6 +124,15 @@ if runs lint; then
 	step pull request description check
 	python3 scripts/check_pr_body_test.py
 
+	step workflow actions pinned
+	# A tag can be moved to other code; a commit can't.
+	unpinned=$(grep -n 'uses:' .github/workflows/*.yml | grep -v '@[0-9a-f]\{40\}' || true)
+	if [ -n "$unpinned" ]; then
+		echo "Pin these actions to a full commit SHA (keep the tag as a comment):" >&2
+		echo "$unpinned" >&2
+		exit 1
+	fi
+
 	step go vet
 	go vet ./...
 
