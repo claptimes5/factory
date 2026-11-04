@@ -30,7 +30,10 @@ your branch in turn, or use `git stash` around it. With the Playwright MCP
 tools, open the page you changed on each and save a screenshot to
 `.playwright-mcp/before-<page>.png` and `.playwright-mcp/after-<page>.png`.
 Rebuild with `cd web && npm run build` first: the devserver serves the
-committed build under `internal/web/app`, not your source.
+committed build under `internal/web/app`, not your source. Use 8090 for
+both, one after the other, and stop it before `npm run e2e`: the browser
+tests reuse whatever devserver answers on 8099 and 8098, whatever build
+it serves.
 
 ## 4. Check each criterion
 

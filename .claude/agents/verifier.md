@@ -33,8 +33,9 @@ wrong until you have seen it work.
    fail if the change were reverted or wrong? If not, say so.
 4. Dashboard change: `cd web && npm run build` in a worktree if the
    committed build may be stale, start `go run ./internal/web/devserver`
-   there (`-addr` if 8090 is taken), open the page with the Playwright
-   tools and take a screenshot.
+   there, open the page with the Playwright tools and take a screenshot.
+   Stop it before `npm run e2e`, and never serve on 8099 or 8098: the
+   browser tests reuse whatever answers there, so they'd test that build.
 
 ## Report
 

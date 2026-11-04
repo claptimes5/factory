@@ -15,8 +15,8 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
-| 6 | Browser E2E + web quality gates | not started | | | | |
-| 7 | Agent self-verification protocol | not started | | | | |
+| 6 | Browser E2E + web quality gates | passed | Avi | 2026-11-04 | `docs/factory/ui-seeds.py`; 5 CI attempts on e277ee7; throwaway red run | #129, #131, see log |
+| 7 | Agent self-verification protocol | passed | Avi | 2026-11-04 | two sample tasks through `verify-factory` and the `verifier` agent | see log |
 | 7b | Formal verification of the riskiest property (optional) | not started | | | | trigger (a) may apply: the pipeline's retry and park states; decide after Step 7 |
 | 8 | AI code review + security review | not started | | | | |
 | 9 | Risk-tiered approval and ownership | not started | | | | |
@@ -414,4 +414,61 @@ Decisions made: the Level 3 work done early (FACTORY_CONFIG route, sandbox, mask
   autonomy.json) is parked in git history and .claude/autonomy.json until Step 13.
 Open questions for human: none
 Next step proposed: 6 (5b is skipped)
+```
+
+### 2026-11-04
+```
+STEP 6: Browser E2E + web quality gates   STATUS: passed
+Gate command(s): python3 docs/factory/ui-seeds.py <clone>; CI run 41915653371 on e277ee7,
+  attempts 1-5; throwaway PR run 41915103770 with a planted failure; Playwright MCP
+  opening http://127.0.0.1:8090/app/ and taking a screenshot.
+Result: UI seeds caught 5 of 5 (U1 hidden button, U2 moved route, U3 renamed field,
+  U4 API field renamed, U5 sign-in skipped; #129). Five attempts all green, web job
+  2m27s median (2m19s to 2m39s). The red run's playwright-report artifact (25 MB)
+  holds each failure's screenshot and trace. Playwright MCP 0.0.83 (#131) opened the
+  devserver and saved a screenshot in this session (not run when #131 merged).
+Negative control: the UI seeds and the throwaway red run.
+Flagged changes: CI retries 1 -> 0 (stricter, #129).
+Decisions made: no Lighthouse-style quality gates (optional for one person). The
+  browser tool is the Playwright MCP server, headless, isolated, held to the
+  devservers' origins.
+Open questions for human: none
+```
+
+### 2026-11-04
+```
+STEP 7: Agent self-verification protocol   STATUS: passed
+Gate command(s): sample task 1 (a copy change and a small behaviour change: the
+  diff's header and Trust's practice run at zero and one) taken through the
+  verify-factory skill, then the verifier agent; sample task 2 (Home's "After this"
+  list shows three, not two) with a seeded defect, then a fresh verifier.
+Result: task 1 (#132): verify passed (172 passed, 4 skipped); both new browser tests
+  red with the source change stashed (4 of 4 runs); before and after screenshots of
+  Trust's level 6 from Playwright MCP. Verifier: "VERDICT: pass", citing its own runs
+  (52 passed on the branch, 4 failed on main with the branch's specs), a rebuild
+  that left git status clean, and desktop and phone screenshots. It also found the
+  same singular bug in History.tsx:103 and the devserver's log line, outside the task.
+  Task 2: the seed left "and {queue.length - 3} more" while the list grew to three,
+  and the author's test counted only the list. Verifier: "VERDICT: fail", "1 current +
+  3 listed + '5 more' adds up to 9 out of 8", plus the exactly-4 case, with a repro.
+  The branch was deleted unpushed.
+Negative control: task 2 is it.
+Flagged changes: the PR template's "Testing" heading is now "Testing and evidence";
+  check-pr-body.py still matches it ("test"), and its tests pass.
+Decisions made: no Stop hook ("not done until verify passes"): the guard already
+  refuses a commit until verify --quick passes, and the skill asks for the full
+  verify; add one if an agent claims done without it. No /simplify or /bug-hunt
+  skills (no recurring need yet). pstack (Appendix D) not used. The verifier has
+  Bash so it can run tests and the devserver; it is told not to write in the
+  checkout, and both runs left the checkouts clean. Claude Code loads
+  .claude/agents/ at session start, so this session ran the verifier as a
+  general-purpose agent told to follow verifier.md; from the next session it is
+  the "verifier" type.
+Found on the way: npm run e2e reuses whatever devserver answers on 8099, so a
+  "before" devserver left on 8099 made verify test main's build (4 false failures).
+  The skill and verifier.md now say to use 8090 and stop it before e2e.
+Open questions for human: 7b. Trigger (a) applies (the pipeline's retry and park
+  states are a state machine). Run it now, or skip until a Step 8 review misses
+  something there?
+Next step proposed: 7b or 8
 ```
