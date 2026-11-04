@@ -9,7 +9,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 0 | Orient and baseline | passed | Avi | 2026-11-04 | commands in BASELINE.md; GitHub plan recorded | [BASELINE.md](BASELINE.md), top-up in log |
 | 1 | One-command local verification | passed | Avi | 2026-11-04 | `scripts/verify.sh`; install cooldown checked with npm 11.19 | fresh clone at 0e2c81e, 2 runs; `web/.npmrc`, top-up in log |
 | 2 | Lean CLAUDE.md | passed | Avi | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
-| 3 | Deterministic guardrails (hooks, permissions) | blocked | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; live demos need a restart | top-up in log: sandbox needs `socat`, live demos need the maintainer |
+| 3 | Deterministic guardrails (hooks, permissions) | blocked | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; live demos in a sandboxed session | live gate parts 1 and 2 in log: git push fails through the mask |
 | 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
@@ -318,4 +318,29 @@ Note: inside the sandbox, git status lists the /dev/null mounts over denied path
   (.bashrc, .mcp.json, .claude/skills, ...) as untracked. Add files by name there.
 Next: switch the remote, restart with --settings .claude/github.json, show gh and
   git push work with hosts.yml masked, then set Step 3 to passed.
+
+STEP 3 live gate, part 2   STATUS: blocked
+Gate command(s): in a FACTORY_CONFIG=1 session with the sandbox on and the mask from
+  .claude/github.json: gh api user; git ls-remote origin HEAD; git push of a branch;
+  python3 .claude/hooks/guard_test.py.
+Result: origin is now https://github.com/claptimes5/factory.git with
+  `gh auth git-credential` as git's helper. gh works through the mask: gh api user
+  answered claptimes5 from inside the sandbox, with the project's Read deny on
+  hosts.yml kept. Guard tests: 22 pass.
+  git push fails: "Invalid username or token. Password authentication is not
+  supported for Git operations." ls-remote passed only because the repo is public
+  and needs no auth. Likely cause: the helper gives git the stand-in, git sends it
+  base64-encoded in a Basic header, and the proxy swaps the stand-in only where it
+  appears in plain text (gh sends it that way, so gh works). Sending it in plain
+  text with http.extraHeader "Authorization: Bearer ..." also got a 401: GitHub's
+  git endpoint wants Basic.
+Not shown: the stand-in itself. Printing even part of the token gh sees was refused
+  by auto mode's classifier, which is the right call.
+Options for the maintainer: (a) push from a terminal outside Claude Code and accept
+  that sandboxed sessions can't push; autonomous runs would then need a different
+  route before Step 13. (b) Find out whether the sandbox's mask can swap a stand-in
+  inside a Basic header. (c) Give sandboxed sessions a separate fine-grained token
+  limited to this repo, readable by git, instead of masking gh's.
+Next: the maintainer picks an option; then show a push from inside the sandbox and
+  set Step 3 to passed.
 ```
