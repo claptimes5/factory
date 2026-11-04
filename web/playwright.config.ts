@@ -6,9 +6,11 @@ const port = 8099;
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
-  retries: process.env.CI ? 1 : 0,
+  // No retries, in CI either: a test that passes on its second try is flaky,
+  // and a retry would hide it (docs/factory/BASELINE.md lists the known ones).
+  retries: 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
-  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
+  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure", screenshot: "only-on-failure" },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
     { name: "phone", use: { ...devices["Pixel 7"] } },

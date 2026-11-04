@@ -18,24 +18,31 @@ const budgetSeconds = 180;
 const secs = (since) => Math.round((performance.now() - since) / 1000);
 
 const port = 8099; // playwright.config.ts's
-const url = `http://127.0.0.1:${port}/api/v1/overview`;
-const up = () => fetch(url, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false);
+// e2e/login.spec.ts's: the same sample data behind a password.
+const loginPort = 8098;
 
-const started = performance.now();
-let server;
-if (!(await up())) {
+// Starts a devserver on port unless one already answers there, and
+// returns it (or nothing, when one was running). Behind a password the API
+// says 401, which still means it's up.
+async function devserver(port, ...flags) {
+  const up = () => fetch(`http://127.0.0.1:${port}/api/v1/overview`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok || r.status === 401, () => false);
+  if (await up()) return null;
   // Its own process group, so stopping it stops the binary go run starts.
-  server = spawn("go", ["run", "../internal/web/devserver", "-listen", `127.0.0.1:${port}`], { stdio: "inherit", detached: true });
+  const server = spawn("go", ["run", "../internal/web/devserver", "-listen", `127.0.0.1:${port}`, ...flags], { stdio: "inherit", detached: true });
   const deadline = Date.now() + 120_000;
   while (!(await up())) {
     if (server.exitCode !== null || Date.now() > deadline) {
-      console.error("e2e: the devserver didn't start");
+      console.error(`e2e: the devserver on port ${port} didn't start`);
       process.exit(1);
     }
     await new Promise((r) => setTimeout(r, 200));
   }
+  return server;
 }
-const stop = () => server && process.kill(-server.pid);
+
+const started = performance.now();
+const servers = await Promise.all([devserver(port), devserver(loginPort, "-password", "e2e sample password")]);
+const stop = () => servers.forEach((s) => s && process.kill(-s.pid));
 const args = process.argv.slice(2);
 const ran = performance.now();
 const pw = spawn("npx", ["playwright", "test", ...args], { stdio: "inherit", env: { ...process.env, FACTORY_E2E_SERVER: "1" } });
