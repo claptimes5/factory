@@ -8,8 +8,9 @@ Thanks for helping. Issues and pull requests are both welcome.
   agree on the approach.
 - Run what CI runs: `scripts/verify.sh` does all of it, stopping at the
   first failure (about 3 minutes; `scripts/verify.sh --quick` skips the
-  race detector and the dashboard for the inner loop). It needs
-  golangci-lint at the version CI pins, and tells you how to install it.
+  race detector and the dashboard for the inner loop). It first checks
+  for Git, Go, Python 3 and Node and names any that are missing; it
+  installs the golangci-lint and Playwright browser versions CI uses itself.
   What it runs:
   - `gofmt -l` reports nothing for the Go files
   - `go vet ./...`, `go build ./...` and `go test -race ./...`

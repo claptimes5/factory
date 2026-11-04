@@ -23,8 +23,9 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
   the full one before you say a change is done, and show its last lines.
 - One Go test: `go test -race -run TestName ./internal/pipeline/`. One
   browser spec: `cd web && npm run e2e -- e2e/home.spec.ts`.
-- Run `gofmt -w` on the Go files you change. verify needs golangci-lint at
-  the version `.github/workflows/ci.yml` pins, and says how to install it.
+- Run `gofmt -w` on the Go files you change. On a new machine, verify
+  names every missing tool at once and installs the pinned golangci-lint
+  and Playwright browser itself.
 - Changed anything under `web/`, or the API in `internal/web/openapi.yaml`?
   Run `cd web && npm ci && npm run build` and commit what it regenerates
   under `internal/web/app` and `web/src/api`, in the same commit.
