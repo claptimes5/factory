@@ -154,8 +154,14 @@ function WorkspaceTrustView({ t, w: r }: { t: Trust; w: WorkspaceTrust }) {
                 {!l.available && <p className="text-meta text-muted-foreground">{l.needs}</p>}
                 {p && l.level === 6 ? (
                   <p className="text-meta text-muted-foreground">
-                    Practice run: of the {r.proposed} issues it filed from its own findings in {t.window_days} days, you took on {r.accepted}
-                    {r.accepted > 0 && (p.went_wrong > 0 ? `; ${p.went_wrong} went wrong once merged` : "; none went wrong once merged")}.
+                    {r.proposed === 0 ? (
+                      `Practice run: it filed no issues from its own findings in ${t.window_days} days.`
+                    ) : (
+                      <>
+                        Practice run: of the {r.proposed} {r.proposed === 1 ? "issue" : "issues"} it filed from its own findings in {t.window_days} days, you took on {r.accepted}
+                        {r.accepted > 0 && (p.went_wrong > 0 ? `; ${p.went_wrong} went wrong once merged` : "; none went wrong once merged")}.
+                      </>
+                    )}
                   </p>
                 ) : (
                   p &&
