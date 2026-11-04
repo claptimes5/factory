@@ -11,7 +11,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 0 | Orient and baseline | passed | Avi | 2026-11-04 | commands in BASELINE.md; GitHub plan recorded | [BASELINE.md](BASELINE.md), top-up in log |
 | 1 | One-command local verification | passed | Avi | 2026-11-04 | `scripts/verify.sh`; install cooldown checked with npm 11.19 | fresh clone at 0e2c81e, 2 runs; `web/.npmrc`, top-up in log |
 | 2 | Lean CLAUDE.md | passed | Avi | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
-| 3 | Deterministic guardrails (hooks, permissions) | in progress | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; Level 1 live demos | Level 3 parts done early, see log; Level 1 gate re-run after the lock change merges |
+| 3 | Deterministic guardrails (hooks, permissions) | passed | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; Level 1 live demos | Level 1 gate in log; Level 3 parts done early and parked |
 | 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
@@ -37,7 +37,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 2026-11-04 | Every edit to a factory file needed a person to restart Claude Code with FACTORY_CONFIG=1, and the sandbox blocked Bash writes under .claude/ | guard.py harness block, Bash sandbox (both Level 3 controls, switched on at Step 3) | Back to Level 1: the guard drops the factory files, settings.json drops the sandbox | fixed |
 | 2026-11-04 | Every commit from a desktop-app session was refused: the guard runs verify with Claude Code's PATH, where the Windows npm comes first | guard.py verify-before-commit | verify switches to asdf's Linux Node when the npm on the PATH is the Windows one | fixed |
 | 2026-11-04 | A stray ~/.git folder (no HEAD) made the guard treat the home directory as a repo and refuse writes under ~/.claude | guard.py repo_root | A .git directory counts only with a HEAD (#125) | fixed |
-| 2026-11-04 | The guard reads a heredoc's text as commands, so a script whose text mentions "> some/protected/path" is treated as writing there | guard.py segments | None yet; it now only asks, and only for product paths | accepted |
+| 2026-11-04 | The guard reads a heredoc's text as commands, so a script whose text mentions "> some/protected/path" is treated as writing there; a heredoc mentioning "git commit" after another command is refused as "run git commit as its own command" | guard.py segments | None yet; append with the Edit tool instead. Fix if it keeps biting | accepted |
 | 2026-11-04 | `cp -r staging/. worktree/` wrote .claude/hooks/guard.py into a branch worktree while the guard still refused factory files: cp names a directory as its target, and the guard checks only the target it is given | guard.py check_writes | None needed at Level 1 (nothing there is protected now); at Level 3 the sandbox and autonomy.json Edit denies stop it | accepted |
 | 2026-11-04 | In the sandbox, the job bridge's tests couldn't open Unix sockets | Bash sandbox | allowAllUnixSockets plus denyRead on the Docker and WSL sockets (#126). autonomy.json doesn't carry these yet | open for Level 3 |
 | 2026-11-04 | In the sandbox, git push fails through the token mask (the stand-in isn't swapped inside git's Basic header); gh works | Bash sandbox credentials mask | Give pushes the bot identity's own repo-scoped token (Step 9) | open for Level 3 |
@@ -388,4 +388,30 @@ Next: once this merges and the main checkout pulls it, restart once (settings lo
   start) and re-run Step 3's Level 1 gate live: a product protected edit asks, a commit
   with a lint error is refused, a .env read is denied, verify runs with no prompt, a
   factory file edits freely, and a Bash bypass of a product path is recorded.
+```
+
+### 2026-11-04
+```
+STEP 3: Deterministic guardrails (Level 1 gate)   STATUS: passed
+Gate command(s): live, in a session started after #127 (no sandbox): Read of .env;
+  guard.py pre-edit on internal/web/auth.go and .claude/settings.json; pre-bash on
+  `sed -i ... deploy/upgrade.sh` and `python3 -c "open('deploy/x','w')"`; a commit
+  of a planted errcheck violation in a scratch worktree; scripts/verify.sh --quick;
+  an Edit of this file.
+Result: .env read denied by the permission settings. auth.go: ask. settings.json:
+  allowed, no output (factory files are free at Level 1). sed -i on deploy/: ask.
+  python3 -c write to deploy/: allowed; the guard can't see it, so at Level 1 only
+  review and CI stop it (Step 4 now, CODEOWNERS at Step 9). The commit was refused
+  with golangci-lint's "Error return value of os.Remove is not checked (errcheck)",
+  and verify got there under Claude Code's own PATH. verify --quick passed in 81s
+  with no prompt, after "npm here was the Windows one ...; using asdf's
+  .../nodejs/24.2.0 instead" (auto mode, so no prompt doesn't prove the allowlist).
+  This Edit to docs/factory/PROGRESS.md went through with no prompt and no hook stop.
+Negative control: the planted lint error above; 3 red guard tests with .claude/ put
+  back on the protected list (lock-level change entry).
+Flagged changes: none in this entry.
+Decisions made: the Level 3 work done early (FACTORY_CONFIG route, sandbox, mask,
+  autonomy.json) is parked in git history and .claude/autonomy.json until Step 13.
+Open questions for human: none
+Next step proposed: 6 (5b is skipped)
 ```
