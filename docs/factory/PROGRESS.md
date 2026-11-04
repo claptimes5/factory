@@ -460,10 +460,10 @@ Decisions made: no Stop hook ("not done until verify passes"): the guard already
   verify; add one if an agent claims done without it. No /simplify or /bug-hunt
   skills (no recurring need yet). pstack (Appendix D) not used. The verifier has
   Bash so it can run tests and the devserver; it is told not to write in the
-  checkout, and both runs left the checkouts clean. Claude Code loads
-  .claude/agents/ at session start, so this session ran the verifier as a
-  general-purpose agent told to follow verifier.md; from the next session it is
-  the "verifier" type.
+  checkout, and both runs left the checkouts clean. A new agent file wasn't
+  callable by name at first, so both runs used a general-purpose agent told to
+  follow verifier.md; "verifier" and "verify-factory" were listed later in the
+  same session, after a turn with the person. The named type hasn't run a gate.
 Found on the way: npm run e2e reuses whatever devserver answers on 8099, so a
   "before" devserver left on 8099 made verify test main's build (4 false failures).
   The skill and verifier.md now say to use 8090 and stop it before e2e.
