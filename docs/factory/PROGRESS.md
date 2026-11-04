@@ -15,7 +15,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
-| 6 | Browser E2E + web quality gates | not started | | | | |
+| 6 | Browser E2E + web quality gates | passed | Avi | 2026-11-04 | `python3 docs/factory/ui-seeds.py <clone>`; ci on #129 5x; throwaway #130 | 5 of 5 seeds caught; run 41915653371 attempts 1-5 green, Playwright median 105s; #130 artifacts |
 | 7 | Agent self-verification protocol | not started | | | | |
 | 7b | Formal verification of the riskiest property (optional) | not started | | | | trigger (a) may apply: the pipeline's retry and park states; decide after Step 7 |
 | 8 | AI code review + security review | not started | | | | |
@@ -39,6 +39,8 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 2026-11-04 | A stray ~/.git folder (no HEAD) made the guard treat the home directory as a repo and refuse writes under ~/.claude | guard.py repo_root | A .git directory counts only with a HEAD (#125) | fixed |
 | 2026-11-04 | The guard reads a heredoc's text as commands, so a script whose text mentions "> some/protected/path" is treated as writing there; a heredoc mentioning "git commit" after another command is refused as "run git commit as its own command" | guard.py segments | None yet; append with the Edit tool instead. Fix if it keeps biting | accepted |
 | 2026-11-04 | `cp -r staging/. worktree/` wrote .claude/hooks/guard.py into a branch worktree while the guard still refused factory files: cp names a directory as its target, and the guard checks only the target it is given | guard.py check_writes | None needed at Level 1 (nothing there is protected now); at Level 3 the sandbox and autonomy.json Edit denies stop it | accepted |
+| 2026-11-04 | CI retried each failed browser test once, so a flaky test passed as green; the first run without retries found a third flake | CI's Playwright retries | retries 0, everywhere (#129) | fixed |
+| 2026-11-04 | Auto mode refused to run a downloaded package (`npx @playwright/mcp --help`) before review | auto-mode classifier | Read its README with npm view instead; the server is tried after the maintainer approves #131 | accepted |
 | 2026-11-04 | In the sandbox, the job bridge's tests couldn't open Unix sockets | Bash sandbox | allowAllUnixSockets plus denyRead on the Docker and WSL sockets (#126). autonomy.json doesn't carry these yet | open for Level 3 |
 | 2026-11-04 | In the sandbox, git push fails through the token mask (the stand-in isn't swapped inside git's Basic header); gh works | Bash sandbox credentials mask | Give pushes the bot identity's own repo-scoped token (Step 9) | open for Level 3 |
 | 2026-11-04 | In the sandbox, git status lists the /dev/null mounts over denied paths as untracked files | Bash sandbox | Add files by name in sandboxed sessions | open for Level 3 |
@@ -414,4 +416,40 @@ Decisions made: the Level 3 work done early (FACTORY_CONFIG route, sandbox, mask
   autonomy.json) is parked in git history and .claude/autonomy.json until Step 13.
 Open questions for human: none
 Next step proposed: 6 (5b is skipped)
+```
+
+### 2026-11-04
+```
+STEP 6: Browser E2E + web quality gates   STATUS: passed
+Gate command(s): python3 docs/factory/ui-seeds.py <clone> (5 UI breaks, whole suite
+  each); ci on #129 at e277ee7, run 41915653371 attempts 1-5; throwaway #130 (a
+  sign-in assertion broken) for the failure artifacts.
+Result: seeds caught 5 of 5: U1 Save quiet hours hidden, U2 /notify moved, U3 the
+  From field renamed (notify test each), U4 an item's title sent as name (25
+  tests), U5 sign-in skipped (both login tests). CI 5 of 5 green with no retries:
+  Playwright 105, 102, 115, 118, 95s (median 105s); web job median 147s. #130: only
+  the two seeded tests failed, and playwright-report held their traces and a
+  screenshot of the sign-in page at the failure. Full verify: 170 passed, 46s.
+Negative control: the seeds and #130.
+Critical flows in the browser: 1 (issue to PR), 2 (gates) and 3 (review rounds,
+  parking) were covered already; 5 (sign-in) is new, e2e/login.spec.ts against a
+  second devserver started with -password; 4 (containment) has nothing to show in a
+  browser and stays with Step 5's Go tests.
+Flaky tests: get-started "repositories are chosen" reproduced (2s setup polling
+  brought the server's repo list back over the played save) and fixed; notify "When
+  to tell you" fixed the documented way but never reproduced; get-started "a ChatGPT
+  plan signs in" found by the first no-retry CI run and fixed (the click raced the
+  step opening by itself). All three stay on BASELINE's list until runs prove them.
+Flagged changes: CI retries 1 -> 0 (stricter). openStep in get-started.spec.ts clicks
+  until the card is open, inside expect.toPass: it retries an action until a state
+  holds, bounded by the test's timeout, and fails if the card never opens.
+Decisions made: web quality gates (accessibility, performance) skipped as optional
+  for one person; revisit when the dashboard gets outside users. Browser tool:
+  Microsoft's Playwright MCP, pinned to 0.0.83, headless, in-memory profile, kept on
+  the devservers (#131, not yet run: auto mode won't run it before review). A
+  failure screenshot now joins each trace. Similar read-then-click patterns in
+  dashboard.spec.ts:369 and setup.spec.ts:18 have never failed; left alone.
+Open questions for human: none (merge #128, #129, #131; approve the playwright MCP
+  server in the first session after)
+Next step proposed: 7
 ```
