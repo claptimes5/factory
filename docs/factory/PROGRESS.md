@@ -111,7 +111,8 @@ Decisions made: one stdlib Python script (no jq on the second workstation); prot
   builders run with --setting-sources user and never load these hooks.
 Second workstation: golangci-lint was missing for asdf's Go 1.27.3 (now verify installs
   it); Node 22.13. Full verify: 339s cold, then 122s with one new desktop flake
-  (get-started.spec.ts:299, now in BASELINE), then 132s, 166 passed, 4 skipped.
+  (get-started.spec.ts:299, now in BASELINE), then 132s, 166 passed, 4 skipped, then
+  125s with the same flake again (165 passed, 1 failed).
 Open questions for human: none
 Next step proposed: 4
 ```
