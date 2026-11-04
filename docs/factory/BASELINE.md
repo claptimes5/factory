@@ -64,6 +64,13 @@ recognized, not retried until green.
 - `CODEOWNERS`: `/.github/`, `/factory.example.yaml`, `/prompts/`,
   `/.golangci.yml` → the maintainer. Ineffective until branch protection
   requires code-owner review.
+- **Since Step 4 (2026-11-04):** `test`, `lint` and `web` run
+  `scripts/verify.sh --part go|lint|web`; a `verify` job passes only when
+  all three did. `pr.yml`'s `pr-body` fails a PR whose Testing, Risk or
+  How to revert section is empty. `main` is protected: PRs only (0
+  approvals), `verify`, `pr-body` and `cla` required, branch up to date
+  before merging (no merge queue on a personal account's repo), no force
+  pushes or deletion, admins included.
 
 ## Protected paths
 
@@ -107,12 +114,16 @@ judgment"); revisit in Step 5.
 likely, in CI: it needs Docker *and* the `redis:7-alpine` and
 `alpine:3.20` images already pulled, and nothing pulls them. It covers
 how a job's commands reach its service containers without reaching
-anything else, inside the sandbox. Proposed for Step 4: pull the two
-images in CI so it runs.
+anything else, inside the sandbox. **Since Step 4:** CI pulls the two
+images and sets `FACTORY_REQUIRE_DOCKER`, which makes the test fail
+rather than skip without them (and keeps Go's cache from reusing a
+skipped result). It runs in CI now.
 
 ## Known problems
 
-- golangci-lint missing locally, so the local check set is not the CI set.
-- No branch protection: CI is advisory, CODEOWNERS is not enforced.
+- ~~golangci-lint missing locally~~: verify installs it (Step 3).
+- ~~No branch protection~~: done in Step 4. CODEOWNERS is still not
+  enforced: code-owner review is Step 9.
 - 4 npm audit findings in dashboard dependencies.
-- No single command runs everything CI runs.
+- ~~No single command runs everything CI runs~~: `scripts/verify.sh`
+  (Step 1), and CI runs it (Step 4).

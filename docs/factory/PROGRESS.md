@@ -6,7 +6,7 @@
 | 1 | One-command local verification | passed | 2026-11-03 | `scripts/verify.sh` | fresh clone at 0e2c81e, 2 runs |
 | 2 | Lean CLAUDE.md | passed | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
 | 3 | Deterministic guardrails | passed | 2026-11-03 | live hook demos + `python3 .claude/hooks/guard_test.py` | see log |
-| 4 | Required CI mirrors local verify | not started | | | |
+| 4 | Required CI mirrors local verify | passed | 2026-11-04 | throwaway PR, clean PR, direct push | #122, #121, see log |
 | 5 | Characterization + critical-path tests | not started | | | |
 | 6 | Browser E2E + web quality gates | not started | | | |
 | 7 | Agent self-verification protocol | not started | | | |
@@ -115,4 +115,30 @@ Second workstation: golangci-lint was missing for asdf's Go 1.27.3 (now verify i
   125s with the same flake again (165 passed, 1 failed).
 Open questions for human: none
 Next step proposed: 4
+```
+
+### 2026-11-04
+```
+STEP 4: Required CI mirrors local verify   STATUS: passed
+Gate command(s): (a) throwaway PR #122 breaking an assertion in e2e/home.spec.ts, its
+  description the empty template; (b) #121 (this step); (c) git push origin HEAD:main
+  with an empty commit on origin/main.
+Result: (a) web, verify and pr-body red, merge state BLOCKED; the failure was the planted
+  "Checking nothing at all" (desktop and phone). Filling the description reran pr-body
+  -> pass, still BLOCKED on verify. Closed, branch deleted.
+  (b) all checks pass (lint 38s, test 1m56s, web 2m40s, verify, pr-body, cla), merge state
+  CLEAN. (c) rejected: GH006 "Changes must be made through a pull request"; main unchanged.
+Negative control: (a) is it. Also check-pr-body.py fails #120's description (no sections).
+Flagged changes: TestServicesWithDocker (internal/runner, protected) fails instead of
+  skipping when FACTORY_REQUIRE_DOCKER is set; CI sets it. Stricter. Its first CI run came
+  back "(cached)" from a run that skipped; with the variable it ran (internal/runner 30s).
+Decisions made: CI's jobs each run one --part of verify.sh (same speed as before) and a
+  verify job aggregates them, with if: always() so a skipped part can't pass; the
+  golangci-lint action only installs the binary. Required: verify, pr-body, cla; strict
+  up to date (no merge queue for personal accounts); PRs required with 0 approvals (sole
+  maintainer; Step 9); admins included; no force push or deletion. The pr-body check runs
+  the PR's own script, like every test; review is the guard. Auto mode refused a merge
+  attempt on the red PR, so (a) is shown by GitHub's merge state, not by a refused merge.
+Open questions for human: none
+Next step proposed: 5
 ```

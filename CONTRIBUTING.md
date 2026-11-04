@@ -31,6 +31,14 @@ Thanks for helping. Issues and pull requests are both welcome.
   `.claude/` if you work in worktrees under it, since Claude Code reads
   them from there. AGENTS.md says which paths are protected.
 - Update the docs under `docs/` when you change what a user sees or runs.
+- Fill in the pull request template: Summary, how you tested it, what it
+  risks and how to revert it. The `pr-body` check fails while Testing,
+  Risk or How to revert is empty, and reruns when you edit the
+  description.
+- `main` is protected: it changes only through pull requests, and a pull
+  request merges once `verify`, `pr-body` and `cla` pass and its branch is
+  up to date with `main`. CI's `verify` runs `scripts/verify.sh` in three
+  parts side by side (`--part lint`, `--part go`, `--part web`).
 
 ## Versions and releases
 

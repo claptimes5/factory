@@ -61,6 +61,10 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
 - Commit titles are one sentence, in the present tense, about the
   behavior: "Retry reruns a parked item's failed review". No prefixes. The
   body says why first, then what changed.
+- A pull request fills in the template's Testing, Risk and How to revert
+  sections; the `pr-body` check fails while one is empty. `main` takes
+  changes only through pull requests whose `verify` check passed on a
+  branch up to date with it.
 
 ## Take care with
 
