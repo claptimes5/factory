@@ -14,7 +14,7 @@ test("nothing on the dashboard works until you sign in, and you land where you w
   await expect(page).toHaveURL(/\/login\?next=%2Fapp%2Fsettings$/);
   await page.getByLabel("Password").fill("not the password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByText("That isn't the password.")).toBeVisible();
+  await expect(page.getByText("Seeded failure for the Step 6 gate")).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);
 
   await page.getByLabel("Password").fill(password);
