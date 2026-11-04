@@ -1,9 +1,13 @@
 #!/bin/sh
 # verify.sh runs what CI runs, in one command, and stops at the first
-# failure: gofmt, go vet, the pinned golangci-lint, go build, go test -race,
-# then the dashboard's npm ci, build (types, styles), stale-build check and
-# Playwright. Humans, agents and CI all run this, so "it passed" means the
-# same thing everywhere.
+# failure: gofmt, the Claude Code hooks' tests, go vet, the pinned
+# golangci-lint, go build, go test -race, then the dashboard's npm ci,
+# build (types, styles), stale-build check and Playwright. Humans, agents
+# and CI all run this, so "it passed" means the same thing everywhere.
+#
+# It first checks for every tool it needs and names all that are missing
+# at once. The ones this repo pins (golangci-lint, Playwright's Chromium)
+# it installs itself.
 #
 # --quick is the inner loop: the Go checks without -race, and the
 # dashboard's type check when its packages are installed. It is not a
@@ -34,6 +38,54 @@ linux_npm() {
 	esac
 }
 
+version() { "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9.]*\).*/\1/p'; }
+
+step tools
+# A new machine should learn everything it lacks in one run, not one
+# failure per run. Only what needs a system install is left to a person.
+web=true
+if $quick && [ ! -d web/node_modules ]; then web=false; fi
+missing=""
+need() { command -v "$1" >/dev/null 2>&1 || missing="$missing
+  $1: $2"; }
+need git "https://git-scm.com/downloads"
+need go "https://go.dev/dl/ (any recent Go; go.mod fetches the toolchain it names)"
+need python3 "Python 3, for the Claude Code hooks' tests"
+engines=$(sed -n 's/.*"node": *"\(.*\)".*/\1/p' web/package.json)
+if $web; then need npm "Node $engines, https://nodejs.org"; fi
+if [ -n "$missing" ]; then
+	printf 'verify needs these installed first, then rerun:%s\n' "$missing" >&2
+	exit 1
+fi
+if $web; then
+	linux_npm
+	if ! node -e '
+		const want = process.argv[1].replace(/^>=/, "").split(".").map(Number);
+		const have = process.versions.node.split(".").map(Number);
+		for (let i = 0; i < 3; i++) if (have[i] !== want[i]) process.exit(have[i] > want[i] ? 0 : 1);
+	' "$engines"; then
+		printf 'Node here is %s, but the dashboard needs %s: https://nodejs.org\n' "$(node --version)" "$engines" >&2
+		exit 1
+	fi
+fi
+# The version CI pins, so a local pass means a CI pass. A version manager
+# may not put go install's directory on the PATH, so use it directly.
+want=$(sed -n 's/^ *version: v//p' .github/workflows/ci.yml | head -n1)
+lint=golangci-lint
+if [ "$(version golangci-lint)" != "$want" ]; then
+	bin=$(go env GOBIN)
+	[ -n "$bin" ] || bin=$(go env GOPATH)/bin
+	lint=$bin/golangci-lint
+	if [ "$(version "$lint")" != "$want" ]; then
+		echo "Installing golangci-lint v$want, the version CI runs, into $bin."
+		go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$want"
+	fi
+fi
+if ! docker info >/dev/null 2>&1; then
+	echo "Docker isn't running here, so the tests that need it will be skipped."
+fi
+echo "All there."
+
 step gofmt
 # New files too, not only tracked ones: a file not yet added is still in
 # the commit about to be made.
@@ -44,22 +96,16 @@ if [ -n "$unformatted" ]; then
 	exit 1
 fi
 
+step claude hooks
+# The hooks in .claude/ enforce AGENTS.md for interactive agents; a broken
+# one fails open or blocks everything, so its tests run every time.
+python3 .claude/hooks/guard_test.py
+
 step go vet
 go vet ./...
 
 step golangci-lint
-# The version CI pins, so a local pass means a CI pass.
-want=$(sed -n 's/^ *version: v//p' .github/workflows/ci.yml | head -n1)
-if ! command -v golangci-lint >/dev/null; then
-	echo "golangci-lint isn't installed: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$want" >&2
-	exit 1
-fi
-have=$(golangci-lint --version | sed -n 's/.*version \([0-9.]*\).*/\1/p')
-if [ "$have" != "$want" ]; then
-	echo "golangci-lint is $have but CI runs $want: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$want" >&2
-	exit 1
-fi
-golangci-lint run ./...
+"$lint" run ./...
 
 step go build
 go build ./...
@@ -69,7 +115,6 @@ if $quick; then
 	go test ./...
 	if [ -d web/node_modules ]; then
 		step dashboard type check
-		linux_npm
 		(cd web && npm run --silent typecheck)
 	else
 		printf '\nSkipped the dashboard type check: web/node_modules is missing (run the full verify once).\n'
@@ -82,13 +127,13 @@ step go test -race
 go test -race ./...
 
 step npm ci
-linux_npm
 (cd web && npm ci --no-audit --no-fund)
 
 step dashboard build, and the committed build matches it
 scripts/check-web-built.sh
 
 step playwright
-(cd web && npm run e2e)
+# The browser at the version package.json pins; a no-op once it's there.
+(cd web && npx playwright install chromium && npm run e2e)
 
 printf '\nverify passed.\n'

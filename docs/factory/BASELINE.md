@@ -50,6 +50,7 @@ recognized, not retried until green.
 | Test | Seen | Symptom | Likely cause | Owner | Fix in |
 |---|---|---|---|---|---|
 | `e2e/notify.spec.ts` "When to tell you…" (phone) | 1 in 4 full runs, 2026-11-03 | `apiResponse.json: Response has been disposed` at line 16 | The settings route handler is still fetching when the page closes | maintainer | Step 6 |
+| `e2e/get-started.spec.ts` "repositories are chosen by where they're hosted…" (desktop) | 2 in 4 full runs, 2026-11-03, second workstation | `locator.click` timeout at line 327: the Remove button resolves, then is detached from the DOM, again and again | The repo list re-renders after the save while the test clicks | maintainer | Step 6 |
 | `TestAPIReads` (`internal/web`) | CI on PR #119, run crossing 00:00 UTC, 2026-11-04 | `notifications = …` at `api_test.go:263`, no `budget` entry | Spend is recorded before midnight UTC and read after it; "today's spend" (`store.Today()`, wall clock) is then $0. Fails only across UTC midnight | maintainer | Step 5: a clock the store's tests can set |
 
 ## CI and repo settings

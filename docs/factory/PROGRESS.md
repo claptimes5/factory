@@ -5,7 +5,7 @@
 | 0 | Orient and baseline | passed | 2026-11-03 | commands in BASELINE.md | [BASELINE.md](BASELINE.md) |
 | 1 | One-command local verification | passed | 2026-11-03 | `scripts/verify.sh` | fresh clone at 0e2c81e, 2 runs |
 | 2 | Lean CLAUDE.md | passed | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
-| 3 | Deterministic guardrails | not started | | | |
+| 3 | Deterministic guardrails | passed | 2026-11-03 | live hook demos + `python3 .claude/hooks/guard_test.py` | see log |
 | 4 | Required CI mirrors local verify | not started | | | |
 | 5 | Characterization + critical-path tests | not started | | | |
 | 6 | Browser E2E + web quality gates | not started | | | |
@@ -80,4 +80,39 @@ Decisions made: CLAUDE.md stays an @AGENTS.md import (Factory's own builders rea
   gate used subagents told to ignore inherited context.
 Open questions for human: none
 Next step proposed: 3
+```
+
+### 2026-11-03
+```
+STEP 3: Deterministic guardrails   STATUS: passed
+Gate command(s): live, in this session, with .claude/settings.json installed:
+  git push --force nowhere-remote HEAD; git add <planted errcheck file> && git commit;
+  scripts/verify.sh --quick; Edit of .claude/hooks/guard.py.
+  Plus python3 .claude/hooks/guard_test.py (16 tests, in verify).
+Result: force push refused by the hook; the commit refused with golangci-lint's
+  errcheck finding; verify --quick ran, no prompt (auto mode, so this doesn't prove
+  the allowlist); the protected edit got "ask", which auto mode's classifier
+  approved: no person saw it. The maintainer chose to keep "ask" (see decisions).
+Negative control: 6 breaks of guard.py on a copy each turned its tests red. The live
+  demo found two holes, both fixed with tests: (1) the hook found guard.py from
+  $CLAUDE_PROJECT_DIR, the main checkout, so in a worktree it ran nothing; it now
+  follows the event's cwd. (2) `printf > bad.go && git add && git commit` passed,
+  since the hook runs before the whole command; a commit must now be its own
+  command (cd and git add before it are fine).
+Flagged changes: verify.sh gains the hooks' tests and a tool check that installs
+  golangci-lint and Playwright's Chromium at the pinned versions (stricter, not looser).
+Decisions made: one stdlib Python script (no jq on the second workstation); protected
+  edits ask, and in auto mode the classifier answers (maintainer's choice over a
+  refuse-and-unlock file); shell writes to protected paths are caught best effort
+  (redirects, sed -i, cp, mv, rm, tee), with review and CODEOWNERS behind them; crashes
+  refuse; settings deny reading factory.env, factory.yaml and *.pem; the agent may not
+  write .claude/settings.json (auto mode refused twice), so the maintainer installs it,
+  in the main checkout too, since Claude Code reads settings from there. Factory's
+  builders run with --setting-sources user and never load these hooks.
+Second workstation: golangci-lint was missing for asdf's Go 1.27.3 (now verify installs
+  it); Node 22.13. Full verify: 339s cold, then 122s with one new desktop flake
+  (get-started.spec.ts:299, now in BASELINE), then 132s, 166 passed, 4 skipped, then
+  125s with the same flake again (165 passed, 1 failed).
+Open questions for human: none
+Next step proposed: 4
 ```

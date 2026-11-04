@@ -23,8 +23,9 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
   the full one before you say a change is done, and show its last lines.
 - One Go test: `go test -race -run TestName ./internal/pipeline/`. One
   browser spec: `cd web && npm run e2e -- e2e/home.spec.ts`.
-- Run `gofmt -w` on the Go files you change. verify needs golangci-lint at
-  the version `.github/workflows/ci.yml` pins, and says how to install it.
+- Run `gofmt -w` on the Go files you change. On a new machine, verify
+  names every missing tool at once and installs the pinned golangci-lint
+  and Playwright browser itself.
 - Changed anything under `web/`, or the API in `internal/web/openapi.yaml`?
   Run `cd web && npm ci && npm run build` and commit what it regenerates
   under `internal/web/app` and `web/src/api`, in the same commit.
@@ -76,6 +77,14 @@ CODEOWNERS), `.claude/`, `prompts/`, `.golangci.yml`,
 above, only when the task is about them; in a session with a person,
 ask first. Never weaken a check to make it pass: no skipped tests,
 loosened thresholds or rewritten expectations without saying so.
+
+In Claude Code, `.claude/hooks/guard.py` enforces some of this: an edit
+to one of these paths asks for approval (in auto mode, the auto-mode
+classifier answers, not a person); force pushes, `--no-verify` and
+`rm -rf` outside the checkout are refused; a commit runs
+`scripts/verify.sh --quick` first, and must be its own command so the
+check sees what it commits; Go files are gofmt'd on save. When it
+refuses, fix the cause; don't work around it.
 
 How this repo is being moved to agent-driven work, step by step, is in
 [docs/factory/PLAYBOOK.md](docs/factory/PLAYBOOK.md), with progress in

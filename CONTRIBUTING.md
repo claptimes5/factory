@@ -8,8 +8,9 @@ Thanks for helping. Issues and pull requests are both welcome.
   agree on the approach.
 - Run what CI runs: `scripts/verify.sh` does all of it, stopping at the
   first failure (about 3 minutes; `scripts/verify.sh --quick` skips the
-  race detector and the dashboard for the inner loop). It needs
-  golangci-lint at the version CI pins, and tells you how to install it.
+  race detector and the dashboard for the inner loop). It first checks
+  for Git, Go, Python 3 and Node and names any that are missing; it
+  installs the golangci-lint and Playwright browser versions CI uses itself.
   What it runs:
   - `gofmt -l` reports nothing for the Go files
   - `go vet ./...`, `go build ./...` and `go test -race ./...`
@@ -23,6 +24,12 @@ Thanks for helping. Issues and pull requests are both welcome.
     no font sizes, radii or colors outside the tokens; the components and
     tokens are shown at `/app/design`.
 - Run `gofmt -w` on the Go files you changed.
+- If you use Claude Code here, `.claude/settings.json` adds hooks (they
+  need Python 3): they ask before an edit to a protected path, refuse
+  force pushes and `--no-verify`, and run `scripts/verify.sh --quick`
+  before each commit. The settings also go in your main checkout's
+  `.claude/` if you work in worktrees under it, since Claude Code reads
+  them from there. AGENTS.md says which paths are protected.
 - Update the docs under `docs/` when you change what a user sees or runs.
 
 ## Versions and releases
