@@ -399,7 +399,7 @@ func TestEstimateWaitingRefusesEveryEnqueue(t *testing.T) {
 	}
 	e.p.lastDrain = time.Time{}
 	e.p.drainedTrigger(ctx)
-	if seen, _ := e.p.Store.HasEvent(ctx, "drain_seen", store.Today()+" "+e.p.ref("o/r", 1)); seen {
+	if seen, _ := e.p.Store.HasEvent(ctx, "drain_seen", e.p.Store.Today()+" "+e.p.ref("o/r", 1)); seen {
 		t.Fatal("a wait on a human was reported as stuck")
 	}
 }
@@ -723,7 +723,7 @@ func TestPlanRunsCostNoDollars(t *testing.T) {
 			billed += j.CostUSD
 		}
 	}
-	spent, _ := e.p.Store.SpendOn(ctx, store.Today())
+	spent, _ := e.p.Store.SpendOn(ctx, e.p.Store.Today())
 	if plan != 0 || billed == 0 || spent != billed {
 		t.Fatalf("plan $%.2f, billed $%.2f, spent today $%.2f", plan, billed, spent)
 	}

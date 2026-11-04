@@ -85,7 +85,7 @@ func (s *Store) FinishReview(ctx context.Context, jobID int64, r Result, raised,
 		if err := saveReview(tx, jobID, raised, updated); err != nil {
 			return err
 		}
-		return finishJob(tx, jobID, r)
+		return s.finishJob(tx, jobID, r)
 	})
 }
 

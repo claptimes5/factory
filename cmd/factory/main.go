@@ -842,7 +842,7 @@ func status(ctx context.Context, st *store.Store, cfg *config.Config) error {
 		n, _ := st.CountJobs(ctx, s, "")
 		fmt.Fprintf(w, "jobs %s:\t%d\n", s, n)
 	}
-	spent, _ := st.SpendOn(ctx, store.Today())
+	spent, _ := st.SpendOn(ctx, st.Today())
 	fmt.Fprintf(w, "spend today:\t$%.2f of $%.2f\n", spent, cfg.Budgets.DailyTotal)
 	limits, _ := st.Limits(ctx)
 	if len(limits) > 0 {
@@ -1464,7 +1464,7 @@ func runCompare(ctx context.Context, cfg *config.Config, st *store.Store, args [
 	}
 	// The arms share what is left of today's budget and their spend counts
 	// against it, so a comparison cannot run past the daily cap.
-	spent, err := st.SpendOn(ctx, store.Today())
+	spent, err := st.SpendOn(ctx, st.Today())
 	if err != nil {
 		return err
 	}

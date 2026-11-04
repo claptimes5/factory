@@ -107,7 +107,7 @@ func (p *Pipeline) huntBudget(ctx context.Context) string {
 	if spent, err := p.buildSpend(ctx); err != nil || spent+cost > p.Cfg.Budgets.DailyTotal {
 		return fmt.Sprintf("today's budget is spent ($%.2f of $%.2f)", spent, p.Cfg.Budgets.DailyTotal)
 	}
-	if spent, err := p.Store.SpendByKind(ctx, store.Today(), "hunt"); err != nil || spent+cost > p.Cfg.HuntDailyBudget() {
+	if spent, err := p.Store.SpendByKind(ctx, p.Store.Today(), "hunt"); err != nil || spent+cost > p.Cfg.HuntDailyBudget() {
 		return fmt.Sprintf("today's hunting budget is spent ($%.2f of $%.2f)", spent, p.Cfg.HuntDailyBudget())
 	}
 	return ""
