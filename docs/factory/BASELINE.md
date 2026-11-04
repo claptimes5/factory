@@ -51,7 +51,7 @@ recognized, not retried until green.
 |---|---|---|---|---|---|
 | `e2e/notify.spec.ts` "When to tell you…" (phone) | 1 in 4 full runs, 2026-11-03 | `apiResponse.json: Response has been disposed` at line 16 | The settings route handler is still fetching when the page closes | maintainer | Step 6 |
 | `e2e/get-started.spec.ts` "repositories are chosen by where they're hosted…" (desktop) | 2 in 4 full runs, 2026-11-03, second workstation | `locator.click` timeout at line 327: the Remove button resolves, then is detached from the DOM, again and again | The repo list re-renders after the save while the test clicks | maintainer | Step 6 |
-| `TestAPIReads` (`internal/web`) | CI on PR #119, run crossing 00:00 UTC, 2026-11-04 | `notifications = …` at `api_test.go:263`, no `budget` entry | Spend is recorded before midnight UTC and read after it; "today's spend" (`store.Today()`, wall clock) is then $0. Fails only across UTC midnight | maintainer | Step 5: a clock the store's tests can set |
+| ~~`TestAPIReads` (`internal/web`)~~ | CI on PR #119, run crossing 00:00 UTC, 2026-11-04 | `notifications = …` at `api_test.go:263`, no `budget` entry | Spend is recorded before midnight UTC and read after it; "today's spend" (`store.Today()`, wall clock) is then $0. Fails only across UTC midnight | maintainer | **Fixed in Step 5:** the Store has a Clock, the dashboard tests pin it |
 
 ## CI and repo settings
 
@@ -96,6 +96,22 @@ judgment"); revisit in Step 5.
    egress allowlist, and never sees tokens it shouldn't.
 5. **Dashboard login and request guard:** no dashboard action works
    without a valid session.
+
+Revisited in Step 5 (2026-11-04). The code behind each, which
+[seeds.py](seeds.py) seeds bugs into:
+
+| Flow | Code | Seeds | Caught |
+|---|---|---|---|
+| 1. Issue to PR | `internal/state` (stage edges), `internal/pipeline/stages.go` (review routing) | 2 | 2 |
+| 2. Gates block bad changes | `internal/gates` (run, pass, diff guard), `stages.go` (gates stop the build) | 6 | 5 |
+| 3. Review rounds settle | `stages.go` (round cap, `countBlocks`), `internal/pipeline/guard.go` (breaker) | 4 | 4 |
+| 4. Containment | `internal/egress` (allowlist, blocked addresses), `internal/runner` (docker args) | 7 | 7 |
+| 5. Login and request guard | `internal/web/auth.go`, `guard` in `internal/web/web.go` | 5 | 5 |
+
+The one miss can't be caught: `DiffGuard`'s parsing of copied files never
+runs, since it asks git for renames only (`-M`). The API contract is
+checked by `TestOpenAPIMatchesGo` (Go types against `openapi.yaml`, which
+the dashboard's types are generated from); a dropped field fails it.
 
 ## Environments
 
