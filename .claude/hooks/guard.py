@@ -6,11 +6,14 @@ interactive Claude Code session in this repository (Factory's own builders
 start Claude with --setting-sources user, so they never load them):
 
   pre-edit   Before Edit, Write or NotebookEdit: an edit to a protected
-             path needs a person to approve it.
+             path needs a person to approve it, and an edit to the
+             factory's own files (HARNESS) is refused unless a person
+             started the session with FACTORY_CONFIG=1.
   pre-bash   Before a shell command: force pushes, --no-verify and rm -rf
              outside the checkout are refused; shell writes to a protected
-             path need approval; a commit first runs scripts/verify.sh
-             --quick and is refused if it fails.
+             path are treated like edits; a commit first runs
+             scripts/verify.sh --quick and is refused if it fails. The
+             command inside bash -c or sh -c gets the same checks.
   post-edit  After an edit: gofmt -w on the Go file.
 
 It reads the hook's JSON on stdin and uses only the standard library, so
@@ -40,7 +43,19 @@ PROTECTED = (
     ".golangci.yml",
     "deploy/",
     "docs/factory/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "REVIEW.md",
+    "RISK.md",
 )
+
+# HARNESS is the part of PROTECTED that steers the agents themselves
+# (docs/factory/PLAYBOOK.md, Step 3). The hook reads FACTORY_CONFIG from
+# the environment Claude Code was started with, so an agent can't set it
+# for itself: FACTORY_CONFIG=1 before a command changes only that command.
+HARNESS = (".claude/", ".github/", "docs/factory/", "AGENTS.md", "CLAUDE.md", "REVIEW.md", "RISK.md")
+
+SHELLS = {"sh", "bash", "dash", "zsh"}
 
 # Commands whose arguments are all files they write, and those whose last
 # argument is the one they write.
@@ -58,7 +73,10 @@ def repo_root(path):
     """
     d = path if os.path.isdir(path) else os.path.dirname(path)
     while True:
-        if os.path.exists(os.path.join(d, ".git")):
+        # A .git directory without HEAD (some tools leave one in the home
+        # directory) is not a repository.
+        g = os.path.join(d, ".git")
+        if os.path.isfile(g) or os.path.isfile(os.path.join(g, "HEAD")):
             return d
         parent = os.path.dirname(d)
         if parent == d:
@@ -96,6 +114,11 @@ def refuse(reason):
 
 
 def ask_protected(p):
+    if p in HARNESS and os.environ.get("FACTORY_CONFIG") != "1":
+        refuse(f"Refused: {p} is one of the factory's own files, which change only in "
+               "a session a person started for that. Ask them to restart Claude Code "
+               "with FACTORY_CONFIG=1 (FACTORY_CONFIG=1 claude) if this change is "
+               "what the task is about.")
     ask(f"{p} is a protected path (AGENTS.md, \"Take care with\"). "
         "Change it only when the task is about it, and only once a person "
         "approves this edit.")
@@ -234,8 +257,12 @@ def pre_bash(event):
     project = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
     tmp = os.environ.get("TMPDIR") or "/tmp"
     workspace = [os.path.realpath(d) for d in (project, repo_root(os.path.realpath(cwd)) or project, tmp, "/tmp")]
-    changed = False
-    for seg in segments(event.get("tool_input", {}).get("command", "")):
+    check_command(event.get("tool_input", {}).get("command", ""), cwd, workspace)
+
+
+def check_command(command, cwd, workspace, changed=False):
+    """Check each simple command in command; return whether one changed files."""
+    for seg in segments(command):
         while seg and "=" in seg[0] and not seg[0].startswith("="):
             seg = seg[1:]  # FOO=bar cmd
         if not seg:
@@ -244,6 +271,9 @@ def pre_bash(event):
         if name == "cd" and len(seg) > 1:
             cwd = os.path.join(cwd, os.path.expanduser(seg[1]))
             continue
+        if name in SHELLS and "-c" in seg[1:-1]:
+            changed = check_command(seg[seg.index("-c") + 1], cwd, workspace, changed)
+            continue
         check_writes(seg, cwd)
         if name == "git":
             check_git(seg, cwd, changed)
@@ -251,6 +281,7 @@ def pre_bash(event):
             check_rm(seg, cwd, workspace)
         if not (name == "git" and git_subcommand(seg)[0] in ("add", "status", "diff")):
             changed = True
+    return changed
 
 
 def edited_path(event):

@@ -71,6 +71,32 @@ recognized, not retried until green.
   approvals), `verify`, `pr-body` and `cla` required, branch up to date
   before merging (no merge queue on a personal account's repo), no force
   pushes or deletion, admins included.
+- **GitHub plan (recorded 2026-11-04):** the repo is **public** and owned
+  by a **personal account** (`owner.type: User`). The CLI's token can't
+  read the account's plan, but for a public repo Free and Pro offer the
+  same controls:
+
+  | Control | Available | Compensating control where not |
+  |---|---|---|
+  | Branch protection | yes, in use | |
+  | Rulesets (branch) | yes, none yet | branch protection covers `main` |
+  | CODEOWNERS enforcement | yes, not yet required (Step 9) | |
+  | Merge queue | **no** (organization repos only) | "require branches to be up to date" (on) |
+  | Push rulesets | **no** (private and internal repos only) | the guard hook and the sandbox locally; CODEOWNERS on `.github/` and `.claude/` once required (Step 9); the bot's token gets no `workflow` scope (Step 9) |
+- **Workflow secrets (recorded 2026-11-04):** the repo has no secrets or
+  variables (`gh secret list`, `gh variable list`: empty). `ci.yml` and
+  `pr.yml` run the PR's code with `contents: read` and no `secrets.*`.
+  `cla.yml` runs on `pull_request_target` with a write token but never
+  checks out the PR's code. `release.yml` runs only by hand, on `main`.
+  No workflow runs an agent, so the CI agent limits don't apply yet. Every
+  action is pinned to a commit SHA; `scripts/verify.sh` fails if one isn't.
+- **Install hygiene (since 2026-11-04):** `web/.npmrc` turns off packages'
+  install scripts and sets a 7-day `min-release-age`;
+  `web/package-lock.json` and `go.sum` are committed and `npm ci` installs
+  from the lockfile. Only `fsevents` (macOS only) has an install script.
+  npm before 11.10 ignores the cooldown with a warning: CI's Node 24 has
+  npm 11.19; this workstation's Node 24.4.1 has 11.5.2, and the second
+  workstation's Node 22 has npm 10.
 
 ## Protected paths
 
@@ -120,6 +146,9 @@ the dashboard's types are generated from); a dropped field fails it.
   a GitHub release from `release.yml`; rolling back means installing the
   previous release.
 - **Approver:** the maintainer alone. No compliance constraints.
+- **Secrets when running the baseline:** the tests need none. Checked
+  2026-11-04: the agent's environment holds no secret variables apart
+  from Claude Code's own session token, and no `factory.env` is loaded.
 - **Public development:** `docs/factory/` is committed to this public
   repo. It must never name or describe other repositories Factory works
   on (AGENTS.md).

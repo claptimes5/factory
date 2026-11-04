@@ -1,23 +1,30 @@
 # Factory progress
 
-| Step | Name | Status | Date | Gate command | Evidence |
-|------|------|--------|------|--------------|----------|
-| 0 | Orient and baseline | passed | 2026-11-03 | commands in BASELINE.md | [BASELINE.md](BASELINE.md) |
-| 1 | One-command local verification | passed | 2026-11-03 | `scripts/verify.sh` | fresh clone at 0e2c81e, 2 runs |
-| 2 | Lean CLAUDE.md | passed | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
-| 3 | Deterministic guardrails | passed | 2026-11-03 | live hook demos + `python3 .claude/hooks/guard_test.py` | see log |
-| 4 | Required CI mirrors local verify | passed | 2026-11-04 | throwaway PR, clean PR, direct push | #122, #121, see log |
-| 5 | Characterization + critical-path tests | passed | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
-| 6 | Browser E2E + web quality gates | not started | | | |
-| 7 | Agent self-verification protocol | not started | | | |
-| 8 | AI code review + security review | not started | | | |
-| 9 | Risk-tiered approval and ownership | not started | | | |
-| 10 | Safe ship and rollback | not started | | | |
-| 11 | First automations: chores | not started | | | |
-| 12 | First feature through the full loop | not started | | | |
-| 13 | Graduate to poteto-mode | not started | | | |
-| 14 | Measure and improve | not started | | | |
-| 15 | Scale carefully | not started | | | |
+Source of truth for where the factory build stands. Updated at the end of every step (see `PLAYBOOK.md`, Appendix A). Statuses: `not started`, `in progress`, `blocked`, `passed`, `skipped`. Put your name in Owner when you begin a step; do not start a step someone else owns.
+
+Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has carried real work. Optional: 5b, 7b, 11, 16.
+
+| Step | Name | Status | Owner | Date | Gate command | Evidence |
+|------|------|--------|-------|------|--------------|----------|
+| 0 | Orient and baseline | passed | Avi | 2026-11-04 | commands in BASELINE.md; GitHub plan recorded | [BASELINE.md](BASELINE.md), top-up in log |
+| 1 | One-command local verification | passed | Avi | 2026-11-04 | `scripts/verify.sh`; install cooldown checked with npm 11.19 | fresh clone at 0e2c81e, 2 runs; `web/.npmrc`, top-up in log |
+| 2 | Lean CLAUDE.md | passed | Avi | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
+| 3 | Deterministic guardrails (hooks, permissions) | blocked | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; live demos need a restart | top-up in log: sandbox needs `socat`, live demos need the maintainer |
+| 4 | Required CI mirrors local verify | in progress | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, this PR, top-up in log |
+| 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
+| 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
+| 6 | Browser E2E + web quality gates | not started | | | | |
+| 7 | Agent self-verification protocol | not started | | | | |
+| 7b | Formal verification of the riskiest property (optional) | not started | | | | trigger (a) may apply: the pipeline's retry and park states; decide after Step 7 |
+| 8 | AI code review + security review | not started | | | | |
+| 9 | Risk-tiered approval and ownership | not started | | | | |
+| 10 | Safe ship and rollback | not started | | | | |
+| 11 | First automations: chores (optional) | skipped | Avi | 2026-11-04 | | sole maintainer, no recurring chore worth automating yet |
+| 12 | First feature through the full loop | not started | | | | |
+| 13 | Graduate to poteto-mode (autonomy by exception) | not started | | | | |
+| 14 | Measure and improve (factory as code) | not started | | | | |
+| 15 | Make poteto-mode the default (optional until 14 is stable) | not started | | | | |
+| 16 | Scale carefully (optional) | skipped | Avi | 2026-11-04 | | not before Steps 12 to 14 are solid; reopen then |
 
 ## Log
 <!-- Newest last. One entry per step using the Appendix A template. -->
@@ -173,4 +180,91 @@ Follow-up for the hooks (Step 3, protected): the guard's "commit as its own comm
   should apply only where verify runs. Not changed here.
 Open questions for human: none
 Next step proposed: 6
+```
+
+### 2026-11-04
+```
+PLAYBOOK UPDATE: new PLAYBOOK.md copied in; steps already passed (0 to 5) topped up
+against the new gates. Owner column and rows 5b, 7b, 15 (poteto-mode default) and
+16 (scale, was 15) added. 5b, 11 and 16 skipped (reasons in the table); 7b waits
+until Step 7. Steps 7 to 10's new actions apply when those steps run.
+
+STEP 0 top-up   STATUS: passed
+Result: BASELINE.md "CI and repo settings" records the GitHub plan: public repo on a
+  personal account; branch protection, rulesets and CODEOWNERS enforcement available;
+  merge queue (organization repos only) and push rulesets (private and internal repos
+  only) not, with the compensating control for each. Baseline ran with no secrets.
+Decisions made: the agent may get its own bot identity (Step 9); no monthly spend cap
+  yet (maintainer's answers to new question (f)).
+Open questions for human: the spend cap, before Step 13.
+
+STEP 1 top-up   STATUS: passed
+Gate command(s): npm ci && npm run build in web/ with the new web/.npmrc; in a scratch
+  package with the same .npmrc, npx npm@11.19.1 install @types/node with
+  --min-release-age 7 and 0.
+Result: install and build pass with ignore-scripts=true (only fsevents, macOS-only,
+  has an install script). The cooldown works: age 7 installed 26.6.5, age 0 installed
+  26.6.6 (6 days old). The lockfile was already committed.
+Negative control: the age 0 run above.
+Known gap: npm before 11.10 ignores min-release-age with a warning. CI has 11.19; this
+  workstation's Node 24.4.1 has 11.5.2 and the second workstation's Node 22 has npm 10.
+  verify only runs npm ci, which installs from the lockfile, so the gap matters only
+  when someone adds or updates a package locally.
+
+STEP 3 top-up   STATUS: blocked
+Gate command(s): python3 .claude/hooks/guard_test.py (20 tests); the new guard run
+  by hand on this checkout's paths, with and without FACTORY_CONFIG=1.
+Result: harness paths (.claude/, .github/, docs/factory/, AGENTS.md, CLAUDE.md,
+  REVIEW.md, RISK.md) are refused unless the session was started with
+  FACTORY_CONFIG=1, and ask with it; the other protected paths still ask. Measured:
+  Edit of .claude/settings.json refused, with FACTORY_CONFIG=1 asks;
+  `sed -i ... .github/workflows/ci.yml` refused; `bash -c 'echo x >> .claude/hooks/
+  guard.py'` refused (the guard now checks the command inside bash -c and sh -c);
+  `FACTORY_CONFIG=1 sed -i ... AGENTS.md` refused (a prefix is not the session's env).
+  `python3 -c 'open(".claude/x","w")'` passes the guard, as expected of a speed bump.
+  settings.json: Read and Edit denies for .env*, factory.env, factory.yaml, *.pem,
+  *.key, ~/.ssh, ~/.aws, ~/.azure, gcloud, gh's hosts.yml, ~/.netrc, ~/.npmrc,
+  ~/.docker/config.json, ~/.kube/config, ~/.git-credentials; the sandbox on with
+  failIfUnavailable and allowUnsandboxedCommands false, writes to the Go, npm and
+  Playwright caches, network to the Go and npm registries, GitHub and Playwright's
+  CDN. .claude/autonomy.json adds strictAllowlist, Edit denies for the harness paths
+  (merged into the sandbox's write denies, so they stop sed -i and python -c too) and
+  CLAUDE_CODE_SUBPROCESS_ENV_SCRUB. AGENTS.md says hooks are a speed bump.
+Negative control: three breaks of the new guard on a copy (FACTORY_CONFIG check off,
+  env defaulted to 1, bash -c not followed) turned 15, 15 and 4 tests red.
+Flagged changes: AGENTS.md moved from "edit freely" to harness in guard_test.py (it is
+  what CLAUDE.md loads). Stricter.
+Why blocked: the live half of the gate needs the maintainer.
+  1. The sandbox can't start here: bubblewrap is installed, socat is not
+     (sudo apt-get install socat). With failIfUnavailable, Claude Code won't start in
+     this repo until it is.
+  2. Copy .claude/settings.json into the main checkout (Claude Code reads it there),
+     then restart, once with and once without FACTORY_CONFIG=1, and show: an Edit to
+     .claude/ refused without it and asking with it; Read of a .env file denied;
+     scripts/verify.sh --quick with no prompt; the bypasses `sed -i` on
+     .github/workflows/ci.yml and `bash -c 'echo x > .claude/x'` and what stopped each;
+     /sandbox shows the unsandboxed retry off. Also confirm verify passes inside the
+     sandbox (the Docker test skips there; CI still runs it) and Playwright's Chromium
+     starts.
+Known gap: in interactive sessions a python -c or similar write to .github/ or
+  docs/factory/ is stopped by nothing local (the sandbox protects only Claude Code's
+  own files under .claude/); review and CODEOWNERS (Step 9) are the wall.
+
+STEP 4 top-up   STATUS: in progress
+Gate command(s): (a) throwaway PR #124 breaking an assertion in web/e2e/home.spec.ts;
+  (b) this PR; (c) git push of a new commit on origin/main straight to main.
+Result: (a) web and verify red on the planted "Tests: seeded failure" step, merge state
+  BLOCKED; closed, branch deleted. (b) see this PR's checks. (c) rejected: GH006
+  "Protected branch update failed"; main unchanged at ec1fc56.
+  Workflow safety: no repo secrets or variables; ci.yml and pr.yml run PR code with
+  contents: read and no secrets; cla.yml's pull_request_target never checks out PR
+  code; no workflow runs an agent, so the CI agent limits wait for Step 8. Every
+  action is now pinned to a commit SHA, and verify fails on an unpinned one.
+  Push ruleset: not available for a public repo (BASELINE.md).
+Negative control: (a), and an unpinned actions/checkout@v4 in a scratch worktree made
+  verify --part lint fail at "workflow actions pinned".
+Flagged changes: none loosened. verify gains the pinned-actions check.
+Next: set Step 4 to passed once this PR's checks are green (a FACTORY_CONFIG=1
+  session), then finish Step 3's live gate. Steps 8 and 9's gates haven't run yet,
+  so there is nothing to re-run for them.
 ```

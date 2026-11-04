@@ -30,7 +30,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
@@ -99,7 +99,7 @@ jobs:
             echo "::error::CI hasn't passed on $SHA yet. Wait for it, or fix main, then run this again."
             exit 1
           fi
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         if: ${{ !inputs.dry_run }}
         with:
           go-version-file: go.mod
