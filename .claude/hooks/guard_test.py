@@ -169,6 +169,10 @@ class Guard(unittest.TestCase):
                 self.assertRefused(r)
                 self.assertIn("its own command", r.stderr)
 
+    def test_commit_after_a_change_is_allowed_in_a_repo_without_verify(self):
+        os.remove(os.path.join(self.repo, "scripts", "verify.sh"))
+        self.assertAllowed(self.bash("echo x > a.go && git commit -am x"))
+
     def test_post_edit_formats_go(self):
         p = os.path.join(self.repo, "x.go")
         with open(p, "w") as f:

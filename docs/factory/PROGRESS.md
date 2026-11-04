@@ -10,7 +10,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 1 | One-command local verification | passed | Avi | 2026-11-04 | `scripts/verify.sh`; install cooldown checked with npm 11.19 | fresh clone at 0e2c81e, 2 runs; `web/.npmrc`, top-up in log |
 | 2 | Lean CLAUDE.md | passed | Avi | 2026-11-03 | fresh-session task, verify from CLAUDE.md only | 3 fresh-agent runs, see log |
 | 3 | Deterministic guardrails (hooks, permissions) | blocked | Avi | 2026-11-04 | `python3 .claude/hooks/guard_test.py`; live demos need a restart | top-up in log: sandbox needs `socat`, live demos need the maintainer |
-| 4 | Required CI mirrors local verify | in progress | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, this PR, top-up in log |
+| 4 | Required CI mirrors local verify | passed | Avi | 2026-11-04 | throwaway PR, clean PR, direct push | #124, #125, top-up in log |
 | 5 | Characterization + critical-path tests | passed | Avi | 2026-11-04 | `docs/factory/seeds.py`; new tests 5x local and 5x CI | #123, see log |
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
 | 6 | Browser E2E + web quality gates | not started | | | | |
@@ -267,4 +267,55 @@ Flagged changes: none loosened. verify gains the pinned-actions check.
 Next: set Step 4 to passed once this PR's checks are green (a FACTORY_CONFIG=1
   session), then finish Step 3's live gate. Steps 8 and 9's gates haven't run yet,
   so there is nothing to re-run for them.
+```
+
+### 2026-11-04
+```
+STEP 4   STATUS: passed
+Result: #125 merged as 6afa07e; main takes a PR only once its verify check passes.
+
+STEP 3 live gate, part 1   STATUS: blocked
+Result (a session started after #125, so Bash ran in the sandbox):
+  Read of a .env and `cat ~/.config/gh/hosts.yml` denied; a python3 -c write to
+  .claude/hooks/ and a touch outside the workspace stopped (read-only file system);
+  a request to a host off the allowlist refused; the unsandboxed retry off; an edit
+  to docs/factory/ refused by the guard without FACTORY_CONFIG; verify --part lint
+  and --part web pass in the sandbox with no prompt (Playwright 166 passed). In a
+  FACTORY_CONFIG=1 session the guard let edits to .claude/hooks/ and docs/factory/
+  through.
+  Expected gap seen: a python3 -c write to .github/ went through (Step 9's CODEOWNERS
+  is the wall). The probe file is removed.
+What the sandbox breaks:
+  1. go test: eight tests in internal/mcp and internal/pipeline fail with "socket:
+     operation not permitted", because the job bridge listens on a Unix socket. Fix:
+     sandbox.network.allowAllUnixSockets true, with filesystem.denyRead on
+     /var/run/docker.sock, /run/docker.sock and /run/WSL; then show those are
+     unreachable. Until then verify --quick fails in the sandbox, so commits from it
+     are refused.
+  2. gh: hosts.yml is denied. Fix: credentials mask mode for hosts.yml with
+     injectHosts api.github.com and github.com, plus network.tlsTerminate. Mask and
+     tlsTerminate are honoured only from user settings or --settings, not
+     .claude/settings.json. The maintainer keeps them out of user settings (they'd
+     reach every project), so they go in repo files passed with --settings:
+     .claude/github.json for interactive sessions, .claude/autonomy.json for
+     autonomous ones. Try it with the project's Read deny on hosts.yml kept first;
+     dropping that deny would hand the real token to sessions started without
+     --settings.
+  3. git pull/push: the SSH key is under the ~/.ssh deny. Fix: an HTTPS remote with
+     gh as git's credential helper (gh auth setup-git), which rides on the mask.
+Applied, approved by the maintainer outside auto mode (the classifier had stopped
+  them as self-modification):
+  1. settings.json gets allowAllUnixSockets and the three denyReads. In the sandbox
+     both Docker sockets are /dev/null (connect refused) and /run/WSL is empty;
+     go test -race on internal/mcp and internal/pipeline passes, and so does the
+     full scripts/verify.sh (Playwright 166 passed, 4 skipped).
+  2. .claude/github.json and .claude/autonomy.json carry the mask; not yet tried
+     (needs a restart with --settings).
+  3. The remote switch needs the maintainer: the sandbox guards .git/config.
+Guard follow-up from Step 5 done: "commit as its own command" now applies only in a
+  repo with scripts/verify.sh. New test fails on the old guard; 22 tests pass.
+Note: inside the sandbox, git status lists the /dev/null mounts over denied paths
+  (.bashrc, .mcp.json, .claude/skills, ...) as untracked. Add files by name there.
+Next: switch the remote, restart with --settings .claude/github.json, show gh and
+  git push work with hosts.yml masked, then set Step 3 to passed.
 ```

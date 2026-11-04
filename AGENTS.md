@@ -91,6 +91,9 @@ auto mode, the auto-mode classifier answers, not a person). The hook is
 a speed bump, not a wall: a script run through Bash can write files it
 never sees. The walls are the Bash sandbox in `.claude/settings.json`
 (Linux needs `bubblewrap` and `socat`), review, and CODEOWNERS.
+For `gh` and git over HTTPS inside the sandbox, start with
+`claude --settings .claude/github.json`: commands see a stand-in for the
+GitHub token, and the real one is added only on requests to GitHub.
 Autonomous runs start with `claude --settings .claude/autonomy.json`,
 which also denies writes to the factory's files and limits the network
 to GitHub and the package registries. Force pushes, `--no-verify` and

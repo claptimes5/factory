@@ -171,7 +171,9 @@ def short_flags(args):
 
 def check_git(seg, cwd, changed):
     sub, args, where = git_subcommand(seg)
-    if sub == "commit" and changed:
+    # Only a repo with scripts/verify.sh is checked before a commit, so only
+    # there does the commit need to be its own command.
+    if sub == "commit" and changed and verify_script(os.path.join(cwd, where) if where else cwd):
         # The hook runs before the whole command, so verify would check
         # the tree as it was, not as the earlier commands leave it.
         refuse("Refused: run git commit as its own command (cd and git add "
@@ -194,11 +196,18 @@ def check_git(seg, cwd, changed):
         verify_before_commit(os.path.join(cwd, where) if where else cwd)
 
 
-def verify_before_commit(cwd):
+def verify_script(cwd):
+    """Return the path of the repo's scripts/verify.sh, or None if it has none."""
     root = repo_root(os.path.realpath(cwd))
     script = root and os.path.join(root, "scripts", "verify.sh")
-    if not script or not os.path.isfile(script):
+    return script if script and os.path.isfile(script) else None
+
+
+def verify_before_commit(cwd):
+    script = verify_script(cwd)
+    if not script:
         return
+    root = os.path.dirname(os.path.dirname(script))
     r = subprocess.run([script, "--quick"], cwd=root, text=True,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if r.returncode != 0:
