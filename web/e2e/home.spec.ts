@@ -93,7 +93,7 @@ test("a check going shows its commands as they pass, its time counting, and noth
   await checkGoing(page);
   await page.goto("/app/");
   const card = page.getByTestId("setup-lead");
-  await expect(card).toContainText("Checking api's");
+  await expect(card).toContainText("Checking nothing at all");
   await expect(card).not.toContainText("You asked for it");
   const steps = card.getByRole("list", { name: "Its checks" });
   await expect(steps.getByRole("listitem")).toHaveText([/Install\s*0:26/, /Types\s*0:11/, /Lint\s*0:2\d/, /Tests\s*~2:47/]);
