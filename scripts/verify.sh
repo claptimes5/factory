@@ -1,9 +1,10 @@
 #!/bin/sh
 # verify.sh runs what CI runs, in one command, and stops at the first
-# failure: gofmt, the Claude Code hooks' tests, go vet, the pinned
-# golangci-lint, go build, go test -race, then the dashboard's npm ci,
-# build (types, styles), stale-build check and Playwright. Humans, agents
-# and CI all run this, so "it passed" means the same thing everywhere.
+# failure: gofmt, the tests of the Claude Code hooks and the PR
+# description check, go vet, the pinned golangci-lint, go build,
+# go test -race, then the dashboard's npm ci, build (types, styles),
+# stale-build check and Playwright. Humans, agents and CI all run this,
+# so "it passed" means the same thing everywhere.
 #
 # It first checks for every tool it needs and names all that are missing
 # at once. The ones this repo pins (golangci-lint, Playwright's Chromium)
@@ -12,11 +13,29 @@
 # --quick is the inner loop: the Go checks without -race, and the
 # dashboard's type check when its packages are installed. It is not a
 # substitute for the full run before a pull request.
+#
+# --part lint|go|web runs one third of the full run: everything up to
+# go build; go test -race; or the dashboard. CI runs the three side by
+# side, so it checks exactly what verify does.
 set -eu
 cd "$(dirname "$0")/.."
 
 quick=false
-[ "${1:-}" = "--quick" ] && quick=true
+part=all
+case "${1:-}" in
+"") ;;
+--quick) quick=true ;;
+--part)
+	part=${2:-}
+	case "$part" in lint | go | web) ;; *) part="" ;; esac
+	;;
+*) part="" ;;
+esac
+if [ -z "$part" ]; then
+	echo "usage: scripts/verify.sh [--quick | --part lint|go|web]" >&2
+	exit 2
+fi
+runs() { [ "$part" = all ] || [ "$part" = "$1" ]; }
 
 step() { printf '\n== %s\n' "$*"; }
 
@@ -43,8 +62,8 @@ version() { "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9.]*\).*/\1/p'
 step tools
 # A new machine should learn everything it lacks in one run, not one
 # failure per run. Only what needs a system install is left to a person.
-web=true
-if $quick && [ ! -d web/node_modules ]; then web=false; fi
+web=false
+if runs web && ! $quick || { $quick && [ -d web/node_modules ]; }; then web=true; fi
 missing=""
 need() { command -v "$1" >/dev/null 2>&1 || missing="$missing
   $1: $2"; }
@@ -72,7 +91,7 @@ fi
 # may not put go install's directory on the PATH, so use it directly.
 want=$(sed -n 's/^ *version: v//p' .github/workflows/ci.yml | head -n1)
 lint=golangci-lint
-if [ "$(version golangci-lint)" != "$want" ]; then
+if runs lint && [ "$(version golangci-lint)" != "$want" ]; then
 	bin=$(go env GOBIN)
 	[ -n "$bin" ] || bin=$(go env GOPATH)/bin
 	lint=$bin/golangci-lint
@@ -81,34 +100,39 @@ if [ "$(version golangci-lint)" != "$want" ]; then
 		go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$want"
 	fi
 fi
-if ! docker info >/dev/null 2>&1; then
+if runs go && ! docker info >/dev/null 2>&1; then
 	echo "Docker isn't running here, so the tests that need it will be skipped."
 fi
 echo "All there."
 
-step gofmt
-# New files too, not only tracked ones: a file not yet added is still in
-# the commit about to be made.
-unformatted=$(git ls-files --cached --others --exclude-standard '*.go' | xargs gofmt -l)
-if [ -n "$unformatted" ]; then
-	echo "These files need gofmt -w:" >&2
-	echo "$unformatted" >&2
-	exit 1
+if runs lint; then
+	step gofmt
+	# New files too, not only tracked ones: a file not yet added is still in
+	# the commit about to be made.
+	unformatted=$(git ls-files --cached --others --exclude-standard '*.go' | xargs gofmt -l)
+	if [ -n "$unformatted" ]; then
+		echo "These files need gofmt -w:" >&2
+		echo "$unformatted" >&2
+		exit 1
+	fi
+
+	step claude hooks
+	# The hooks in .claude/ enforce AGENTS.md for interactive agents; a broken
+	# one fails open or blocks everything, so its tests run every time.
+	python3 .claude/hooks/guard_test.py
+
+	step pull request description check
+	python3 scripts/check_pr_body_test.py
+
+	step go vet
+	go vet ./...
+
+	step golangci-lint
+	"$lint" run ./...
+
+	step go build
+	go build ./...
 fi
-
-step claude hooks
-# The hooks in .claude/ enforce AGENTS.md for interactive agents; a broken
-# one fails open or blocks everything, so its tests run every time.
-python3 .claude/hooks/guard_test.py
-
-step go vet
-go vet ./...
-
-step golangci-lint
-"$lint" run ./...
-
-step go build
-go build ./...
 
 if $quick; then
 	step go test
@@ -123,17 +147,25 @@ if $quick; then
 	exit 0
 fi
 
-step go test -race
-go test -race ./...
+if runs go; then
+	step go test -race
+	go test -race ./...
+fi
 
-step npm ci
-(cd web && npm ci --no-audit --no-fund)
+if runs web; then
+	step npm ci
+	(cd web && npm ci --no-audit --no-fund)
 
-step dashboard build, and the committed build matches it
-scripts/check-web-built.sh
+	step dashboard build, and the committed build matches it
+	scripts/check-web-built.sh
 
-step playwright
-# The browser at the version package.json pins; a no-op once it's there.
-(cd web && npx playwright install chromium && npm run e2e)
+	step playwright
+	# The browser at the version package.json pins; a no-op once it's there.
+	(cd web && npx playwright install chromium && npm run e2e)
+fi
 
-printf '\nverify passed.\n'
+if [ "$part" = all ]; then
+	printf '\nverify passed.\n'
+else
+	printf '\nverify --part %s passed.\n' "$part"
+fi

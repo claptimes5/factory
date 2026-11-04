@@ -1,0 +1,17 @@
+name: pr
+# Reruns when the description is edited, so fixing it clears the check.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  contents: read
+jobs:
+  pr-body:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: the description says how it was tested, what it risks and how to revert it
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$BODY" | python3 scripts/check-pr-body.py

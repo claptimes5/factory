@@ -6,8 +6,9 @@ on:
 permissions:
   contents: read
 jobs:
-  # The race-enabled tests are the long pole; vet, build and lint run
-  # beside them in their own job instead of after them.
+  # Each job runs one part of scripts/verify.sh, so CI checks exactly what
+  # a local run does. The race-enabled tests are the long pole; the other
+  # parts run beside them instead of after them.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -19,8 +20,11 @@ jobs:
           # Each job lists different files so it keeps its own build cache
           # (this one with -race) instead of racing the others for one key.
           cache-dependency-path: go.sum
-      - name: test
-        run: go test -race ./...
+      # Without these the sandbox's service-container test skips.
+      - name: images the Docker tests use
+        run: docker pull -q redis:7-alpine && docker pull -q alpine:3.20
+      - name: verify --part go
+        run: scripts/verify.sh --part go
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -32,19 +36,16 @@ jobs:
           cache-dependency-path: |
             go.sum
             .golangci.yml
-      - name: vet
-        run: go vet ./...
-      - name: build
-        run: go build ./...
+      # A prebuilt binary, faster than the go install verify falls back to.
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.14.0
+          install-only: true
+      - name: verify --part lint
+        run: scripts/verify.sh --part lint
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
@@ -58,33 +59,38 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
-      # The built app and the generated API types are committed so the Go
-      # build needs no Node; fail if either is stale.
-      - name: build
-        run: npm run build
-      - name: built app and types are up to date
-        run: |
-          git status --porcelain -- . ../internal/web/app
-          test -z "$(git status --porcelain -- . ../internal/web/app)"
       # The browser is cached by Playwright's version and the runner image.
       # On a hit nothing is installed: the runner already has the libraries
       # headless Chromium needs, and apt-get on every run cost minutes
       # whenever the Ubuntu mirror was slow.
       - id: pwver
-        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: echo "v=$(node -p "require('./web/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         id: playwright
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pwver.outputs.v }}
       - if: steps.playwright.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-      - name: playwright (desktop and phone)
-        run: npm run e2e
+        run: npx --yes "playwright@${{ steps.pwver.outputs.v }}" install --with-deps chromium
+      - name: verify --part web
+        run: scripts/verify.sh --part web
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: playwright-report
           path: web/playwright-report
           retention-days: 7
+  # The one check branch protection requires. It runs even when a part
+  # fails or is skipped, because a skipped required check counts as passed.
+  verify:
+    needs: [test, lint, web]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every part of verify passed
+        run: |
+          echo "test: ${{ needs.test.result }}, lint: ${{ needs.lint.result }}, web: ${{ needs.web.result }}"
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.web.result }}" = success
