@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -33,11 +34,18 @@ func TestServiceArgs(t *testing.T) {
 // without network still reaches them (and nothing else), and stopping
 // removes the services and their network.
 func TestServicesWithDocker(t *testing.T) {
+	// CI sets FACTORY_REQUIRE_DOCKER so a missing image fails instead of
+	// skipping. Reading it also keys Go's test cache on it, so a result
+	// cached from a run that skipped isn't reused.
+	skip := t.Skip
+	if os.Getenv("FACTORY_REQUIRE_DOCKER") != "" {
+		skip = t.Fatal
+	}
 	if exec.Command("docker", "info").Run() != nil {
-		t.Skip("no docker")
+		skip("no docker")
 	}
 	if exec.Command("docker", "image", "inspect", "redis:7-alpine").Run() != nil || exec.Command("docker", "image", "inspect", "alpine:3.20").Run() != nil {
-		t.Skip("needs the redis:7-alpine and alpine:3.20 images")
+		skip("needs the redis:7-alpine and alpine:3.20 images")
 	}
 	ctx := context.Background()
 	d := &Docker{}

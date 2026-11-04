@@ -25,6 +25,8 @@ jobs:
         run: docker pull -q redis:7-alpine && docker pull -q alpine:3.20
       - name: verify --part go
         run: scripts/verify.sh --part go
+        env:
+          FACTORY_REQUIRE_DOCKER: "1"
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 20
