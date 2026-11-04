@@ -1,9 +1,9 @@
 #!/bin/sh
 # verify.sh runs what CI runs, in one command, and stops at the first
-# failure: gofmt, go vet, the pinned golangci-lint, go build, go test -race,
-# then the dashboard's npm ci, build (types, styles), stale-build check and
-# Playwright. Humans, agents and CI all run this, so "it passed" means the
-# same thing everywhere.
+# failure: gofmt, the Claude Code hooks' tests, go vet, the pinned
+# golangci-lint, go build, go test -race, then the dashboard's npm ci,
+# build (types, styles), stale-build check and Playwright. Humans, agents
+# and CI all run this, so "it passed" means the same thing everywhere.
 #
 # --quick is the inner loop: the Go checks without -race, and the
 # dashboard's type check when its packages are installed. It is not a
@@ -43,6 +43,11 @@ if [ -n "$unformatted" ]; then
 	echo "$unformatted" >&2
 	exit 1
 fi
+
+step claude hooks
+# The hooks in .claude/ enforce AGENTS.md for interactive agents; a broken
+# one fails open or blocks everything, so its tests run every time.
+python3 .claude/hooks/guard_test.py
 
 step go vet
 go vet ./...

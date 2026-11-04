@@ -23,6 +23,10 @@ Thanks for helping. Issues and pull requests are both welcome.
     no font sizes, radii or colors outside the tokens; the components and
     tokens are shown at `/app/design`.
 - Run `gofmt -w` on the Go files you changed.
+- If you use Claude Code here, `.claude/settings.json` adds hooks (they
+  need Python 3): they ask before an edit to a protected path, refuse
+  force pushes and `--no-verify`, and run `scripts/verify.sh --quick`
+  before each commit. AGENTS.md says which paths are protected.
 - Update the docs under `docs/` when you change what a user sees or runs.
 
 ## Versions and releases

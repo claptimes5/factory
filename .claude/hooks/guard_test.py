@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Tests for guard.py: each runs the hook as Claude Code does, on a scratch repo."""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard.py")
+
+
+class Guard(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(os.path.join(self.repo, "scripts"))
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        self.verify(0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def verify(self, code):
+        """Stand in for scripts/verify.sh, exiting with code."""
+        p = os.path.join(self.repo, "scripts", "verify.sh")
+        with open(p, "w") as f:
+            f.write(f"#!/bin/sh\necho verify ran\nexit {code}\n")
+        os.chmod(p, 0o755)
+
+    def run_guard(self, mode, tool_input):
+        event = {"cwd": self.repo, "tool_input": tool_input}
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.repo, TMPDIR=self.tmp.name)
+        return subprocess.run([sys.executable, GUARD, mode], input=json.dumps(event),
+                              capture_output=True, text=True, env=env)
+
+    def bash(self, command):
+        return self.run_guard("pre-bash", {"command": command})
+
+    def assertAsks(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def assertRefused(self, r):
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("Refused", r.stderr)
+
+    def assertAllowed(self, r):
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+
+    def test_edit_to_protected_path_asks(self):
+        for p in (".github/workflows/ci.yml", "internal/runner/docker.go", "internal/web/auth.go",
+                  ".claude/settings.json", "docs/factory/PROGRESS.md", "prompts/x.md"):
+            with self.subTest(p):
+                self.assertAsks(self.run_guard("pre-edit", {"file_path": os.path.join(self.repo, p)}))
+
+    def test_edit_elsewhere_is_allowed(self):
+        for p in ("internal/web/api.go", "internal/pipeline/pipeline.go", "docs/using.md", "AGENTS.md"):
+            with self.subTest(p):
+                self.assertAllowed(self.run_guard("pre-edit", {"file_path": os.path.join(self.repo, p)}))
+
+    def test_worktree_under_claude_dir_is_its_own_repo(self):
+        wt = os.path.join(self.repo, ".claude", "worktrees", "w")
+        os.makedirs(wt)
+        open(os.path.join(wt, ".git"), "w").close()
+        self.assertAllowed(self.run_guard("pre-edit", {"file_path": os.path.join(wt, "internal/web/api.go")}))
+        self.assertAsks(self.run_guard("pre-edit", {"file_path": os.path.join(wt, "deploy/upgrade.sh")}))
+
+    def test_shell_write_to_protected_path_asks(self):
+        for c in ("echo x > .github/CODEOWNERS", "sed -i 's/a/b/' prompts/review.md",
+                  "cp /tmp/x .golangci.yml", "rm deploy/upgrade.sh", "cd internal && tee runner/x.go",
+                  "git checkout -- internal/egress/egress.go"):
+            with self.subTest(c):
+                self.assertAsks(self.bash(c))
+
+    def test_shell_read_of_protected_path_is_allowed(self):
+        for c in ("cat .github/workflows/ci.yml", "sed -n 1,5p prompts/review.md",
+                  "cp .golangci.yml /tmp/x", "grep -r x internal/runner"):
+            with self.subTest(c):
+                self.assertAllowed(self.bash(c))
+
+    def test_force_push_is_refused(self):
+        for c in ("git push --force", "git push -f origin main", "git push -uf origin x",
+                  "git push --force-with-lease", "git push origin +main", "git -C . push --force"):
+            with self.subTest(c):
+                self.assertRefused(self.bash(c))
+
+    def test_plain_push_is_allowed(self):
+        self.assertAllowed(self.bash("git push -u origin my-branch"))
+
+    def test_no_verify_is_refused(self):
+        for c in ("git commit --no-verify -m x", "git commit -nm x", "git push --no-verify"):
+            with self.subTest(c):
+                self.assertRefused(self.bash(c))
+
+    def test_quoted_flag_text_is_not_a_flag(self):
+        self.assertAllowed(self.bash("git commit -m 'explain --no-verify and -f'"))
+
+    def test_rm_rf_outside_workspace_is_refused(self):
+        for c in ("rm -rf /", "rm -rf ~", "rm -rf ..", "rm -fr /etc", "rm -r -f $HOME/x",
+                  "rm -rf .", "cd / && rm -rf home", "rm --recursive --force /var"):
+            with self.subTest(c):
+                self.assertRefused(self.bash(c))
+
+    def test_rm_rf_inside_workspace_is_allowed(self):
+        for c in ("rm -rf web/node_modules", "rm -rf build/out", f"rm -rf {self.tmp.name}/scratch",
+                  "rm -rf /tmp/x"):
+            with self.subTest(c):
+                self.assertAllowed(self.bash(c))
+
+    def test_commit_is_refused_when_verify_fails(self):
+        self.verify(1)
+        r = self.bash("git add . && git commit -m 'x'")
+        self.assertRefused(r)
+        self.assertIn("verify ran", r.stderr)
+
+    def test_commit_is_allowed_when_verify_passes(self):
+        self.assertAllowed(self.bash("git commit -m 'x'"))
+
+    def test_post_edit_formats_go(self):
+        p = os.path.join(self.repo, "x.go")
+        with open(p, "w") as f:
+            f.write("package x\nfunc  F( ) {}\n")
+        self.assertAllowed(self.run_guard("post-edit", {"file_path": p}))
+        with open(p) as f:
+            self.assertEqual(f.read(), "package x\n\nfunc F() {}\n")
+
+    def test_post_edit_reports_unparsable_go(self):
+        p = os.path.join(self.repo, "x.go")
+        with open(p, "w") as f:
+            f.write("package x\nfunc {\n")
+        r = self.run_guard("post-edit", {"file_path": p})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("gofmt could not format", r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
