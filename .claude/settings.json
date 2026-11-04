@@ -96,9 +96,11 @@
     "failIfUnavailable": true,
     "allowUnsandboxedCommands": false,
     "filesystem": {
-      "allowWrite": ["~/.cache", "~/.npm", "~/.asdf/installs/golang", "~/go"]
+      "allowWrite": ["~/.cache", "~/.npm", "~/.asdf/installs/golang", "~/go"],
+      "denyRead": ["/var/run/docker.sock", "/run/docker.sock", "/run/WSL"]
     },
     "network": {
+      "allowAllUnixSockets": true,
       "allowedDomains": [
         "proxy.golang.org",
         "sum.golang.org",
