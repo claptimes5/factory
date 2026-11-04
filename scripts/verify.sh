@@ -42,16 +42,20 @@ step() { printf '\n== %s\n' "$*"; }
 # On WSL a Windows npm can run even when `which npm` names a Linux one
 # (a version manager's shim hands off to the next npm on the PATH). It
 # installs a node_modules the build can't use and fails with errors that
-# don't mention npm, so catch it first.
+# don't mention npm, so catch it first. asdf's shim is what hands off to
+# the Windows npm, so when asdf has a Linux Node, use it: hooks and other
+# programs that start verify don't get the PATH a shell profile sets.
 linux_npm() {
 	case "$(npm config get prefix 2>/dev/null)" in
 	[A-Za-z]:\\*)
-		printf "npm here is the Windows one (%s). Put a Linux Node's bin directory first on the PATH, then rerun; verify reinstalls web/node_modules.\n" "$(npm config get prefix)" >&2
-		# asdf's shim is what hands off to the Windows npm, so name the
-		# real directory behind it.
-		if dir=$(asdf where nodejs 2>/dev/null); then
-			printf 'Here: export PATH="%s/bin:$PATH"\n' "$dir" >&2
+		prefix=$(npm config get prefix)
+		if dir=$(asdf where nodejs 2>/dev/null) && [ -x "$dir/bin/npm" ]; then
+			PATH="$dir/bin:$PATH"
+			export PATH
+			printf "npm here was the Windows one (%s); using asdf's %s instead.\n" "$prefix" "$dir" >&2
+			return
 		fi
+		printf "npm here is the Windows one (%s). Put a Linux Node's bin directory first on the PATH, then rerun; verify reinstalls web/node_modules.\n" "$prefix" >&2
 		exit 1
 		;;
 	esac

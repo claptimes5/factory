@@ -75,28 +75,24 @@ auto-merge's guard rails (`internal/pipeline/guard.go`) keep untrusted
 code and text contained. Keep changes there small and conservative, and
 say in the PR what they loosen, if anything.
 
-What steers or ships the code is protected too: `.github/` (CI,
-CODEOWNERS), `.claude/`, `prompts/`, `.golangci.yml`,
+What ships the code is protected too: `prompts/`, `.golangci.yml`,
 `factory.example.yaml` and `deploy/`. Change any of these, or the paths
 above, only when the task is about them; in a session with a person,
 ask first. Never weaken a check to make it pass: no skipped tests,
 loosened thresholds or rewritten expectations without saying so.
 
-In Claude Code, `.claude/hooks/guard.py` enforces some of this. The
-factory's own files (`.claude/`, `.github/`, `docs/factory/`, this file,
-`CLAUDE.md`, `REVIEW.md`, `RISK.md`) can be edited only in a session a
-person started with `FACTORY_CONFIG=1 claude`; otherwise ask them to
-restart that way. Edits to the other paths above ask for approval (in
-auto mode, the auto-mode classifier answers, not a person). The hook is
-a speed bump, not a wall: a script run through Bash can write files it
-never sees. The walls are the Bash sandbox in `.claude/settings.json`
-(Linux needs `bubblewrap` and `socat`), review, and CODEOWNERS.
-For `gh` and git over HTTPS inside the sandbox, start with
-`claude --settings .claude/github.json`: commands see a stand-in for the
-GitHub token, and the real one is added only on requests to GitHub.
-Autonomous runs start with `claude --settings .claude/autonomy.json`,
-which also denies writes to the factory's files and limits the network
-to GitHub and the package registries. Force pushes, `--no-verify` and
+The factory's own files (`.claude/`, `.github/`, `docs/factory/`, this
+file, `CLAUDE.md`, `REVIEW.md`, `RISK.md`) are open to edit while the
+factory is being built (lock level 1 of the playbook's "Lock levels").
+Change them on a branch, say so in the PR, and note anything a lock got
+in the way of in the lock log in `docs/factory/PROGRESS.md`.
+
+In Claude Code, `.claude/hooks/guard.py` enforces some of this. Edits
+to the protected paths above ask for approval (in auto mode, the
+auto-mode classifier answers, not a person). The hook is a speed bump,
+not a wall: a script run through Bash can write files it never sees.
+Review, CI and branch protection are the walls. Force pushes,
+`--no-verify` and
 `rm -rf` outside the checkout are refused; a commit runs
 `scripts/verify.sh --quick` first, and must be its own command so the
 check sees what it commits; Go files are gofmt'd on save. When it
