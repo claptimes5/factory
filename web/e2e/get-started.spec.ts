@@ -16,8 +16,13 @@ const step = (page: Page, key: string) => page.locator(`[data-testid="wizard-ste
 /** Opens a step's card, unless it is the one already open. */
 async function openStep(page: Page, key: string) {
   const head = step(page, key).locator("button[aria-expanded]");
-  if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
-  await expect(head).toHaveAttribute("aria-expanded", "true");
+  // The step that needs attention opens by itself once the live look comes
+  // back; if that lands between reading the card and clicking it, the click
+  // closes it again. So check, and click once more, until it's open.
+  await expect(async () => {
+    if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
+    await expect(head).toHaveAttribute("aria-expanded", "true", { timeout: 1000 });
+  }).toPass();
   return step(page, key);
 }
 
