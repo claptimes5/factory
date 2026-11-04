@@ -38,6 +38,11 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
   (127.0.0.1:8090), then `cd web && npm run dev`
   (http://localhost:5173/app/). More in
   [Working on the dashboard](docs/using.md#working-on-the-dashboard).
+- To check a dashboard change by hand, drive it with the Playwright MCP
+  server in `.mcp.json` (Microsoft's `@playwright/mcp`, pinned): start the
+  devserver, then open, click and screenshot it. The browser is headless,
+  keeps no profile, and stays on the devservers and the Vite dev server.
+  A check you'll want again belongs in `web/e2e/` instead.
 - On WSL a Windows npm can run even when `which npm` names a Linux one;
   verify stops and says so. Put a Linux Node's `bin` first on the PATH.
   There is no pinned Node: any version `web/package.json`'s `engines`

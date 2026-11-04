@@ -5,6 +5,7 @@
 /web/node_modules/
 /web/test-results/
 /web/playwright-report/
+/.playwright-mcp/
 /factory.env
 *.pem
 /factory.yaml
