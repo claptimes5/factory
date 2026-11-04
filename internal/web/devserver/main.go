@@ -3,6 +3,9 @@
 // checks in web/e2e. It runs nothing: actions are recorded and refused.
 //
 //	go run ./internal/web/devserver -listen 127.0.0.1:8090
+//
+// With -password it asks for that password first, as a real control room
+// with one set does; the browser checks sign in through it.
 package main
 
 import (
@@ -173,6 +176,7 @@ pricing:
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8090", "address to serve on")
+	password := flag.String("password", "", "make everyone sign in with this password first")
 	flag.Parse()
 	dir, err := os.MkdirTemp("", "factory-devserver-")
 	if err != nil {
@@ -218,6 +222,7 @@ func main() {
 		Workspaces: []web.Workspace{{Name: "acme", Repos: []string{"acme/api", "acme/web"}, DailyCap: 20}},
 		ConfigPath: cfgPath, Listen: *listen, Restarter: rs, StartedConfig: web.ConfigVersion([]byte(sampleConfig)),
 		Choices: sampleChoices(st),
+		Login:   &web.Login{Password: *password, Secret: []byte("devserver: sample data only")},
 		// 116 stopped because its checks had no database; its compose file has one.
 		SetupPark: func(_ context.Context, it *store.WorkItem) (pipeline.Park, bool) {
 			return pipeline.Park{CantFix: true, Setup: "service", Line: setupLine}, it.IssueNumber == 116 && it.Stage == state.Parked

@@ -1363,7 +1363,11 @@ connect to a closed port hangs instead of being refused, so that check
 waits over two minutes before any test runs. Pass Playwright's arguments
 after `--`: `npm run e2e -- e2e/home.spec.ts`. A devserver that's already
 running is reused, so restart it after `npm run build`: it serves the app
-it was built with.
+it was built with. It starts a second devserver too, on 8098 with
+`-password`, for the sign-in tests in `e2e/login.spec.ts`; run
+`go run ./internal/web/devserver -password <something>` to try the
+sign-in page yourself. CI doesn't retry a failed test: one that fails and
+then passes is flaky, and the run says so.
 
 `npm run e2e` prints how long the devserver took to come up and how long
 Playwright took. A run of the whole suite that passes but takes longer than

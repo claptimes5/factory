@@ -40,6 +40,9 @@ test("When to tell you: what gets through, push on this device, the devices and 
     { path: ["notify", "quiet_hours", "weekends"], value: true },
     { path: ["notify", "quiet_hours", "timezone"], value: null },
   ]);
+  // The page may still be fetching settings again through the handler above;
+  // closing it then would fail the handler's fetch ("Response has been disposed").
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
 test("the dashboard installs as a web app: its manifest, icons and service worker are served", async ({ request }) => {
