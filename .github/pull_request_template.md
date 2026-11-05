@@ -2,10 +2,13 @@
 
 <!-- What changes for someone using Factory, and why. -->
 
-## Testing
+## Testing and evidence
 
 <!-- How you know it works: the commands you ran and what they printed
-(the last lines of scripts/verify.sh), screenshots for the dashboard. -->
+(the last lines of scripts/verify.sh), the browser tests you ran, before
+and after screenshots for the dashboard, each acceptance criterion and
+what checked it, the verifier's verdict and what it observed, and anything
+not verified. The verify-factory skill builds this. -->
 
 ## Risk
 
