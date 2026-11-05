@@ -17,7 +17,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
 | 6 | Browser E2E + web quality gates | passed | Avi | 2026-11-04 | `docs/factory/ui-seeds.py`; 5 CI attempts on e277ee7; throwaway red run | #129, #131, see log |
 | 7 | Agent self-verification protocol | passed | Avi | 2026-11-04 | two sample tasks through `verify-factory` and the `verifier` agent | see log |
-| 7b | Formal verification of the riskiest property (optional) | not started | | | | trigger (a) may apply: the pipeline's retry and park states; decide after Step 7 |
+| 7b | Formal verification of the riskiest property (optional) | in progress | Avi | 2026-11-05 | `.claude/skills/verify-breaker/check.sh` | TLA+ model of the auto-merge breaker: holds without daemon stops; a stop mid-trip breaks it (finding); waits on the maintainer's statement of what it doesn't cover |
 | 8 | AI code review + security review | not started | | | | |
 | 9 | Risk-tiered approval and ownership | not started | | | | |
 | 10 | Safe ship and rollback | not started | | | | |
@@ -39,6 +39,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 2026-11-04 | A stray ~/.git folder (no HEAD) made the guard treat the home directory as a repo and refuse writes under ~/.claude | guard.py repo_root | A .git directory counts only with a HEAD (#125) | fixed |
 | 2026-11-04 | The guard reads a heredoc's text as commands, so a script whose text mentions "> some/protected/path" is treated as writing there; a heredoc mentioning "git commit" after another command is refused as "run git commit as its own command" | guard.py segments | None yet; append with the Edit tool instead. Fix if it keeps biting | accepted |
 | 2026-11-04 | `cp -r staging/. worktree/` wrote .claude/hooks/guard.py into a branch worktree while the guard still refused factory files: cp names a directory as its target, and the guard checks only the target it is given | guard.py check_writes | None needed at Level 1 (nothing there is protected now); at Level 3 the sandbox and autonomy.json Edit denies stop it | accepted |
+| 2026-11-05 | The resume protocol's "re-run the previous step's gate" meant a whole Step 7 sample task through the verifier, hours after it passed with nothing changed | playbook resume protocol | Ran scripts/verify.sh as the drift check instead; the playbook could say "the gate, or verify when nothing changed since it passed" | accepted (guide feedback) |
 | 2026-11-04 | In the sandbox, the job bridge's tests couldn't open Unix sockets | Bash sandbox | allowAllUnixSockets plus denyRead on the Docker and WSL sockets (#126). autonomy.json doesn't carry these yet | open for Level 3 |
 | 2026-11-04 | In the sandbox, git push fails through the token mask (the stand-in isn't swapped inside git's Basic header); gh works | Bash sandbox credentials mask | Give pushes the bot identity's own repo-scoped token (Step 9) | open for Level 3 |
 | 2026-11-04 | In the sandbox, git status lists the /dev/null mounts over denied paths as untracked files | Bash sandbox | Add files by name in sandboxed sessions | open for Level 3 |
@@ -471,4 +472,47 @@ Open questions for human: 7b. Trigger (a) applies (the pipeline's retry and park
   states are a state machine). Run it now, or skip until a Step 8 review misses
   something there?
 Next step proposed: 7b or 8
+```
+
+### 2026-11-05
+```
+STEP 7b: Formal verification of the riskiest property   STATUS: in progress
+Trigger: (a), and the maintainer asked for it.
+Target (maintainer chose A): auto-merge's breaker. Property: once a repo's breaker
+  trips, the factory never turns auto-merge on there again, and every PR it had set
+  to merge itself is turned off, is still being turned off, or you were told to.
+  Harm: an unreviewed change merges to main after the factory decided to stop
+  trusting itself. (The other candidate, the review round cap, is sequential and
+  Step 5's tests caught 4 of 4 seeds there.)
+Tool: TLA+ and TLC, tla2tools.jar v1.7.4 pinned by SHA-256 (trust on first use:
+  GitHub has no digest for that asset; its size matched). Maintainer approved the
+  download. The model: .claude/skills/verify-breaker/Breaker.tla, each action naming
+  its Go lines.
+Gate command(s): .claude/skills/verify-breaker/check.sh [Breaker|BreakerBroken|
+  BreakerCrash]; check.sh --sync (now in scripts/verify.sh).
+Result: Breaker (2 PRs, no daemon stop): holds, 1,459 states, depth 18, about 1s;
+  3 PRs once: holds, 24,963 states. BreakerCrash (one stop allowed): FAILS, see
+  finding. Drift check before the step: scripts/verify.sh passed.
+Negative control: BreakerBroken (recordMergeOn's breaker check, guard.go:870-872,
+  deleted) fails: the breaker trips, then a PR records and turns auto-merge on.
+  On the real code, deleting those lines made check.sh --sync name recordMergeOn,
+  and put back it passed. The Go tests catch that deletion too
+  (TestBreakerTrippedWhileWaitingForCIHandsItBack and one more), so the model's
+  own reach is the daemon stopping mid-trip, which no test drives.
+Finding (open, a separate PR): if the daemon stops after TripBreaker
+  (guard.go:562) and before the hand-back loop reaches a PR, that PR keeps
+  auto-merge on; after the restart checkBreaker returns at "already tripped"
+  (guard.go:536-540) and the loop's alert never goes out. TLC's trace: SLock,
+  SRecord, SEnable for p2; BLock, BTrip; Crash; then only BAlready.
+Coverage record: sync commit 948cd5b; covered.sha256 hashes 12 functions in
+  guard.go, stages.go and store/guard.go. verify fails when one changes, until
+  someone checks the model and runs check.sh --record.
+Flagged changes: verify gains the --sync step (stricter).
+Decisions made: the check lives in a project skill as the playbook says; TLC isn't
+  in verify (it would make Java a requirement for every contributor), only the
+  sync check is.
+Open questions for human: (1) confirm the property and harm above; (2) confirm or
+  change "What it doesn't cover" in .claude/skills/verify-breaker/SKILL.md, which
+  the gate needs in your words; (3) fix the finding now, or after Step 8?
+Next step proposed: 8, once 7b's statement is in
 ```
