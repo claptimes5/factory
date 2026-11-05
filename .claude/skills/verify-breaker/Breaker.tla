@@ -14,7 +14,7 @@ EXTENDS Naturals
 CONSTANTS
     PRs,                  \* the PRs the factory may set to merge themselves
     MaxCrashes,           \* how many times the daemon may stop mid-step
-    RecordChecksBreaker   \* FALSE models deleting guard.go:870-872
+    RecordChecksBreaker   \* FALSE models deleting guard.go:902-904
 
 VARIABLES
     tripped,          \* auto_merge_guard.tripped_at != '' (store/guard.go)
@@ -44,18 +44,18 @@ Init ==
 
 (***************************************************************************)
 (* A PR's start: startMerge, enableAt or resync calling recordMergeOn      *)
-(* (guard.go:866-882), and autoMerge's cleanup when it fails               *)
+(* (guard.go:898-914), and autoMerge's cleanup when it fails               *)
 (* (stages.go:1259-1263).                                                  *)
 (***************************************************************************)
 
-\* recordMergeOn takes the repo's guard lock (guard.go:867-869).
+\* recordMergeOn takes the repo's guard lock (guard.go:899-901).
 SLock(p) ==
     /\ spc[p] = "start" /\ lock = "none"
     /\ lock' = p
     /\ spc' = [spc EXCEPT ![p] = "locked"]
     /\ UNCHANGED <<tripped, rec, forge, alerted, todo, bpc, crashes, enabledAfterTrip>>
 
-\* It refuses once the breaker tripped (guard.go:870-872). autoMerge then
+\* It refuses once the breaker tripped (guard.go:902-904). autoMerge then
 \* cancels, which does nothing with no record on (stages.go:1313-1315).
 SRefused(p) ==
     /\ spc[p] = "locked" /\ RecordChecksBreaker /\ tripped
@@ -63,14 +63,14 @@ SRefused(p) ==
     /\ spc' = [spc EXCEPT ![p] = "done"]
     /\ UNCHANGED <<tripped, rec, forge, alerted, todo, bpc, crashes, enabledAfterTrip>>
 
-\* It records auto-merge on before asking the forge (guard.go:873-877).
+\* It records auto-merge on before asking the forge (guard.go:905-909).
 SRecord(p) ==
     /\ spc[p] = "locked" /\ (~RecordChecksBreaker \/ ~tripped)
     /\ rec' = [rec EXCEPT ![p] = "on"]
     /\ spc' = [spc EXCEPT ![p] = "recorded"]
     /\ UNCHANGED <<tripped, lock, forge, alerted, todo, bpc, crashes, enabledAfterTrip>>
 
-\* The forge turns it on, still under the lock (guard.go:881).
+\* The forge turns it on, still under the lock (guard.go:913).
 SEnable(p) ==
     /\ spc[p] = "recorded"
     /\ forge' = [forge EXCEPT ![p] = "on"]
@@ -109,8 +109,9 @@ SCancelFails(p) ==
     /\ UNCHANGED <<tripped, lock, rec, forge, todo, bpc, crashes, enabledAfterTrip>>
 
 (***************************************************************************)
-(* The breaker: checkBreaker (guard.go:520-601), on each poll of main's    *)
-(* health (guard.go:360, 460) once strikes reach the threshold.            *)
+(* The breaker: checkBreaker (guard.go:520-570) and handBackTripped       *)
+(* (guard.go:596-632), on each poll of main's health (guard.go:360, 460)  *)
+(* once strikes reach the threshold.                                       *)
 (***************************************************************************)
 
 \* It takes the same lock (guard.go:532-534).
@@ -128,7 +129,7 @@ BAlready ==
     /\ UNCHANGED <<tripped, rec, forge, alerted, todo, spc, crashes, enabledAfterTrip>>
 
 \* It trips the breaker (guard.go:562) and lists the PRs set to merge
-\* themselves (guard.go:570-577).
+\* themselves (guard.go:599-605).
 BTrip ==
     /\ bpc = "locked" /\ ~tripped
     /\ tripped' = TRUE
@@ -136,7 +137,7 @@ BTrip ==
     /\ bpc' = "loop"
     /\ UNCHANGED <<lock, rec, forge, alerted, spc, crashes, enabledAfterTrip>>
 
-\* handBack cancels one (guard.go:578-582, 840-843; stages.go:1312-1329)...
+\* handBack cancels one (guard.go:607-611, 872-875; stages.go:1312-1329)...
 BHandBack(p) ==
     /\ bpc = "loop" /\ p \in todo
     /\ forge' = [forge EXCEPT ![p] = IF @ = "on" THEN "off" ELSE @]
@@ -174,15 +175,17 @@ Merge(p) ==
     /\ forge' = [forge EXCEPT ![p] = "merged"]
     /\ UNCHANGED <<tripped, lock, rec, alerted, todo, bpc, spc, crashes, enabledAfterTrip>>
 
-\* The daemon stops between two steps. The store and the forge keep what
-\* they had; the in-memory lock and loop are gone. Starts that were under
-\* way aren't retried.
+\* The daemon stops between two steps and starts again. The store and the
+\* forge keep what they had; the in-memory lock and loop are gone. Starts
+\* that were under way aren't retried. Before anything else runs, a
+\* tripped breaker's hand-backs are finished (finishTrips, guard.go:576-591,
+\* from Recover): the breaker's loop again, over what's on record as on.
 Crash ==
     /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
-    /\ lock' = "none"
-    /\ todo' = {}
-    /\ bpc' = "idle"
+    /\ lock' = IF tripped THEN "breaker" ELSE "none"
+    /\ todo' = IF tripped THEN {p \in PRs : rec[p] = "on"} ELSE {}
+    /\ bpc' = IF tripped THEN "loop" ELSE "idle"
     /\ spc' = [p \in PRs |-> IF spc[p] = "start" THEN "start" ELSE "done"]
     /\ UNCHANGED <<tripped, rec, forge, alerted, enabledAfterTrip>>
 

@@ -382,6 +382,7 @@ func (p *Pipeline) Recover(ctx context.Context) error {
 		p.warn(d.StaleEgressProxies(ctx), "remove stale egress proxies")
 	}
 	p.recoverSignIns()
+	p.finishTrips(ctx)
 	if _, err := p.Store.ReopenCreating(ctx, "Creating it was interrupted when the factory stopped. Check the repo for an issue with this title before you create it again."); err != nil {
 		return err
 	}

@@ -17,7 +17,7 @@ Core path: 0 to 10 and 12. Autonomy track: 13 to 15, after the core path has car
 | 5b | Property tests and fuzzing (optional) | skipped | Avi | 2026-11-04 | | Step 5's seeds caught 23 of 24 with example tests; revisit if a parser or matcher bug gets past them |
 | 6 | Browser E2E + web quality gates | passed | Avi | 2026-11-04 | `docs/factory/ui-seeds.py`; 5 CI attempts on e277ee7; throwaway red run | #129, #131, see log |
 | 7 | Agent self-verification protocol | passed | Avi | 2026-11-04 | two sample tasks through `verify-factory` and the `verifier` agent | see log |
-| 7b | Formal verification of the riskiest property (optional) | in progress | Avi | 2026-11-05 | `.claude/skills/verify-breaker/check.sh` | TLA+ model of the auto-merge breaker: holds without daemon stops; a stop mid-trip breaks it (finding); waits on the maintainer's statement of what it doesn't cover |
+| 7b | Formal verification of the riskiest property (optional) | in progress | Avi | 2026-11-05 | `.claude/skills/verify-breaker/check.sh` | TLA+ model of the auto-merge breaker, one daemon stop allowed: holds. The stop mid-trip it found is fixed (a restart finishes the trip). Waits on the maintainer's statement of what it doesn't cover |
 | 8 | AI code review + security review | not started | | | | |
 | 9 | Risk-tiered approval and ownership | not started | | | | |
 | 10 | Safe ship and rollback | not started | | | | |
@@ -514,5 +514,24 @@ Decisions made: the check lives in a project skill as the playbook says; TLC isn
 Open questions for human: (1) confirm the property and harm above; (2) confirm or
   change "What it doesn't cover" in .claude/skills/verify-breaker/SKILL.md, which
   the gate needs in your words; (3) fix the finding now, or after Step 8?
+Next step proposed: 8, once 7b's statement is in
+```
+
+```
+STEP 7b: Formal verification of the riskiest property   STATUS: in progress
+Trigger: the maintainer answered open question (3): fix the finding now.
+What changed: Recover calls finishTrips, which runs a tripped breaker's
+  hand-backs again and tells you when it found a PR still merging itself
+  (guard.go, a protected path; the maintainer asked for the change). The
+  hand-back loop and its alert moved out of checkBreaker into handBackTripped,
+  unchanged, so both share them. New test: TestRestartFinishesABreakerTripCutShort,
+  which fails without the fix ("still merging itself after the restart").
+Model: Crash now finishes the trip before anything else runs, as Recover does.
+  Breaker.cfg allows one stop (BreakerCrash.cfg is gone, folded into it): holds,
+  3,116 states, depth 19. 3 PRs and 2 stops once: holds, 85,724 states.
+  BreakerBroken still fails. Line citations moved with the code.
+Coverage record: re-recorded with finishTrips, handBackTripped and Recover added
+  (15 functions).
+Open questions for human: (1) and (2) from the entry above.
 Next step proposed: 8, once 7b's statement is in
 ```

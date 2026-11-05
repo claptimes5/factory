@@ -33,30 +33,31 @@ About a second. TLC is `tla2tools.jar` v1.7.4, pinned by SHA-256 in
 
 | Config | Bounds | Result |
 |---|---|---|
-| `Breaker` | 2 PRs, the daemon never stops | holds: 1,459 states, depth 18 (3 PRs checked once: 24,963 states, holds) |
-| `BreakerBroken` | `recordMergeOn`'s breaker check deleted (guard.go:870-872) | fails: the breaker trips, then a PR records and turns auto-merge on after it. The negative control |
-| `BreakerCrash` | 2 PRs, the daemon may stop once | **fails: the finding below** |
+| `Breaker` | 2 PRs, the daemon may stop once | holds: 3,116 states, depth 19 (3 PRs and 2 stops checked once: 85,724 states, holds) |
+| `BreakerBroken` | `recordMergeOn`'s breaker check deleted (guard.go:902-904), no stops | fails: the breaker trips, then a PR records and turns auto-merge on after it. The negative control |
 
-## Finding (2026-11-05, open)
+## Finding (2026-11-05, fixed)
 
-If the daemon stops after `checkBreaker` records the trip
-(`TripBreaker`, guard.go:562) and before its hand-back loop reaches a PR
-(guard.go:574-582), that PR keeps auto-merge on. After the restart,
-`checkBreaker` sees the breaker already tripped and returns
-(guard.go:536-540), so nothing turns it off and the alert at the end of
-the loop never goes out. TLC's trace: p2 set to merge itself; breaker
-trips; daemon stops; from then on only `BAlready`. In the code, the PR is
-handed back only if main moves first (`resync` refuses and hands it back)
-or the item is parked. The fix belongs in its own PR; when it lands,
-`BreakerCrash` should pass and join `check.sh`'s default run.
+A daemon stop after `checkBreaker` recorded the trip (`TripBreaker`,
+guard.go:562) and before its hand-backs reached a PR left that PR set to
+merge itself: after the restart, `checkBreaker` saw the breaker already
+tripped and returned (guard.go:536-540), so nothing turned it off and its
+alert never went out. TLC's trace, with one stop allowed: p2 set to merge
+itself; breaker trips; daemon stops; from then on only `BAlready`.
+
+Fixed: `Recover` calls `finishTrips`, which runs the hand-backs again for
+each tripped repo and tells you when it found one
+(`TestRestartFinishesABreakerTripCutShort`). The model's `Crash` does the
+same, and `Breaker` now allows a stop. With the old `Crash` it fails again.
 
 ## Coverage record
 
-- **Sync commit:** 948cd5b. `covered.sha256` holds a hash of each Go
-  function the model stands for, as of then: `checkBreaker`, `guardLock`,
-  `breakerTripped`, `handBack`, `recordMergeOn`, `startMerge`, `enableAt`,
-  `resync` (guard.go); `autoMerge`, `autoMerged`, `cancelAutoMerge`
-  (stages.go); `TripBreaker` (store/guard.go).
+- **Sync commit:** the fix's commit. `covered.sha256` holds a hash of
+  each Go function the model stands for, as of then: `checkBreaker`,
+  `finishTrips`, `handBackTripped`, `guardLock`, `breakerTripped`,
+  `handBack`, `recordMergeOn`, `startMerge`, `enableAt`, `resync`
+  (guard.go); `autoMerge`, `autoMerged`, `cancelAutoMerge` (stages.go);
+  `TripBreaker` (store/guard.go); `Recover` (pipeline.go).
 - **When `--sync` fails:** read the changed function against the actions
   in `Breaker.tla` (each names its Go lines), update the model and its
   line numbers if the behavior changed, run `check.sh`, then
@@ -68,7 +69,7 @@ or the item is parked. The fix belongs in its own PR; when it lands,
 
 A pass covers the model within its bounds, not the system:
 
-- Two PRs (three checked once), one repo, at most one daemon stop. A
+- Two PRs and one daemon stop (three and two checked once), one repo. A
   workspace's repos share the breaker the same way and aren't modelled
   separately.
 - The forge is trusted: a successful `CancelAutoMerge` stops the merge,
@@ -78,6 +79,8 @@ A pass covers the model within its bounds, not the system:
 - `autoMerged` reads the event log; the model keeps one record per PR, and
   doesn't model the store failing (`autoMerged` then says on, which only
   makes cancelling more likely).
+- The restart's hand-backs run before any start can (the model holds the
+  lock for them): `Recover` runs before the first `Tick`.
 - Starts cut short by a stop aren't retried in the model. Their retries
   (`followMerge`, `enableAt`) go through the same lock and check.
 - It assumes `openPR` moves an item to awaiting_human before `startMerge`

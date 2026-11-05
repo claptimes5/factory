@@ -1,7 +1,7 @@
 #!/bin/sh
 # check.sh checks the auto-merge breaker model with TLC (see SKILL.md).
 #
-#   check.sh [Breaker|BreakerCrash|BreakerBroken]   model-check one config
+#   check.sh [Breaker|BreakerBroken]   model-check one config
 #   check.sh --sync     fail if the Go the model stands for changed since
 #                       someone last confirmed the model (covered.sha256)
 #   check.sh --record   after confirming the model still describes the
@@ -20,6 +20,8 @@ jar=${TLA2TOOLS:-$HOME/.cache/tla/$version/tla2tools.jar}
 # The functions the model stands for, as "file function". A Go function's
 # body runs from its "func" line to the next line that is a bare "}".
 covered="internal/pipeline/guard.go checkBreaker
+internal/pipeline/guard.go finishTrips
+internal/pipeline/guard.go handBackTripped
 internal/pipeline/guard.go guardLock
 internal/pipeline/guard.go breakerTripped
 internal/pipeline/guard.go handBack
@@ -30,7 +32,8 @@ internal/pipeline/guard.go resync
 internal/pipeline/stages.go autoMerge
 internal/pipeline/stages.go autoMerged
 internal/pipeline/stages.go cancelAutoMerge
-internal/store/guard.go TripBreaker"
+internal/store/guard.go TripBreaker
+internal/pipeline/pipeline.go Recover"
 
 hashes() {
 	echo "$covered" | while read -r file fn; do
@@ -59,9 +62,9 @@ case "${1:-Breaker}" in
 	echo "Recorded $(wc -l <"$here/covered.sha256") functions at $(git -C "$root" rev-parse --short HEAD)."
 	exit 0
 	;;
-Breaker | BreakerCrash | BreakerBroken) cfg=$1 ;;
+Breaker | BreakerBroken) cfg=$1 ;;
 *)
-	echo "usage: check.sh [Breaker|BreakerCrash|BreakerBroken] | --sync | --record" >&2
+	echo "usage: check.sh [Breaker|BreakerBroken] | --sync | --record" >&2
 	exit 2
 	;;
 esac
