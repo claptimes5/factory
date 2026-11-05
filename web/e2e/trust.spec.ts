@@ -13,7 +13,7 @@ test("Trust shows the workspace on the ladder toward full automation, with the l
   // The sample's auto_merge (low risk, up to size S) is level 3.
   await expect(page.locator('[data-testid="level"][aria-current="step"]')).toContainText("Merge small, low-risk changes");
   await expect(levels.nth(5)).toContainText("Pick its own work");
-  await expect(levels.nth(5)).toContainText("Practice run: of the 0 issues it filed from its own findings");
+  await expect(levels.nth(5)).toContainText("Practice run: it filed no issues from its own findings in");
   await expect(levels.nth(5)).not.toContainText("Not built yet");
   await expect(levels.nth(6)).toContainText("Ship");
   await expect(levels.nth(6)).toContainText("Not built yet");

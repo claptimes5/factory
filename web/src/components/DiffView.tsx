@@ -72,7 +72,7 @@ export function DiffView({ patch, findings, itemId }: { patch: string; findings:
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-sm">
         <span className="text-muted-foreground">
-          {files.length} files · {findings.length} findings
+          {files.length} {files.length === 1 ? "file" : "files"} · {findings.length} {findings.length === 1 ? "finding" : "findings"}
         </span>
         <SegmentedControl
           label="Diff layout"
