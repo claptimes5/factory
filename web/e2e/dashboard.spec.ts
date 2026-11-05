@@ -153,6 +153,24 @@ test("PR panel shows CI, gates and findings linked to diff lines", async ({ page
   if (phone(info)) await noSidewaysScroll(page);
 });
 
+test("the diff's header counts one file and one finding in the singular", async ({ page }) => {
+  await page.goto("/app/line");
+  await page.getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true }).click();
+  const diffURL = page.url().replace(/\/?$/, "/diff");
+  await expect(page.getByTestId("pr-panel")).toContainText("PR #88");
+  // The sample has two of each; keep the first file and the first finding.
+  await page.route(/\/api\/v1\/items\/\d+\/diff$/, async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    body.patch = body.patch.split(/(?=^diff --git )/m)[0];
+    body.findings = body.findings.slice(0, 1);
+    await route.fulfill({ response: r, json: body });
+  });
+  await page.goto(diffURL);
+  await expect(page.getByTestId("diff-file")).toHaveCount(1);
+  await expect(page.getByText("1 file · 1 finding", { exact: true })).toBeVisible();
+});
+
 test("an item's page shows its build's screenshots, before and after", async ({ page }, info) => {
   await page.goto("/app/line");
   await page.getByTestId("card").filter({ hasText: "Parser drops" }).filter({ visible: true }).click();
