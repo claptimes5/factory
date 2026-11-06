@@ -50,6 +50,9 @@ Test fixtures use made-up names such as `o/r`, `acme/api` or `you/web`.
 - A browser test that fails once with nothing changed may be one of the
   known flaky ones listed in `docs/factory/BASELINE.md`; say so, don't
   rerun until green.
+- Changed auto-merge or its breaker? verify stops at "breaker model in
+  step" until you follow `.claude/skills/verify-breaker/SKILL.md`: a TLA+
+  model of the breaker, checked over every order of events.
 
 ## Style
 

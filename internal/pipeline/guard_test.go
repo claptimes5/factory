@@ -698,6 +698,26 @@ func TestBreakerTrippedWhileWaitingForCIHandsItBack(t *testing.T) {
 	}
 }
 
+// A stop after the trip is on record and before its hand-backs: the
+// restart hands them back and tells you, once.
+func TestRestartFinishesABreakerTripCutShort(t *testing.T) {
+	ctx := context.Background()
+	e, _, msgs := guardSetup(t, true)
+	pending := waitingAutoMerge(t, e, 1)
+	e.p.Store.TripBreaker(ctx, "o/r", "two reverts", stamp(guardNow()))
+	for range 2 {
+		if err := e.p.Recover(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Contains(e.gh.cancelled, pending.PRNumber) || e.p.autoMerged(ctx, e.item(t, 1)) {
+		t.Fatalf("still merging itself after the restart: %v", e.gh.cancelled)
+	}
+	if notes(msgs, "Auto-merge is off for o/r: two reverts") != 1 || !hasLabel(e.gh.prLabels[pending.PRNumber], LabelAwaitingYou) {
+		t.Fatalf("notes %q labels %v", *msgs, e.gh.prLabels[pending.PRNumber])
+	}
+}
+
 func TestSyncsStartOverForANewBuild(t *testing.T) {
 	ctx := context.Background()
 	e := setup(t)

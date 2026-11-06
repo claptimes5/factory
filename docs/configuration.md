@@ -628,7 +628,9 @@ The repo has to be set up for it:
 whose merge commit main health sees a check go red on, is a strike
 against its repo. `threshold` strikes within `window` turn auto-merge off
 for that repo: new PRs wait for you, the PRs waiting to merge themselves
-have their auto-merge turned off, and you're told once. It stays off until
+have their auto-merge turned off, and you're told once. If the factory
+stopped before it got to every one, it turns them off when it starts
+again, and tells you about those. It stays off until
 you run `factory automerge reset owner/name` or press Reset on the
 dashboard, or, with `cool_off` set, until that long after it tripped.
 Every merged factory PR counts, whether you merged it or it merged

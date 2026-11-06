@@ -1,7 +1,8 @@
 #!/bin/sh
 # verify.sh runs what CI runs, in one command, and stops at the first
 # failure: gofmt, the tests of the Claude Code hooks and the PR
-# description check, go vet, the pinned golangci-lint, go build,
+# description check, that the auto-merge breaker model is in step with
+# its code, go vet, the pinned golangci-lint, go build,
 # go test -race, then the dashboard's npm ci, build (types, styles),
 # stale-build check and Playwright. Humans, agents and CI all run this,
 # so "it passed" means the same thing everywhere.
@@ -136,6 +137,11 @@ if runs lint; then
 		echo "$unpinned" >&2
 		exit 1
 	fi
+
+	step auto-merge breaker model in step with the code
+	# The model was checked against these functions as they were; a change
+	# to them needs someone to check the model still fits (its SKILL.md).
+	.claude/skills/verify-breaker/check.sh --sync
 
 	step go vet
 	go vet ./...

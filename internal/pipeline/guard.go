@@ -566,6 +566,35 @@ func (p *Pipeline) checkBreaker(ctx context.Context, repo string) {
 	}
 	data, _ := json.Marshal(map[string]any{"strikes": len(strikes), "threshold": th})
 	p.warn(p.Store.AddEvent(ctx, store.Event{Actor: "daemon", Type: "auto_merge_breaker", Reason: repo, Data: string(data)}), "AddEvent")
+	p.handBackTripped(ctx, repo, reason, true)
+}
+
+// finishTrips, at startup, hands back the PRs a breaker trip didn't get
+// to: once the trip is on record, checkBreaker returns early, so a stop
+// between the trip and its hand-backs would leave those PRs merging
+// themselves, with nobody told.
+func (p *Pipeline) finishTrips(ctx context.Context) {
+	if p.Cfg.NoGuard {
+		return
+	}
+	for _, repo := range p.Cfg.RepoNames() {
+		g, err := p.Store.Guard(ctx, repo)
+		if err != nil || !g.Tripped() {
+			p.warn(err, "Guard")
+			continue
+		}
+		mu := p.guardLock(repo)
+		mu.Lock()
+		p.handBackTripped(ctx, repo, g.Reason, false)
+		mu.Unlock()
+	}
+}
+
+// handBackTripped hands back each PR in repo's workspace still set to
+// merge itself, once its breaker tripped, and tells you. Unless always,
+// you're told only when there was one. It holds the repo's guard lock.
+func (p *Pipeline) handBackTripped(ctx context.Context, repo, reason string, always bool) {
+	am := p.repoConf(repo).AutoMerge
 	var cancelled, stuck []string
 	items, err := p.Store.ListItems(ctx, state.AwaitingHuman)
 	p.warn(err, "ListItems")
@@ -580,6 +609,9 @@ func (p *Pipeline) checkBreaker(ctx context.Context, repo string) {
 			continue
 		}
 		cancelled = append(cancelled, p.ref(it.Repo, it.PRNumber))
+	}
+	if !always && len(cancelled)+len(stuck) == 0 {
+		return
 	}
 	where := repo
 	if len(p.Cfg.WorkspaceRepos(ws)) > 1 {
